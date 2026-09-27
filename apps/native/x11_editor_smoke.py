@@ -280,11 +280,89 @@ def main():
     # Its 30px section heading then sits 9px lower than the former headings.
     INSPECTOR_SHIFT = -20
 
-    # The Layers heading's quiet Combine menu button, beside Add image layer.
-    COMBINE_MENU = (177, 87)
-
     def inspector_click(x, y):
         click(editor, inspector_x(x), y + INSPECTOR_SHIFT)
+
+    # Shipping sidebar: Layers takes max(188 px, 40%) of the panel above
+    # Properties, always. Rows are 54 px on a 58 px pitch, front to back, with
+    # eye, lock and ⋯ quick actions; Properties opens with a 48 px heading.
+    def sidebar_geometry():
+        inner = window_size()[1] - export_bar_height() - 52 - 4
+        return 54, max(188, .4 * inner)
+
+    def layer_row(index):
+        return inspector_x(100), round(sidebar_geometry()[0] + 95 + 58 * index)
+
+    def layer_quick(index, action):
+        return inspector_x({"eye": 149, "lock": 176, "more": 203}[action]), layer_row(index)[1]
+
+    def layer_click(index, action=None):
+        click(editor, *(layer_quick(index, action) if action else layer_row(index)))
+
+    def properties_top():
+        top, height = sidebar_geometry()
+        return round(top + height)
+
+    # The ⋯ layer settings popover: 280 px beside the sidebar, top-aligned with
+    # the ⋯ button. Offsets are from its top-left corner; annotation layers have
+    # no 132 px Transform section.
+    LAYER_MENU = {
+        "blend": (140, 70), "opacity": (140, 142),
+        "rotate-left": (80, 222), "rotate-right": (208, 222),
+        "flip-horizontal": (80, 266), "flip-vertical": (208, 266),
+        "bring-front": (100, 354), "send-back": (100, 390),
+        "merge-down": (100, 476), "merge-visible": (100, 512), "flatten": (100, 548),
+        "duplicate": (100, 610), "delete": (100, 648),
+    }
+
+    def layer_menu_point(index, item, image=True):
+        height = window_size()[1]
+        top = layer_quick(index, "more")[1] - 14
+        top = max(8, min(top, height - 8 - min(height - 16, 560)))
+        dx, dy = LAYER_MENU[item]
+        if not image and dy > 300:
+            dy -= 132
+        return editor_width() - 518 + dx, top + dy
+
+    def layer_menu_click(index, item, image=True):
+        click(editor, *layer_menu_point(index, item, image))
+
+    def layer_menu(index, item, image=True):
+        # Escape closes a menu left open by an earlier action; the ⋯ toggles it.
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        layer_click(index, "more")
+        layer_menu_click(index, item, image)
+
+    def prop_click(x, offset):
+        click(editor, inspector_x(x), properties_top() + offset)
+
+    def prop_field(offset, value, x=78):
+        prop_click(x, offset)
+        run("xdotool", "key", "ctrl+a")
+        type_text(value, 60)
+        run("xdotool", "key", "Return", "sleep", ".2")
+
+    # Image Width/Height/X/Y inputs below the Properties heading.
+    IMAGE_FIELDS = {"width": (50, 110), "height": (160, 110), "x": (50, 181), "y": (160, 181)}
+
+    def image_field(name, value):
+        x, offset = IMAGE_FIELDS[name]
+        prop_field(offset, value, x)
+
+    def rename_layer(index, name):
+        run("xdotool", "mousemove", "--window", editor, *map(str, layer_row(index)),
+            "click", "--repeat", "2", "--delay", "80", "1", "sleep", ".3", "key", "ctrl+a")
+        type_text(name, 30)
+        run("xdotool", "key", "Return", "sleep", ".2")
+
+    def drag_layer(index, target, below):
+        start = layer_row(index)
+        end = layer_row(target)
+        end = end[0], end[1] + (18 if below else -18)
+        run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+            "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+            str(start[0]), str(start[1] + 8), "sleep", ".1", "mousemove", "--sync",
+            "--window", editor, *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
 
     # The full-width export bar is below the canvas and inspector: a fixed
     # collapsed height, plus a fixed settings area while its disclosure is open.
@@ -487,7 +565,8 @@ def main():
             click(editor, *shape_flyout_point(name))
         elif name in ("wand", "erase", "restore"):
             rail_click("eraser")
-            inspector_click(*draw_tool_points[name])
+            # Shipping's Eraser mode group below the Properties heading.
+            prop_click({"wand": 43, "erase": 115, "restore": 190}[name], ERASER_MODE_ROW)
         else:
             rail_click({"text": "text", "arrow": "arrow", "pen": "pen"}[name])
 
@@ -516,23 +595,20 @@ def main():
         else:
             raise AssertionError(name)
 
-    # Draw panel tool grid centers (inspector x, window y) under the token fonts,
-    # authored below the former toolbar like every inspector row.
-    draw_tool_points = {
-        "text": (34, 132), "rectangle": (111, 132),
-        "ellipse": (41, 176), "line": (108, 176), "arrow": (172, 176),
-        "pen": (33, 220), "wand": (95, 220), "erase": (163, 220),
-        "restore": (45, 264), "triangle": (127, 264),
-        "diamond": (50, 308), "star": (125, 308),
-    }
+    # Eraser mode buttons (Wand, Erase, Restore) sit below a two-line intro;
+    # the Eraser rows that follow move down by ERASER_ROWS.
+    ERASER_MODE_ROW = 126
+    ERASER_ROWS = 95
 
     def draw_tool(name):
         tool_state["draw"] = name
         select_draw_tool(name)
 
     def draw_row(y):
-        # Draw rows authored below the historical four-row tool grid.
-        return y + 44
+        # Draw rows were authored below the historical tool grid, whose first
+        # following row centered at y=332. The rail now picks the tool, so rows
+        # start below the Layers section and the Properties heading.
+        return y + 44 + properties_top() + 75 - 332
 
     def zoom_menu_x():
         # Preset menu rows, 44px apart from y=64, right-aligned to the preset.
@@ -560,6 +636,9 @@ def main():
     def inspector_move(x, y, *tail):
         run("xdotool", "mousemove", "--window", editor, str(inspector_x(x)),
             str(y + INSPECTOR_SHIFT), *tail)
+
+    def window_move(point, *tail):
+        run("xdotool", "mousemove", "--window", editor, *map(str, point), *tail)
 
     def bottom(y):
         # Rows authored against an inspector scrolled until it clamps at its end.
@@ -914,7 +993,7 @@ def main():
             drag((300, 220), (380, 300))
             first = save_layers(lambda values: len(values) == 2, "first combine layer")[-1]
             toolbar_click("layers")
-            inspector_click(15, 300)
+            layer_click(0, "eye")
             save_layers(lambda values: len(values) == 2 and not values[-1]["visible"],
                         "hidden combine fixture")
             run("xdotool", "key", "r", "sleep", ".2")
@@ -929,11 +1008,12 @@ def main():
             # A context action belongs to its clicked row, not to the previous
             # selection. Select the second row, then merge the top row downward.
             toolbar_click("layers")
-            inspector_click(100, 202)
-            inspector_move(100, 158, "sleep", ".2", "mousedown", "3",
-                           "sleep", ".15", "mouseup", "3", "sleep", ".3")
+            layer_click(1)
+            window_move(layer_row(0), "sleep", ".2", "mousedown", "3",
+                        "sleep", ".15", "mouseup", "3", "sleep", ".3")
             shot(editor, "combine-row-context-menu")
-            inspector_click(130, 358)  # Fifth context item: Merge down.
+            row_x, row_y = layer_row(0)
+            click(editor, row_x + 30, row_y + 200)  # Fifth context item: Merge down.
             merged_down = save_layers(lambda values: len(values) == 3, "clicked-row merge down")
             assert [value["id"] for value in merged_down[:2]] == fixture_ids[:2]
             assert merged_down[-1]["id"] not in fixture_ids
@@ -948,11 +1028,11 @@ def main():
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "redo merge down") == merged_down_snapshot
 
-            # Exercise the shared heading menu. Merge visible replaces only
+            # Exercise the row's ⋯ layer menu. Merge visible replaces only
             # visible layers and leaves the hidden annotation in its old slot.
-            inspector_click(*COMBINE_MENU)
+            layer_click(0, "more")
             shot(editor, "combine-heading-menu")
-            inspector_click(135, 169)  # Merge visible.
+            layer_menu_click(0, "merge-visible")
             merged_visible = save_layers(
                 lambda values: len(values) == 2, "heading menu merge visible")
             hidden = [value for value in merged_visible if not value["visible"]]
@@ -973,8 +1053,8 @@ def main():
             save_until(lambda: json.loads(draft.read_text())["document"]["background"] == "#2d9cff",
                        "combine fixture background")
             toolbar_click("layers")
-            inspector_click(*COMBINE_MENU)
-            inspector_click(135, 213)  # Flatten image.
+            layer_click(1, "more")  # The merged image; the hidden annotation stays above it.
+            layer_menu_click(1, "flatten")
             flattened = save_layers(lambda values: len(values) == 1, "flatten image")
             flattened_document = json.loads(draft.read_text())["document"]
             assert flattened_document["background"] is None
@@ -996,7 +1076,7 @@ def main():
             shot(editor, "combine-flattened-reopened")
 
             resize_editor(760, 540, "sleep", ".3")
-            inspector_click(*COMBINE_MENU)
+            layer_click(0, "more")
             shot(editor, "combine-minimum-disabled-menu")
             run("xdotool", "key", "Escape", "sleep", ".2")
             resize_editor(1000, 801, "sleep", ".3")
@@ -1096,7 +1176,7 @@ def main():
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "redo after dialog")[-1] == shape
             toolbar_click("layers")  # Layers; select the restored shape, not the original.
-            inspector_click(100, 158)
+            layer_click(0)
             run("xdotool", "key", "ctrl+d", "sleep", ".3")
             copied = save_layers(lambda values: len(values) == 3, "keyboard duplicate")[-1]
             assert copied["id"] != shape["id"]
@@ -1115,7 +1195,7 @@ def main():
             for _ in range(4):
                 run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "undo nudges exactly")[-1] == copied
-            inspector_click(100, 158)  # Restore the copy selection after Undo.
+            layer_click(0)  # Restore the copy selection after Undo.
             canvas_click("width")
             run("xdotool", "key", "ctrl+d", "Delete", "Left", "shift+Up", "sleep", ".3")
             run("xdotool", "key", "p", "c", "r", "sleep", ".3")
@@ -1126,10 +1206,10 @@ def main():
             assert save_layers(lambda values: len(values) == 2, "Delete removes selected copy")[-1] == shape
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "undo keyboard deletion")[-1] == copied
-            inspector_click(100, 158)  # Select restored copy explicitly after undo.
+            layer_click(0)  # Select restored copy explicitly after undo.
             run("xdotool", "key", "BackSpace", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "Backspace removes selected copy")[-1] == shape
-            inspector_click(100, 202)  # Original image is locked.
+            layer_click(1)  # Original image is locked.
             run("xdotool", "key", "Delete", "Right", "shift+Down", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "locked keyboard deletion")[-1] == shape
             # Layer snapshots must work even with an empty OS clipboard. Copy
@@ -1137,7 +1217,7 @@ def main():
             subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"",
                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            check=True, timeout=10)
-            inspector_click(100, 158)
+            layer_click(0)
             run("xdotool", "key", "ctrl+c", "sleep", ".3")
             assert run("xclip", "-selection", "clipboard", "-o") == b""
             run("xdotool", "key", "Right", "sleep", ".3", "key", "Delete", "sleep", ".3")
@@ -1170,20 +1250,19 @@ def main():
             assert save_layers(lambda values: len(values) == 3, "reopen has no layer clipboard")[-1] == pasted_twice
             toolbar_click("layers")
             before_menu = draft.read_bytes()
-            inspector_move(100, 202, "sleep", ".2", "mousedown", "3",
-                           "sleep", ".15", "mouseup", "3", "sleep", ".3")
+            window_move(layer_row(1), "sleep", ".2", "mousedown", "3",
+                        "sleep", ".15", "mouseup", "3", "sleep", ".3")
             shot(editor, "layer-context-menu")
             run("xdotool", "key", "Escape", "sleep", ".3")
             assert draft.read_bytes() == before_menu, "opening/cancelling a row menu must not edit"
             resize_editor(760, 540, "sleep", ".3")
-            # Without the Output tab the toolbar no longer wraps at the minimum
-            # width, so the first layer row is 44px higher than at full size.
-            inspector_move(100, 158, "sleep", ".2", "mousedown", "3",
-                           "sleep", ".15", "mouseup", "3", "sleep", ".3")
+            window_move(layer_row(0), "sleep", ".2", "mousedown", "3",
+                        "sleep", ".15", "mouseup", "3", "sleep", ".3")
             shot(editor, "layer-context-menu-minimum")
             # Copy the first row through the actual popup. A missed opening must
             # fail this flow, not silently produce a menu-free review capture.
-            inspector_click(130, 173)
+            row_x, row_y = layer_row(0)
+            click(editor, row_x + 30, row_y + 15)
             assert draft.read_bytes() == before_menu
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             menu_paste = save_layers(lambda values: len(values) == 4, "context-menu copy then paste")[-1]
@@ -1300,11 +1379,11 @@ def main():
         if args.rotation_snap_only:
             resize_editor(1000, 1001)
             toolbar_click("layers")
-            inspector_click(79, 300)  # Unlock the original image for canvas rotation.
+            layer_click(0, "lock")  # Unlock the original image for canvas rotation.
             save_layers(lambda values: not values[0]["locked"], "unlocked original")
             shot(editor, "rotation-snap-controls")
             before = draft.read_bytes()
-            field(775, 37, x=50)
+            prop_field(304, 37, x=50)
             shot(editor, "rotation-snap-custom")
             assert draft.read_bytes() == before, "snap preference must not edit or save a draft"
             # Full-canvas image uses the inset top grip at (558,117), pivot (558,269).
@@ -2049,11 +2128,14 @@ def main():
             return
 
         if args.text_only:
+            def text_menu_click(x, y):
+                # Text properties were authored with "Style…" at y=357 (window
+                # 338). They now open the Properties section below Layers.
+                click(editor, inspector_x(x), y + 1 + INSPECTOR_SHIFT + properties_top() + 84 - 338)
+
             def text_click(x, y):
-                # The shipping Layers heading sits 1 px below the authored
-                # text-inspector baseline (the former Combine menu row made it
-                # 18 px taller). Draw-tool controls must not receive this.
-                inspector_click(x, y + 1)
+                # The 32 px Size field now has its own row above Bold/Italic.
+                text_menu_click(x, y + 46 if y >= 573 else y)
 
             resize_editor(1000, 1501)
             toolbar_click("draw")  # Draw.
@@ -2070,38 +2152,37 @@ def main():
             assert created["text"] == "Text" and created["fontFamily"] == "sans"
             assert created["align"] == "left" and created.get("autoWidth") is True
             shot(editor, f"text-created-{args.appearance}")
-            text_click(90, 357)
+            text_click(44, 357)
             shot(editor, f"text-style-menu-{args.appearance}")
             run("xdotool", "key", "Escape")
-            # Text properties precede generic layer geometry in the sidebar.
+            # Shipping applies every text property as it changes: a typing burst
+            # in one field is one undo step, each toggle or menu choice another.
             text_click(100, 431)
             shot(editor, f"text-font-menu-{args.appearance}")
             text_click(100, 515)  # Serif: shipping order Sans serif, Serif, Monospace, Rounded.
+            save_layers(lambda values: values[-1]["fontFamily"] == "serif", "font family applied live")
             text_click(105, 505)
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
             time.sleep(.2)
-            text_click(95, 573)   # Bold.
-            text_click(146, 573)  # Italic.
-            text_click(74, 864)   # Apply without plate or shadow first.
             save_layers(lambda values: values[-1]["text"] == "Readable native text"
                         and values[-1]["fontFamily"] == "serif", "plain text applied")
+            text_click(41, 573)   # Bold, on the row below Size.
+            text_click(97, 573)   # Italic.
+            save_layers(lambda values: values[-1]["bold"] and values[-1]["italic"], "traits applied")
             shot(editor, "text-without-shadow")
-            text_click(92, 820)   # Stage Drop shadow, leaving the plate off.
-            before_shadow = draft.read_bytes()
+            text_click(92, 820)   # Drop shadow, leaving the plate off.
+            save_layers(lambda values: values[-1].get("dropShadow") is True
+                        and values[-1]["background"] is None, "glyph shadow applied")
             for x, y, value in [(95, 891, "#3b82f6"), (128, 935, "65"),
                                 (60, 979, "3"), (80, 1023, "17.5"), (80, 1067, "-8")]:
                 text_click(x, y)
                 run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--", value)
                 run("xdotool", "key", "Return")
-            shot(editor, "text-shadow-staged")
-            assert draft.read_bytes() == before_shadow
-            text_click(74, 1110)
-            save_layers(lambda values: values[-1].get("dropShadow") is True
-                        and values[-1]["background"] is None, "glyph shadow applied")
             custom_shadow = {"color": "#3b82f6", "opacity": 65, "blur": 3,
                              "offsetX": 17.5, "offsetY": -8}
-            assert layers()[-1]["dropShadowStyle"] == custom_shadow
+            save_layers(lambda values: values[-1].get("dropShadowStyle") == custom_shadow,
+                        "custom shadow applied")
             shot(editor, "text-glyph-shadow")
             def text_pixels(name, crop=None):
                 if crop is None:
@@ -2110,26 +2191,12 @@ def main():
                     crop = f"{round(size[0] * scale)}x{round(size[1] * scale)}+{round(left)}+{round(top)}"
                 return run("convert", str(output / f"{name}.png"), "-crop", crop,
                            "-depth", "8", "rgba:-")
-            assert text_pixels("text-shadow-staged") == text_pixels("text-without-shadow")
             assert text_pixels("text-glyph-shadow") != text_pixels("text-without-shadow")
-            text_click(92, 820)   # Cancellation must preserve the accepted shadow.
-            text_click(74, 909)
-            shot(editor, "text-shadow-cancelled")
-            assert text_pixels("text-shadow-cancelled") == text_pixels("text-glyph-shadow")
             text_click(170, 820)  # Outline shares the shadow row.
-            shot(editor, "text-outline-staged")
-            assert text_pixels("text-outline-staged") == text_pixels("text-glyph-shadow")
-            text_click(74, 1110)
             save_layers(lambda values: values[-1]["outlined"], "text outline applied")
             shot(editor, "text-outline")
             assert text_pixels("text-outline") != text_pixels("text-glyph-shadow")
-            text_click(170, 820)
-            text_click(74, 1155)
-            shot(editor, "text-outline-cancelled")
-            assert text_pixels("text-outline-cancelled") == text_pixels("text-outline")
-            text_click(92, 776)   # Background plate.
-            shot(editor, f"text-staged-{args.appearance}")
-            text_click(74, 1231)   # Apply text; plate owns the shadow now.
+            text_click(92, 776)   # Background plate; the plate owns the shadow now.
             edited = save_layers(
                 lambda values: values[-1]["text"] == "Readable native text"
                 and values[-1]["bold"] and values[-1]["italic"]
@@ -2138,12 +2205,6 @@ def main():
                 "readable styled text applied")[-1]
             assert edited["id"] == created["id"]
             shot(editor, f"text-edited-{args.appearance}")
-            text_click(100, 431)
-            text_click(100, 559)  # Stage Monospace without applying.
-            save_layers(lambda values: values[-1]["fontFamily"] == "serif",
-                        "saving accepted pixels preserves staged family")
-            shot(editor, f"text-family-pending-{args.appearance}")
-            text_click(74, 1276)  # Cancel changes; later close must not be blocked.
             toolbar_click("undo")
             save_layers(lambda values: values[-1]["background"] is None
                         and values[-1].get("dropShadow") is True, "undo shadowed plate")
@@ -2151,33 +2212,22 @@ def main():
             save_layers(lambda values: not values[-1]["outlined"]
                         and values[-1].get("dropShadow") is True, "undo text outline")
             toolbar_click("undo")
-            save_layers(lambda values: not values[-1].get("dropShadow", False), "undo glyph shadow")
-            toolbar_click("undo")
-            save_layers(lambda values: values[-1]["text"] == "Text" and values[-1]["fontFamily"] == "sans",
-                        "text edit undo")
+            save_layers(lambda values: values[-1]["dropShadowStyle"]["offsetY"] != -8,
+                        "one typed shadow field is one undo step")
             toolbar_click("redo")
-            save_layers(lambda values: values[-1]["text"] == "Readable native text",
-                        "text edit redo")
-            toolbar_click("redo")
-            save_layers(lambda values: values[-1].get("dropShadow") is True, "redo glyph shadow")
+            save_layers(lambda values: values[-1]["dropShadowStyle"] == custom_shadow, "redo shadow field")
             toolbar_click("redo")
             save_layers(lambda values: values[-1]["outlined"], "redo text outline")
             toolbar_click("redo")
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
-            before_preset = draft.read_bytes()
-            text_click(90, 357)
-            text_click(90, 602)  # Mono Box chip row, preserving the accepted plate color.
-            shot(editor, "text-preset-staged")
-            assert draft.read_bytes() == before_preset
-            assert text_pixels("text-preset-staged") == text_pixels(f"text-edited-{args.appearance}")
-            font_field = f"205x64+{inspector_x(8)}+408"
-            assert text_pixels("text-preset-staged", font_field) != text_pixels(
-                f"text-edited-{args.appearance}", font_field), "Preset stages a different font field"
-            text_click(74, 1276)
-            shot(editor, "text-preset-cancelled")
-            assert text_pixels("text-preset-cancelled", font_field) == text_pixels(
-                f"text-edited-{args.appearance}", font_field), "Cancel restores the font field"
-            # Cancel restores this label, not the independently chosen future preset.
+            text_click(44, 357)
+            shot(editor, "text-style-menu-edited")
+            text_menu_click(-60, 598)  # Mono Box chip row, preserving the accepted plate color.
+            save_layers(lambda values: values[-1]["fontFamily"] == "mono"
+                        and values[-1]["background"] == edited["background"], "named style applied live")
+            shot(editor, "text-preset-applied-live")
+            toolbar_click("undo")  # The preset is one undo step; its future default stays.
+            save_layers(lambda values: values[-1]["fontFamily"] == "serif", "named style undo")
             toolbar_click("draw")
             draw_tool("text")
             shot(editor, "text-preset-carried-default")
@@ -2194,10 +2244,9 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 2, "future label is one undo step")
             toolbar_click("layers")
-            text_click(100, 153)  # Restore the original label's selected-text inspector.
-            text_click(90, 357)
-            text_click(90, 622)
-            text_click(74, 1231)
+            layer_click(0)  # Restore the original label's selected-text inspector.
+            text_click(44, 357)
+            text_menu_click(-60, 598)  # Mono Box again, over the accepted outline.
             preset = save_layers(lambda values: values[-1]["fontFamily"] == "mono"
                                  and not values[-1]["outlined"], "named style applied")[-1]
             for key in ["text", "fontSize", "bold", "italic", "align", "color", "background", "dropShadowStyle"]:
@@ -2216,7 +2265,7 @@ def main():
             wait(lambda: not windows("Screenshot editor"), "text editor closes")
             editor = reopen()
             toolbar_click("layers")  # Layers, with the restored text selected explicitly.
-            text_click(100, 153)
+            layer_click(0)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, f"text-minimum-reopened-{args.appearance}")
             before_scroll = draft.read_bytes()
@@ -2243,12 +2292,12 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["text-click-once-fresh-selection", "text-readable-explicit-apply",
-                           "text-font-family", "text-family-cancel", "text-bold-italic-plate",
-                           "text-glyph-shadow-pixels", "text-shadow-stage-cancel",
+                "checks": ["text-click-once-fresh-selection", "text-readable-live-apply",
+                           "text-font-family", "text-typing-one-undo-step", "text-bold-italic-plate",
+                           "text-glyph-shadow-pixels", "text-shadow-field-undo",
                            "text-custom-shadow-settings-reopen",
-                           "text-named-style-staging-cancel", "text-named-style-preserve-undo-redo",
-                           "text-preset-future-after-cancel", "text-preset-future-independent-traits",
+                           "text-named-style-live", "text-named-style-preserve-undo-redo",
+                           "text-preset-future-after-undo", "text-preset-future-independent-traits",
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
                            "text-outline-pixels", "text-outline-stage-cancel", "text-outline-undo-redo-reopen",
                            "text-undo-redo", "text-draft-reopen",
@@ -2437,7 +2486,7 @@ def main():
             save_layers(lambda values: values[0]["src"] == edited["src"], "wand redo")
             toolbar_click("undo")
             save_layers(lambda values: values[0]["src"] == source, "undo before global removal")
-            inspector_click(150, draw_row(308))  # Disable Contiguous below the tool rows.
+            inspector_click(150, draw_row(308 + ERASER_ROWS))  # Disable Contiguous below the mode row.
             fixture_click((108, 189))
             global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
             asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))
@@ -2881,7 +2930,7 @@ def main():
         drag((320, 250), (480, 370))
         annotation = save_layers(lambda values: len(values) == 2, "annotation fixture")[-1]
         toolbar_click("layers")
-        inspector_click(79, 300)
+        layer_click(0, "lock")
         save_layers(lambda values: values[-1]["locked"], "locked annotation remains style editable")
         inspector_move(180, 400, "click", "--repeat", "20", "5")
         shot(editor, "annotation-fields")
@@ -3019,10 +3068,13 @@ def main():
         toolbar_click("layers")
         inspector_move(180, 400, "click", "--repeat", "25", "4")
         shot(editor, "imported-selected-layer")
-        inspector_click(78, 371)
+        # Double-click renames inline; Escape keeps the full, intact name.
+        run("xdotool", "mousemove", "--window", editor, *map(str, layer_row(0)),
+            "click", "--repeat", "2", "--delay", "80", "1", "sleep", ".3")
+        shot(editor, "imported-rename-field")
         run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
         assert run("xclip", "-selection", "clipboard", "-o").decode() == imported_path.name
-        run("xdotool", "key", "Escape")  # The single-line name field scrolls; its value is intact.
+        run("xdotool", "key", "Escape")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         shot(editor, "imported-minimum")
         inspector_move(180, 400, "click", "--repeat", "8", "5")
@@ -3038,7 +3090,7 @@ def main():
         save(640, 440, 0, 0)
         assert layers()[-1]["id"] == imported_id
 
-        inspector_click(100, 158)  # Redo retained the original's selection; pick the imported row.
+        layer_click(0)  # Redo retained the original's selection; pick the imported row.
         resize_before = draft.read_bytes()
         resize_start = fixture_point((387, 489))
         resize_end = fixture_point((423, 489))
@@ -3079,7 +3131,7 @@ def main():
         # Undo history is session-local. Restore through a fresh east-grip resize
         # at 1:1 scale, where the desired edge lands on an exact pointer pixel.
         toolbar_click("layers")  # Reopened editors start in Geometry, not Layers.
-        inspector_click(100, 158)
+        layer_click(0)
         resize_editor(942, 701, "sleep", ".3")
         drag((round(238 + 260 + resized_width), 489), (618, 489))
         save_layers(lambda values: values[-1]["width"] == 120 and values[-1]["height"] == 80,
@@ -3149,13 +3201,12 @@ def main():
         resize_inspector_fixture(1000, 781)
         toolbar_click("layers")  # Layers, preserving the Geometry panel's scroll position.
         shot(editor, "layers-original-locked")
-        inspector_click(88, 632)
+        layer_click(0, "more")
         shot(editor, "layers-transform-menu")
         run("xdotool", "key", "Escape")
 
         def transform(index, orientation, width, height):
-            inspector_click(88, 632)
-            inspector_click(58, 464 + 44 * index)
+            layer_menu(0, ["rotate-left", "rotate-right", "flip-horizontal", "flip-vertical"][index])
             save_layers(lambda values: values[0].get("orientation") == orientation,
                         f"transform {orientation}")
             assert saved(width, height, 0, 0), "fresh photo rotates its canvas"
@@ -3204,7 +3255,8 @@ def main():
         toolbar_click("undo")
         save_layers(lambda values: values[0].get("orientation") is None, "undo left rotation")
         assert saved(640, 360, 0, 0)
-        inspector_click(17, 299)  # A hidden, locked image remains transformable.
+        run("xdotool", "key", "Escape", "sleep", ".2")
+        layer_click(0, "eye")  # A hidden, locked image remains transformable.
         save_layers(lambda values: not values[0]["visible"], "hide original before transform")
         transform(2, "flip-horizontal", 640, 360)
         assert not layers()[0]["visible"]
@@ -3213,19 +3265,17 @@ def main():
         toolbar_click("undo")
         save_layers(lambda values: values[0]["visible"], "restore original visibility")
         assert_transformed_pixels("layers-transform-restored", True, True)
-        inspector_click(47, 591)  # Duplicate the locked original, not delete or move it.
+        layer_menu(0, "duplicate")  # Duplicate the locked original, not delete or move it.
         first = save_layers(lambda values: len(values) == 2, "duplicate original")
         copy_id = first[1]["id"]
         assert first[0]["locked"] and first[1]["visible"] and not first[1]["locked"]
         assert (first[1]["x"], first[1]["y"]) == (24, 24)
         assert first[0]["src"] == first[1]["src"]
         long_name = "Layer with a deliberately long name to retain"
-        field(371, long_name)
-        inspector_click(182, 371)
+        rename_layer(0, long_name)
         save_layers(lambda values: values[-1]["name"] == long_name, "renamed image")
-        field(459, 190)
-        field(503, 70)
-        inspector_click(34, 547)
+        image_field("x", 190)
+        image_field("y", 70)
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70), "moved duplicate")
         shot(editor, "layers-moved")
         fixture_pixel("layers-moved", 361, 277, (229, 179, 68))
@@ -3281,18 +3331,18 @@ def main():
         # Reopen starts in Geometry and undo history is intentionally not persisted.
         # Switch to Layers and restore explicitly so downstream fixtures stay stable.
         toolbar_click("layers")
-        inspector_click(100, 158)
-        field(459, 190)
-        field(503, 70)
-        inspector_click(34, 547)
+        layer_click(0)
+        image_field("x", 190)
+        image_field("y", 70)
         save_layers(lambda values: (values[-1]["x"], values[-1]["y"]) == (190, 70),
                     "restore snapped move after reopen")
-        field(415, 50)
-        inspector_click(154, 415)
+        layer_menu(0, "opacity")
+        shot(editor, "layers-opacity-menu")
+        run("xdotool", "key", "Escape", "sleep", ".2")
         save_layers(lambda values: values[-1]["opacity"] == 50, "half opacity")
         shot(editor, "layers-half-opacity")
         fixture_pixel("layers-half-opacity", 361, 277, (134, 144, 117), tolerance=1)
-        inspector_click(15, 300)  # Hide the copy; the original blue pixel is restored.
+        layer_click(0, "eye")  # Hide the copy; the original blue pixel is restored.
         save_layers(lambda values: not values[-1]["visible"], "hidden duplicate")
         shot(editor, "layers-hidden")
         fixture_pixel("layers-hidden", 361, 277, (40, 110, 166))
@@ -3300,22 +3350,24 @@ def main():
         save_layers(lambda values: values[-1]["visible"], "undo visibility")
         shot(editor, "layers-undo-visible")
         fixture_pixel("layers-undo-visible", 361, 277, (134, 144, 117), tolerance=1)
-        inspector_click(79, 300)
+        layer_click(0, "lock")
         save_layers(lambda values: values[-1]["locked"], "lock duplicate")
-        inspector_click(124, 591)  # Delete is disabled while locked.
+        layer_menu(0, "delete")  # Delete is disabled while locked.
+        shot(editor, "layers-locked-menu")
+        run("xdotool", "key", "Escape", "sleep", ".2")
         save_layers(lambda values: len(values) == 2 and values[-1]["locked"], "locked layer retained")
         shot(editor, "layers-locked")
-        inspector_click(79, 300)
+        layer_click(0, "lock")
         save_layers(lambda values: not values[-1]["locked"], "unlock duplicate")
-        inspector_click(47, 591)
+        layer_menu(0, "duplicate")
         third = save_layers(lambda values: len(values) == 3, "second duplicate")[-1]["id"]
         assert (layers()[-1]["x"], layers()[-1]["y"]) == (214, 94)
-        inspector_click(149, 547)  # Down: the third layer moves behind the first copy.
+        drag_layer(0, 1, below=True)  # The third layer moves behind the first copy.
         save_layers(lambda values: [value["id"] for value in values] == ["capture-background", third, copy_id], "reordered down")
         shot(editor, "layers-reordered")
-        inspector_click(92, 547)
+        layer_menu(1, "bring-front")
         save_layers(lambda values: [value["id"] for value in values] == ["capture-background", copy_id, third], "reordered up")
-        inspector_click(124, 591)
+        layer_menu(0, "delete")
         save_layers(lambda values: len(values) == 2 and values[-1]["id"] == copy_id, "deleted selected copy")
         toolbar_click("undo")
         save_layers(lambda values: len(values) == 3, "undo deletion")
@@ -3333,12 +3385,12 @@ def main():
         shot(editor, "layers-small-scrolled")
         resize_editor(1000, 701)
         inspector_move(180, 400, "click", "--repeat", "12", "4")
-        inspector_click(100, 202)  # Select and explicitly unlock the original.
-        inspector_click(79, 300)
+        layer_click(1)  # Select and explicitly unlock the original.
+        layer_click(1, "lock")
         save_layers(lambda values: not values[0]["locked"], "unlock original")
-        inspector_click(124, 591)
+        layer_menu(1, "delete")
         save_layers(lambda values: [value["id"] for value in values] == [copy_id], "delete original layer")
-        inspector_click(124, 591)
+        layer_menu(0, "delete")
         save_layers(lambda values: len(values) == 0, "empty saved document")
         shot(editor, "layers-empty")
         toolbar_click("undo")

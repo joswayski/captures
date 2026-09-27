@@ -1895,28 +1895,66 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
         DrawShape::Wand | DrawShape::Erase | DrawShape::Restore
     ) {
         ui.label("Remove a color, paint it out, or paint it back.");
+        // Shipping `.screenshot-format-buttons-3`: three equal toggle buttons.
         let gap = tokens.number("s-2");
-        let width = (ui.available_width() - 2. * gap) / 3.;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for (shape, label) in [
-                (DrawShape::Wand, "Wand"),
-                (DrawShape::Erase, "Erase"),
-                (DrawShape::Restore, "Restore"),
-            ] {
-                let active = view.draw_shape == shape;
-                let response = ui.add_sized(
-                    [width, tokens.number("h-md")],
-                    egui::Button::selectable(active, label),
-                );
-                response.widget_info(|| {
-                    egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label)
-                });
-                if response.clicked() {
-                    view.draw_shape = shape;
-                }
+        let (row, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), tokens.number("h-md")),
+            egui::Sense::hover(),
+        );
+        let width = (row.width() - 2. * gap) / 3.;
+        for (index, (shape, label)) in [
+            (DrawShape::Wand, "Wand"),
+            (DrawShape::Erase, "Erase"),
+            (DrawShape::Restore, "Restore"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(row.left() + index as f32 * (width + gap), row.top()),
+                egui::vec2(width, row.height()),
+            );
+            let response = ui.interact(
+                rect,
+                ui.scope_id().with(("eraser-mode", label)),
+                egui::Sense::click(),
+            );
+            let active = view.draw_shape == shape;
+            let fill = if active {
+                tokens.color("surface-selected")
+            } else if response.hovered() {
+                tokens.color("control-hover")
+            } else {
+                tokens.color("control")
+            };
+            ui.painter().rect(
+                rect,
+                tokens.number("r-md"),
+                fill,
+                egui::Stroke::new(
+                    1.,
+                    tokens.color(if active {
+                        "theme-accent"
+                    } else {
+                        "border-subtle"
+                    }),
+                ),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(tokens.number("text-sm")),
+                tokens.color(if active { "text" } else { "text-muted" }),
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label)
+            });
+            if response.clicked() {
+                view.draw_shape = shape;
             }
-        });
+        }
     }
     if view.draw_shape != previous_tool {
         view.cancel_drawing();
@@ -5111,9 +5149,11 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
     .labelled_by(label.id);
     ui.horizontal(|ui| {
         ui.label("Size");
-        crate::primitives::NumberInput::new("text-size", "Text size", 84.)
+        crate::primitives::NumberInput::new("text-size", "Text size", 96.)
             .range(8. ..=512.)
             .show(ui, tokens, &mut fields.staged.font_size);
+    });
+    ui.horizontal(|ui| {
         ui.checkbox(&mut fields.staged.bold, "Bold");
         ui.checkbox(&mut fields.staged.italic, "Italic");
     });
