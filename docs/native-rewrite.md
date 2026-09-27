@@ -1963,7 +1963,7 @@ pixels, undo/redo, draft restore and light/dark/minimum layouts are exercised on
 private X11. Windows/Wayland presentation remains unverified; AppKit style controls
 are described below. Physical input/accessibility acceptance stays open.
 
-The wgpu Import image action now picks one PNG/JPEG/WebP/TIFF file independently
+The wgpu Import image action picks PNG/JPEG/WebP/TIFF files independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
 normalizes EXIF orientation and supplies owned RGBA to the shared import command.
 RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
@@ -1981,7 +1981,7 @@ chooser fixture, asymmetric rendered pixels, cancellation/retry, undo/redo,
 reopen and stale-close handling in both appearances. That fixture does not verify
 physical file dialogs, input, accessibility or IME. Windows and Wayland share the
 implementation but remain presentation-unverified; AppKit import is described below.
-Batch picker import remains a separate slice. Shipping Tauri import is unchanged.
+Shipping Tauri import is unchanged.
 
 Both hosts now port the shipping canvas interactions from shared
 `captures_app::editor_canvas` geometry and copy. Image files dropped on the
@@ -2015,6 +2015,23 @@ disabled state, the hover tint, the loupe's sampled colour, the brush preview an
 the Apply crop halo in both appearances; AppKit is covered by XCTest only (macOS
 CI is its first compile). Windows/Wayland share the wgpu code but are
 presentation-unverified.
+
+Add images now matches shipping's multi-select file input on both hosts (rfd
+`pick_files`, `NSOpenPanel.allowsMultipleSelection`). The chosen files feed the
+canvas-drop import queue with no drop point: unsupported files are skipped (all
+unsupported reports the drop error), the first image takes the default placement and
+each later one stacks below the previous import, one undo step per file. The drop
+guide's snapped edge and the armed Expand canvas ghost now animate like shipping:
+`motion` adds `snap_bloom_breathe` (opacity and scale about the bloom's center),
+`snap_edge_pulse` and `expand_ghost_breathe`, and `editor_canvas` the accent bloom
+geometry (`min(96px, 42%)` with an 8 % overhang for the drop guide, 96 px for
+Expand canvas). Both hosts share one bloom/bar/particle painter with the Trim edges
+preview, whose bloom now breathes too. Under reduced motion every loop rests on the
+element's own style (bloom opacity 0.95, bar and ghost 1) with no particles and no
+redraw timer. The edge pulse's `brightness()` filter is omitted. Private X11 checks
+the multi-select portal request and import in both appearances; AppKit is covered by
+XCTest only (macOS CI is its first compile). Windows/Wayland share the wgpu code but
+are presentation-unverified.
 
 Separately, both live development hosts open external PNG/JPEG/WebP/GIF/MP4/WebM
 paths through the shared History-backed `open_media` request using repeatable

@@ -263,6 +263,28 @@ pub const TRIM_EDGE_BAR: f64 = 4.;
 pub const TRIM_BLOOM: f64 = 96.;
 pub const TRIM_BLOOM_STOPS: [(f64, f64); 4] = [(0., 0.5), (0.38, 0.2), (0.72, 0.06), (1., 0.)];
 
+/// `.screenshot-drop-snap-bloom` / `.screenshot-canvas-expand-bloom`: an
+/// accent gradient outward from a glowing edge (0.55 → 0.22 at 38 % → 0.06
+/// at 72 % → clear), faded along the edge by the 12 %/88 % mask. Expand
+/// canvas blooms are [`SNAP_BLOOM`] deep and span the edge; the drop guide's
+/// are `min(SNAP_BLOOM, SNAP_BLOOM_FRACTION × target)` deep and overhang each
+/// end by [`SNAP_BLOOM_OVERHANG`] of the edge's length.
+pub const SNAP_BLOOM: f64 = 96.;
+pub const SNAP_BLOOM_FRACTION: f64 = 0.42;
+pub const SNAP_BLOOM_OVERHANG: f64 = 0.08;
+pub const SNAP_BLOOM_STOPS: [(f64, f64); 4] = [(0., 0.55), (0.38, 0.22), (0.72, 0.06), (1., 0.)];
+/// `.screenshot-drop-snap-guide::after` / `.screenshot-canvas-expand-edge::after`:
+/// a 5 px accent pill straddling the edge, with `0 0 8px .95, 0 0 20px .65,
+/// 0 0 36px .4` glows.
+pub const SNAP_EDGE_BAR: f64 = 5.;
+
+/// Depth of the drop guide's bloom on a target `across` points deep
+/// perpendicular to the edge: shipping's `min(96px, 42%)`.
+#[must_use]
+pub fn drop_bloom_depth(across: f64) -> f64 {
+    SNAP_BLOOM.min(SNAP_BLOOM_FRACTION * across.max(0.))
+}
+
 /// Pixel strips Trim edges removes from each side of the current canvas.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct TrimMargins {
@@ -859,6 +881,13 @@ mod tests {
             expand_action_anchor(corner, 100., 80.).unwrap(),
             (Point { x: 100., y: 76. }, CanvasEdge::Right)
         );
+    }
+
+    #[test]
+    fn drop_bloom_depth_is_capped_like_shipping() {
+        assert_eq!(drop_bloom_depth(100.), 42.);
+        assert_eq!(drop_bloom_depth(1_000.), SNAP_BLOOM);
+        assert_eq!(drop_bloom_depth(-4.), 0.);
     }
 
     #[test]
