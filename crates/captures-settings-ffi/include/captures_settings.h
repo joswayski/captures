@@ -43,8 +43,10 @@ char *captures_update_notice_request_v1(const char *request_json);
  * session_error?} returns {line, text: string|null, changed}; keep the returned
  * line for the next event. tooltip_frame {anchor, text_width, text_height,
  * right_aligned, progress 0...1, bounds} takes top-left rects and returns the
- * styled tooltip rect. Envelopes follow captures_app_request_v1; free with
- * captures_settings_free_v1. */
+ * styled tooltip rect. hidden_notice {shortcut, platform: "macos"|"windows"|
+ * "linux"} returns the "Recording controls hidden" card copy {title,
+ * before_keys, keys, after_keys, detail} and its {width, height}. Envelopes
+ * follow captures_app_request_v1; free with captures_settings_free_v1. */
 char *captures_recording_hud_request_v1(const char *request_json);
 
 /* Event-loop-thread-only native capture-launch shortcuts. One owner per process.

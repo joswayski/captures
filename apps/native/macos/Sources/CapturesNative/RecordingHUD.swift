@@ -87,6 +87,31 @@ enum RecordingHUDPolicy {
         return (next, result["text"] as? String)
     }
 
+    /// Shipping `RecordingControlsHiddenNotice` copy (the sentence runs
+    /// `beforeKeys`, one key chip per `keys` entry, then `afterKeys`) and card size.
+    struct HiddenNotice: Equatable {
+        let title: String
+        let beforeKeys: String
+        let keys: [String]
+        let afterKeys: String
+        let detail: String
+        let size: NSSize
+    }
+
+    static func hiddenNotice(shortcut: String) -> HiddenNotice {
+        let result = request(["operation": "hidden_notice", "shortcut": shortcut, "platform": "macos"])
+        let title = result?.string("title", "Recording controls hidden") ?? "Recording controls hidden"
+        let before = result?.string("before_keys", "Open Captures from the menu bar, or press")
+            ?? "Open Captures from the menu bar, or press"
+        let keys = result?["keys"] as? [String] ?? []
+        let after = result?.string("after_keys", "to bring them back.") ?? "to bring them back."
+        let width = (result?["width"] as? NSNumber)?.doubleValue ?? 418
+        let height = (result?["height"] as? NSNumber)?.doubleValue ?? 74
+        let detail = result?["detail"] as? String ?? ([before] + keys + [after]).joined(separator: " ")
+        return HiddenNotice(title: title, beforeKeys: before, keys: keys, afterKeys: after,
+            detail: detail, size: NSSize(width: width, height: height))
+    }
+
     /// Flipped HUD coordinates in and out.
     static func tooltipFrame(anchor: NSRect, textSize: NSSize, rightAligned: Bool,
                              progress: Double, bounds: NSRect) -> NSRect? {
@@ -548,10 +573,78 @@ final class RecordingHUDPanel: NSPanel {
     }
 }
 
+/// A rounded token tile with a centred shared shipping icon: shipping
+/// `.recording-controls-hidden-icon` and `.recording-saved-icon`.
+/// `CaptureIcon`'s spark (its last path) is filled, like `.capture-icon-spark`.
+final class ShippingIconTile: NSView {
+    override var isFlipped: Bool { true }
+    let glyph: String
+    private let tokens: Tokens
+    private let inkToken: String
+    private let glyphSide: CGFloat
+    private let strokeUnits: CGFloat
+
+    init(frame: NSRect, tokens: Tokens, glyph: String, fill: String, ink: String,
+         glyphSide: CGFloat, strokeUnits: CGFloat) {
+        self.glyph = glyph; self.tokens = tokens; inkToken = ink
+        self.glyphSide = glyphSide; self.strokeUnits = strokeUnits
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = tokens.number("r-lg")
+        layer?.backgroundColor = tokens.color(fill).cgColor
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = NSRect(x: (bounds.width - glyphSide) / 2, y: (bounds.height - glyphSide) / 2,
+                          width: glyphSide, height: glyphSide)
+        let ink = tokens.color(inkToken)
+        ink.setStroke(); ink.setFill()
+        let lines = ShippingIcons.polylines(glyph)
+        for (index, line) in lines.enumerated() where line.count > 1 {
+            let path = NSBezierPath()
+            path.lineWidth = strokeUnits * rect.width / 24
+            path.lineCapStyle = .round; path.lineJoinStyle = .round
+            for (pointIndex, point) in line.enumerated() {
+                let mapped = NSPoint(x: rect.minX + point.x * rect.width / 24,
+                                     y: rect.minY + point.y * rect.height / 24)
+                if pointIndex == 0 { path.move(to: mapped) } else { path.line(to: mapped) }
+            }
+            if glyph == "capture" && index == lines.count - 1 {
+                path.close(); path.fill()
+            } else {
+                path.stroke()
+            }
+        }
+    }
+}
+
+/// Shipping `.recording-controls-hidden-notice`: an accent capture tile, then a
+/// bold title over left-aligned copy whose New Capture shortcut is drawn as
+/// `kbd` chips that wrap with the sentence (`flex-wrap`, `gap: var(--s-2)`).
 final class RecordingControlsHiddenNoticeView: NSView {
     override var isFlipped: Bool { true }
 
-    init(frame: NSRect, tokens: Tokens) {
+    struct BodyItem: Equatable {
+        let text: String
+        let frame: NSRect
+        let chip: Bool
+    }
+
+    let notice: RecordingHUDPolicy.HiddenNotice
+    let tile: ShippingIconTile
+    let titleLabel: NSTextField
+    private let tokens: Tokens
+    private(set) var bodyItems: [BodyItem] = []
+
+    init(frame: NSRect, tokens: Tokens, notice: RecordingHUDPolicy.HiddenNotice) {
+        self.notice = notice; self.tokens = tokens
+        let padding = tokens.number("s-5")
+        tile = ShippingIconTile(frame: NSRect(x: padding, y: (frame.height - 34) / 2, width: 34, height: 34),
+            tokens: tokens, glyph: "capture", fill: "theme-accent", ink: "theme-accent-ink",
+            glyphSide: 20, strokeUnits: 1.8)
+        titleLabel = NSTextField(labelWithString: notice.title)
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
@@ -562,38 +655,114 @@ final class RecordingControlsHiddenNoticeView: NSView {
         layer?.shadowOpacity = 0.4
         layer?.shadowRadius = 18
         layer?.shadowOffset = NSSize(width: 0, height: -6)
-        setAccessibilityRole(.group)
-        setAccessibilityLabel("Recording controls hidden")
-
-        let title = NSTextField(labelWithString: "Recording controls hidden")
-        title.frame = NSRect(x: 20, y: 14, width: 320, height: 22)
-        title.alignment = .center
-        title.font = .systemFont(ofSize: 15, weight: .semibold)
-        title.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue)
-        addSubview(title)
-
-        let detail = NSTextField(wrappingLabelWithString:
-            "Open Captures from the menu bar, reactivate the app, or press New Capture to bring them back.")
-        detail.frame = NSRect(x: 20, y: 40, width: 320, height: 42)
-        detail.alignment = .center
-        detail.font = .systemFont(ofSize: 11, weight: .medium)
-        detail.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
-        addSubview(detail)
+        // Shipping `role="status"`.
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("\(notice.title). \(notice.detail)")
+        addSubview(tile)
+        titleLabel.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
+        titleLabel.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        addSubview(titleLabel)
+        layoutContent()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var textAttributes: [NSAttributedString.Key: Any] {
+        [.font: NSFont.systemFont(ofSize: tokens.number("text-xs")),
+         .foregroundColor: tokens.color("glass-text-muted")]
+    }
+    private var chipAttributes: [NSAttributedString.Key: Any] {
+        [.font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
+         .foregroundColor: tokens.color(RecordingHUDColorToken.glassText.rawValue)]
+    }
+
+    /// Positions the title and the wrapped body from measured text, so any
+    /// system font keeps every piece inside the card.
+    private func layoutContent() {
+        let padding = tokens.number("s-5"), gap = tokens.number("s-2")
+        let left = tile.frame.maxX + padding
+        let width = max(0, bounds.width - padding - left)
+        let titleHeight = ceil(titleLabel.intrinsicContentSize.height)
+        // `kbd`: 2 × 5 pt padding, a 20 pt minimum width and a 2 pt bottom border.
+        let pieces: [(String, Bool)] = [(notice.beforeKeys, false)] + notice.keys.map { ($0, true) }
+            + [(notice.afterKeys, false)]
+        let sizes = pieces.map { piece -> NSSize in
+            let (text, chip) = piece
+            let size = (text as NSString).size(withAttributes: chip ? chipAttributes : textAttributes)
+            return chip ? NSSize(width: max(20, ceil(size.width) + 12), height: ceil(size.height) + 7)
+                : NSSize(width: min(width, ceil(size.width)), height: ceil(size.height))
+        }
+        let lineHeight = sizes.map(\.height).max() ?? 0
+        var rows: [[Int]] = [[]]
+        var x: CGFloat = 0
+        for (index, size) in sizes.enumerated() {
+            if x > 0 && x + size.width > width { rows.append([]); x = 0 }
+            rows[rows.count - 1].append(index)
+            x += size.width + gap
+        }
+        let bodyHeight = CGFloat(rows.count) * lineHeight + CGFloat(rows.count - 1) * gap
+        let top = floor((bounds.height - titleHeight - 3 - bodyHeight) / 2)
+        titleLabel.frame = NSRect(x: left, y: top, width: width, height: titleHeight)
+        var items: [BodyItem] = []
+        var y = top + titleHeight + 3
+        for row in rows {
+            x = 0
+            for index in row {
+                let size = sizes[index]
+                items.append(BodyItem(text: pieces[index].0,
+                    frame: NSRect(x: left + x, y: y + (lineHeight - size.height) / 2,
+                                  width: size.width, height: size.height),
+                    chip: pieces[index].1))
+                x += size.width + gap
+            }
+            y += lineHeight + gap
+        }
+        bodyItems = items
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        for item in bodyItems {
+            if item.chip {
+                let radius = tokens.number("r-xs")
+                let chip = NSBezierPath(roundedRect: item.frame.insetBy(dx: 0.5, dy: 0.5),
+                                        xRadius: radius, yRadius: radius)
+                NSColor.white.withAlphaComponent(0.08).setFill(); chip.fill()
+                tokens.color("glass-border-strong").setStroke()
+                chip.lineWidth = 1; chip.stroke()
+                // `border-bottom-width: 2px`.
+                let bottom = NSBezierPath()
+                bottom.move(to: NSPoint(x: item.frame.minX + radius, y: item.frame.maxY - 1.5))
+                bottom.line(to: NSPoint(x: item.frame.maxX - radius, y: item.frame.maxY - 1.5))
+                bottom.lineWidth = 1; bottom.stroke()
+                let size = (item.text as NSString).size(withAttributes: chipAttributes)
+                (item.text as NSString).draw(at: NSPoint(x: item.frame.midX - size.width / 2,
+                                                         y: item.frame.minY + 3),
+                                             withAttributes: chipAttributes)
+            } else {
+                (item.text as NSString).draw(with: item.frame,
+                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                    attributes: textAttributes)
+            }
+        }
+    }
 }
 
 final class RecordingControlsHiddenNoticePanel: NSPanel {
     static let motion = "recording_controls_hidden_lifecycle"
 
-    init(screen: NSScreen, tokens: Tokens) {
-        let size = NSSize(width: 360, height: 96)
+    init(screen: NSScreen, tokens: Tokens, shortcut: String) {
+        let hiddenNotice = RecordingHUDPolicy.hiddenNotice(shortcut: shortcut)
+        let size = hiddenNotice.size
         let visible = screen.visibleFrame
-        let origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 23)
+        // Centred where the 430 × 102 HUD sat (20 pt above the visible bottom).
+        let origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 20 + (102 - size.height) / 2)
         super.init(contentRect: NSRect(origin: origin, size: size), styleMask: [.borderless],
             backing: .buffered, defer: false)
-        title = "Recording controls hidden"
+        title = hiddenNotice.title
         isReleasedWhenClosed = false
         isOpaque = false
         backgroundColor = .clear
@@ -603,6 +772,6 @@ final class RecordingControlsHiddenNoticePanel: NSPanel {
         sharingType = .none
         ignoresMouseEvents = true
         contentView = RecordingControlsHiddenNoticeView(
-            frame: NSRect(origin: .zero, size: size), tokens: tokens)
+            frame: NSRect(origin: .zero, size: size), tokens: tokens, notice: hiddenNotice)
     }
 }

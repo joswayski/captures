@@ -835,7 +835,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var playbackReachedEOF = false
     private var playbackFramePresented = false
     private var playbackLoopEnabled = false
-    private var playbackSoundEnabled = false
+    /// Shipping previews through an unmuted `<video>`: Sound starts on.
+    private var playbackSoundEnabled = true
     private var playbackAudioEnabled: Bool?
     private var gifFramesPerSecond: UInt16 = 15
     private var gifMaximumWidth: UInt32 = 800
@@ -976,8 +977,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var cropAdjustmentButton: CaptureButton!
     private var previewFitButton: CaptureButton!
     private var previewActualButton: CaptureButton!
-    private let playbackLoop = NSButton(checkboxWithTitle: "Loop preview", target: nil, action: nil)
-    private let playbackSound = NSButton(checkboxWithTitle: "Sound", target: nil, action: nil)
+    private let playbackLoop = RecordingPreviewToggle(title: "Loop preview", leadingGlyph: "↻")
+    private let playbackSound = RecordingPreviewToggle(title: "Sound", leadingGlyph: nil)
     private var destinationDirectory = ""
     private var compressQuality = "highest"
     private var estimating = false
@@ -1062,7 +1063,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         invalidateComparison()
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
-        playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
+        playbackSoundEnabled = true; playbackAudioEnabled = nil; playbackSound.state = .on
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
         if gifMaximumWidthControl.item(withTitle: "Original") != nil {
@@ -1294,7 +1295,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         playbackButton.primary = true; playbackButton.circular = true
         playbackButton.iconOnly = true; playbackButton.icon = .shipping("resume")
-        playbackButton.setAccessibilityLabel("Play silent recording preview")
+        playbackButton.setAccessibilityLabel(playbackSoundEnabled
+            ? "Play recording preview with sound" : "Play silent recording preview")
+        playbackLoop.tokens = tokens; playbackSound.tokens = tokens
+        playbackSound.state = playbackSoundEnabled ? .on : .off
         playbackLoop.target = self; playbackLoop.action = #selector(playbackLoopChanged)
         playbackLoop.setAccessibilityLabel("Loop recording preview")
         playbackLoop.toolTip = "Repeat the accepted trim until paused. This changes only playback, not the saved recording."
@@ -3312,7 +3316,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             playbackButton?.setAccessibilityLabel(playbackSoundEnabled
                 ? "Play recording preview with sound" : "Play silent recording preview")
             playbackButton?.toolTip = stagedDiffers ? "Apply staged edits before playing."
-                : "Play the accepted trim and mix; Sound is off by default."
+                : "Play the accepted trim and mix with Sound on."
             playbackButton?.isEnabled = available && valid && !stagedDiffers
                 && !cropAdjustmentActive
         case .playing:
@@ -3464,7 +3468,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackCancel = nil; playbackState = .idle
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
-        playbackSoundEnabled = false; playbackAudioEnabled = nil; playbackSound.state = .off
+        playbackSoundEnabled = true; playbackAudioEnabled = nil; playbackSound.state = .on
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
         if gifMaximumWidthControl.item(withTitle: "Original") != nil {
@@ -3606,6 +3610,76 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         alert.addButton(withTitle: "Keep editing")
         alert.addButton(withTitle: "Discard edits")
         return alert.runModal() == .alertSecondButtonReturn
+    }
+}
+
+/// Shipping `.recording-preview-loop`: a quiet pill toggle in the preview
+/// toolbar. Transparent with subtle ink, `--surface-hover` on hover, and
+/// `--surface-active` with a `--border` ring while on. It keeps NSButton's
+/// on/off state, keyboard activation and accessibility.
+final class RecordingPreviewToggle: NSButton {
+    var tokens: Tokens? { didSet { needsDisplay = true } }
+    /// A leading text glyph, e.g. the shipping "↻" before Loop preview.
+    let leadingGlyph: String?
+    private var hoverTracking: NSTrackingArea?
+    private var hovered = false
+
+    init(title: String, leadingGlyph: String?) {
+        self.leadingGlyph = leadingGlyph
+        super.init(frame: .zero)
+        self.title = title
+        setButtonType(.pushOnPushOff)
+        isBordered = false
+        focusRingType = .none
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var state: NSControl.StateValue { didSet { needsDisplay = true } }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder(); needsDisplay = true; return accepted
+    }
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder(); needsDisplay = true; return accepted
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let tokens else { return }
+        let on = state == .on
+        let lit = isEnabled && (hovered || cell?.isHighlighted == true)
+        let radius = tokens.number("r-md")
+        let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        if on {
+            tokens.color("surface-active").setFill(); pill.fill()
+            tokens.color("border").setStroke(); pill.lineWidth = 1; pill.stroke()
+        } else if lit {
+            tokens.color("surface-hover").setFill(); pill.fill()
+        }
+        let ink = tokens.color(!isEnabled ? "text-faint" : on || lit ? "text" : "text-subtle")
+        let label: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium), .foregroundColor: ink]
+        let glyph: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: ink]
+        let titleSize = (title as NSString).size(withAttributes: label)
+        let glyphSize = leadingGlyph.map { ($0 as NSString).size(withAttributes: glyph) } ?? .zero
+        let gap = leadingGlyph == nil ? 0 : tokens.number("s-3")
+        var x = max(tokens.number("s-4"), (bounds.width - glyphSize.width - gap - titleSize.width) / 2)
+        if let leadingGlyph {
+            (leadingGlyph as NSString).draw(at: NSPoint(x: x, y: (bounds.height - glyphSize.height) / 2),
+                                            withAttributes: glyph)
+            x += glyphSize.width + gap
+        }
+        (title as NSString).draw(at: NSPoint(x: x, y: (bounds.height - titleSize.height) / 2),
+                                 withAttributes: label)
+        if window?.firstResponder === self && isEnabled { drawFocusRing(tokens, in: bounds, radius: radius) }
     }
 }
 

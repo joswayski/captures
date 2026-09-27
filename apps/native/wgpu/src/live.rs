@@ -1253,6 +1253,8 @@ pub struct Live {
     recording_screenshot_settings: Option<AppSettings>,
     recording_controls_hidden: Option<u64>,
     recording_hidden_notice_until: Option<Instant>,
+    /// The saved New Capture shortcut, for the hidden-controls notice's chips.
+    new_capture_shortcut: String,
     recording_restore_available: bool,
     history_refresh_status: Option<String>,
     can_hide: Option<bool>,
@@ -1546,6 +1548,7 @@ impl Live {
             recording_screenshot_settings: None,
             recording_controls_hidden: None,
             recording_hidden_notice_until: None,
+            new_capture_shortcut: String::new(),
             recording_restore_available: false,
             history_refresh_status: None,
             can_hide: None,
@@ -1906,6 +1909,7 @@ impl Live {
             .open_editor_after_recording
             .then(|| PathBuf::from(&settings.output_directory));
         self.include_cursor = settings.show_cursor_in_screenshots;
+        self.new_capture_shortcut = settings.new_capture_shortcut.clone();
         self.recording_screenshot_settings = matches!(
             request,
             CaptureRequest::NewCapture | CaptureRequest::Recording(_)
@@ -5610,14 +5614,14 @@ impl Live {
             let microphone_peak = self.recording_microphone_peak;
             let position = target.position
                 + egui::vec2(
-                    (target.size.x - 430.).max(0.) / 2.,
-                    (target.size.y - 102.).max(0.) - 20.,
+                    (target.size.x - crate::recording_hud::SIZE.x).max(0.) / 2.,
+                    (target.size.y - crate::recording_hud::SIZE.y).max(0.) - 20.,
                 );
             ctx.show_viewport_deferred(
                 egui::ViewportId::from_hash_of("recording-controls"),
                 egui::ViewportBuilder::default()
                     .with_title("Captures Recording Controls")
-                    .with_inner_size([430., 102.])
+                    .with_inner_size(crate::recording_hud::SIZE)
                     .with_position(position)
                     .with_transparent(true)
                     .with_decorations(false)
@@ -5698,12 +5702,22 @@ impl Live {
                     .filter(|deadline| *deadline > Instant::now())
             {
                 let notice_tokens = t.clone();
+                let copy = captures_app::recording_hud::hidden_notice_copy(
+                    &self.new_capture_shortcut,
+                    crate::preferences::shortcut_platform(),
+                );
+                let notice_size = egui::vec2(
+                    captures_app::recording_hud::HIDDEN_NOTICE_WIDTH as f32,
+                    captures_app::recording_hud::HIDDEN_NOTICE_HEIGHT as f32,
+                );
+                // Centred where the HUD was, like shipping `hide_recording_controls`.
+                let offset = (crate::recording_hud::SIZE - notice_size) / 2.;
                 ctx.show_viewport_deferred(
                     egui::ViewportId::from_hash_of("recording-controls-hidden"),
                     egui::ViewportBuilder::default()
-                        .with_title("Recording controls hidden")
-                        .with_inner_size([360., 96.])
-                        .with_position(position + egui::vec2(35., 3.))
+                        .with_title(captures_app::recording_hud::HIDDEN_NOTICE_TITLE)
+                        .with_inner_size(notice_size)
+                        .with_position(position + offset)
                         .with_transparent(true)
                         .with_decorations(false)
                         .with_always_on_top()
@@ -5712,9 +5726,8 @@ impl Live {
                         notice_tokens.glass_controls(ui);
                         // Shipping `recording-controls-hidden-lifecycle` (6 s) ends
                         // 200 ms before the 6.2 s window closes.
-                        let lifecycle = notice_tokens.motion(
-                            captures_app::motion::Motion::RecordingControlsHiddenLifecycle,
-                        );
+                        let lifecycle = notice_tokens
+                            .motion(captures_app::motion::Motion::RecordingControlsHiddenLifecycle);
                         let now = Instant::now();
                         let until = deadline.saturating_duration_since(now).as_secs_f64() * 1000.;
                         let since = RECORDING_HIDDEN_NOTICE_MS - until;
@@ -5729,23 +5742,7 @@ impl Live {
                         }
                         let rect = ui.max_rect();
                         crate::motion::with_pose(ui, pose, rect, |ui| {
-                        egui::Frame::new()
-                            .fill(notice_tokens.color("glass-strong"))
-                            .stroke(egui::Stroke::new(
-                                1.,
-                                notice_tokens.color("glass-border"),
-                            ))
-                            .corner_radius(notice_tokens.number("r-xl") as u8)
-                            .inner_margin(egui::Margin::symmetric(20, 14))
-                            .show(ui, |ui| {
-                                ui.set_width(320.);
-                                ui.vertical_centered(|ui| {
-                                    ui.strong("Recording controls hidden");
-                                    ui.label(
-                                        "Open Captures from the tray, reactivate the app, or press New Capture to bring them back.",
-                                    );
-                                });
-                            });
+                            crate::recording_hud::show_hidden_notice(ui, &notice_tokens, &copy);
                         });
                     },
                 );

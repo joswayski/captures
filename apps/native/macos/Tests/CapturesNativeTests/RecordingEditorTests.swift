@@ -702,8 +702,11 @@ final class RecordingEditorTests: XCTestCase {
         let sound = try checkbox("Preview accepted recording audio", in: controller.root)
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
-        XCTAssertEqual(sound.state, .off, "each item defaults Sound off")
+        XCTAssertEqual(sound.state, .on, "each item defaults Sound on, like the shipping <video>")
+        XCTAssertEqual(play.accessibilityLabel(), "Play recording preview with sound")
         let initialRequests = worker.requests.count
+        sound.performClick(nil)
+        XCTAssertEqual(sound.state, .off); XCTAssertFalse(controller.dirty)
         sound.performClick(nil)
         XCTAssertEqual(sound.state, .on); XCTAssertFalse(controller.dirty)
         XCTAssertEqual(worker.requests.count, initialRequests)
@@ -763,11 +766,11 @@ final class RecordingEditorTests: XCTestCase {
                                 historyRoot: "/History", outputDirectory: "/Exports")
         let cleanSound = try checkbox("Preview accepted recording audio", in: cleanController.root)
         cleanSound.performClick(nil)
-        XCTAssertEqual(cleanSound.state, .on); XCTAssertFalse(cleanController.dirty)
+        XCTAssertEqual(cleanSound.state, .off); XCTAssertFalse(cleanController.dirty)
         cleanController.present(artifact: recordingArtifact(id: "clean-next-recording"),
                                 historyRoot: "/History", outputDirectory: "/Exports")
         XCTAssertEqual(cleanWorker.openCount, 2, "a clean item switch opens the new History item")
-        XCTAssertEqual(cleanSound.state, .off, "a successful new-item open resets Sound off")
+        XCTAssertEqual(cleanSound.state, .on, "a successful new-item open resets Sound on")
         XCTAssertFalse(cleanController.dirty)
     }
 
@@ -788,7 +791,7 @@ final class RecordingEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: recordingArtifact(id: name), historyRoot: "/History",
                                outputDirectory: "/Exports")
-            try checkbox("Preview accepted recording audio", in: controller.root).performClick(nil)
+            XCTAssertEqual(try checkbox("Preview accepted recording audio", in: controller.root).state, .on)
             try button("Play", in: controller.root).performClick(nil)
             XCTAssertTrue(labels(in: controller.root).contains(expected))
             worker.completePlayback(.success(.cancelled))
@@ -803,7 +806,7 @@ final class RecordingEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(id: "gif"), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        try checkbox("Preview accepted recording audio", in: controller.root).performClick(nil)
+        XCTAssertEqual(try checkbox("Preview accepted recording audio", in: controller.root).state, .on)
         try button("Play", in: controller.root).performClick(nil)
         XCTAssertTrue(labels(in: controller.root).contains("GIF · no audio"))
     }
@@ -859,7 +862,7 @@ final class RecordingEditorTests: XCTestCase {
             .compactMap { $0 as? NSImageView }.first)
         let acceptedFrame = preview.image
 
-        sound.performClick(nil)
+        XCTAssertEqual(sound.state, .on, "Sound starts on")
         play.performClick(nil)
         XCTAssertEqual(worker.playbackStarts, [1_937])
         play.performClick(nil)
@@ -903,6 +906,15 @@ final class RecordingEditorTests: XCTestCase {
 
         XCTAssertEqual(seek.doubleValue, 0, "layout coverage keeps the playhead at source start")
         XCTAssertTrue(play.circular && play.iconOnly, "Play is the shipping overlay circle")
+        // Shipping `.recording-preview-loop`: quiet pill toggles, not checkboxes.
+        XCTAssertEqual((loop as? RecordingPreviewToggle)?.leadingGlyph, "↻")
+        XCTAssertNil((sound as? RecordingPreviewToggle)?.leadingGlyph)
+        XCTAssertNotNil(sound as? RecordingPreviewToggle)
+        XCTAssertEqual(loop.state, .off, "Loop preview starts off")
+        loop.performClick(nil)
+        XCTAssertEqual(loop.state, .on, "the pill keeps NSButton on/off state")
+        loop.performClick(nil)
+        XCTAssertEqual(loop.state, .off)
         for size in [NSSize(width: 760, height: 540), NSSize(width: 960, height: 600)] {
             controller.window.setContentSize(size)
             for view in [play, fit, seek, loop, sound, caption] as [NSView] {
@@ -1182,7 +1194,7 @@ final class RecordingEditorTests: XCTestCase {
             let sound = try checkbox("Preview accepted recording audio", in: controller.root)
             worker.playbackMetadata = RecordingPlaybackMetadata(startPositionMilliseconds: 400,
                 width: 640, height: 360, framesPerSecond: 24, audioEnabled: true)
-            sound.performClick(nil)
+            XCTAssertEqual(sound.state, .on, "Sound starts on")
             loop.state = .on; _ = loop.sendAction(loop.action, to: loop.target)
             play.performClick(nil)
             worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 700,
@@ -1259,7 +1271,7 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertTrue(gifNote.superview!.bounds.contains(gifNote.frame))
             XCTAssertTrue(try checkbox("Mono audio output", in: controller.root).isHidden)
             XCTAssertEqual(try field("Recording preview mode", in: controller.root).stringValue,
-                           "Silent playback")
+                           "GIF · no audio")
             try render(controller.root,
                        name: "recording-editor-gif-24-fps-minimum-\(appearance)")
 
@@ -2500,7 +2512,7 @@ final class RecordingEditorTests: XCTestCase {
         silent.present(artifact: recordingArtifact(), historyRoot: "/History",
                        outputDirectory: "/Exports")
         XCTAssertEqual(try field("Recording preview mode", in: silent.root).stringValue,
-                       "Silent playback")
+                       "No audio tracks")
         XCTAssertTrue(try checkbox("Mono audio output", in: silent.root).isHiddenOrHasHiddenAncestor,
                       "a recording without audio shows no Audio card")
         XCTAssertTrue(try field("System audio volume percent", in: silent.root).isHiddenOrHasHiddenAncestor)
@@ -4103,12 +4115,12 @@ final class RecordingEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.window.setContentSize(NSSize(width: 960, height: 560))
         let initial = try XCTUnwrap(controller.window.initialFirstResponder)
-        XCTAssertEqual(initial.accessibilityLabel(), "Play silent recording preview", "Play starts focused")
+        XCTAssertEqual(initial.accessibilityLabel(), "Play recording preview with sound", "Play starts focused")
         let fit = try XCTUnwrap(KeyViewLoop.order(from: initial).first { ($0 as? NSButton)?.title == "Fit" })
         let order = KeyViewLoop.order(from: fit)
         var previous = 0
         for name in ["100%",
-                     "Play silent recording preview", "Recording crop canvas",
+                     "Play recording preview with sound", "Recording crop canvas",
                      "Loop recording preview", "Preview accepted recording audio", "Recording trim start handle",
                      "Trim start milliseconds", "GIF frame rate", "Crop recording",
                      "Adjust recording crop graphically", "Recording crop X", "Recording crop height",

@@ -154,6 +154,61 @@ impl Notice {
     }
 }
 
+impl Notice {
+    /// Shipping `.recording-saved-copy p`: the error, or the saved/ready line.
+    pub fn detail(&self) -> &str {
+        self.error
+            .as_deref()
+            .unwrap_or(if self.saved_path.is_some() {
+                "Saved to your Captures folder."
+            } else {
+                "Kept in Capture History for 30 days. Save a copy anytime."
+            })
+    }
+
+    /// Shipping `.recording-saved-reveal`: its label and leading icon.
+    pub fn primary(&self) -> (&'static str, &'static str) {
+        match (self.saved_path.is_some(), self.pending) {
+            (true, true) => ("Opening…", "folder"),
+            (true, false) => ("Show in Folder", "folder"),
+            (false, true) => ("Saving…", "save"),
+            (false, false) => ("Save file", "save"),
+        }
+    }
+}
+
+/// Shipping `.recording-saved-notice` geometry: one row of a 38 px check
+/// tile, the copy and the action button (`grid-template-columns: 38px 1fr
+/// auto`, `gap` and padding `--s-5`, 38 px right padding for the dismiss ×).
+pub struct Layout {
+    pub tile: egui::Rect,
+    pub copy_left: f32,
+    pub button: egui::Rect,
+    pub dismiss: egui::Rect,
+}
+
+pub fn layout(tokens: &Tokens, button_width: f32) -> Layout {
+    let padding = tokens.number("s-5");
+    let gap = tokens.number("s-5");
+    let height = tokens.number("h-md");
+    let tile = egui::Rect::from_min_size(
+        egui::pos2(padding, (SIZE.y - 38.) / 2.),
+        egui::Vec2::splat(38.),
+    );
+    let button = egui::Rect::from_min_size(
+        egui::pos2(SIZE.x - 38. - button_width, (SIZE.y - height) / 2.),
+        egui::vec2(button_width, height),
+    );
+    // `.recording-saved-dismiss { top: 10px; right: 10px; 24 × 24 }`.
+    let dismiss = egui::Rect::from_min_size(egui::pos2(SIZE.x - 34., 10.), egui::Vec2::splat(24.));
+    Layout {
+        tile,
+        copy_left: tile.right() + gap,
+        button,
+        dismiss,
+    }
+}
+
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Action> {
     let mut action = None;
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE);
@@ -166,91 +221,152 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Actio
         egui::StrokeKind::Inside,
     );
     tokens.glass_controls(ui);
-    let icon = egui::Rect::from_min_size(egui::pos2(18., 18.), egui::vec2(20., 20.));
+    let semibold = egui::FontFamily::Name("semibold".into());
+    let (label, icon) = notice.primary();
+    let button_font = egui::FontId::new(tokens.number("text-xs"), semibold.clone());
+    let label_width = ui
+        .painter()
+        .layout_no_wrap(
+            label.into(),
+            button_font.clone(),
+            tokens.color("glass-text"),
+        )
+        .size()
+        .x;
+    // `padding: 0 var(--s-4)`, a 14 px icon, `gap: var(--s-3)` and a 1 px border.
+    let button_width =
+        (2. * tokens.number("s-4") + 14. + tokens.number("s-3") + label_width + 2.).ceil();
+    let layout = layout(tokens, button_width);
+
+    // `.recording-saved-icon`: a positive tile with a 20 px, 2.2-stroke check.
     ui.painter()
-        .circle_filled(icon.center(), 10., tokens.color("positive"));
-    ui.painter().line_segment(
-        [
-            icon.center() + egui::vec2(-5., 0.),
-            icon.center() + egui::vec2(-1., 4.),
-        ],
-        Stroke::new(2., tokens.color("positive-ink")),
+        .rect_filled(layout.tile, tokens.number("r-lg"), tokens.color("positive"));
+    crate::capture_controls::paint_icon(
+        ui.painter(),
+        "check",
+        egui::Rect::from_center_size(layout.tile.center(), egui::Vec2::splat(20.)),
+        2.2,
+        tokens.color("positive-ink"),
     );
-    ui.painter().line_segment(
-        [
-            icon.center() + egui::vec2(-1., 4.),
-            icon.center() + egui::vec2(5., -4.),
-        ],
-        Stroke::new(2., tokens.color("positive-ink")),
+
+    let copy_width = (layout.button.left() - tokens.number("s-5") - layout.copy_left).max(0.);
+    let title_font = egui::FontId::new(tokens.number("text-md"), semibold);
+    let title = ui.painter().layout_no_wrap(
+        notice.title().into(),
+        title_font.clone(),
+        tokens.color("glass-text"),
     );
-    ui.scope_builder(
-        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-            egui::pos2(46., 14.),
-            egui::vec2(352., 52.),
-        )),
-        |ui| {
-            ui.label(
-                RichText::new(notice.title())
-                    .strong()
-                    .color(tokens.color("glass-text")),
-            );
-            crate::primitives::glass_scroll_area(
-                ui,
-                tokens,
-                egui::ScrollArea::vertical()
-                    .id_salt("recording-notice-detail")
-                    .max_height(32.)
-                    .min_scrolled_height(0.),
-                |ui| {
-                    ui.label(
-                        RichText::new(notice.error.as_deref().unwrap_or(
-                            if notice.saved_path.is_some() {
-                                "Saved to your Captures folder."
-                            } else {
-                                "Kept in Capture History for 30 days. Save a copy anytime."
-                            },
-                        ))
-                        .small()
-                        .color(tokens.color("glass-text")),
-                    )
-                    .on_hover_text(notice.error.as_deref().unwrap_or(""));
-                },
-            );
-        },
+    let detail_font = egui::FontId::proportional(tokens.number("text-xs"));
+    let detail_height = ui
+        .painter()
+        .layout(
+            notice.detail().into(),
+            detail_font.clone(),
+            tokens.color("glass-text-muted"),
+            copy_width,
+        )
+        .size()
+        .y;
+    let padding = tokens.number("s-5");
+    let max_detail = SIZE.y - 2. * padding - title.size().y - 2.;
+    let copy_height = title.size().y + 2. + detail_height.min(max_detail);
+    let copy = egui::Rect::from_min_size(
+        egui::pos2(layout.copy_left, (SIZE.y - copy_height) / 2.),
+        egui::vec2(copy_width, copy_height),
     );
-    let label = if notice.saved_path.is_some() {
-        if notice.pending {
-            "Opening…"
-        } else {
-            "Show in Folder"
-        }
-    } else if notice.pending {
-        "Saving…"
-    } else {
-        "Save file"
-    };
-    let button = egui::Rect::from_min_size(egui::pos2(246., 76.), egui::vec2(116., 28.));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(button), |ui| {
-        if ui
-            .add_enabled(
-                !notice.pending,
-                egui::Button::new(label).min_size(button.size()),
-            )
-            .clicked()
-        {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(copy), |ui| {
+        ui.spacing_mut().item_spacing.y = 2.;
+        ui.add(egui::Label::new(
+            RichText::new(notice.title())
+                .font(title_font)
+                .color(tokens.color("glass-text")),
+        ));
+        crate::primitives::glass_scroll_area(
+            ui,
+            tokens,
+            egui::ScrollArea::vertical()
+                .id_salt("recording-notice-detail")
+                .max_height(max_detail)
+                .min_scrolled_height(0.),
+            |ui| {
+                ui.set_width(copy_width);
+                ui.label(
+                    RichText::new(notice.detail())
+                        .font(detail_font.clone())
+                        .color(tokens.color("glass-text-muted")),
+                )
+                .on_hover_text(notice.error.as_deref().unwrap_or(""));
+            },
+        );
+    });
+
+    let glyph = egui::IdSalt::new("recording-saved-reveal-icon");
+    let ink = tokens.color("glass-text");
+    ui.scope_builder(egui::UiBuilder::new().max_rect(layout.button), |ui| {
+        ui.spacing_mut().button_padding = egui::vec2(tokens.number("s-4"), 0.);
+        let visuals = &mut ui.visuals_mut().widgets;
+        visuals.inactive.weak_bg_fill = tokens.color("glass-hover");
+        visuals.hovered.weak_bg_fill = tokens.color("glass-active");
+        visuals.active.weak_bg_fill = tokens.color("glass-active");
+        let button = egui::Button::new((
+            egui::Atom::custom(glyph, egui::Vec2::splat(14.)),
+            RichText::new(label).font(button_font).color(ink),
+        ))
+        .gap(tokens.number("s-3"))
+        .wrap_mode(egui::TextWrapMode::Extend)
+        .stroke(Stroke::new(1., tokens.color("glass-border-strong")))
+        .corner_radius(tokens.number("r-md"))
+        .min_size(layout.button.size());
+        let shown = ui
+            .add_enabled_ui(!notice.pending, |ui| {
+                let shown = button.atom_ui(ui);
+                if let Some(rect) = shown.rect(glyph) {
+                    crate::capture_controls::paint_icon(ui.painter(), icon, rect, 1.8, ink);
+                }
+                shown
+            })
+            .inner;
+        if shown.response.clicked() {
             action = Some(match &notice.saved_path {
                 Some(path) => Action::Reveal(notice.guard.clone(), path.clone()),
                 None => Action::Save(notice.guard.clone()),
             });
         }
     });
-    let close = egui::Rect::from_min_size(egui::pos2(SIZE.x - 30., 6.), egui::vec2(24., 24.));
+
+    // `.recording-saved-dismiss`: a quiet 24 px ×.
     let response = ui
-        .put(close, egui::Button::new("×").frame(false))
+        .interact(
+            layout.dismiss,
+            ui.unique_id().with("recording-saved-dismiss"),
+            egui::Sense::click(),
+        )
         .on_hover_text("Dismiss recording notice");
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Dismiss recording notice")
     });
+    let hovered = response.hovered();
+    if hovered {
+        ui.painter().rect_filled(
+            layout.dismiss,
+            tokens.number("r-sm"),
+            tokens.color("glass-hover"),
+        );
+    }
+    if response.has_focus() {
+        crate::primitives::focus_ring(ui, tokens, layout.dismiss, tokens.number("r-sm"));
+    }
+    crate::capture_controls::paint_icon(
+        ui.painter(),
+        "close",
+        egui::Rect::from_center_size(layout.dismiss.center(), egui::Vec2::splat(14.)),
+        1.8,
+        tokens.color(if hovered {
+            "glass-text"
+        } else {
+            "glass-text-subtle"
+        }),
+    );
     if response.clicked() {
         action = Some(Action::Dismiss(notice.guard.clone()));
     }
@@ -260,6 +376,34 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Actio
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notice_is_one_row_of_check_tile_copy_and_icon_button_with_a_dismiss_x() {
+        let tokens = &crate::tokens::load()["dark-mustard"];
+        let layout = layout(tokens, 100.);
+        let centre = SIZE.y / 2.;
+        assert_eq!(layout.tile.size(), egui::Vec2::splat(38.));
+        assert_eq!(layout.tile.left(), tokens.number("s-5"));
+        assert!((layout.tile.center().y - centre).abs() < 0.5);
+        assert!((layout.button.center().y - centre).abs() < 0.5);
+        assert_eq!(layout.button.height(), tokens.number("h-md"));
+        assert_eq!(layout.button.right(), SIZE.x - 38.);
+        assert!(layout.copy_left + 100. < layout.button.left());
+        assert_eq!(
+            layout.dismiss,
+            egui::Rect::from_min_size(egui::pos2(SIZE.x - 34., 10.), egui::Vec2::splat(24.))
+        );
+        assert!(layout.dismiss.left() >= layout.button.right());
+
+        let mut notice = Notice::new("id".into(), 1, Instant::now());
+        assert_eq!(notice.primary(), ("Save file", "save"));
+        notice.pending = true;
+        assert_eq!(notice.primary(), ("Saving…", "save"));
+        notice.pending = false;
+        notice.saved_path = Some("/saved.mp4".into());
+        assert_eq!(notice.primary(), ("Show in Folder", "folder"));
+        assert_eq!(notice.detail(), "Saved to your Captures folder.");
+    }
+
     #[test]
     fn timeout_is_exactly_15_2_seconds_and_does_not_delete_identity() {
         let now = Instant::now();

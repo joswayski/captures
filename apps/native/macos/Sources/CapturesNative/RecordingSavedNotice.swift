@@ -72,9 +72,12 @@ final class RecordingSavedNoticeModel {
     func dismiss() { generation += 1; artifactID = nil; state = nil; changed() }
 }
 
+/// Shipping `.recording-saved-notice`: one row of a positive check tile, the
+/// copy and the action button (`grid-template-columns: 38px 1fr auto`, `gap`
+/// and padding `--s-5`), with a quiet 24 pt dismiss × in the top-right corner.
 final class RecordingSavedNoticeView: NSView {
     private let tokens: Tokens
-    private let icon = NSTextField(labelWithString: "●")
+    let tile: ShippingIconTile
     private let heading = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
     let primaryButton: CaptureButton
@@ -84,8 +87,15 @@ final class RecordingSavedNoticeView: NSView {
 
     init(frame: NSRect, tokens: Tokens) {
         self.tokens = tokens
-        primaryButton = CaptureButton("Save file", frame: NSRect(x: 246, y: 70, width: 104, height: 32), tokens: tokens, glass: true) {}
-        dismissButton = CaptureButton("Dismiss", frame: NSRect(x: 354, y: 70, width: 70, height: 32), tokens: tokens, glass: true) {}
+        let padding = tokens.number("s-5")
+        tile = ShippingIconTile(frame: NSRect(x: padding, y: (frame.height - 38) / 2, width: 38, height: 38),
+            tokens: tokens, glyph: "check", fill: "positive", ink: "positive-ink",
+            glyphSide: 20, strokeUnits: 2.2)
+        primaryButton = CaptureButton("Save file", frame: NSRect(x: 0, y: 0, width: 0, height: tokens.number("h-md")),
+            tokens: tokens, glass: true) {}
+        // `.recording-saved-dismiss { top: 10px; right: 10px }`.
+        dismissButton = CaptureButton("Dismiss", frame: NSRect(x: frame.width - 34, y: 10, width: 24, height: 24),
+            tokens: tokens, glass: true) {}
         super.init(frame: frame)
         wantsLayer = true; layer?.backgroundColor = tokens.color("glass-strong").cgColor
         layer?.cornerRadius = tokens.number("r-xl"); layer?.borderWidth = 1
@@ -93,16 +103,19 @@ final class RecordingSavedNoticeView: NSView {
         layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.4
         layer?.shadowRadius = 18; layer?.shadowOffset = NSSize(width: 0, height: -6)
         setAccessibilityRole(.group); setAccessibilityLabel("Recording ready")
-        icon.frame = NSRect(x: 18, y: 17, width: 18, height: 20)
-        icon.font = .systemFont(ofSize: 13, weight: .bold); addSubview(icon)
-        heading.frame = NSRect(x: 42, y: 14, width: 360, height: 22)
-        heading.font = .systemFont(ofSize: 15, weight: .semibold)
-        heading.textColor = tokens.color("glass-text"); addSubview(heading)
-        detail.frame = NSRect(x: 42, y: 39, width: 382, height: 29)
-        detail.font = .systemFont(ofSize: 11, weight: .medium)
-        detail.textColor = tokens.color("glass-text-subtle"); detail.maximumNumberOfLines = 2
+        addSubview(tile)
+        heading.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        heading.textColor = tokens.color("glass-text"); heading.lineBreakMode = .byTruncatingTail
+        addSubview(heading)
+        detail.font = .systemFont(ofSize: tokens.number("text-xs"))
+        detail.textColor = tokens.color("glass-text-muted"); detail.maximumNumberOfLines = 3
+        detail.lineBreakMode = .byTruncatingTail
         addSubview(detail)
+        // `.recording-saved-reveal`: a 14 pt icon before an xs label.
+        primaryButton.textSize = tokens.number("text-xs"); primaryButton.iconSide = 14
         primaryButton.setAccessibilityLabel("Save recording file"); addSubview(primaryButton)
+        dismissButton.hudControl = true; dismissButton.iconOnly = true
+        dismissButton.icon = .shipping("close"); dismissButton.iconSide = 14
         dismissButton.setAccessibilityLabel("Dismiss recording notice"); addSubview(dismissButton)
         update(.ready)
     }
@@ -113,30 +126,53 @@ final class RecordingSavedNoticeView: NSView {
         case .ready:
             heading.stringValue = "Recording ready"
             detail.stringValue = "Kept in Capture History for 30 days. Save a copy anytime."
-            icon.textColor = tokens.color("positive")
             primaryButton.title = "Save file"; primaryButton.isEnabled = true
+            primaryButton.icon = .shipping("save")
             primaryButton.setAccessibilityLabel("Save recording file")
         case .saving:
             heading.stringValue = "Saving recording…"; detail.stringValue = "Choosing your Captures folder and saving a copy."
-            icon.textColor = tokens.color("theme-accent")
             primaryButton.title = "Saving…"; primaryButton.isEnabled = false
+            primaryButton.icon = .shipping("save")
         case .saved:
             heading.stringValue = "Recording saved"; detail.stringValue = "Saved to your Captures folder."
-            icon.textColor = tokens.color("positive")
             primaryButton.title = "Show in Folder"; primaryButton.isEnabled = true
+            primaryButton.icon = .shipping("folder")
             primaryButton.setAccessibilityLabel("Show saved recording in Folder")
         case .error(let message, let retry):
             heading.stringValue = retry == .save ? "Couldn’t save recording" : "Couldn’t show recording"
-            detail.stringValue = message; icon.textColor = tokens.color("danger-text")
+            detail.stringValue = message
             primaryButton.title = retry == .save ? "Retry save" : "Retry reveal"
+            primaryButton.icon = .shipping(retry == .save ? "save" : "folder")
             primaryButton.isEnabled = true; primaryButton.setAccessibilityLabel(primaryButton.title)
         }
         heading.setAccessibilityLabel(heading.stringValue)
         detail.setAccessibilityLabel(detail.stringValue)
         detail.toolTip = detail.stringValue
-        detail.textColor = tokens.color("glass-text")
         setAccessibilityLabel(heading.stringValue)
+        layoutRow()
         needsDisplay = true
+    }
+
+    /// One row, sized from the measured button label and copy so any system
+    /// font keeps the tile, copy and button apart inside the card.
+    private func layoutRow() {
+        let padding = tokens.number("s-5"), gap = tokens.number("s-5")
+        let labelWidth = ceil((primaryButton.title as NSString).size(withAttributes:
+            [.font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium)]).width)
+        // `padding: 0 var(--s-4)`, the icon, `gap: var(--s-3)` and a 1 pt border.
+        let buttonWidth = tokens.number("s-4") * 2 + 14 + tokens.number("s-3") + labelWidth + 2
+        let height = tokens.number("h-md")
+        primaryButton.frame = NSRect(x: bounds.width - 38 - buttonWidth, y: (bounds.height - height) / 2,
+                                     width: buttonWidth, height: height)
+        let left = tile.frame.maxX + gap
+        let width = max(0, primaryButton.frame.minX - gap - left)
+        let headingHeight = ceil(heading.intrinsicContentSize.height)
+        let maxDetail = bounds.height - padding * 2 - headingHeight - 2
+        let detailHeight = min(maxDetail, ceil(detail.cell?.cellSize(forBounds:
+            NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)).height ?? 0))
+        let top = floor((bounds.height - headingHeight - 2 - detailHeight) / 2)
+        heading.frame = NSRect(x: left, y: top, width: width, height: headingHeight)
+        detail.frame = NSRect(x: left, y: heading.frame.maxY + 2, width: width, height: detailHeight)
     }
 }
 

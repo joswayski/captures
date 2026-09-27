@@ -21,7 +21,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause (silent by default), opt-in Loop and accepted-mix Sound preview, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects, physical setup/login and installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
@@ -1068,8 +1068,9 @@ separately from accepted edited frames, and has independent loading, cancel, fai
 and retry states; failure leaves the rest of editing available, while accepted work
 keeps the existing close/quit gate. Seeking and applying edits do not regenerate the
 strip or turn thumbnail clicks into a new seek gesture. AppKit also provides
-Play/Pause of the accepted trim and spatial edits, silent by default with optional
-accepted-mix Sound preview. A transient Loop control can
+Play/Pause of the accepted trim and spatial edits, with accepted-mix Sound on by
+default like the shipping unmuted `<video>`; the Sound and ↻ Loop preview pills can turn
+them off or on. A transient Loop control can
 repeat nonempty completed trims without changing accepted edits, exports or dirty
 identity; each lap reopens the decoder, so playback does not claim to be gapless.
 Persistent bounded FFmpeg playback delivers retained latest frames and a source-relative playhead without
@@ -1643,6 +1644,11 @@ nonactivating top-right notice in both native hosts. Save file reuses the shared
 original-recording export operation; saved state offers Show in Folder. Pending
 saves pause the 15.2-second expiry; failure keeps retry available. Dismiss, expiry
 and new capture only remove presentation, and stale callbacks cannot revive it.
+Both hosts lay it out as the shipping single row (positive check tile, copy, Save
+file / Show in Folder with its icon, and a quiet × dismiss). The "Recording
+controls hidden" notice shares its copy and card size through `captures-app`
+(`hidden_notice` on the recording HUD ABI for AppKit) and draws the shipping
+accent tile, left-aligned copy and New Capture key chips.
 Both hosts now honour `open_editor_after_recording` like the shipping app: a
 finished take opens the recording editor, and the notice appears when a recording
 editor closes (including editors opened from History). With the preference off,

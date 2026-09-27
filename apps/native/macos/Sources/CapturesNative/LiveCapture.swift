@@ -1868,7 +1868,8 @@ final class LiveCaptureController: NSObject {
         recordingControlsHidden = true
         updateRecordingMeter()
         hud.orderOut(nil)
-        let notice = RecordingControlsHiddenNoticePanel(screen: screen, tokens: tokens)
+        let notice = RecordingControlsHiddenNoticePanel(screen: screen, tokens: tokens,
+            shortcut: recordingPreferences?.newCaptureShortcut ?? "")
         recordingHiddenNotice = notice
         notice.orderFrontRegardless()
         // Shipping `recording-controls-hidden-lifecycle` (6 s) ends 200 ms before the close.

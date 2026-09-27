@@ -38,6 +38,56 @@ pub const TOOLTIP_DELAY_MS: u64 = 0;
 pub const ERROR_GAP: f64 = 5.0;
 pub const ERROR_INSET: f64 = 10.0;
 
+/// Shipping `RecordingControlsHiddenNotice` card
+/// (`RECORDING_CONTROLS_HIDDEN_NOTICE_CARD_*`), without the transparent
+/// shadow frame.
+pub const HIDDEN_NOTICE_WIDTH: f64 = 418.0;
+pub const HIDDEN_NOTICE_HEIGHT: f64 = 74.0;
+pub const HIDDEN_NOTICE_TITLE: &str = "Recording controls hidden";
+
+/// Shipping `.recording-controls-hidden-notice` copy: the sentence runs
+/// `before_keys`, one `<kbd>` chip per entry in `keys`, then `after_keys`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HiddenNoticeCopy {
+    pub title: &'static str,
+    pub before_keys: String,
+    pub keys: Vec<String>,
+    pub after_keys: &'static str,
+}
+
+impl HiddenNoticeCopy {
+    /// The sentence as plain text, for accessibility.
+    pub fn detail(&self) -> String {
+        let mut words = vec![self.before_keys.clone()];
+        words.extend(self.keys.iter().cloned());
+        words.push(self.after_keys.to_owned());
+        words.join(" ")
+    }
+}
+
+/// The notice copy for the saved New Capture shortcut (the default when it is
+/// blank). Shipping names the macOS "menu bar" and the "tray" elsewhere.
+pub fn hidden_notice_copy(
+    new_capture_shortcut: &str,
+    platform: crate::shortcuts::ShortcutPlatform,
+) -> HiddenNoticeCopy {
+    let shortcut = if new_capture_shortcut.trim().is_empty() {
+        captures_settings::default_new_capture_shortcut()
+    } else {
+        new_capture_shortcut.to_owned()
+    };
+    let tray = match platform {
+        crate::shortcuts::ShortcutPlatform::Macos => "menu bar",
+        _ => "tray",
+    };
+    HiddenNoticeCopy {
+        title: HIDDEN_NOTICE_TITLE,
+        before_keys: format!("Open Captures from the {tray}, or press"),
+        keys: crate::shortcuts::shortcut_display_tokens(&shortcut, platform),
+        after_keys: "to bring them back.",
+    }
+}
+
 /// HUD controls in their shipping left-to-right order.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -403,6 +453,28 @@ pub fn tooltip_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_notice_copy_names_the_tray_and_the_new_capture_keys() {
+        use crate::shortcuts::ShortcutPlatform;
+        let mac = hidden_notice_copy("CommandOrControl+Shift+Space", ShortcutPlatform::Macos);
+        assert_eq!(mac.title, "Recording controls hidden");
+        assert_eq!(mac.before_keys, "Open Captures from the menu bar, or press");
+        assert_eq!(mac.keys, ["Cmd", "Shift", "Space"]);
+        assert_eq!(mac.after_keys, "to bring them back.");
+        assert_eq!(
+            mac.detail(),
+            "Open Captures from the menu bar, or press Cmd Shift Space to bring them back."
+        );
+        let linux = hidden_notice_copy("CommandOrControl+Shift+Space", ShortcutPlatform::Linux);
+        assert_eq!(linux.before_keys, "Open Captures from the tray, or press");
+        assert_eq!(linux.keys, ["Ctrl", "Shift", "Space"]);
+        let blank = hidden_notice_copy("  ", ShortcutPlatform::Windows);
+        assert!(
+            !blank.keys.is_empty(),
+            "a blank shortcut falls back to the default"
+        );
+    }
 
     fn input(state: RecordingState) -> Input {
         Input {

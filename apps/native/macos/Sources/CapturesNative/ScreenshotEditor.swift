@@ -4046,6 +4046,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if let bar {
             let jpeg = bar.sourcePath.map { URL(fileURLWithPath: $0).pathExtension.lowercased() == "jpeg" } == true
             outputFormat.item(at: 1)?.title = jpeg ? ".jpeg" : ".jpg"
+            // Shipping JPEG option description while JPEG drops transparency.
+            outputFormat.item(at: 1)?.toolTip = bar.hintWarning ? "Fills in transparent areas." : nil
         }
         saveAsNewSwitch.isHidden = bar?.formatRequiresCopy ?? true
         saveAsNewLabel.isHidden = saveAsNewSwitch.isHidden
