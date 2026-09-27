@@ -224,6 +224,22 @@ enum Request {
     },
     /// Shipping keyframes and transitions (`captures_app::motion`).
     Motion,
+    /// Shipping Screen Recording recovery dialog for a denied capture.
+    PermissionRecoveryPrompt,
+    PermissionRecoveryClassify {
+        message: String,
+    },
+    PermissionRecoverySchedule {
+        path: String,
+        mode: captures_capture::CaptureMode,
+    },
+    PermissionRecoveryTake {
+        path: String,
+    },
+    PermissionRecoveryReset {
+        path: String,
+        bundle_id: String,
+    },
 }
 
 /// One History entry plus the host's off-main `missing` result. Unknown fields
@@ -316,6 +332,38 @@ fn response(request: *const c_char) -> Value {
         Ok(Request::Motion) => {
             json!({"ok":true,"motion":captures_app::motion::catalog()})
         }
+        Ok(Request::PermissionRecoveryPrompt) => ONBOARDING
+            .lock()
+            .map_err(|_| "The onboarding service is unavailable. Restart Captures.".to_owned())
+            .map(|session| {
+                use captures_app::permission_recovery as recovery;
+                json!({
+                    "ok":true,
+                    "supported":recovery::supported(),
+                    "prompt":recovery::prompt(session.screen_requested_this_launch()),
+                })
+            })
+            .unwrap_or_else(|error| json!({"ok":false,"error":error})),
+        Ok(Request::PermissionRecoveryClassify { message }) => json!({
+            "ok":true,
+            "denied":captures_app::permission_recovery::is_permission_denied(&message),
+            "failure":captures_app::permission_recovery::failure_message(&message),
+        }),
+        Ok(Request::PermissionRecoverySchedule { path, mode }) => {
+            captures_app::permission_recovery::schedule_retry(Path::new(&path), mode)
+                .map(|()| json!({"ok":true}))
+                .unwrap_or_else(|error| json!({"ok":false,"error":error}))
+        }
+        Ok(Request::PermissionRecoveryTake { path }) => {
+            captures_app::permission_recovery::take_pending_capture(Path::new(&path))
+                .map(|mode| json!({"ok":true,"mode":mode}))
+                .unwrap_or_else(|error| json!({"ok":false,"error":error}))
+        }
+        Ok(Request::PermissionRecoveryReset { path, bundle_id }) => {
+            permission_recovery_reset(Path::new(&path), &bundle_id)
+                .map(|()| json!({"ok":true}))
+                .unwrap_or_else(|error| json!({"ok":false,"error":error}))
+        }
         Ok(Request::OnboardingCopy) => {
             json!({"ok":true,"copy":captures_app::onboarding::copy()})
         }
@@ -339,6 +387,23 @@ fn response(request: *const c_char) -> Value {
             .unwrap_or_else(|e| json!({"ok":false,"error":e.to_string()})),
         Err(error) => json!({"ok":false,"error":error}),
     }
+}
+
+/// Shipping resets only on macOS; elsewhere the dialog is never offered.
+fn permission_recovery_reset(path: &Path, bundle_id: &str) -> Result<(), String> {
+    if !captures_app::permission_recovery::supported() {
+        return Err("Screen Recording recovery is only available on macOS.".into());
+    }
+    captures_app::permission_recovery::reset_screen_permission(
+        path,
+        bundle_id,
+        &mut captures_app::permission_recovery::Tccutil,
+    )?;
+    ONBOARDING
+        .lock()
+        .map_err(|_| "The onboarding service is unavailable. Restart Captures.".to_owned())?
+        .forget_screen_request();
+    Ok(())
 }
 
 /// Handles one JSON request. See `include/captures_settings.h` for pointer ownership.
@@ -446,6 +511,53 @@ mod tests {
     }
 
     #[test]
+    fn permission_recovery_abi_shares_copy_and_pending_retry() {
+        let prompt = settings_request(json!({"operation":"permission_recovery_prompt"}));
+        assert_eq!(prompt["ok"], true);
+        assert_eq!(prompt["supported"], cfg!(target_os = "macos"));
+        assert_eq!(prompt["prompt"]["title"], "Captures Setup");
+        assert_eq!(prompt["prompt"]["cancel"], "Not Now");
+        assert!(
+            ["restart", "reset_and_restart"]
+                .contains(&prompt["prompt"]["recovery"].as_str().unwrap())
+        );
+
+        let denied = settings_request(json!({"operation":"permission_recovery_classify",
+            "message":"Couldn’t start capture: screen capture permission was denied"}));
+        assert_eq!(denied["denied"], true);
+        assert_eq!(
+            denied["failure"],
+            "Captures could not reset or restart its Screen Recording setup: Couldn’t start capture: screen capture permission was denied"
+        );
+        let other = settings_request(json!({"operation":"permission_recovery_classify",
+            "message":"screen capture permission was requested"}));
+        assert_eq!(other["denied"], false);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        captures_settings::write_atomic(&path, &AppSettings::default()).unwrap();
+        let path = path.to_str().unwrap();
+        let empty = settings_request(json!({"operation":"permission_recovery_take","path":path}));
+        assert_eq!(empty, json!({"ok":true,"mode":null}));
+        let scheduled = settings_request(json!({"operation":"permission_recovery_schedule",
+            "path":path,"mode":"display"}));
+        assert_eq!(scheduled["ok"], true);
+        let taken = settings_request(json!({"operation":"permission_recovery_take","path":path}));
+        assert_eq!(taken, json!({"ok":true,"mode":"display"}));
+        let again = settings_request(json!({"operation":"permission_recovery_take","path":path}));
+        assert_eq!(again["mode"], Value::Null);
+        let invalid = settings_request(json!({"operation":"permission_recovery_schedule",
+            "path":path,"mode":"everything"}));
+        assert_eq!(invalid["ok"], false);
+        // Never run tccutil from tests: off macOS the reset is refused outright.
+        if !cfg!(target_os = "macos") {
+            let reset = settings_request(json!({"operation":"permission_recovery_reset",
+                "path":path,"bundle_id":"dev.captures.native"}));
+            assert_eq!(reset["ok"], false);
+        }
+    }
+
+    #[test]
     fn history_presentation_abi_shares_copy_cards_and_grid() {
         let copy = settings_request(json!({"operation":"history_copy"}));
         assert_eq!(copy["ok"], true);
@@ -456,6 +568,10 @@ mod tests {
         assert_eq!(copy["confirm_timeout_ms"], 4_000);
         assert_eq!(copy["actions"]["edit"]["label"], "Edit");
         assert_eq!(copy["actions"]["save_file"]["busy"], "Saving…");
+        assert_eq!(
+            copy["actions"]["save_file"]["tooltip"],
+            "Save a permanent copy to your Captures folder"
+        );
         assert_eq!(copy["actions"]["show_in_folder"]["label"], "Show in Folder");
         assert_eq!(copy["actions"]["show_in_folder"]["done"], Value::Null);
         assert_eq!(copy["actions"]["restore"]["label"], "Restore");

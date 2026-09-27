@@ -49,6 +49,8 @@ def main():
         "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
     common = [str(binary), "--live", "--history-root", str(history)]
     env = os.environ.copy()
+    # Live hosts must never unbind the developer's real OS screenshot keys.
+    env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     # The application's normal stdout logger must be visible before normal quit.
     env["NSUnbufferedIO"] = "YES"
     if args.trace:

@@ -49,6 +49,17 @@ impl Session {
         }
     }
 
+    /// Screen access was requested by this process. Shipping chooses
+    /// "Restart & Retry" over "Reset, Restart & Retry" from this flag.
+    pub const fn screen_requested_this_launch(&self) -> bool {
+        self.screen_requested
+    }
+
+    /// After resetting this app's TCC record, a new request is possible.
+    pub fn forget_screen_request(&mut self) {
+        self.screen_requested = false;
+    }
+
     pub fn execute(&mut self, path: &Path, action: Action) -> Result<State, String> {
         self.execute_with(path, action, &mut System)
     }
@@ -529,7 +540,15 @@ mod tests {
             .execute_with(&path, Action::RequestScreen, &mut permissions)
             .unwrap();
         assert!(state.screen_recording_requested_this_launch);
+        assert!(session.screen_requested_this_launch());
         assert!(!state.screen_recording_can_request);
+        // A TCC reset forgets the launch flag (shipping recovery).
+        let mut reset = Session::new();
+        reset
+            .execute_with(&path, Action::RequestScreen, &mut Fake::mac())
+            .unwrap();
+        reset.forget_screen_request();
+        assert!(!reset.screen_requested_this_launch());
         let mut restarted = Session::new();
         let state = restarted
             .execute_with(&path, Action::Check, &mut permissions)

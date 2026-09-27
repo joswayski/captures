@@ -144,6 +144,28 @@ enum NativePreviewLayout {
         return origin
     }
 
+    /// Shipping pile gravity for a collapsed stack: exactly ±1 at its corner,
+    /// or from the dragged pile's position. Nil when the inputs are invalid.
+    static func gravity(monitor: CapturesPreviewMonitor, count: Int,
+                        origin: CapturesPreviewOrigin? = nil, placement: String) -> Double? {
+        let code: UInt32
+        switch placement {
+        case "bottom_left": code = 0
+        case "bottom_right": code = 1
+        case "top_left": code = 2
+        case "top_right": code = 3
+        default: return nil
+        }
+        guard count >= 0 else { return nil }
+        let value: Double
+        if var origin {
+            value = captures_preview_gravity_v1(monitor, count, &origin, code)
+        } else {
+            value = captures_preview_gravity_v1(monitor, count, nil, code)
+        }
+        return value.isNaN ? nil : value
+    }
+
     /// Monitor is physical top-left desktop geometry; returned frame is logical
     /// top-left geometry. AppKit's coordinate conversion stays with the host.
     static func geometry(monitor: CapturesPreviewMonitor, count: Int,
