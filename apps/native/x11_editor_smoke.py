@@ -2445,6 +2445,8 @@ def main():
 
         if args.text_draft_only:
             shot(editor, "text-draft-restored")
+            # Dismiss the restored-draft notice so the authored layout applies.
+            click(editor, editor_width() - DRAFT_DISMISS_RIGHT, 20)
             resize_editor(942, 701)
             toolbar_click("layers")  # Layers.
             fixture_click((370, 230))  # Select the text plate, including non-ink pixels.
