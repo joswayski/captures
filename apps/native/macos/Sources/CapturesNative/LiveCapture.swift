@@ -232,6 +232,17 @@ final class LiveCaptureController: NSObject {
     private var regionButton: CaptureButton!
     private var windowButton: CaptureButton!
     private var newCaptureButton: CaptureButton!
+    private var eyebrowLabel: NSTextField!
+    private var headingLabel: NSTextField!
+    private var ledeLabel: NSTextField!
+    private var preferencesHeaderButton: CaptureButton!
+    private var screenAccessButton: CaptureButton!
+    /// Top of the filters row, below the header, capture row and status.
+    private var contentTop: CGFloat = 192
+    private var renderedRecoveryWidth: CGFloat = 0
+    /// Called with true when a capture hides this window and false when the
+    /// capture ends, so the host can hide its other windows too.
+    var workspaceHidden: ((Bool) -> Void)?
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
          transport: AppTransport = AppBridge(), recoveryWorker: RecordingRecoveryWorking = RecordingRecoveryWorker(),
@@ -266,14 +277,17 @@ final class LiveCaptureController: NSObject {
         let eyebrow = title(copy.eyebrow.uppercased(), frame: NSRect(x: 28, y: 24, width: 420, height: 14),
                             size: tokens.number("text-2xs"), weight: .semibold)
         eyebrow.textColor = tokens.color("text-subtle")
-        title(copy.title, frame: NSRect(x: 28, y: 40, width: 420, height: 36),
-              size: tokens.number("text-3xl"), weight: .semibold)
+        eyebrowLabel = eyebrow
+        headingLabel = title(copy.title, frame: NSRect(x: 28, y: 40, width: 420, height: 36),
+                             size: tokens.number("text-3xl"), weight: .semibold)
         let lede = title(copy.lede, frame: NSRect(x: 28, y: 80, width: 600, height: 20),
                          size: tokens.number("text-md"))
         lede.textColor = tokens.color("text-subtle")
+        ledeLabel = lede
         newCaptureButton = button("New Capture…", frame: NSRect(x: 708, y: 24, width: 126, height: 34)) { [weak self] in self?.newCapture() }
         newCaptureButton.primary = true
-        button("Preferences", frame: NSRect(x: 846, y: 24, width: 126, height: 34), action: showPreferences)
+        preferencesHeaderButton = button("Preferences", frame: NSRect(x: 846, y: 24, width: 126, height: 34),
+                                         action: showPreferences)
         deleteAllButton = HistoryButton(copy.deleteAll, frame: .zero, tokens: tokens, style: .danger,
                                         glyph: .trash) { [weak self] in self?.deleteAllHistory() }
         deleteAllCancelButton = HistoryButton(copy.cancel, frame: .zero, tokens: tokens, style: .ghost) {
@@ -289,7 +303,7 @@ final class LiveCaptureController: NSObject {
         refreshButton = button("Refresh", frame: NSRect(x: 340, y: 118, width: 90, height: 34)) {
             [weak self] in self?.loadHistory(); self?.loadDisplays()
         }
-        button("Screen access", frame: NSRect(x: 442, y: 118, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
+        screenAccessButton = button("Screen access", frame: NSRect(x: 442, y: 118, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
         captureButton = button("Capture display", frame: NSRect(x: 602, y: 118, width: 116, height: 34)) { [weak self] in self?.capture(.display) }
         captureButton.selected = true
         regionButton = button("Capture region", frame: NSRect(x: 730, y: 118, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
@@ -355,30 +369,50 @@ final class LiveCaptureController: NSObject {
         help.font = .systemFont(ofSize: tokens.number("text-sm"))
         help.textColor = tokens.color("text-subtle")
         help.lineBreakMode = .byTruncatingTail
+        help.autoresizingMask = [.width]
         recoveryPanel.addSubview(help)
         recoveryCancelButton = CaptureButton("Cancel", frame: NSRect(x: 842, y: 10, width: 86, height: 24),
                                              tokens: tokens) { [weak self] in self?.recoveryCancel?.cancel() }
+        recoveryCancelButton.autoresizingMask = [.minXMargin]
         recoveryPanel.addSubview(recoveryCancelButton)
         recoveryRetryButton = CaptureButton("Retry list", frame: NSRect(x: 842, y: 10, width: 86, height: 24),
                                             tokens: tokens) { [weak self] in
             self?.recoveryActionError = nil; self?.refreshRecovery()
         }
+        recoveryRetryButton.autoresizingMask = [.minXMargin]
         recoveryPanel.addSubview(recoveryRetryButton)
         recoveryScroll = NSScrollView(frame: NSRect(x: 12, y: 78, width: 920, height: 90))
         recoveryScroll.hasVerticalScroller = true; recoveryScroll.drawsBackground = false
         recoveryScroll.useTokenScrollers(tokens)
         recoveryScroll.setAccessibilityLabel("Interrupted recording details")
+        recoveryScroll.autoresizingMask = [.width]
         recoveryPanel.addSubview(recoveryScroll)
         recoveryStatus = NSTextField(wrappingLabelWithString: "")
         recoveryStatus.font = .systemFont(ofSize: 11)
         recoveryStatus.textColor = tokens.color("text-muted")
         recoveryStatus.setAccessibilityLabel("Interrupted recording status")
         recoveryStatus.frame = NSRect(x: 16, y: 57, width: 900, height: 17)
+        recoveryStatus.autoresizingMask = [.width]
         recoveryPanel.addSubview(recoveryStatus)
         root.addSubview(recoveryPanel)
         renderRecovery()
         updateActions()
         installKeyViewLoop()
+        // The History window is resizable: lay the fixed-frame chrome out again.
+        root.sizeDidChange = { [weak self] _ in self?.layoutForSize() }
+        layoutForSize()
+    }
+
+    /// Reflow the header, capture row, recovery section and grid for the
+    /// window's current size, down to its 640 × 440 minimum.
+    private func layoutForSize() {
+        guard recoveryPanel != nil else { return }
+        recoveryPanel.frame.size.width = max(0, root.bounds.width - 56)
+        layoutHeaderActions()
+        layoutHistory()
+        if !recoveryPanel.isHidden && renderedRecoveryWidth != recoveryScroll.contentSize.width {
+            renderRecovery()
+        }
     }
 
     /// Shipping DOM order for the controls both windows share: Cancel before
@@ -400,25 +434,29 @@ final class LiveCaptureController: NSObject {
         var x: CGFloat = 28
         for (_, pill) in historyFilterButtons {
             pill.isHidden = !showToolbar
-            pill.frame = NSRect(x: x, y: 192, width: pill.preferredWidth, height: tokens.number("h-sm"))
+            pill.frame = NSRect(x: x, y: contentTop, width: pill.preferredWidth, height: tokens.number("h-sm"))
             x += pill.preferredWidth + tokens.number("s-2")
         }
         toolbarDivider.isHidden = !showToolbar
-        toolbarDivider.frame = NSRect(x: 28, y: 192 + tokens.number("h-sm") + tokens.number("s-5"),
+        toolbarDivider.frame = NSRect(x: 28, y: contentTop + tokens.number("h-sm") + tokens.number("s-5"),
                                       width: width, height: 1)
-        var y: CGFloat = showToolbar ? toolbarDivider.frame.maxY + tokens.number("s-6") : 192
+        var y: CGFloat = showToolbar ? toolbarDivider.frame.maxY + tokens.number("s-6") : contentTop
         if !recoveryPanel.isHidden {
             recoveryPanel.frame.origin = NSPoint(x: 28, y: y)
             y = recoveryPanel.frame.maxY + tokens.number("s-6")
         }
         historyScroll.frame = NSRect(x: 28, y: y, width: width, height: max(0, root.bounds.height - y - 16))
+        grid.compact = AppWindowLayout.compact(width: root.bounds.width)
         grid.tile(force: true)
         emptyState.frame = historyScroll.frame
         filteredEmptyLabel.frame = NSRect(x: historyScroll.frame.minX, y: historyScroll.frame.minY,
                                           width: width, height: 20)
     }
 
-    /// Delete all sits at the header's bottom right, with Cancel while armed.
+    /// Delete all sits at the header's bottom right, with Cancel while armed;
+    /// a compact window stacks it under the heading (shipping
+    /// `@media (max-width: 720px)`). The capture row wraps to the width and
+    /// everything below follows it.
     private func layoutHeaderActions() {
         guard let deleteAllButton else { return }
         let copy = historyCopy
@@ -429,16 +467,72 @@ final class LiveCaptureController: NSObject {
         deleteAllButton.setAccessibilityLabel(confirmDeleteAll ? copy.deleteAllConfirmLabel : copy.deleteAllLabel)
         deleteAllButton.style = confirmDeleteAll ? .confirm : .danger
         deleteAllButton.isEnabled = !busy && !artifacts.isEmpty
-        let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
-        func width(_ text: String) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
-        let height = tokens.number("h-md"), right = root.bounds.width - 28
-        let deleteWidth = width(deleteAllButton.title) + 15 + tokens.number("s-3") + 2 * tokens.number("s-5")
-        deleteAllButton.frame = NSRect(x: right - deleteWidth, y: 70, width: deleteWidth, height: height)
         deleteAllCancelButton.isHidden = deleteAllButton.isHidden || !confirmDeleteAll
         deleteAllCancelButton.isEnabled = !clearingHistory
+        let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        func width(_ text: String) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
+        let height = tokens.number("h-md"), left: CGFloat = 28, right = root.bounds.width - 28
+        let compact = AppWindowLayout.compact(width: root.bounds.width)
+        let deleteWidth = width(deleteAllButton.title) + 15 + tokens.number("s-3") + 2 * tokens.number("s-5")
         let cancelWidth = width(copy.cancel) + 2 * tokens.number("s-5")
-        deleteAllCancelButton.frame = NSRect(x: deleteAllButton.frame.minX - tokens.number("s-3") - cancelWidth,
-                                             y: 70, width: cancelWidth, height: height)
+        let gap = tokens.number("s-3")
+
+        // Native New Capture and Preferences sit at the top right.
+        preferencesHeaderButton?.frame = NSRect(x: right - 126, y: 24, width: 126, height: 34)
+        newCaptureButton?.frame = NSRect(x: right - 264, y: 24, width: 126, height: 34)
+        let headingWidth = max(0, min(420, right - 264 - 12 - left))
+        eyebrowLabel?.frame = NSRect(x: left, y: 24, width: headingWidth, height: 14)
+        headingLabel?.frame = NSRect(x: left, y: 40, width: headingWidth, height: 36)
+
+        var headerBottom: CGFloat
+        if compact {
+            let ledeWidth = max(0, right - left)
+            let ledeHeight = ledeLabel.map { max(20, textHeight(copy.lede, font: $0.font!, width: ledeWidth)) } ?? 20
+            ledeLabel?.frame = NSRect(x: left, y: 80, width: ledeWidth, height: ledeHeight)
+            headerBottom = 80 + ledeHeight
+            if !deleteAllButton.isHidden {
+                let y = headerBottom + tokens.number("s-5")
+                var x = left
+                if !deleteAllCancelButton.isHidden {
+                    deleteAllCancelButton.frame = NSRect(x: x, y: y, width: cancelWidth, height: height)
+                    x += cancelWidth + gap
+                }
+                deleteAllButton.frame = NSRect(x: x, y: y, width: deleteWidth, height: height)
+                headerBottom = y + height
+            }
+        } else {
+            deleteAllButton.frame = NSRect(x: right - deleteWidth, y: 70, width: deleteWidth, height: height)
+            deleteAllCancelButton.frame = NSRect(x: deleteAllButton.frame.minX - gap - cancelWidth,
+                                                 y: 70, width: cancelWidth, height: height)
+            let actionsLeft = deleteAllButton.isHidden ? right + 12
+                : deleteAllCancelButton.isHidden ? deleteAllButton.frame.minX : deleteAllCancelButton.frame.minX
+            let ledeWidth = max(0, min(600, actionsLeft - 12 - left))
+            let ledeHeight = ledeLabel.map { max(20, textHeight(copy.lede, font: $0.font!, width: ledeWidth)) } ?? 20
+            ledeLabel?.frame = NSRect(x: left, y: 80, width: ledeWidth, height: ledeHeight)
+            headerBottom = max(80 + ledeHeight, deleteAllButton.isHidden ? 0 : 70 + height)
+        }
+
+        // The capture row wraps within the window, 12 pt apart like before.
+        var x = left
+        var y = max(118, headerBottom + 16)
+        var rowBottom = y
+        let row: [NSView?] = [displayMenu, refreshButton, screenAccessButton, captureButton, regionButton, windowButton]
+        for case let control? in row {
+            var controlWidth = control.frame.width
+            if control === displayMenu { controlWidth = min(300, right - left) }
+            if x > left && x + controlWidth > right {
+                x = left; y = rowBottom + 12
+            }
+            control.frame = NSRect(x: x, y: y, width: controlWidth, height: 34)
+            x += controlWidth + 12
+            rowBottom = y + 34
+        }
+        status?.frame = NSRect(x: left, y: rowBottom + 8, width: max(0, right - left), height: 18)
+        let top = rowBottom + 8 + 18 + 14
+        if top != contentTop {
+            contentTop = top
+            layoutHistory()
+        }
     }
 
     @discardableResult private func title(_ text: String, frame: NSRect, size: CGFloat = 13,
@@ -558,8 +652,9 @@ final class LiveCaptureController: NSObject {
         recoveryRetryButton.isHidden = recoveryError == nil && recoveryActionError == nil
         recoveryRetryButton.isEnabled = !recoveryLoading && !recoveryBusy
         // Shipping `.recording-recovery-row`: details on the left, actions on the right.
+        renderedRecoveryWidth = recoveryScroll.contentSize.width
         let width = recoveryScroll.contentSize.width - 4
-        let textWidth = width - 260
+        let textWidth = max(0, width - 260)
         let content = Surface(frame: NSRect(x: 0, y: 0, width: width, height: 86))
         var nextY: CGFloat = 0
         for (index, draft) in recoveryDrafts.enumerated() {
@@ -986,6 +1081,7 @@ final class LiveCaptureController: NSObject {
                 self.preparingRegion = kind == .region
                 self.preparingWindow = kind == .window
                 self.window.orderOut(nil)
+                self.workspaceHidden?(true)
                 if kind == .display && preferences.countdown > 0 {
                     let panel = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens, remaining: preferences.countdown)
                     self.countdownPanel = panel; panel.orderFrontRegardless()
@@ -1053,6 +1149,7 @@ final class LiveCaptureController: NSObject {
                 self.previewCaptureGeneration = self.miniPreviews?.beginCapture(
                     settings: preferences.miniPreviewSettings)
                 self.window.orderOut(nil)
+                self.workspaceHidden?(true)
                 let tick: () -> Void = { [weak self] in
                     guard let self, let display = self.unifiedDisplay else { return }
                     self.tickCountdown(display: display, preferences: preferences,
@@ -2285,6 +2382,7 @@ final class LiveCaptureController: NSObject {
             previewCaptureGeneration = nil
         }
         snapshotPending = false; setBusy(false)
+        if restoreWindow { workspaceHidden?(false) }
         switch windowRestoration.finish(restoreRequested: restoreWindow) {
         case .none: break
         case .visible:

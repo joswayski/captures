@@ -147,6 +147,71 @@ final class HistoryClearTests: XCTestCase {
         }
     }
 
+    func testHistoryWindowReflowsDownToItsMinimumSize() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let settingsPath = directory.appendingPathComponent("settings.json").path
+        let history = AppWindowKind.history
+        let window = AppWindows.makeWindow(history)
+        defer { window.close() }
+        XCTAssertEqual(window.title, "Capture History")
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+        XCTAssertEqual(window.contentMinSize, NSSize(width: 640, height: 440))
+        // Test windows stay at most 600 pt tall.
+        window.setContentSize(NSSize(width: history.size.width, height: 600))
+        let root = Surface(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+            failPartway: false, kinds: ["screenshot", "video"])
+        let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+            historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
+            recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+        defer { withExtendedLifetime(controller) {} }
+        window.orderFront(nil)
+        let grid = try historyGrid(root)
+        try waitUntil { grid.numberOfRows == 2 && grid.visibleCards.count == 2 }
+        func control(_ title: String) throws -> NSView {
+            try XCTUnwrap(root.subviews.first { ($0 as? NSButton)?.title == title })
+        }
+        func assertInside(_ width: CGFloat) throws {
+            for title in ["New Capture…", "Preferences", "Refresh", "Screen access",
+                          "Capture display", "Capture region", "Capture window"] {
+                let frame = try control(title).frame
+                XCTAssertGreaterThanOrEqual(frame.minX, 28, "\(title) at \(width)")
+                XCTAssertLessThanOrEqual(frame.maxX, width - 28 + 0.5, "\(title) at \(width)")
+            }
+            XCTAssertLessThanOrEqual(grid.visibleCards.map(\.frame.maxX).max() ?? 0, grid.bounds.width + 0.5)
+        }
+
+        // Wide: one capture row, three columns of cards.
+        try assertInside(root.bounds.width)
+        XCTAssertEqual(try control("Capture window").frame.minY, try control("Refresh").frame.minY)
+        XCTAssertFalse(grid.compact)
+        let wideTop = grid.visibleCards[0].frame.minY
+        XCTAssertEqual(grid.visibleCards[1].frame.minY, wideTop, "two cards share the first row")
+
+        // Minimum: the capture row wraps and the grid is one compact column.
+        window.setContentSize(history.minimumSize)
+        try waitUntil { root.bounds.width == history.minimumSize.width }
+        try assertInside(root.bounds.width)
+        XCTAssertGreaterThan(try control("Capture window").frame.minY, try control("Refresh").frame.minY)
+        XCTAssertTrue(grid.compact)
+        try waitUntil { grid.visibleCards.count >= 1 }
+        let cards = grid.visibleCards.sorted { $0.frame.minY < $1.frame.minY }
+        if cards.count > 1 { XCTAssertGreaterThan(cards[1].frame.minY, cards[0].frame.minY) }
+
+        // And back: the row and grid widen again.
+        window.setContentSize(NSSize(width: history.size.width, height: 600))
+        try waitUntil { !grid.compact }
+        XCTAssertEqual(try control("Capture window").frame.minY, try control("Refresh").frame.minY)
+    }
+
     func testRestoreBringsAScreenshotBackAsAFloatingPreview() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

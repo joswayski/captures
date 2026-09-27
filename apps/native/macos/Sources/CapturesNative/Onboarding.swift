@@ -684,7 +684,10 @@ final class OnboardingView: NSView {
 
     override func layout() {
         super.layout()
-        let inset = tokens.number("s-8")
+        // Shipping `@media (max-height: 600px)`: the default 560 pt setup
+        // window hides the lede and tightens the stage padding and gap.
+        let short = AppWindowLayout.short(height: bounds.height)
+        let inset = tokens.number(short ? "s-7" : "s-8")
         let width = min(620, max(0, bounds.width - 2 * inset))
         let x = (bounds.width - width) / 2
         let gap = tokens.number("s-3")
@@ -694,8 +697,13 @@ final class OnboardingView: NSView {
             items.append((eyebrow as NSView, ceil(eyebrow.intrinsicContentSize.height), gap))
         }
         title.preferredMaxLayoutWidth = width; lede.preferredMaxLayoutWidth = width
-        items.append((title as NSView, wrappedHeight(title, width), gap))
-        items.append((lede as NSView, wrappedHeight(lede, width), tokens.number("s-7")))
+        lede.isHidden = short
+        if short {
+            items.append((title as NSView, wrappedHeight(title, width), tokens.number("s-5")))
+        } else {
+            items.append((title as NSView, wrappedHeight(title, width), gap))
+            items.append((lede as NSView, wrappedHeight(lede, width), tokens.number("s-7")))
+        }
         let screenHeight = screenRow.height(forWidth: width)
         let microphoneHeight = microphoneRow.isHidden ? 0 : microphoneRow.height(forWidth: width)
         items.append((cards as NSView, screenHeight + microphoneHeight, tokens.number("s-5")))
@@ -709,7 +717,7 @@ final class OnboardingView: NSView {
         }
         let actionsHeight = tokens.number("h-xl")
         let total = items.reduce(actionsHeight) { $0 + $1.1 + $1.2 }
-        var y = max(tokens.number(done == nil ? "s-9" : "s-7"), (bounds.height - total) / 2)
+        var y = max(tokens.number(short ? "s-6" : done == nil ? "s-9" : "s-7"), (bounds.height - total) / 2)
         for (view, height, after) in items {
             let w = view === mark ? 40 : view === eyebrow ? ceil(eyebrow.intrinsicContentSize.width) : width
             view.frame = NSRect(x: x, y: y, width: w, height: height)

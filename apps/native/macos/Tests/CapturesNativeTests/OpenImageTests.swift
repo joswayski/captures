@@ -55,8 +55,8 @@ final class OpenImageTests: XCTestCase {
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
             .first?.documentView as? HistoryGridView)
         try waitUntil { table.numberOfRows == 1 && table.selectedRow == 0 }
-        try waitUntil { NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } }
-        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        try waitUntil { NSApp.windows.contains { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible } }
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible })
         defer {
             editor.performClose(nil)
             if let sheet = editor.attachedSheet {
@@ -174,8 +174,8 @@ final class OpenImageTests: XCTestCase {
         XCTAssertFalse(window.isVisible)
 
         controller.openPreview(first)
-        try waitUntil { NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } }
-        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        try waitUntil { NSApp.windows.contains { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible } }
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible })
         defer {
             editor.performClose(nil)
             if let sheet = editor.attachedSheet {
@@ -203,7 +203,7 @@ final class OpenImageTests: XCTestCase {
         editor.orderOut(nil)
         controller.openPreview(first)
         try waitUntil { editor.isVisible && editor.title.contains("Unsaved") }
-        XCTAssertTrue(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible } === editor)
+        XCTAssertTrue(NSApp.windows.first { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible } === editor)
         XCTAssertTrue(descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
             .contains { $0.contains("120 × 80") }, "duplicate Edit must preserve the staged crop")
         XCTAssertFalse(window.isVisible)
@@ -292,7 +292,7 @@ final class OpenImageTests: XCTestCase {
                         .appendingPathComponent("external-media-light-error-minimum.png"))
                 }
             }
-            let editor = try XCTUnwrap(NSApp.windows.first { $0.title == "Recording editor" && $0.isVisible })
+            let editor = try XCTUnwrap(NSApp.windows.first { $0.title == EditorWindowTitle.recording && $0.isVisible })
             defer { editor.orderOut(nil) }
             let controls = try XCTUnwrap(editor.contentView)
             XCTAssertNotNil(descendants(controls).compactMap { $0 as? NSImageView }
@@ -377,7 +377,7 @@ final class OpenImageTests: XCTestCase {
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
             .first?.documentView as? HistoryGridView)
         try waitUntil { table.numberOfRows == 2 && !controller.externalOpenPending }
-        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        let editor = try XCTUnwrap(NSApp.windows.first { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible })
         defer { editor.performClose(nil) }
         XCTAssertEqual(try canvasSize(in: try XCTUnwrap(editor.contentView)),
                        "\(secondImage.width)×\(secondImage.height)",
@@ -416,7 +416,7 @@ final class OpenImageTests: XCTestCase {
             historyRoot: folder.path, settingsPath: settingsPath, transport: transport,
             showPreferences: {})
         defer { withExtendedLifetime(controller) {} }
-        defer { NSApp.windows.filter { $0.title.hasPrefix("Edit screenshot") }.forEach { $0.orderOut(nil) } }
+        defer { NSApp.windows.filter { $0.title.hasPrefix(EditorWindowTitle.screenshot) }.forEach { $0.orderOut(nil) } }
         window.makeKeyAndOrderFront(nil)
         try waitUntil { root.subviews.compactMap { $0 as? CaptureButton }
             .first { $0.title == "Capture display" }?.isEnabled == true }
@@ -493,7 +493,7 @@ final class OpenImageTests: XCTestCase {
         transport.releaseFirstOpen.signal()
         try waitUntil { !controller.externalOpenPending }
         XCTAssertEqual(table.selectedRow, 1, "late History must keep the newer selection")
-        XCTAssertFalse(NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        XCTAssertFalse(NSApp.windows.contains { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible })
     }
 
     func testSupersedingHistoryDoesNotOpenStaleEditorOrKeepBusyLatch() throws {
@@ -530,7 +530,7 @@ final class OpenImageTests: XCTestCase {
         gate.signal()
         try waitUntil { !controller.externalOpenPending && table.numberOfRows == 1 }
         XCTAssertTrue(controller.prepareEditorForTermination())
-        XCTAssertFalse(NSApp.windows.contains { $0.title.hasPrefix("Edit screenshot") && $0.isVisible })
+        XCTAssertFalse(NSApp.windows.contains { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible })
     }
 
     private func waitUntil(_ condition: () -> Bool) throws {
