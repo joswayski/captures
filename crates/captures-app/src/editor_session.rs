@@ -317,6 +317,12 @@ pub struct Snapshot<'a> {
     /// Overflow ghost and Expand canvas action per visible layer that hangs
     /// past the canvas edge.
     pub canvas_expand: BTreeMap<&'a str, crate::editor_canvas::CanvasExpandPreview>,
+    /// Shipping `canTrimEdges`: hosts disable Trim edges when it is false.
+    pub can_trim: bool,
+    /// Margins, kept area and cut edges the Trim edges hover/focus preview
+    /// paints (`editor_canvas::CanvasTrimPreview`), or `None` when the trim
+    /// cuts nothing on-canvas.
+    pub trim_preview: Option<crate::editor_canvas::CanvasTrimPreview>,
     /// Shipping Layers-panel row copy per layer ID (`editor_chrome`).
     pub layer_rows: BTreeMap<&'a str, LayerRow>,
     /// Live row previews (`data:image/png;base64,…`) per layer ID, current as
@@ -591,6 +597,8 @@ impl EditorSession {
                     .map(|preview| (element.base().id.as_str(), preview))
                 })
                 .collect(),
+            can_trim: document.can_trim_to_content(),
+            trim_preview: document.trim_preview(),
             layer_thumbnails: self
                 .thumbnails
                 .iter()
@@ -679,6 +687,34 @@ impl EditorSession {
             options,
         )
         .map_err(|error| error.to_string())
+    }
+
+    /// The remove-background wand's colour loupe at a document point, from the
+    /// same image layer and natural pixel a wand click would edit.
+    #[must_use]
+    pub fn wand_loupe(&self, point: Point) -> Option<crate::editor_image_background::WandLoupe> {
+        crate::editor_image_background::wand_loupe(
+            self.visible_document(),
+            |src| self.assets.get(src).map(|asset| &**asset),
+            point,
+        )
+    }
+
+    /// Shared natural pixels of every visible image layer, by source, so a
+    /// host can draw the wand loupe on its UI thread without the session.
+    #[must_use]
+    pub fn visible_image_assets(&self) -> BTreeMap<String, Arc<RgbaImage>> {
+        self.visible_document()
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                Element::Image(image) if image.base.visible => self
+                    .assets
+                    .get(&image.src)
+                    .map(|asset| (image.src.clone(), asset.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Cloning this Arc does not copy pixels; an old UI frame may safely outlive
@@ -788,20 +824,9 @@ impl EditorSession {
         if !point.x.is_finite() || !point.y.is_finite() || !tolerance.is_finite() {
             return Err("Background removal requires finite coordinates and tolerance.".into());
         }
-        let (index, image, pixel) = self
-            .history
-            .current()
-            .elements
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, element)| match element {
-                Element::Image(image) if image.base.visible => image
-                    .natural_pixel_at(point)
-                    .map(|pixel| (index, image, pixel)),
-                _ => None,
-            })
-            .ok_or("Click inside a visible image layer to sample a color.")?;
+        let (index, image, pixel) =
+            crate::editor_image_background::wand_target(self.history.current(), point)
+                .ok_or("Click inside a visible image layer to sample a color.")?;
         // Locked image layers remain editable, as in the shipping wand. Other
         // layer kinds and hidden images do not block image-background picking.
         let source = self

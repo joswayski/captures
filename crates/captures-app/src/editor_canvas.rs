@@ -245,6 +245,166 @@ impl Document {
     }
 }
 
+/// Shipping `.screenshot-canvas-trim-hint` `--trim-rgb`: the red "negative"
+/// of the accent expand glow. Shipping hard-codes it, so hosts do too.
+pub const TRIM_RGB: [u8; 3] = [255, 92, 106];
+/// `.screenshot-canvas-trim-region` fill alpha over the discarded margins.
+pub const TRIM_REGION_ALPHA: f64 = 0.14;
+/// `.screenshot-canvas-trim-keep`: `1.5px dashed` border at this alpha, 3 px
+/// radius, with a 22 px glow at [`TRIM_KEEP_GLOW_ALPHA`].
+pub const TRIM_KEEP_ALPHA: f64 = 0.72;
+pub const TRIM_KEEP_WIDTH: f64 = 1.5;
+pub const TRIM_KEEP_RADIUS: f64 = 3.;
+pub const TRIM_KEEP_GLOW_ALPHA: f64 = 0.18;
+/// `.screenshot-canvas-trim-edge::after`: a 4 px pill straddling each cut edge.
+pub const TRIM_EDGE_BAR: f64 = 4.;
+/// `.screenshot-canvas-trim-bloom`: a 96 px outward gradient from each cut
+/// edge (0.5 → 0.2 at 38 % → 0.06 at 72 % → clear).
+pub const TRIM_BLOOM: f64 = 96.;
+pub const TRIM_BLOOM_STOPS: [(f64, f64); 4] = [(0., 0.5), (0.38, 0.2), (0.72, 0.06), (1., 0.)];
+
+/// Pixel strips Trim edges removes from each side of the current canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct TrimMargins {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+/// Shipping `canvasTrimMarginPreview`: what the Trim edges hover preview
+/// tints and outlines, in current document coordinates.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasTrimPreview {
+    /// The part of the current canvas that stays after the trim.
+    pub keep: Rect,
+    pub margins: TrimMargins,
+    /// Edges with a positive margin, in shipping's top/right/bottom/left order;
+    /// these glow and stream particles.
+    pub edges: Vec<CanvasEdge>,
+    /// Discarded strips: full-width top/bottom, then left/right between them.
+    pub regions: Vec<(CanvasEdge, Rect)>,
+}
+
+/// The integer canvas frame Trim edges fits to `bounds` (shipping
+/// `trimDocumentToContent` with no padding), in current document coordinates.
+#[must_use]
+pub fn trim_frame(bounds: Rect) -> Rect {
+    let x = bounds.x.floor();
+    let y = bounds.y.floor();
+    let right = (bounds.x + bounds.width).ceil();
+    let bottom = (bounds.y + bounds.height).ceil();
+    Rect {
+        x,
+        y,
+        width: (right - x).max(1.),
+        height: (bottom - y).max(1.),
+    }
+}
+
+impl Document {
+    /// Shipping `canTrimEdges`: visible layers leave empty margin on the
+    /// canvas or overhang it, so Trim edges would change the document. Hosts
+    /// disable the button otherwise.
+    #[must_use]
+    pub fn can_trim_to_content(&self) -> bool {
+        let Ok(Some(bounds)) = self.visible_content_bounds() else {
+            return false;
+        };
+        let frame = trim_frame(bounds);
+        frame.x != 0. || frame.y != 0. || frame.width != self.width || frame.height != self.height
+    }
+
+    /// Shipping `canvasTrimMarginPreview`: the margins Trim edges would cut
+    /// from the current canvas. Overhanging content grows the canvas rather
+    /// than being removed, so only positive interior margins count; `None`
+    /// when the trim is a no-op or cuts nothing on-canvas.
+    #[must_use]
+    pub fn trim_preview(&self) -> Option<CanvasTrimPreview> {
+        if !self.can_trim_to_content() {
+            return None;
+        }
+        let frame = trim_frame(self.visible_content_bounds().ok()??);
+        let left = frame.x.max(0.);
+        let top = frame.y.max(0.);
+        let right = (frame.x + frame.width).min(self.width);
+        let bottom = (frame.y + frame.height).min(self.height);
+        if right <= left || bottom <= top {
+            return None;
+        }
+        let margins = TrimMargins {
+            top,
+            right: (self.width - right).max(0.),
+            bottom: (self.height - bottom).max(0.),
+            left,
+        };
+        let mut edges = Vec::new();
+        let mut regions = Vec::new();
+        let middle = self.height - margins.top - margins.bottom;
+        for (edge, margin, rect) in [
+            (
+                CanvasEdge::Top,
+                margins.top,
+                Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: self.width,
+                    height: margins.top,
+                },
+            ),
+            (
+                CanvasEdge::Right,
+                margins.right,
+                Rect {
+                    x: self.width - margins.right,
+                    y: margins.top,
+                    width: margins.right,
+                    height: middle,
+                },
+            ),
+            (
+                CanvasEdge::Bottom,
+                margins.bottom,
+                Rect {
+                    x: 0.,
+                    y: self.height - margins.bottom,
+                    width: self.width,
+                    height: margins.bottom,
+                },
+            ),
+            (
+                CanvasEdge::Left,
+                margins.left,
+                Rect {
+                    x: 0.,
+                    y: margins.top,
+                    width: margins.left,
+                    height: middle,
+                },
+            ),
+        ] {
+            if margin > 0. {
+                edges.push(edge);
+                regions.push((edge, rect));
+            }
+        }
+        if edges.is_empty() {
+            return None;
+        }
+        Some(CanvasTrimPreview {
+            keep: Rect {
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top,
+            },
+            margins,
+            edges,
+            regions,
+        })
+    }
+}
+
 /// Editable handle on a selected line/arrow.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -699,6 +859,69 @@ mod tests {
             expand_action_anchor(corner, 100., 80.).unwrap(),
             (Point { x: 100., y: 76. }, CanvasEdge::Right)
         );
+    }
+
+    #[test]
+    fn trim_rule_and_margin_preview_match_shipping() {
+        let mut document = Document::new_capture("fixture:base", 100., 80., None);
+        assert!(!document.can_trim_to_content(), "a tight canvas has nothing to trim");
+        assert_eq!(document.trim_preview(), None);
+
+        document.resize_canvas(150., 100.);
+        assert!(document.can_trim_to_content());
+        let preview = document.trim_preview().unwrap();
+        assert_eq!(preview.keep, rect(0., 0., 100., 80.));
+        assert_eq!(
+            preview.margins,
+            TrimMargins {
+                top: 0.,
+                right: 50.,
+                bottom: 20.,
+                left: 0.,
+            }
+        );
+        assert_eq!(preview.edges, [CanvasEdge::Right, CanvasEdge::Bottom]);
+        assert_eq!(
+            preview.regions,
+            [
+                (CanvasEdge::Right, rect(100., 0., 50., 80.)),
+                (CanvasEdge::Bottom, rect(0., 80., 150., 20.)),
+            ]
+        );
+
+        // Fractional content snaps outward, as the trim itself does.
+        document.translate(10.4, 5.);
+        let preview = document.trim_preview().unwrap();
+        assert_eq!(preview.keep, rect(10., 5., 101., 80.));
+        assert_eq!(
+            preview.edges,
+            [
+                CanvasEdge::Top,
+                CanvasEdge::Right,
+                CanvasEdge::Bottom,
+                CanvasEdge::Left
+            ]
+        );
+        assert_eq!(preview.regions[0], (CanvasEdge::Top, rect(0., 0., 150., 5.)));
+        assert_eq!(preview.regions[3], (CanvasEdge::Left, rect(0., 5., 10., 80.)));
+        let mut trimmed = document.clone();
+        trimmed.trim_to_content().unwrap();
+        assert_eq!((trimmed.width, trimmed.height), (101., 80.));
+        assert!(!trimmed.can_trim_to_content(), "trimming is idempotent");
+
+        // Overhang only: the trim grows the canvas but cuts nothing on-canvas.
+        document.translate(-10.4, -5.);
+        document.resize_canvas(60., 40.);
+        assert!(document.can_trim_to_content());
+        assert_eq!(document.trim_preview(), None);
+
+        // Hidden layers never hold the canvas open.
+        document.resize_canvas(150., 100.);
+        if let Element::Image(image) = &mut document.elements[0] {
+            image.base.visible = false;
+        }
+        assert!(!document.can_trim_to_content());
+        assert_eq!(document.trim_preview(), None);
     }
 
     #[test]

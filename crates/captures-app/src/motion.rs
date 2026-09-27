@@ -324,6 +324,32 @@ const GUIDANCE_NUDGE: &[Keyframe] = &[
 /// Box-shadow spread of the onboarding CTA halo at full strength, in points.
 pub const ONBOARDING_CTA_SPREAD: f64 = 5.;
 
+/// `screenshot-cta-pulse` (the editor's Apply crop): a `--theme-accent` halo
+/// that swells to [`EDITOR_CTA_SPREAD`] points at [`EDITOR_CTA_ALPHA`] and
+/// fades. It shares the onboarding halo's keyframes.
+pub const EDITOR_CTA_SPREAD: f64 = 5.;
+pub const EDITOR_CTA_ALPHA: f64 = 0.22;
+
+/// `canvas-trim-region-breathe`: the discarded margins' tint (0.82 ↔ 1).
+const TRIM_REGION_BREATHE: &[Keyframe] = &[
+    frame(0., Pose::with(0.82, 0., 1.)),
+    frame(0.5, Pose::REST),
+    frame(1., Pose::with(0.82, 0., 1.)),
+];
+/// `canvas-trim-keep-breathe`: the dashed kept-area outline (0.88 ↔ 1).
+const TRIM_KEEP_BREATHE: &[Keyframe] = &[
+    frame(0., Pose::with(0.88, 0., 1.)),
+    frame(0.5, Pose::REST),
+    frame(1., Pose::with(0.88, 0., 1.)),
+];
+/// `canvas-trim-edge-pulse`: the cut-edge bar (1 ↔ 0.9; hosts omit the
+/// `brightness(1.12)` filter).
+const TRIM_EDGE_PULSE: &[Keyframe] = &[
+    frame(0., Pose::REST),
+    frame(0.5, Pose::with(0.9, 0., 1.)),
+    frame(1., Pose::REST),
+];
+
 /// Shipping entrance, exit and lifecycle animations the native hosts play.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Motion {
@@ -413,10 +439,26 @@ pub enum Motion {
     /// var(--ease-out)`, the Region/Window overlay chip's shake after a click
     /// without a drag. Only `translate_x` moves.
     CaptureGuidanceNudge,
+    /// `.screenshot-property-actions button.primary.cta-pulse` (Apply crop):
+    /// `screenshot-cta-pulse 2.4s ease-in-out infinite`. Hosts draw a
+    /// `--theme-accent` ring of [`EDITOR_CTA_SPREAD`] × the pose opacity at
+    /// [`EDITOR_CTA_ALPHA`] × the pose opacity.
+    EditorCtaPulse,
+    /// `.screenshot-canvas-trim-region`: `canvas-trim-region-breathe 1.7s
+    /// ease-in-out infinite` on the Trim edges hover tint. Like every trim
+    /// hint loop it has no fill mode, so under reduced motion hosts rest on
+    /// the element's own style (opacity 1), not the final keyframe.
+    TrimRegionBreathe,
+    /// `.screenshot-canvas-trim-keep`: `canvas-trim-keep-breathe 1.7s
+    /// ease-in-out infinite`.
+    TrimKeepBreathe,
+    /// `.screenshot-canvas-trim-edge::after`: `canvas-trim-edge-pulse 1.4s
+    /// ease-in-out infinite`.
+    TrimEdgePulse,
 }
 
 impl Motion {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 32] = [
         Self::UpdateNoticeIn,
         Self::UpdateNoticeRestartExit,
         Self::StartupNoticeIn,
@@ -445,6 +487,10 @@ impl Motion {
         Self::OnboardingCtaPulse,
         Self::CaptureRecordReadyPing,
         Self::CaptureGuidanceNudge,
+        Self::EditorCtaPulse,
+        Self::TrimRegionBreathe,
+        Self::TrimKeepBreathe,
+        Self::TrimEdgePulse,
     ];
 
     /// Stable name used by the settings ABI.
@@ -478,6 +524,10 @@ impl Motion {
             Self::OnboardingCtaPulse => "onboarding_cta_pulse",
             Self::CaptureRecordReadyPing => "capture_record_ready_ping",
             Self::CaptureGuidanceNudge => "capture_guidance_nudge",
+            Self::EditorCtaPulse => "editor_cta_pulse",
+            Self::TrimRegionBreathe => "trim_region_breathe",
+            Self::TrimKeepBreathe => "trim_keep_breathe",
+            Self::TrimEdgePulse => "trim_edge_pulse",
         }
     }
 
@@ -568,6 +618,12 @@ impl Motion {
                 RECORD_READY_PING,
             ),
             Self::CaptureGuidanceNudge => spec(Dur("dur-4"), 0., Ease("ease-out"), GUIDANCE_NUDGE),
+            Self::EditorCtaPulse => spec(Millis(2_400.), 0., CSS_EASE_IN_OUT, ONBOARDING_CTA_PULSE),
+            Self::TrimRegionBreathe => {
+                spec(Millis(1_700.), 0., CSS_EASE_IN_OUT, TRIM_REGION_BREATHE)
+            }
+            Self::TrimKeepBreathe => spec(Millis(1_700.), 0., CSS_EASE_IN_OUT, TRIM_KEEP_BREATHE),
+            Self::TrimEdgePulse => spec(Millis(1_400.), 0., CSS_EASE_IN_OUT, TRIM_EDGE_PULSE),
         }
     }
 
@@ -645,6 +701,8 @@ pub enum Transition {
 const CSS_EASE: Easing = Easing::Bezier([0.25, 0.1, 0.25, 1.]);
 /// CSS `ease-out` keyword (not the `--ease-out` token).
 const CSS_EASE_OUT: Easing = Easing::Bezier([0., 0., 0.58, 1.]);
+/// CSS `ease-in-out` keyword (not the `--ease-in-out` token).
+const CSS_EASE_IN_OUT: Easing = Easing::Bezier([0.42, 0., 0.58, 1.]);
 /// CSS `linear`.
 const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 /// `cubic-bezier(0.4, 0, 0.2, 1)`, shipping's preview exit and settle curve.
@@ -991,6 +1049,103 @@ impl CubicBezier {
     }
 }
 
+/// One `DROP_SNAP_PARTICLES` seed: the sparks that stream outward from a
+/// glowing canvas edge (image-drop snap, Expand canvas, Trim edges).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SnapParticle {
+    /// 0...1 position along the edge.
+    pub along: f64,
+    /// Multiplier of [`SNAP_PARTICLE_TRAVEL`] for how far outward it flies.
+    pub travel: f64,
+    pub delay_ms: f64,
+    pub duration_ms: f64,
+    /// Diameter in points.
+    pub size: f64,
+}
+
+const fn seed(along: f64, travel: f64, delay_ms: f64, duration_ms: f64, size: f64) -> SnapParticle {
+    SnapParticle {
+        along,
+        travel,
+        delay_ms,
+        duration_ms,
+        size,
+    }
+}
+
+/// Shipping's fixed particle seeds, in `ScreenshotEditor.tsx` order.
+pub const SNAP_PARTICLES: [SnapParticle; 14] = [
+    seed(0.08, 0.72, 0., 1_150., 3.),
+    seed(0.18, 1.05, 180., 1_350., 2.),
+    seed(0.28, 0.88, 420., 1_050., 4.),
+    seed(0.38, 1.2, 80., 1_450., 2.),
+    seed(0.48, 0.95, 550., 1_200., 3.),
+    seed(0.55, 0.7, 280., 950., 2.),
+    seed(0.62, 1.12, 700., 1_300., 3.),
+    seed(0.72, 0.82, 120., 1_100., 2.),
+    seed(0.8, 1.28, 480., 1_500., 4.),
+    seed(0.88, 0.9, 320., 1_180., 2.),
+    seed(0.94, 0.78, 620., 1_020., 3.),
+    seed(0.42, 1.35, 850., 1_400., 2.),
+    seed(0.15, 0.65, 950., 900., 2.),
+    seed(0.68, 1.08, 1_050., 1_250., 3.),
+];
+
+/// `drop-snap-particle-*`: full outward travel at `--snap-travel: 1`, points.
+pub const SNAP_PARTICLE_TRAVEL: f64 = 72.;
+/// The particles' `cubic-bezier(0.2, 0.65, 0.25, 1)`, applied per keyframe
+/// segment of each property.
+pub const SNAP_PARTICLE_EASING: [f64; 4] = [0.2, 0.65, 0.25, 1.];
+/// Opacity keyframes (offset, opacity); the transform only has its 0 % and
+/// 100 % frames, so it eases over the whole run.
+pub const SNAP_PARTICLE_OPACITY: [(f64, f64); 4] = [(0., 0.), (0.12, 1.), (0.7, 0.55), (1., 0.)];
+/// Scale at the start and end of the run.
+pub const SNAP_PARTICLE_SCALE: (f64, f64) = (0.55, 0.2);
+
+/// Where one particle is `elapsed_ms` after its edge started glowing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SnapParticlePose {
+    /// Points outward from the edge, perpendicular to it.
+    pub outward: f64,
+    pub scale: f64,
+    pub opacity: f64,
+}
+
+impl SnapParticle {
+    /// The particle's pose in its `infinite` loop, or `None` while it is
+    /// invisible: before its delay (its own style is `opacity: 0`) and always
+    /// under reduced motion, whose single 0.01 ms run has no fill mode.
+    #[must_use]
+    pub fn pose(&self, elapsed_ms: f64, reduced_motion: bool) -> Option<SnapParticlePose> {
+        if reduced_motion
+            || self.duration_ms <= 0.
+            || !elapsed_ms.is_finite()
+            || elapsed_ms < self.delay_ms
+        {
+            return None;
+        }
+        let [x1, y1, x2, y2] = SNAP_PARTICLE_EASING;
+        let easing = CubicBezier::new(x1, y1, x2, y2)?;
+        let progress = ((elapsed_ms - self.delay_ms) % self.duration_ms) / self.duration_ms;
+        let moved = easing.ease(progress);
+        let mut opacity = 0.;
+        for pair in SNAP_PARTICLE_OPACITY.windows(2) {
+            let ((a, from), (b, to)) = (pair[0], pair[1]);
+            if progress <= b {
+                opacity = from + (to - from) * easing.ease((progress - a) / (b - a));
+                break;
+            }
+        }
+        let (start, end) = SNAP_PARTICLE_SCALE;
+        let pose = SnapParticlePose {
+            outward: self.travel * SNAP_PARTICLE_TRAVEL * moved,
+            scale: start + (end - start) * moved,
+            opacity,
+        };
+        (pose.opacity > 0.001).then_some(pose)
+    }
+}
+
 /// The settings ABI's `motion` payload: every shipping animation and
 /// transition with its token names, for hosts that hand keyframes to a system
 /// animator (Core Animation) instead of sampling poses.
@@ -1003,7 +1158,18 @@ pub fn catalog() -> serde_json::Value {
         .iter()
         .map(|t| (t.name().into(), serde_json::json!(t.spec())))
         .collect();
-    serde_json::json!({ "keyframes": keyframes, "transitions": transitions })
+    serde_json::json!({
+        "keyframes": keyframes,
+        "transitions": transitions,
+        "snap_particles": {
+            "seeds": SNAP_PARTICLES,
+            "travel": SNAP_PARTICLE_TRAVEL,
+            "easing": SNAP_PARTICLE_EASING,
+            "opacity": SNAP_PARTICLE_OPACITY,
+            "scale": [SNAP_PARTICLE_SCALE.0, SNAP_PARTICLE_SCALE.1],
+        },
+        "editor_cta": { "spread": EDITOR_CTA_SPREAD, "alpha": EDITOR_CTA_ALPHA },
+    })
 }
 
 #[cfg(test)]
@@ -1307,5 +1473,46 @@ mod tests {
             catalog["transitions"]["capture_guidance_slide"]["easing"]["token"],
             "ease-out"
         );
+    }
+
+    #[test]
+    fn editor_cta_and_trim_hint_loops_match_shipping() {
+        let cta = Motion::EditorCtaPulse.resolve(&Shipping).unwrap();
+        assert_eq!(cta.duration_ms, 2_400.);
+        assert!(close(cta.pose_repeating(0., false).opacity, 0.));
+        assert!(close(cta.pose_repeating(1_200., false).opacity, 1.));
+        assert_eq!(cta.pose_repeating(1_200., true).opacity, 0., "no halo when reduced");
+
+        let region = Motion::TrimRegionBreathe.resolve(&Shipping).unwrap();
+        assert_eq!(region.duration_ms, 1_700.);
+        assert!(close(region.pose_repeating(0., false).opacity, 0.82));
+        assert!(close(region.pose_repeating(850., false).opacity, 1.));
+        let keep = Motion::TrimKeepBreathe.resolve(&Shipping).unwrap();
+        assert!(close(keep.pose_repeating(1_700. * 2., false).opacity, 0.88));
+        let edge = Motion::TrimEdgePulse.resolve(&Shipping).unwrap();
+        assert_eq!(edge.duration_ms, 1_400.);
+        assert!(close(edge.pose_repeating(700., false).opacity, 0.9));
+        let catalog = catalog();
+        assert_eq!(catalog["keyframes"]["trim_edge_pulse"]["duration"]["millis"], 1_400.);
+        assert_eq!(catalog["editor_cta"]["alpha"], 0.22);
+        assert_eq!(catalog["snap_particles"]["seeds"].as_array().unwrap().len(), 14);
+    }
+
+    #[test]
+    fn snap_particles_stream_outward_and_vanish_under_reduced_motion() {
+        let first = SNAP_PARTICLES[0];
+        assert_eq!(first.pose(0., false), None, "invisible at the first frame");
+        let early = first.pose(0.12 * 1_150., false).unwrap();
+        assert!(close(early.opacity, 1.));
+        assert!(early.outward > 0. && early.outward < first.travel * 72.);
+        assert!(early.scale < 0.55 && early.scale > 0.2);
+        let late = first.pose(0.8 * 1_150., false).unwrap();
+        assert!(late.outward > early.outward && late.opacity < 0.55);
+        // `infinite`: the loop restarts after each duration.
+        assert_eq!(first.pose(1_150. + 0.12 * 1_150., false), Some(early));
+        // Delayed seeds stay hidden until their delay.
+        assert_eq!(SNAP_PARTICLES[1].pose(100., false), None);
+        assert!(SNAP_PARTICLES[1].pose(180. + 400., false).is_some());
+        assert_eq!(first.pose(0.5 * 1_150., true), None);
     }
 }

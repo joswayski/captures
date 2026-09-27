@@ -309,8 +309,13 @@ char *captures_icon_polylines_v1(const char *name);
  * {width} -> {show_history, zoom_slider_width, zoom_preset_width} (the
  * shipping 1040px rule); "shapes_tooltip" {current}; "tool_label" {key};
  * "zoom_label" {percent}; "canvas_offscreen" {viewport:[x,y,w,h],
- * canvas:[x,y,w,h]} -> whether Recenter should show. Standard owned
- * {ok,result}/{ok,error} envelope; free with captures_settings_free_v1. */
+ * canvas:[x,y,w,h]} -> whether Recenter should show; "draw_tool_preview"
+ * {tool, stroke_width, stroke_enabled} / "brush_preview" {size, softness} ->
+ * the Properties stroke/brush sample {label, stroke_width, shapes, brush} in a
+ * 160x72 view box; "wand_loupe_position" {cursor:[x,y], viewport:[w,h]} ->
+ * the wand loupe's top-left {x,y}. "copy" also carries trim, wand_loupe and
+ * draw_preview paint metrics. Standard owned {ok,result}/{ok,error}
+ * envelope; free with captures_settings_free_v1. */
 char *captures_editor_chrome_v1(const char *request_json);
 
 /* Idle mini-preview metadata, e.g. "1440 × 900 · 246 KB", matching the
@@ -480,7 +485,9 @@ char *captures_editor_hit_test_document_v1(const char *document_json,
  * the layer would have after dragging `handle` to `point` (live drag preview).
  * Snapshots also carry curve_handles {layerId: {start,end,controls,starters,
  * bend_percent,slider,straighten_label,path}} and canvas_expand {layerId: {edges,
- * rect,gaps,bounds,anchor,anchor_edge}}. Layer edits add curve {edit: {kind:
+ * rect,gaps,bounds,anchor,anchor_edge}}, plus can_trim (Trim edges enabled)
+ * and trim_preview {keep, margins:{top,right,bottom,left}, edges, regions:
+ * [[edge,rect],...]}|null for the Trim edges hover preview. Layer edits add curve {edit: {kind:
  * "bend"|"insert"|"remove"|"move"|"straighten", ...}} and expand_canvas.
  * Returns owned success/error JSON; free with captures_settings_free_v1. */
 char *captures_editor_canvas_query_v1(const char *document_json, const char *request_json);
@@ -600,6 +607,12 @@ void captures_editor_free_v1(CapturesEditorSession *session);
  * pixels returns borrowed straight-alpha sRGB RGBA8 in tight top-down rows; false
  * leaves output unchanged. Never mutate/free data. Retain frame for every read. */
 CapturesEditorFrame *captures_editor_frame_v1(const CapturesEditorSession *session);
+/* Read-only remove-background wand loupe at document point (x, y) on the
+ * session worker: {pixel:[x,y], color:[r,g,b,a], tiles:[[r,g,b,a]|null,...]
+ * (extent x extent, row-major), extent, text, transparent, accessible_label}
+ * for the image a wand click there would edit, or null off every visible
+ * image. Owned success/error JSON; free with captures_settings_free_v1. */
+char *captures_editor_wand_loupe_v1(const CapturesEditorSession *session, double x, double y);
 bool captures_editor_frame_pixels_v1(const CapturesEditorFrame *frame, CapturesRegionPixels *output);
 void captures_editor_frame_free_v1(CapturesEditorFrame *frame);
 
