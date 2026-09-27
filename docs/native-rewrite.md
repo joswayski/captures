@@ -1958,9 +1958,25 @@ hover hints; drags preview live and commit one `curve` edit on release, double-c
 add/remove points, and the Layers Curve slider (#841 `RangeSlider`/`TokenSlider`)
 or Straighten action commit once. Curves persist in saves and drafts. Private X11
 exercises a real XDND drop, Expand canvas, curve dots, undo/redo and draft reopen
-in both appearances; AppKit is covered by XCTest only. The Wand colour loupe,
-`DrawToolPreview` and the Apply crop pulse remain open. Windows/Wayland share the
+in both appearances; AppKit is covered by XCTest only. Windows/Wayland share the
 wgpu code but are presentation-unverified.
+
+The final editor-parity slice adds the shipping Trim edges rule and hover
+preview, the Wand colour loupe, `DrawToolPreview` and the Apply crop pulse to both
+hosts. `captures_app::editor_canvas` owns `can_trim_to_content`/`trim_preview`
+(snapshots carry `can_trim` and `trim_preview`); Trim edges is disabled when the
+trim is a no-op, and hover or keyboard focus tints the discarded margins, dashes the
+kept area and pulses the cut edges with blooms and `SNAP_PARTICLES`. The loupe
+samples the same image and natural pixel as a Wand click
+(`editor_image_background::wand_loupe`; AppKit through
+`captures_editor_wand_loupe_v1`) and places itself with `wand_loupe_position`.
+`editor_chrome::draw_preview` supplies the stroke/brush sample geometry, and
+`motion` adds `editor_cta_pulse`, the trim breathing loops and the particle spec;
+all rest under reduced motion (no particles, no halo). Private X11 smokes check the
+disabled state, the hover tint, the loupe's sampled colour, the brush preview and
+the Apply crop halo in both appearances; AppKit is covered by XCTest only (macOS
+CI is its first compile). Windows/Wayland share the wgpu code but are
+presentation-unverified.
 
 Separately, both live development hosts open external PNG/JPEG/WebP/GIF/MP4/WebM
 paths through the shared History-backed `open_media` request using repeatable

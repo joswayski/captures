@@ -410,6 +410,9 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     var onPreviewCancel: (() -> Void)?
     var pixelPreviewVisible = false { didSet { needsDisplay = true } }
     var onWand: ((NSPoint) -> Void)?
+    /// Pointer hover in view coordinates, nil on exit (the Wand loupe).
+    var onHover: ((NSPoint?) -> Void)?
+    private var hoverTracking: NSTrackingArea?
     var onBackgroundBrush: ((Shape, [NSPoint]) -> Void)?
     var brushDiameter: CGFloat = 28 { didSet { needsDisplay = true } }
     var brushOutlineColor = NSColor.labelColor
@@ -574,6 +577,28 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     override func resetCursorRects() {
         if drawingEnabled { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        onHover?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHover?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover?(nil)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1153,6 +1178,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private(set) var curveControls: EditorCurveControls!
     private var annotationControlsHeight: CGFloat = 0
     let dropGuideView = EditorDropGuideView()
+    /// Shipping Trim edges hover/focus preview over the canvas.
+    lazy var trimPreviewView = EditorTrimPreviewView(tokens: tokens)
+    /// Trim edges is hovered or keyboard-focused.
+    private(set) var trimHighlighted = false
+    /// Shipping Wand colour loupe beside the crosshair.
+    lazy var wandLoupeView = EditorWandLoupeView(tokens: tokens)
+    /// One loupe sample in flight; the latest hover point waits behind it.
+    private var wandLoupeInFlight = false
+    private var wandLoupeQueued: (canvas: CGPoint, cursor: CGPoint)?
+    private var wandLoupeGeneration = 0
+    /// Shipping `DrawToolPreview` above the drawing and brush defaults.
+    lazy var drawToolPreview = EditorDrawToolPreviewView(tokens: tokens)
+    /// Base y of each draw control below the preview slot, before the preview
+    /// pushes them down.
+    private var drawControlBaseY: [ObjectIdentifier: CGFloat] = [:]
+    /// Shipping `cta-pulse` halo behind Apply crop while a crop is staged.
+    lazy var applyCropHalo = EditorCtaHalo(tokens: tokens)
     private(set) var expandCanvasButton: CaptureButton!
     /// Remaining files from one drop; each imports after the previous one.
     private var pendingDropURLs: [URL] = []
@@ -1964,6 +2006,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         drawOverlay.onPreviewCancel = { [weak self] in self?.cancelDrawingPreview() }
         drawOverlay.onWand = { [weak self] point in self?.removeImageBackground(at: point) }
+        drawOverlay.onHover = { [weak self] point in self?.wandHover(point) }
         drawOverlay.onBackgroundBrush = { [weak self] mode, points in
             self?.paintImageBackground(mode: mode, points: points)
         }
@@ -2020,6 +2063,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cropOverlay.onChange = { [weak self] rect in self?.setCropFields(rect) }
         cropOverlay.onCancel = { [weak self] in self?.cancelCrop() }
         viewportInput.addSubview(cropOverlay)
+        trimPreviewView.frame = viewportInput.bounds
+        trimPreviewView.autoresizingMask = [.width, .height]
+        trimPreviewView.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
+        viewportInput.addSubview(trimPreviewView)
         // Above the canvas overlays: only its handle, bottom strip and Hide
         // take the pointer; every other press reaches the canvas below.
         compareView = CompressionCompareView(tokens: tokens)
@@ -2145,6 +2192,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                  parent: geometryContent) {
             [weak self] in self?.applyCrop()
         }
+        // Shipping `.screenshot-property-actions button.primary.cta-pulse`.
+        applyCropButton.primary = true
+        applyCropHalo.surround(applyCropButton)
+        geometryContent.addSubview(applyCropHalo, positioned: .below, relativeTo: applyCropButton)
 
         buildLayersPanel()
         buildDrawPanel()
@@ -2250,6 +2301,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             if !icon.isEmpty { control.icon = .shipping(icon); control.iconSide = 13 }
         }
         trimButton.toolTip = EditorChrome.text("header", "trim_tooltip")
+        // Hover or keyboard focus previews the cut on the canvas.
+        trimButton.highlightChanged = { [weak self] _, highlighted in
+            self?.trimHighlighted = highlighted
+            self?.refreshTrimPreview()
+        }
         backgroundButton.toolTip = EditorColors.text("background_tooltip")
         backgroundButton.swatch = tokens.color("surface-raised")
 
@@ -2466,13 +2522,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         softnessFormatter.maximumFractionDigits = 0; softnessFormatter.minimum = 0
         softnessFormatter.maximum = 100
         brushSoftness.formatter = softnessFormatter; brushSoftness.stringValue = "18"
+        brushSoftness.delegate = self
         drawHelper = panelLabel("Other tools create one annotation layer on release.",
                                 frame: NSRect(x: 0, y: 408, width: 252, height: 42), muted: true,
                                 parent: content)
         buildDrawingDefaultControls(in: content)
         buildCreateTextControls(in: content)
+        // Controls below the preview slot move down while it shows.
+        for view in content.subviews where view !== drawHelper && view.frame.minY >= Self.drawPreviewTop {
+            drawControlBaseY[ObjectIdentifier(view)] = view.frame.minY
+        }
+        drawToolPreview.frame = NSRect(x: 0, y: Self.drawPreviewTop, width: 252,
+                                       height: EditorDrawToolPreviewView.height)
+        drawToolPreview.isHidden = true
+        content.addSubview(drawToolPreview)
         publishDrawToolControls()
     }
+
+    /// Top of the `DrawToolPreview` slot, below the Eraser mode row.
+    static let drawPreviewTop: CGFloat = 140
+    /// The preview's height plus one row gap.
+    private var drawPreviewShift: CGFloat { EditorDrawToolPreviewView.height + 12 }
 
     private func buildDrawingDefaultControls(in content: NSView) {
         let strokeColorLabel = panelFieldLabel("Stroke color", x: 0, y: 146, parent: content)
@@ -2560,6 +2630,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.annotationStrokeEnabled = drawingStroke.state == .on
         drawOverlay.annotationFillEnabled = drawingFill.state == .on
         drawOverlay.needsDisplay = true
+        refreshDrawToolPreview()
     }
 
     private func buildCreateTextControls(in content: NSView) {
@@ -3495,9 +3566,94 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     ? "Click once to create empty auto-width text, then type on the canvas."
                     : drawingShadowVisible ? "Drawing pixels update in the background while dragging."
                     : "This tool creates one annotation layer on release."
+        // Shipping shows `DrawToolPreview` for drawing tools and brushes.
+        let previewing = creatingDrawing || brush
+        let shift = previewing ? drawPreviewShift : 0
+        drawToolPreview.isHidden = !previewing
+        for view in drawToolPreview.superview?.subviews ?? [] {
+            guard let base = drawControlBaseY[ObjectIdentifier(view)] else { continue }
+            view.frame.origin.y = base + shift
+        }
+        refreshDrawToolPreview()
+        if shape != .wand { hideWandLoupe() }
         // Other tools need no Wand/brush/text-default fields; collapse their space.
-        drawHelper.frame.origin.y = drawingShadowVisible ? 526 : creatingDrawing ? 338 : 278
+        drawHelper.frame.origin.y = (drawingShadowVisible ? 526 : creatingDrawing ? 338 : 278) + shift
         drawHelper.superview?.frame.size.height = drawHelper.frame.maxY + 8
+    }
+
+    /// Shipping `DrawToolPreview`: the new stroke/shape with its colour, fill
+    /// and opacity, or the Erase/Restore brush dab.
+    private func refreshDrawToolPreview() {
+        let shape = drawShape
+        guard !drawToolPreview.isHidden else { return }
+        if shape.isBackgroundBrush {
+            let size = min(120, max(4, number(brushSize) ?? 28))
+            let softness = min(100, max(0, number(brushSoftness) ?? 18))
+            drawToolPreview.update(NativeDrawToolPreview.brush(size: size, softness: softness),
+                                   stroke: .white, fill: nil, opacity: 1)
+            return
+        }
+        let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
+        let width = min(40, max(2, number(drawingStrokeWidth) ?? 8))
+        let opacity = min(100, max(0, number(drawingOpacity) ?? 100))
+        let tool = shape == .pen ? "pen" : shape.rawValue
+        drawToolPreview.update(
+            NativeDrawToolPreview.stroke(tool: tool, strokeWidth: width,
+                                         strokeEnabled: !closed || drawingStroke.state == .on),
+            stroke: NSColor(hex: drawingStrokeColor.stringValue) ?? tokens.color("text"),
+            fill: closed && drawingFill.state == .on ? NSColor(hex: drawingFillColor.stringValue) : nil,
+            opacity: CGFloat(opacity / 100))
+    }
+
+    /// Shipping Trim edges preview: shown while the enabled button is hovered
+    /// or focused, following each new snapshot.
+    func refreshTrimPreview() {
+        let snapshot = state.snapshot
+        trimPreviewView.canvasSize = snapshot.map { NSSize(width: $0.width, height: $0.height) } ?? .zero
+        trimPreviewView.trimPreview = trimHighlighted && trimButton?.isEnabled == true
+            ? snapshot?.trimPreview : nil
+    }
+
+    /// Shipping `WandColorLoupe`: sample the image under the Wand crosshair on
+    /// the session queue (one request at a time, latest point wins).
+    private func wandHover(_ point: NSPoint?) {
+        guard let point, drawShape == .wand, drawOverlay.drawingEnabled, state.snapshot != nil,
+              !drawOverlay.isViewportPanning, drawOverlay.presentedImageRect.contains(point) else {
+            hideWandLoupe(); return
+        }
+        let request = (canvas: drawOverlay.canvasPoint(for: point),
+                       cursor: root.convert(point, from: drawOverlay))
+        if wandLoupeInFlight { wandLoupeQueued = request; return }
+        requestWandLoupe(request)
+    }
+
+    private func requestWandLoupe(_ request: (canvas: CGPoint, cursor: CGPoint)) {
+        wandLoupeInFlight = true
+        let generation = wandLoupeGeneration
+        worker.wandLoupe(at: request.canvas) { [weak self] loupe in
+            guard let self else { return }
+            self.wandLoupeInFlight = false
+            if generation == self.wandLoupeGeneration {
+                if let loupe { self.showWandLoupe(loupe, cursor: request.cursor) } else { self.wandLoupeView.hide() }
+            }
+            if let next = self.wandLoupeQueued {
+                self.wandLoupeQueued = nil
+                self.requestWandLoupe(next)
+            }
+        }
+    }
+
+    private func showWandLoupe(_ loupe: NativeWandLoupe, cursor: CGPoint) {
+        guard drawShape == .wand, drawOverlay.drawingEnabled else { hideWandLoupe(); return }
+        if wandLoupeView.superview !== root { root.addSubview(wandLoupeView) }
+        let origin = NativeWandLoupe.position(cursor: cursor, viewport: root.bounds.size) ?? cursor
+        wandLoupeView.show(loupe, circleOrigin: origin)
+    }
+
+    private func hideWandLoupe() {
+        wandLoupeGeneration += 1
+        wandLoupeQueued = nil
+        wandLoupeView.hide()
     }
 
     @objc private func outputOptionsChanged() {
@@ -3599,10 +3755,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             publishCropSelection()
             return
         }
-        if field === brushSize {
-            if let value = Double(field.stringValue), value.isFinite {
+        if field === brushSize || field === brushSoftness {
+            if field === brushSize, let value = Double(field.stringValue), value.isFinite {
                 drawOverlay.brushDiameter = CGFloat(min(120, max(4, value)))
             }
+            refreshDrawToolPreview()
             return
         }
         if field === outputWidth || field === outputHeight {
@@ -5014,6 +5171,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cropOverlay.needsDisplay = true
         publishComparison()
         selectionOverlay.layoutExpandButton(); dropGuideView.needsDisplay = true
+        trimPreviewView.needsDisplay = true
     }
 
     private func publishTextInputPresentation(_ presentation: EditorPresentation) {
@@ -5134,6 +5292,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextDoneButton?.isEnabled = inlineReady
         inlineTextCancelButton?.isEnabled = inlineReady
         drawOverlay.drawingEnabled = active
+        if !active || drawShape != .wand { hideWandLoupe() }
         selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
             && state.snapshot != nil && !state.busy && inputResolved && !importLoading
     }
@@ -5781,7 +5940,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let ready = state.snapshot != nil && !state.busy && inlineTextInput == nil
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready
-        trimButton?.isEnabled = ready; backgroundButton?.isEnabled = ready
+        if let applyCropButton {
+            applyCropHalo.surround(applyCropButton)
+            applyCropHalo.pulsing = ready && cropPrevious != nil
+        }
+        // Shipping `disabled={!canTrimEdges}`: nothing to trim greys it out.
+        trimButton?.isEnabled = ready && state.snapshot?.canTrim == true
+        backgroundButton?.isEnabled = ready
+        refreshTrimPreview()
         // The card stays live while a change applies, like shipping; changes
         // made meanwhile queue (see `setBackground`).
         let backgroundLive = state.snapshot != nil && inlineTextInput == nil

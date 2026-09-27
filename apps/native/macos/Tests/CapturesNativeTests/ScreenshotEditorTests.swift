@@ -7506,3 +7506,244 @@ extension ScreenshotEditorTests {
         XCTAssertNil(worker.imports.last?.point, "later files stack below the previous import")
     }
 }
+
+// MARK: - Trim edges preview, Wand loupe, DrawToolPreview and Apply crop pulse
+
+extension ScreenshotEditorTests {
+    private func trimPreviewValue() -> [String: Any] {
+        ["keep": ["x": 0.0, "y": 0.0, "width": 640.0, "height": 360.0],
+         "margins": ["top": 0.0, "right": 80.0, "bottom": 0.0, "left": 0.0],
+         "edges": ["right"],
+         "regions": [["right", ["x": 640.0, "y": 0.0, "width": 80.0, "height": 360.0]]]]
+    }
+
+    func testTrimSnapshotFieldsParseAndOlderFixturesKeepTrimEnabled() throws {
+        let parsed = snapshot(id: "shot", width: 720, extra: ["can_trim": true, "trim_preview": trimPreviewValue()])
+        XCTAssertTrue(parsed.canTrim)
+        let preview = try XCTUnwrap(parsed.trimPreview)
+        XCTAssertEqual(preview.edges, [.right])
+        XCTAssertEqual(preview.keep, CGRect(x: 0, y: 0, width: 640, height: 360))
+        XCTAssertEqual(preview.regions, [CGRect(x: 640, y: 0, width: 80, height: 360)])
+        let tight = snapshot(id: "shot", extra: ["can_trim": false, "trim_preview": NSNull()])
+        XCTAssertFalse(tight.canTrim)
+        XCTAssertNil(tight.trimPreview)
+        let legacy = snapshot(id: "legacy")
+        XCTAssertTrue(legacy.canTrim, "older fixtures predate can_trim and keep Trim enabled")
+        XCTAssertNil(legacy.trimPreview)
+        XCTAssertNil(NativeTrimPreview(["keep": ["x": 0.0], "edges": ["right"], "regions": [] as [Any]]))
+        XCTAssertNil(NativeTrimPreview(["keep": ["x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0],
+                                        "edges": ["sideways"], "regions": [] as [Any]]))
+    }
+
+    func testTrimEdgesDisablesWhenTightAndPreviewsTheCutOnHoverOrFocus() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let fixture = try makeHistoryFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let worker = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                                                        worker: worker)
+            defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            let trim = try button("Trim edges", in: controller.root)
+            XCTAssertEqual(controller.state.snapshot?.canTrim, false, "the capture fills its canvas")
+            XCTAssertFalse(trim.isEnabled, "shipping disables Trim edges when there is nothing to trim")
+            trim.highlightChanged?(trim, true)
+            XCTAssertNil(controller.trimPreviewView.trimPreview, "a disabled Trim edges previews nothing")
+            XCTAssertTrue(controller.trimPreviewView.isHidden)
+            trim.highlightChanged?(trim, false)
+
+            try commitCanvasSize("12", "3", in: controller.root)
+            waitUntil { controller.state.snapshot?.width == 12 && !controller.state.busy }
+            XCTAssertTrue(trim.isEnabled)
+            trim.highlightChanged?(trim, true)
+            let preview = try XCTUnwrap(controller.trimPreviewView.trimPreview)
+            XCTAssertEqual(preview.edges, [.right])
+            XCTAssertEqual(preview.keep, CGRect(x: 0, y: 0, width: 7, height: 3))
+            XCTAssertEqual(preview.regions, [CGRect(x: 7, y: 0, width: 5, height: 3)])
+            XCTAssertFalse(controller.trimPreviewView.isHidden)
+            XCTAssertEqual(controller.trimPreviewView.canvasSize, NSSize(width: 12, height: 3))
+            try render(controller.root, name: "screenshot-editor-trim-hover-\(appearance)")
+            trim.highlightChanged?(trim, false)
+            XCTAssertNil(controller.trimPreviewView.trimPreview, "leaving Trim edges clears the preview")
+            XCTAssertTrue(controller.trimPreviewView.isHidden)
+
+            // Keyboard focus previews too; applying the trim ends the preview.
+            trim.highlightChanged?(trim, true)
+            XCTAssertNotNil(controller.trimPreviewView.trimPreview)
+            trim.performClick(nil)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.width == 7 }
+            XCTAssertFalse(trim.isEnabled)
+            XCTAssertNil(controller.trimPreviewView.trimPreview)
+            XCTAssertTrue(controller.trimPreviewView.isHidden)
+        }
+    }
+
+    func testTrimPreviewBreathesAndRestsStaticWithoutParticlesUnderReducedMotion() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 240),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        let content = try XCTUnwrap(window.contentView)
+        let view = EditorTrimPreviewView(tokens: Tokens.variants["light-mustard"]!)
+        view.frame = content.bounds
+        content.addSubview(view)
+        view.canvasSize = NSSize(width: 800, height: 400)
+        view.imageRect = { NSRect(x: 0, y: 0, width: 400, height: 200) }
+        view.reducedMotion = { false }
+        view.trimPreview = NativeTrimPreview(trimPreviewValue())
+        XCTAssertFalse(view.isHidden)
+        XCTAssertTrue(view.isAnimating, "the hint breathes while shown")
+        XCTAssertEqual(view.project(CGRect(x: 640, y: 0, width: 80, height: 360)),
+                       CGRect(x: 320, y: 0, width: 40, height: 180))
+        // `canvas-trim-*-breathe 1.7s` and `canvas-trim-edge-pulse 1.4s`.
+        XCTAssertEqual(view.breathing(at: 0, reduced: false).region, 0.82, accuracy: 0.01)
+        XCTAssertEqual(view.breathing(at: 0.85, reduced: false).region, 1, accuracy: 0.01)
+        XCTAssertEqual(view.breathing(at: 0, reduced: false).keep, 0.88, accuracy: 0.01)
+        XCTAssertEqual(view.breathing(at: 0.7, reduced: false).edge, 0.9, accuracy: 0.01)
+        let rest = view.breathing(at: 0.3, reduced: true)
+        XCTAssertEqual(rest.region, 1)
+        XCTAssertEqual(rest.keep, 1)
+        XCTAssertEqual(rest.edge, 1)
+        view.display()
+
+        let particles = NativeSnapParticles.shipping
+        XCTAssertEqual(particles.seeds.count, 14)
+        let seed = try XCTUnwrap(particles.seeds.first)
+        XCTAssertNil(particles.pose(seed, at: 0, reduced: false), "invisible at the first frame")
+        let early = try XCTUnwrap(particles.pose(seed, at: 0.12 * seed.duration, reduced: false))
+        XCTAssertEqual(early.opacity, 1, accuracy: 0.01)
+        XCTAssertGreaterThan(early.outward, 0)
+        XCTAssertLessThan(early.outward, seed.travel * 72)
+        XCTAssertNil(particles.pose(seed, at: 0.12 * seed.duration, reduced: true), "no particles when reduced")
+
+        view.trimPreview = nil
+        XCTAssertTrue(view.isHidden)
+        XCTAssertFalse(view.isAnimating)
+        view.reducedMotion = { true }
+        view.trimPreview = NativeTrimPreview(trimPreviewValue())
+        XCTAssertFalse(view.isAnimating, "reduced motion schedules no redraws")
+        view.display()
+    }
+
+    func testWandLoupeSamplesTheNaturalPixelUnderTheCrosshair() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let worker = EditorWorker()
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+
+        // The session samples the image a wand click there would edit.
+        var sampled: NativeWandLoupe?
+        var answered = false
+        worker.wandLoupe(at: CGPoint(x: 3.5, y: 1.5)) { result in sampled = result; answered = true }
+        waitUntil { answered }
+        let loupe = try XCTUnwrap(sampled)
+        // Fixture pixel (3, 1) is (3 × 31, 1 × 71, 19).
+        XCTAssertEqual(loupe.pixel, [3, 1])
+        XCTAssertEqual(loupe.color, [93, 71, 19, 255])
+        XCTAssertEqual(loupe.text, "#5d4713")
+        XCTAssertEqual(loupe.accessibleLabel, "Sample color #5d4713")
+        XCTAssertFalse(loupe.transparent)
+        XCTAssertEqual(loupe.extent, 11)
+        XCTAssertEqual(loupe.tiles.count, 121)
+        XCTAssertNil(loupe.tiles[0], "outside the image the checkerboard shows through")
+        XCTAssertEqual(loupe.tiles[60], [93, 71, 19, 255], "the centre tile is the keyed sample")
+        var offImage: NativeWandLoupe? = loupe
+        var missed = false
+        worker.wandLoupe(at: CGPoint(x: 40, y: 1)) { result in offImage = result; missed = true }
+        waitUntil { missed }
+        XCTAssertNil(offImage, "no loupe off every image")
+
+        controller.selectDrawTool(.wand)
+        let overlay = controller.drawOverlay
+        waitUntil { overlay.drawingEnabled }
+        let image = overlay.presentedImageRect
+        let hover = NSPoint(x: image.minX + image.width * 3.5 / 7, y: image.minY + image.height * 1.5 / 3)
+        overlay.onHover?(hover)
+        waitUntil { !controller.wandLoupeView.isHidden }
+        XCTAssertEqual(controller.wandLoupeView.loupe?.text, "#5d4713")
+        XCTAssertEqual(controller.wandLoupeView.accessibilityLabel(), "Sample color #5d4713")
+        XCTAssertTrue(controller.wandLoupeView.superview === controller.root)
+        try render(controller.root, name: "screenshot-editor-wand-loupe-dark")
+        overlay.onHover?(nil)
+        XCTAssertTrue(controller.wandLoupeView.isHidden, "leaving the canvas hides the loupe")
+        overlay.onHover?(hover)
+        waitUntil { !controller.wandLoupeView.isHidden }
+        controller.selectDrawTool(.erase)
+        XCTAssertTrue(controller.wandLoupeView.isHidden, "only the Wand shows a loupe")
+    }
+
+    func testDrawToolPreviewFollowsTheToolAndItsDefaults() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        let preview = controller.drawToolPreview
+        controller.selectDrawTool(.rectangle)
+        XCTAssertFalse(preview.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(preview.sample?.label, "Stroke preview")
+        XCTAssertEqual(preview.accessibilityLabel(), "Stroke preview")
+        guard case .roundedRect(_, radius: let corner)? = preview.sample?.shapes.first else {
+            return XCTFail("the rectangle sample is a rounded rect")
+        }
+        XCTAssertEqual(corner, 6)
+        XCTAssertEqual(preview.sample?.strokeWidth, 0, "the fixture's closed shapes start without a stroke")
+        XCTAssertNotNil(preview.sampleFill)
+        // Rows below the card move down by its height plus one gap.
+        let width = try field("New drawing stroke width", in: controller.root)
+        XCTAssertGreaterThanOrEqual(width.frame.minY, preview.frame.maxY)
+        try render(controller.root, name: "screenshot-editor-draw-preview-rectangle")
+
+        controller.selectDrawTool(.line)
+        XCTAssertEqual(Double(preview.sample?.strokeWidth ?? 0), 3.36, accuracy: 0.001)
+        XCTAssertNil(preview.sampleFill, "open strokes take no fill")
+        typeLive("40", into: try field("New drawing opacity", in: controller.root), controller: controller)
+        XCTAssertEqual(Double(preview.sampleOpacity), 0.4, accuracy: 0.001)
+
+        controller.selectDrawTool(.erase)
+        XCTAssertFalse(preview.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(preview.sample?.label, "Brush preview")
+        XCTAssertEqual(Double(preview.sample?.brush?.radius ?? 0), 8 + 24.0 / 116 * 22, accuracy: 0.001)
+        typeLive("120", into: try field("Brush diameter", in: controller.root), controller: controller)
+        typeLive("0", into: try field("Brush softness", in: controller.root), controller: controller)
+        XCTAssertEqual(Double(preview.sample?.brush?.radius ?? 0), 30, accuracy: 0.001)
+        XCTAssertEqual(Double(preview.sample?.brush?.hardStop ?? 0), 0.72, accuracy: 0.001)
+        try render(controller.root, name: "screenshot-editor-draw-preview-brush")
+
+        controller.selectDrawTool(.wand)
+        XCTAssertTrue(preview.isHiddenOrHasHiddenAncestor, "the Wand has no stroke preview")
+        let tolerance = try field("Wand color tolerance", in: controller.root)
+        XCTAssertLessThan(tolerance.frame.minY, preview.frame.minY + preview.frame.height,
+                          "Wand rows keep their place without the card")
+    }
+
+    func testApplyCropPulsesOnlyWhileACropIsStaged() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showGeometry(in: controller.root)
+        let apply = try button("Apply crop", in: controller.root)
+        XCTAssertTrue(apply.primary, "shipping Apply crop is the primary action")
+        let halo = controller.applyCropHalo
+        XCTAssertTrue(halo.superview === apply.superview)
+        XCTAssertFalse(halo.pulsing, "no halo before a crop is staged")
+        try press("Draw crop", in: controller.root)
+        XCTAssertTrue(halo.pulsing)
+        XCTAssertEqual(halo.frame, apply.frame.insetBy(dx: -EditorCtaHalo.outset, dy: -EditorCtaHalo.outset))
+        // `screenshot-cta-pulse 2.4s`: nothing at the start, 5 pt at the middle.
+        XCTAssertEqual(halo.halo(at: 0, reduced: false).spread, 0, accuracy: 0.01)
+        XCTAssertEqual(halo.halo(at: 1.2, reduced: false).spread, EditorCtaHalo.spread, accuracy: 0.05)
+        XCTAssertEqual(halo.halo(at: 1.2 + 2.4 * 2, reduced: false).opacity, 1, accuracy: 0.01)
+        XCTAssertEqual(halo.halo(at: 1.2, reduced: true).spread, 0, "reduced motion rests without the halo")
+        try render(controller.root, name: "screenshot-editor-apply-crop-pulse")
+        try press("Cancel crop", in: controller.root)
+        XCTAssertFalse(halo.pulsing, "cancelling the crop stops the pulse")
+        XCTAssertFalse(halo.isAnimating)
+    }
+}
