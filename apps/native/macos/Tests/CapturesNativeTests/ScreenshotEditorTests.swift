@@ -5361,6 +5361,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.openArtifactIDs, ["shot"], "same-ID focus does not reload")
         XCTAssertEqual(worker.autosaves, 0)
         // As in shipping, accepted edits autosave before another capture opens.
+        // The fake opens whatever `snapshot` holds, so it must be the new capture.
+        worker.snapshot = snapshot(id: "other")
         accepted = nil
         controller.present(artifact: artifact(id: "other"), historyRoot: "/native/History") {
             accepted = $0
