@@ -422,6 +422,169 @@ pub fn collapsed_frame_height(count: usize) -> f64 {
     THUMBNAIL_CARD_HEIGHT + 2.0 * collapsed_padding(count)
 }
 
+/// Shipping `THUMBNAIL_STACK_LAYER_ROTATION_{MIN,MAX}_DEG`: loose-paper spin
+/// of each rear card, faded out toward the top and bottom screen edges.
+pub const STACK_LAYER_ROTATION_MIN_DEG: f64 = 2.7;
+pub const STACK_LAYER_ROTATION_MAX_DEG: f64 = 3.0;
+/// Shipping `THUMBNAIL_STACK_PEEK_JITTER_PX` / `_DECAY`.
+pub const STACK_PEEK_JITTER_PX: f64 = 0.4;
+pub const STACK_PEEK_JITTER_DECAY: f64 = 0.58;
+/// `.thumbnail-stack { perspective: 900px }`.
+pub const STACK_PERSPECTIVE_PX: f64 = 900.0;
+/// Shipping `THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT_PX`: front card plus both gutters.
+pub const THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT: f64 =
+    THUMBNAIL_CARD_HEIGHT + 2.0 * THUMBNAIL_CONTROL_GUTTER;
+
+/// Shipping `thumbnailStackLayerRotationDeg`: a stable signed 2.7–3° per
+/// capture id (FNV-1a over UTF-16 units, like `charCodeAt`). Front: 0.
+pub fn stack_layer_rotation_deg(id: &str, depth: usize) -> f64 {
+    if depth == 0 {
+        return 0.0;
+    }
+    let mut hash: u32 = 0x811c_9dc5;
+    for unit in id.encode_utf16() {
+        hash ^= u32::from(unit);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    let sign = if hash & 1 == 1 { 1.0 } else { -1.0 };
+    let magnitude = STACK_LAYER_ROTATION_MIN_DEG
+        + f64::from(hash >> 1) / 2f64.powi(31)
+            * (STACK_LAYER_ROTATION_MAX_DEG - STACK_LAYER_ROTATION_MIN_DEG);
+    (sign * magnitude * 1000.0).round() / 1000.0
+}
+
+/// Shipping `thumbnailStackPeekJitterPx`: a tiny deterministic signed nudge
+/// so peeks are not an even ruler, damped toward the back of the pile.
+pub fn stack_peek_jitter(depth: usize) -> f64 {
+    if depth == 0 {
+        return 0.0;
+    }
+    // JS: Math.imul(depth * 0x9e3779b1 ^ 0x7f4a7c15, 0x85ebca6b) >>> 0.
+    let spread = (depth as u64).wrapping_mul(0x9e37_79b1) as u32;
+    let hashed = (spread ^ 0x7f4a_7c15).wrapping_mul(0x85eb_ca6b);
+    let unit = f64::from(hashed) / 2f64.powi(32) * 2.0 - 1.0;
+    unit * STACK_PEEK_JITTER_PX * STACK_PEEK_JITTER_DECAY.powi(depth as i32 - 1)
+}
+
+/// Shipping `thumbnailStackGravityFromWorkArea`: -1 at the top of the
+/// travel, 0 at the vertical middle, 1 at the bottom.
+pub fn stack_gravity_from_work_area(
+    pile_bottom: f64,
+    work_top: f64,
+    work_height: f64,
+    content_height: f64,
+    bottom_gap: f64,
+) -> f64 {
+    let work_bottom = work_top + work_height - bottom_gap.max(0.0);
+    let pile_top = work_top + content_height.max(0.0);
+    let travel = work_bottom - pile_top;
+    if travel <= 1.0 || !pile_bottom.is_finite() {
+        return 1.0;
+    }
+    (2.0 * (pile_bottom - pile_top) / travel - 1.0).clamp(-1.0, 1.0)
+}
+
+/// Gravity of a collapsed pile. Placement piles sit at ±1 (shipping
+/// `thumbnailStackGravityFromPlacement`); a dragged pile uses its position.
+pub fn collapsed_stack_gravity(
+    bounds: ThumbnailMonitorBounds,
+    count: usize,
+    origin: Option<ThumbnailStackOrigin>,
+    placement: MiniPreviewPlacement,
+) -> f64 {
+    let Some(origin) = origin else {
+        return if placement.is_top() { -1.0 } else { 1.0 };
+    };
+    let geometry = thumbnail_geometry(bounds, count, true, Some(origin), placement);
+    let work = work_area(bounds);
+    let front_y = geometry.y + collapsed_padding(count);
+    stack_gravity_from_work_area(
+        front_y + THUMBNAIL_CARD_HEIGHT + THUMBNAIL_CONTROL_GUTTER,
+        work.top,
+        work.height,
+        THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT,
+        work.bottom_gap,
+    )
+}
+
+/// A rear card's shipping 3D pile pose, flattened to 2D.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CollapsedCardPose {
+    /// Card centre offset from the front card's centre (y down).
+    pub dx: f64,
+    pub dy: f64,
+    /// Card centre offset from this card's [`card_layout_in`] slot, which
+    /// only offsets rear cards by the plain peek. Hosts translate by this.
+    pub slot_dy: f64,
+    /// Clockwise, like CSS `rotateZ`.
+    pub rotation_deg: f64,
+    pub scale_x: f64,
+    /// Includes the `rotateX` tilt, flattened to its vertical foreshortening.
+    pub scale_y: f64,
+}
+
+/// Shipping `--thumbnail-stack-rest-transform` / `-hover-transform`:
+/// `translate3d(pd·dx, (pd·-peek + jitter)·gravity, pd·z) rotateZ(spin·
+/// proximity) rotateX(pd·tilt) scale(1 - pd·k + pd·proximity·k)` about the
+/// card's anchored edge, seen through `perspective: 900px` centred on the
+/// front card. The tilt becomes a vertical scale (hosts have no 3D card
+/// transform); translation depth and the tilt's depth shift the perspective
+/// scale and position exactly. `pd` is [`stack_pose_depth`].
+pub fn collapsed_card_pose(
+    id: &str,
+    depth: usize,
+    hovered: bool,
+    gravity: f64,
+    top_anchor: bool,
+) -> CollapsedCardPose {
+    if depth == 0 {
+        return CollapsedCardPose {
+            scale_x: 1.0,
+            scale_y: 1.0,
+            ..CollapsedCardPose::default()
+        };
+    }
+    let (dx_k, peek, z_k, tilt_k, scale_k) = if hovered {
+        (-0.6, 16.0, -18.0, -0.7, 0.02)
+    } else {
+        (-0.8, 13.0, -24.0, -0.8, 0.025)
+    };
+    let gravity = if gravity.is_finite() {
+        gravity.clamp(-1.0, 1.0)
+    } else {
+        1.0
+    };
+    let proximity = 1.0 - gravity.abs();
+    let expand_sign = if top_anchor { -1.0 } else { 1.0 };
+    let pd = stack_pose_depth(depth as f64);
+    let (tx, ty, tz) = (
+        pd * dx_k,
+        (-pd * peek + stack_peek_jitter(depth)) * gravity,
+        pd * z_k,
+    );
+    let spin = (stack_layer_rotation_deg(id, depth) * proximity).to_radians();
+    let tilt = (pd * tilt_k * expand_sign).to_radians();
+    let scale = 1.0 - pd * scale_k + pd * proximity * scale_k;
+    // `transform-origin: 50% calc(50% * (1 + sign))`: the anchored edge.
+    let origin_y = expand_sign * THUMBNAIL_CARD_HEIGHT / 2.0;
+    // Card centre relative to that origin, then S, rotateX, rotateZ, T.
+    let local_y = -origin_y * scale;
+    let (tilted_y, tilted_z) = (local_y * tilt.cos(), local_y * tilt.sin());
+    let (rotated_x, rotated_y) = (-tilted_y * spin.sin(), tilted_y * spin.cos());
+    let centre = (tx + rotated_x, origin_y + ty + rotated_y, tz + tilted_z);
+    let projection = STACK_PERSPECTIVE_PX / (STACK_PERSPECTIVE_PX - centre.2);
+    let (dx, dy) = (centre.0 * projection, centre.1 * projection);
+    let slot = if top_anchor { 1.0 } else { -1.0 } * collapsed_peek(depth + 1, hovered);
+    CollapsedCardPose {
+        dx,
+        dy,
+        slot_dy: dy - slot,
+        rotation_deg: spin.to_degrees(),
+        scale_x: projection * scale,
+        scale_y: projection * scale * tilt.cos(),
+    }
+}
+
 fn collapsed_virtual_y(front_y: f64, frame_height: f64, anchor: ThumbnailStackAnchor) -> f64 {
     if anchor.is_top() {
         front_y - THUMBNAIL_CONTROL_GUTTER
@@ -867,6 +1030,125 @@ mod tests {
                 stack.card_layout_hovered(0, top_anchor, true)
             );
         }
+    }
+
+    #[test]
+    fn pile_spin_and_jitter_match_shipping_hashes() {
+        // Reference values from thumbnailLayout.ts run under Node.
+        for (id, expected) in [
+            ("a", -2.967),
+            ("capture-1", 2.854),
+            ("2026-09-27T01-02-03-abc", -2.874),
+            ("é😀", 2.781),
+        ] {
+            assert_eq!(stack_layer_rotation_deg(id, 1), expected, "{id}");
+            assert_eq!(stack_layer_rotation_deg(id, 4), expected, "{id}");
+            assert_eq!(stack_layer_rotation_deg(id, 0), 0.0);
+        }
+        for (depth, expected) in [
+            (1, -0.177_334_425_598_382_97),
+            (2, -0.031_316_160_764_545_2),
+            (3, -0.036_153_761_976_808_31),
+            (7, -0.013_686_959_248_788_108),
+        ] {
+            assert!(
+                (stack_peek_jitter(depth) - expected).abs() < 1e-12,
+                "{depth}"
+            );
+        }
+        assert_eq!(stack_peek_jitter(0), 0.0);
+        assert!(stack_peek_jitter(40).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pile_gravity_follows_the_dragged_position() {
+        assert_eq!(
+            stack_gravity_from_work_area(264.0, 0.0, 1000.0, 264.0, 0.0),
+            -1.0
+        );
+        assert_eq!(
+            stack_gravity_from_work_area(1000.0, 0.0, 1000.0, 264.0, 0.0),
+            1.0
+        );
+        assert_eq!(
+            stack_gravity_from_work_area(632.0, 0.0, 1000.0, 264.0, 0.0),
+            0.0
+        );
+        assert_eq!(
+            stack_gravity_from_work_area(5_000.0, 0.0, 1000.0, 264.0, 0.0),
+            1.0
+        );
+        assert_eq!(
+            stack_gravity_from_work_area(10.0, 0.0, 200.0, 264.0, 0.0),
+            1.0
+        );
+
+        let monitor = bounds((0, 25, 1440, 875), (0, 0, 1440, 900), 1.0);
+        use MiniPreviewPlacement::{BottomLeft, TopRight};
+        assert_eq!(collapsed_stack_gravity(monitor, 3, None, BottomLeft), 1.0);
+        assert_eq!(collapsed_stack_gravity(monitor, 3, None, TopRight), -1.0);
+        let work = work_area(monitor);
+        let middle = work.top
+            + (work.height - work.bottom_gap) / 2.0
+            + THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT / 2.0;
+        let dragged = ThumbnailStackOrigin {
+            x: 400.0,
+            edge: middle,
+            anchor: ThumbnailStackAnchor::Bottom,
+        };
+        let gravity = collapsed_stack_gravity(monitor, 3, Some(dragged), BottomLeft);
+        assert!(gravity.abs() < 0.01, "{gravity}");
+        let low = ThumbnailStackOrigin {
+            edge: 5_000.0,
+            ..dragged
+        };
+        assert_eq!(
+            collapsed_stack_gravity(monitor, 3, Some(low), BottomLeft),
+            1.0
+        );
+    }
+
+    #[test]
+    fn pile_pose_recedes_and_spins_only_near_the_middle() {
+        let front = collapsed_card_pose("front", 0, false, 1.0, false);
+        assert_eq!(
+            (front.dx, front.dy, front.slot_dy, front.rotation_deg),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        assert_eq!((front.scale_x, front.scale_y), (1.0, 1.0));
+
+        for top in [false, true] {
+            let mut previous = collapsed_card_pose("card", 0, false, 1.0, top);
+            for depth in 1..6 {
+                let gravity = if top { -1.0 } else { 1.0 };
+                let pose = collapsed_card_pose("card", depth, false, gravity, top);
+                // Corner piles keep square paper and recede in size and step.
+                assert_eq!(pose.rotation_deg, 0.0);
+                assert!(pose.scale_x < previous.scale_x && pose.scale_y <= pose.scale_x);
+                let direction = if top { 1.0 } else { -1.0 };
+                assert!(pose.dy * direction > previous.dy * direction, "{depth}");
+                assert!(pose.dx < 0.0 && pose.dx > -8.0);
+                previous = pose;
+            }
+        }
+        let first = collapsed_card_pose("card", 1, false, 1.0, false);
+        // translate + scale + perspective: a ~11 px lift at ~95% size.
+        assert!((first.dy + 10.7).abs() < 0.2, "{first:?}");
+        assert!((first.scale_x - 0.952).abs() < 0.002, "{first:?}");
+        assert!((first.slot_dy - (first.dy + collapsed_peek(2, false))).abs() < 1e-9);
+
+        let centred = collapsed_card_pose("capture-1", 1, false, 0.0, false);
+        assert!((centred.rotation_deg - 2.854).abs() < 1e-9);
+        assert!(centred.dy.abs() < 2.0, "gravity 0 gathers the peeks");
+        assert!(centred.scale_x > first.scale_x, "proximity restores scale");
+        let half = collapsed_card_pose("capture-1", 1, false, -0.5, false);
+        assert!((half.rotation_deg - 1.427).abs() < 1e-9);
+
+        let hover = collapsed_card_pose("card", 1, true, 1.0, false);
+        assert!(hover.dy < first.dy, "the hover fan peeks further");
+        assert!(hover.scale_x > first.scale_x);
+        let nan = collapsed_card_pose("card", 1, false, f64::NAN, false);
+        assert_eq!(nan, first);
     }
 
     fn bounds(

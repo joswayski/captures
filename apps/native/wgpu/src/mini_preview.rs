@@ -33,6 +33,55 @@ pub enum Busy {
     Trash,
 }
 
+/// A compact card's shipping depth spin and scale about its centre
+/// (`captures_app::preview::collapsed_card_pose`). The host moves the card's
+/// rect by the pose offset; this paints the rotation and recession.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PileTransform {
+    /// Clockwise radians, like CSS `rotateZ`.
+    pub rotation: f32,
+    /// `scale.y` includes the flattened `rotateX` tilt.
+    pub scale: egui::Vec2,
+}
+
+impl PileTransform {
+    pub const IDENTITY: Self = Self {
+        rotation: 0.,
+        scale: egui::Vec2::splat(1.),
+    };
+
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self {
+            rotation: egui::lerp(self.rotation..=other.rotation, t),
+            scale: self.scale + (other.scale - self.scale) * t,
+        }
+    }
+
+    fn is_identity(self) -> bool {
+        self == Self::IDENTITY
+    }
+}
+
+/// Rect offset and paint transform between the rest (`t = 0`) and hover
+/// fan (`t = 1`) poses.
+pub fn pile_pose_between(
+    rest: &captures_app::preview::CollapsedCardPose,
+    hover: &captures_app::preview::CollapsedCardPose,
+    t: f32,
+) -> (egui::Vec2, PileTransform) {
+    let mix = |a: f64, b: f64| egui::lerp(a as f32..=b as f32, t);
+    (
+        egui::vec2(mix(rest.dx, hover.dx), mix(rest.slot_dy, hover.slot_dy)),
+        PileTransform {
+            rotation: mix(rest.rotation_deg, hover.rotation_deg).to_radians(),
+            scale: egui::vec2(
+                mix(rest.scale_x, hover.scale_x),
+                mix(rest.scale_y, hover.scale_y),
+            ),
+        },
+    )
+}
+
 pub fn stack_controls_visible(count: usize, collapsed: bool) -> bool {
     !collapsed && count >= 2
 }
@@ -77,6 +126,8 @@ pub struct View<'a> {
     /// Multiplier on a compact card's depth shade while the stack flies
     /// between the list and the pile (1 at rest).
     pub depth_shade: f32,
+    /// Compact rear-card depth spin and scale (identity for the front card).
+    pub pile: PileTransform,
 }
 
 pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
@@ -101,6 +152,10 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     let card = card.translate(egui::vec2(view.reject_offset, 0.));
     let radius = tokens.number("thumbnail-card-radius");
 
+    if view.collapsed && view.depth > 0 && !view.pile.is_identity() {
+        paint_posed_pile_card(ui, tokens, card, radius, &view);
+        return None;
+    }
     if view.collapsed {
         paint_capture_glow(ui, tokens, card, radius, view.highlight);
         ui.painter()
@@ -843,6 +898,47 @@ fn media_hover_progress(
 /// On hover it takes `blur(2px) brightness(.5) scale(1.015)`. egui has no
 /// per-image blur, so a pre-blurred card-sized copy fades in over the sharp
 /// image while both darken and scale.
+/// A rear compact card under its shipping pile pose. Rear cards never take
+/// input, so this only paints: fill, cover-fit media, depth shade and border,
+/// rotated and scaled about the card centre.
+fn paint_posed_pile_card(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    card: egui::Rect,
+    radius: f32,
+    view: &View<'_>,
+) {
+    use egui::epaint::RectShape;
+    let posed = egui::Rect::from_center_size(card.center(), card.size() * view.pile.scale);
+    let corners = radius * view.pile.scale.min_elem();
+    let angle = view.pile.rotation;
+    let painter = ui.painter();
+    painter.add(RectShape::filled(posed, corners, tokens.color("glass-raised")).with_angle(angle));
+    painter.add(
+        RectShape::filled(posed, corners, Color32::WHITE)
+            .with_texture(
+                view.texture.id(),
+                cover_uv(view.texture.size_vec2(), card.size()),
+            )
+            .with_angle(angle),
+    );
+    if view.depth_shade > 0. {
+        let shade = tokens.color("glass-strong-solid").gamma_multiply(
+            captures_app::preview::collapsed_dim_opacity(view.depth) as f32 * view.depth_shade,
+        );
+        painter.add(RectShape::filled(posed, corners, shade).with_angle(angle));
+    }
+    painter.add(
+        RectShape::stroke(
+            posed,
+            corners,
+            Stroke::new(1., tokens.color("glass-border")),
+            egui::StrokeKind::Inside,
+        )
+        .with_angle(angle),
+    );
+}
+
 fn paint_media(
     ui: &egui::Ui,
     card: egui::Rect,
@@ -1935,6 +2031,7 @@ mod tests {
                 highlight: 0.,
                 warning: None,
                 depth_shade: 1.,
+                pile: PileTransform::IDENTITY,
             },
         );
         let mut output = ctx.end_pass();
@@ -1991,6 +2088,7 @@ mod tests {
                     highlight: 0.,
                     warning: None,
                     depth_shade: 1.,
+                    pile: PileTransform::IDENTITY,
                 },
             );
             let mut output = ctx.end_pass();
@@ -2083,6 +2181,7 @@ mod tests {
                     highlight: 0.,
                     warning: None,
                     depth_shade: 1.,
+                    pile: PileTransform::IDENTITY,
                 },
             );
             let mut output = ctx.end_pass();
@@ -2160,6 +2259,7 @@ mod tests {
                         highlight: 0.,
                         warning: None,
                         depth_shade: 1.,
+                        pile: PileTransform::IDENTITY,
                     },
                 );
             });
@@ -2236,6 +2336,7 @@ mod tests {
                     highlight: 0.,
                     warning: None,
                     depth_shade: 1.,
+                    pile: PileTransform::IDENTITY,
                 },
             );
             let mut output = ctx.end_pass();
@@ -2545,6 +2646,7 @@ mod tests {
                 highlight: 1.,
                 warning: Some(preview_chrome::WARNING_CLIPBOARD_UNAVAILABLE),
                 depth_shade: 1.,
+                pile: PileTransform::IDENTITY,
             },
         );
         let mut output = ctx.end_pass();
@@ -2697,6 +2799,7 @@ mod tests {
                     highlight: 0.,
                     warning: None,
                     depth_shade: 1.,
+                    pile: PileTransform::IDENTITY,
                 },
             );
             let mut output = ctx.end_pass();
@@ -2779,6 +2882,7 @@ mod tests {
                 highlight: 0.,
                 warning: None,
                 depth_shade: 1.,
+                pile: PileTransform::IDENTITY,
             },
         );
         let mut output = ctx.end_pass();

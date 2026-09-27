@@ -277,6 +277,20 @@ bool captures_preview_stack_card_v1(const CapturesPreviewStack *handle, size_t i
 bool captures_preview_stack_card_v2(const CapturesPreviewStack *handle, size_t index,
     bool top_anchor, bool hovered, CapturesPreviewCardLayout *output);
 
+/* Shipping collapsed-pile gravity for captures_preview_geometry_v1 inputs:
+ * -1 top, 0 vertical middle, 1 bottom. NULL origin (a placement pile) is
+ * exactly -1/1. NaN for invalid input. No allocation or OS access. */
+double captures_preview_gravity_v1(CapturesPreviewMonitor monitor, size_t count,
+    const CapturesPreviewOrigin *origin, uint32_t placement);
+/* Shipping rear-card pile pose flattened to 2D: centre offset from the front
+ * card (dx, dy) and from the card's stack_card slot (slot_dy), logical points
+ * with y down; clockwise rotation; scale (scale_y includes the tilt).
+ * Depth zero is the identity. id is the capture's NUL-terminated UTF-8 id.
+ * False (null/invalid input) leaves output unchanged. */
+typedef struct { double dx, dy, slot_dy, rotation_deg, scale_x, scale_y; } CapturesPreviewPilePose;
+bool captures_preview_pile_pose_v1(const char *id, size_t depth, bool hovered,
+    double gravity, bool top_anchor, CapturesPreviewPilePose *output);
+
 /* Pure compact-card shade policy. Paint glass-strong-solid at this opacity.
  * Depth zero is undimmed. Expanded cards never use this overlay. */
 double captures_preview_dim_opacity_v1(size_t depth);

@@ -677,6 +677,14 @@ impl Workbench {
                 *owner = Some(shortcuts);
             })
         };
+        // Shipping logs system-key takeover failures and keeps its bindings.
+        // The live WindowServer disable is AppKit-only; Windows/Linux writes
+        // already happened in `captures_app::system_shortcuts`.
+        if let Some(shortcuts) = owner.as_mut() {
+            for error in shortcuts.take_system_takeover().errors {
+                eprintln!("{error}");
+            }
+        }
         match result {
             Ok(()) => self.shortcut_error = None,
             Err(error) => {
