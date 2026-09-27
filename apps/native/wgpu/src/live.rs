@@ -6429,7 +6429,10 @@ impl Live {
                         .as_deref()
                         .and_then(|id| ids.iter().position(|visible| visible == id));
                     if let Some((_, columns, rows)) = key {
-                        let layout = captures_app::history_view::grid(output.width);
+                        let layout = captures_app::history_view::grid_in_window(
+                            output.width,
+                            output.compact,
+                        );
                         let next =
                             current.map_or(0, |index| layout.step(index, ids.len(), columns, rows));
                         self.select(ids[next].clone());

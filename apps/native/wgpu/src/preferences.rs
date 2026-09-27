@@ -812,7 +812,9 @@ impl Preferences {
                 .auto_shrink(false),
             |ui| {
                 egui::Frame::new().inner_margin(margin).show(ui, |ui| {
-                    ui.set_max_width(720. - 2. * t.number("s-8"));
+                    // `.settings-body { max-width: 720px }`, never wider
+                    // than the window leaves.
+                    ui.set_max_width(ui.available_width().min(720. - 2. * t.number("s-8")));
                     ui.spacing_mut().item_spacing.y = 0.;
                     self.find_rows.clear();
                     self.card_tops.clear();
@@ -1361,15 +1363,24 @@ impl Preferences {
         );
     }
 
-    /// Shipping `.setting-grid`: stacked title-over-select cells.
+    /// Shipping `.setting-grid`: stacked title-over-select cells, two per
+    /// row in a compact window.
     fn select_grid(&mut self, ui: &mut egui::Ui, t: &Tokens, cells: &[(&[&str], Options)]) {
         let gap = t.number("s-5");
-        let width = (ui.available_width() - gap * (cells.len() as f32 - 1.)) / cells.len() as f32;
-        let background = ui.painter().add(egui::Shape::Noop);
-        let response = ui
-            .with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+        let columns = if self.compact {
+            cells.len().min(2)
+        } else {
+            cells.len()
+        }
+        .max(1);
+        let width = (ui.available_width() - gap * (columns as f32 - 1.)) / columns as f32;
+        for (index, row) in cells.chunks(columns).enumerate() {
+            if index > 0 {
+                ui.add_space(gap);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing.x = gap;
-                for (path, options) in cells {
+                for (path, options) in row {
                     let copy = preferences::row(&path.join("."));
                     let cell_background = ui.painter().add(egui::Shape::Noop);
                     let cell = ui
@@ -1387,9 +1398,8 @@ impl Preferences {
                         .response;
                     self.remember(copy.title.to_owned(), cell.rect, cell_background);
                 }
-            })
-            .response;
-        let _ = (background, response);
+            });
+        }
     }
 
     fn appearance(&mut self, ui: &mut egui::Ui, t: &Tokens) {
@@ -1499,7 +1509,9 @@ impl Preferences {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.set_max_width(44. * t.number("text-sm") * 0.55);
+                        ui.set_max_width(
+                            ui.available_width().min(44. * t.number("text-sm") * 0.55),
+                        );
                         ui.label(RichText::new(copy.title).size(t.number("text-md")));
                         ui.add_space(3.);
                         description(ui, t, copy.description, None);

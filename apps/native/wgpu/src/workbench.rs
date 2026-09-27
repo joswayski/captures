@@ -1189,10 +1189,13 @@ impl Workbench {
         let title = presentation
             .as_ref()
             .map_or(shared::copy().title, |p| p.title);
-        view::stage(ui, t, |ui| {
+        // Shipping `@media (max-height: 600px)`: the default 560 pt setup
+        // window drops the lede and tightens the stage.
+        let short = app_windows::short(ui.ctx().content_rect().height());
+        view::stage(ui, t, short, |ui| {
             ui.spacing_mut().item_spacing.y = t.number("s-3");
-            view::header(ui, t, title, shared::LEDE, true);
-            ui.add_space(t.number("s-7") - t.number("s-3"));
+            view::header(ui, t, title, (!short).then_some(shared::LEDE), true);
+            ui.add_space(t.number(if short { "s-5" } else { "s-7" }) - t.number("s-3"));
             ui.spacing_mut().item_spacing.y = t.number("s-5");
             match view::cards(ui, t, presentation.as_ref(), busy) {
                 Some(Target::Screen) => prefs.request_onboarding_screen(),
@@ -1266,7 +1269,13 @@ fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t:
         .show(ctx, |ui| {
             ui.set_width(520.);
             ui.spacing_mut().item_spacing.y = t.number("s-3");
-            crate::onboarding::header(ui, t, shared::RECOVERY_TITLE, shared::RECOVERY_LEDE, false);
+            crate::onboarding::header(
+                ui,
+                t,
+                shared::RECOVERY_TITLE,
+                Some(shared::RECOVERY_LEDE),
+                false,
+            );
             ui.add_space(t.number("s-4"));
             let busy =
                 crate::onboarding::Busy::from_action(preferences.permission_recovery_busy_action());
