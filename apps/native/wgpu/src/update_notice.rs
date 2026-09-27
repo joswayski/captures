@@ -619,6 +619,21 @@ impl FixtureHost {
         self.leaving = None;
     }
 
+    /// Whether the notice card is on screen.
+    #[cfg(target_os = "windows")]
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Hide the notice, as its dismiss button and a Windows tray click do.
+    pub fn hide(&mut self) {
+        self.visible = false;
+        self.shown_at = None;
+        self.simulating = false;
+        self.next_tick = None;
+        crate::emit("update-notice-dismissed", serde_json::json!({}));
+    }
+
     /// Root-window controls for switching fixture statuses.
     pub fn controls(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         ui.label(text(
@@ -652,13 +667,7 @@ impl FixtureHost {
             Action::Dismiss if blocked => {
                 crate::emit("update-notice-dismiss-blocked", serde_json::json!({}));
             }
-            Action::Dismiss => {
-                self.visible = false;
-                self.shown_at = None;
-                self.simulating = false;
-                self.next_tick = None;
-                crate::emit("update-notice-dismissed", serde_json::json!({}));
-            }
+            Action::Dismiss => self.hide(),
             Action::ShowNotes | Action::HideNotes => {
                 let show = action == Action::ShowNotes;
                 self.view.show_changelog = show;

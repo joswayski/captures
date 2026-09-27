@@ -27,7 +27,33 @@ pub enum Action {
     OpenOutputFolder,
     #[cfg(target_os = "linux")]
     Unavailable,
+    /// A left-click on the Windows tray icon; see [`left_click`].
+    #[cfg(target_os = "windows")]
+    LeftClick,
     Quit,
+}
+
+/// What a Windows left-click on the tray icon does.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LeftClick {
+    HideUpdateNotice,
+    HideStartupNotice,
+    OpenPreferences,
+}
+
+/// Shipping `dismiss_visible_tray_notice`: a click first hides a visible
+/// update notice, else a visible startup notice, so the icon toggles an open
+/// notice; only with neither up does it open Preferences.
+#[cfg(any(target_os = "windows", test))]
+pub fn left_click(update_notice_visible: bool, startup_notice_visible: bool) -> LeftClick {
+    if update_notice_visible {
+        LeftClick::HideUpdateNotice
+    } else if startup_notice_visible {
+        LeftClick::HideStartupNotice
+    } else {
+        LeftClick::OpenPreferences
+    }
 }
 
 /// One row of the shipping tray menu (`build_tray_menu`).
@@ -260,7 +286,7 @@ impl Tray {
                     ..
                 }
             ) {
-                send_action(&tray_actions, &ctx, Action::Preferences);
+                send_action(&tray_actions, &ctx, Action::LeftClick);
             }
             #[cfg(not(target_os = "windows"))]
             let _ = (&tray_actions, &ctx, event);
@@ -500,6 +526,15 @@ mod tests {
     }
 
     #[test]
+    fn left_click_hides_a_visible_notice_before_opening_preferences() {
+        assert_eq!(left_click(false, false), LeftClick::OpenPreferences);
+        assert_eq!(left_click(false, true), LeftClick::HideStartupNotice);
+        assert_eq!(left_click(true, false), LeftClick::HideUpdateNotice);
+        // Shipping checks the update notice before the startup notice.
+        assert_eq!(left_click(true, true), LeftClick::HideUpdateNotice);
+    }
+
+    #[test]
     fn tray_actions_wake_root_even_during_a_preview_pass() {
         for action in [
             Action::History,
@@ -507,6 +542,8 @@ mod tests {
             Action::Quit,
             #[cfg(target_os = "linux")]
             Action::Unavailable,
+            #[cfg(target_os = "windows")]
+            Action::LeftClick,
         ] {
             for preview_active in [false, true] {
                 let ctx = egui::Context::default();
