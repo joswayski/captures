@@ -4883,7 +4883,9 @@ final class ScreenshotEditorTests: XCTestCase {
 
             preset.selectItem(withTitle: "Standard")
             size.stringValue = "52"
-            try swatchButton("Color: #2d9cff", in: controller.root).performClick(nil)
+            // Like the preset and size above, set the choice directly: the
+            // swatch row is disabled while the failed creation is unresolved.
+            color.selectedHex = "#2d9cff"
             worker.failOperation = nil
             worker.response = { request in
                 switch request["operation"] as? String {
