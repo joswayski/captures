@@ -24,6 +24,7 @@ pub mod icons;
 pub mod login_item;
 pub mod motion;
 pub mod onboarding;
+pub mod permission_recovery;
 pub mod preferences;
 pub mod preview;
 pub mod preview_chrome;

@@ -1006,19 +1006,109 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         scene = "live"
         render()
         installCaptureShortcuts()
+        // Shipping skips the interactive launch when a Screen Recording
+        // relaunch scheduled a capture, then runs that capture.
+        let retry = takeScheduledCaptureRetry()
         let startup = startupDecision(options: options)
-        if options.live, options.screenshot == nil,
+        if retry == nil, options.live, options.screenshot == nil,
            let trigger = startupNoticeTrigger(setupWasPresented: onboardingWasPresented,
                hiddenLaunch: !startup.showsWindow, openingMedia: !pendingOpenImages.isEmpty) {
             showStartupNotice(trigger)
         }
-        if startup.showsWindow || onboardingWasPresented || !pendingOpenImages.isEmpty {
+        if retry == nil, startup.showsWindow || onboardingWasPresented || !pendingOpenImages.isEmpty {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } else {
             window.orderOut(nil)
         }
         drainOpenImages()
+        if let retry { liveController?.retryCaptureAfterRestart(retry) }
+    }
+
+    private func takeScheduledCaptureRetry() -> StillCaptureKind? {
+        guard options.live else { return nil }
+        do {
+            return try CapturePermissionRecovery(settingsPath: options.settingsFile).takePendingCapture()
+        } catch {
+            Metrics.write(["event": "permission-retry-error", "detail": error.localizedDescription])
+            return nil
+        }
+    }
+
+    /// Shipping `report_capture_error` on macOS: a denied capture offers
+    /// "Restart & Retry" when access was requested this launch, otherwise
+    /// "Reset, Restart & Retry". Returns false to fall back to the plain error.
+    private func offerScreenPermissionRecovery(kind: StillCaptureKind, message: String) -> Bool {
+        guard options.live, !terminating,
+              let recovery = try? CapturePermissionRecovery(settingsPath: options.settingsFile),
+              recovery.isPermissionDenied(message),
+              let prompt = try? recovery.prompt() else { return false }
+        guard window.attachedSheet == nil else {
+            Metrics.write(["event": "permission-recovery", "detail": "sheet busy"])
+            return true
+        }
+        let alert = NSAlert()
+        alert.alertStyle = prompt.critical ? .critical : .informational
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message
+        alert.addButton(withTitle: prompt.confirm)
+        alert.addButton(withTitle: prompt.cancel)
+        if !window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        Metrics.write(["event": "permission-recovery", "recovery": prompt.recovery.rawValue])
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.restartAndRetryCapture(kind, reset: prompt.recovery == .resetAndRestart,
+                recovery: recovery, title: prompt.title)
+        }
+        return true
+    }
+
+    private func restartAndRetryCapture(_ kind: StillCaptureKind, reset: Bool,
+                                        recovery: CapturePermissionRecovery, title: String) {
+        guard options.live, !terminating, !captureBusy else { return }
+        preferencesController?.flush()
+        let bundleIdentifier = Bundle.main.bundleIdentifier
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { () throws -> Void in
+                if reset { try recovery.resetScreenPermission(bundleIdentifier: bundleIdentifier) }
+                try recovery.scheduleRetry(kind)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.relaunchForCaptureRetry(recovery: recovery, title: title)
+                case .failure(let error):
+                    self.presentHostError(title: title,
+                        message: recovery.failureMessage(error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    private func relaunchForCaptureRetry(recovery: CapturePermissionRecovery, title: String) {
+        let abandon: (String) -> Void = { [weak self] reason in
+            // Never leave a retry behind that a later ordinary launch would run.
+            _ = try? recovery.takePendingCapture()
+            self?.presentHostError(title: title, message: recovery.failureMessage(reason))
+        }
+        // Shipping restarts through a normal exit, so unsaved editor work that
+        // cannot be drained cancels the restart before a new host starts.
+        guard !terminating, !captureBusy, liveController?.prepareEditorForTermination() != false else {
+            abandon("Finish or close the open work, then try again.")
+            return
+        }
+        closeCaptureShortcuts()
+        relaunch { [weak self] reason in
+            guard let self else { return }
+            _ = try? recovery.takePendingCapture()
+            self.shortcutSignature = nil
+            if self.onboardingReady { self.installCaptureShortcuts() }
+            self.presentHostError(title: title, message: recovery.failureMessage(reason))
+        }
     }
 
     /// Shipping launch notice pointing at the menu bar item, with the saved
@@ -1048,6 +1138,15 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return
         }
         onboardingController?.flush()
+        relaunch { [weak self] restartError in
+            self?.onboardingView?.restartFailed()
+            self?.presentHostError(title: "Couldn’t Restart Captures", message: restartError)
+        }
+    }
+
+    /// Starts a fresh live host with the same profile and quits this one.
+    /// `failed` runs when spawning fails and this process kept its instance lock.
+    private func relaunch(failed: @escaping (String) -> Void) {
         preferencesController?.flush()
         LiveCaptureController.flush()
         nativeInstance?.stopAccepting()
@@ -1074,8 +1173,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     NSApp.terminate(nil)
                     return
                 }
-                onboardingView?.restartFailed()
-                presentHostError(title: "Couldn’t Restart Captures", message: restartError)
+                failed(restartError)
             } catch {
                 presentHostError(title: "Couldn’t Restart Captures",
                     message: "\(restartError) Captures could not restore its application lock and will quit. Reopen it to continue setup.")
@@ -1217,6 +1315,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.updateShortcutState()
                 }, reportError: { [weak self] message in
                     self?.presentHostError(title: "Capture Failed", message: message)
+                }, screenPermissionDenied: { [weak self] kind, message in
+                    self?.offerScreenPermissionRecovery(kind: kind, message: message) ?? false
                 }, showPermissions: { [weak self] in self?.showPermissions() },
                 showPreferenceSetting: { [weak self] setting in
                     self?.showPreferences(revealing: setting)
