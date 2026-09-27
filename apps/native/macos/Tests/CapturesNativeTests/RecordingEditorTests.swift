@@ -1176,6 +1176,50 @@ final class RecordingEditorTests: XCTestCase {
                        "the retained controller and window reopen after actual close")
     }
 
+    func testMenuCloseWindowRunsTheRecordingEditorCloseTrigger() throws {
+        _ = NSApplication.shared
+        let placeholder = Selector(("menuPlaceholder:"))
+        let menu = AppMainMenu(appName: "Captures", quitTitle: "Quit Captures",
+            actions: AppMainMenuActions(target: NSObject(), quit: placeholder, find: placeholder,
+                                        findNext: placeholder, findPrevious: placeholder))
+        let close = try XCTUnwrap(menu.windowsMenu.items.first { $0.title == "Close Window" })
+        let action = try XCTUnwrap(close.action)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 100))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { true })
+        var closed: [String] = []
+        controller.didClose = { closed.append($0) }
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+
+        // Playback vetoes ⌘W until its teardown finishes, as the close button does.
+        try button("Play", in: controller.root).performClick(nil)
+        controller.window.perform(action, with: close)
+        XCTAssertTrue(controller.window.isVisible)
+        XCTAssertEqual(closed, [])
+        worker.completePlayback(.success(.cancelled))
+        let deadline = Date().addingTimeInterval(5)
+        while closed.isEmpty && Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        XCTAssertEqual(closed, ["recording-id"], "⌘W fires the editor close trigger")
+        XCTAssertEqual(worker.closeCount, 1)
+        XCTAssertFalse(controller.window.isVisible)
+
+        // An idle editor closes straight away.
+        worker.initial = try presentation(artifactID: "second-recording")
+        controller.present(artifact: recordingArtifact(id: "second-recording"),
+                           historyRoot: "/History", outputDirectory: "/Exports")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        XCTAssertTrue(controller.window.isVisible)
+        controller.window.perform(action, with: close)
+        XCTAssertEqual(closed, ["recording-id", "second-recording"])
+        XCTAssertEqual(worker.closeCount, 2)
+        XCTAssertFalse(controller.window.isVisible)
+    }
+
     func testSoundPlaybackRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

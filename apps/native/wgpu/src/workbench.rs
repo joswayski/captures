@@ -375,6 +375,26 @@ impl Workbench {
     }
 
     fn handle_tray_action(&mut self, action: TrayAction, ctx: &egui::Context) {
+        #[cfg(target_os = "windows")]
+        if action == TrayAction::LeftClick {
+            match tray::left_click(
+                self.options.scene == Scene::Update && self.update_notice.is_visible(),
+                self.startup_notice.is_some(),
+            ) {
+                tray::LeftClick::HideUpdateNotice => {
+                    self.update_notice.hide();
+                    ctx.request_repaint();
+                    return;
+                }
+                tray::LeftClick::HideStartupNotice => {
+                    self.startup_notice = None;
+                    crate::live::request_hidden_root_paint(ctx);
+                    ctx.request_repaint();
+                    return;
+                }
+                tray::LeftClick::OpenPreferences => {}
+            }
+        }
         if self.preferences_state.permission_recovery_open() && action != TrayAction::Quit {
             self.show_root(ctx);
             return;
@@ -436,6 +456,9 @@ impl Workbench {
             }
             TrayAction::History => self.show_root(ctx),
             TrayAction::Preferences => self.preferences.open(ctx),
+            // Shipping's left-click opens Preferences once no notice is up.
+            #[cfg(target_os = "windows")]
+            TrayAction::LeftClick => self.preferences.open(ctx),
             TrayAction::OpenOutputFolder => match self.preferences_state.snapshot() {
                 Ok(settings) => {
                     let output = self.action_tx.clone();

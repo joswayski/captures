@@ -71,21 +71,20 @@ generation while the accepted recording keeps running or paused. Escape cancels 
 the selector/countdown, and a completed still follows normal History, mini-preview
 and auto-copy behavior. AppKit/Windows apply capture exclusion; X11 hides the HUD and
 guide from the still but cannot exclude the selector from ongoing recording pixels.
-Native recording editing,
-GIF conversion and media-tool bundling remain unconnected. History **Save file**
+Both hosts open recordings in the native recording editor, which saves MP4 and
+GIF; media-tool bundling remains unconnected. History **Save file**
 copies original video/GIF bytes to the configured output folder without encoding
 or overwriting another file. Repeated Save reuses the export; deleting it allows
 another copy from private History. **Show in Folder** reveals the exported copy,
 which survives deleting or clearing History. The poster remains the native preview.
 
-Successful finalization also opens a nonactivating fixed-glass **Recording ready**
+Closing a recording editor opens a nonactivating fixed-glass **Recording ready**
 notice at the display work area's top right. It reuses History's Save file operation
 and changes to **Recording saved** / Show in Folder after export. Save failure and
 missing-file reveal errors remain retryable; Dismiss and the 15.2-second expiry
 never delete media. Expiry pauses during saving and restarts on completion/error.
 A new capture clears the notice, and stale callbacks cannot reopen a dismissed
-or replaced notice. Because native recording editing is not connected, this appears
-after finalization rather than the shipping editor-close trigger. Physical input,
+or replaced notice. Physical input,
 compositor, multi-display and accessibility acceptance remain open.
 
 Linux CI records an asymmetric 310×170 region on a private Xvfb display, pauses,
@@ -216,8 +215,8 @@ Show clicks / Desktop audio switches (On/Off/Unavailable with a reason tooltip;
 clicks imply the cursor) and the microphone select. The primary button hides under
 auto-start unless a start failed. Guidance stays until a window is selected, hides
 while dragging and fades when the pointer comes within 28 points. Segmented
-indicators slide and the Record row arrives as shipped; wgpu segment icons and
-Wayland remain open; physical
+indicators slide and the Record row arrives as shipped;
+Wayland remains open; physical
 displays, platform input and accessibility acceptance remain open.
 
 Configured Region/Window/Full screen global shortcuts switch the open selector's
@@ -346,7 +345,8 @@ move, aspect, resize and Shift release. The Windows/X11 candidate uses the same
 Rust `RegionSession`; its [private-X11 integration test](wgpu/README.md#validate-and-collect-evidence)
 checks repeated captures, exact saved pixels and cancellation with simulated
 session state. Real OS capture, mixed-DPI and accessibility acceptance is still
-required. Selector blur, magnifier and the full capture-menu UI remain open.
+required. Selector glass panels approximate the shipping backdrop blur with the
+near-opaque fixed glass fills.
 
 Both hosts also offer **Capture window**. Hover a window or desktop, click to
 select and confirm with Enter/Capture; automatic start confirms on click. Shared
@@ -370,8 +370,7 @@ real login-manager acceptance. `--scene window` is a permission-free fixture on
 both hosts. The slice remains experimental and all platform acceptance gates
 stay open until real desktop/input tests pass.
 
-This slice has no recordings or editor; those stored preferences
-do not apply yet. Full UI parity remains
+Full UI parity remains
 open. The wgpu Wayland backend cannot verify hiding its root window, so capture
 is disabled there rather than photographing the app itself. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and
@@ -480,9 +479,11 @@ apps/native/macos/.build/release/CapturesNative --scene preview --reference-chip
 apps/native/macos/.build/release/CapturesNative --scene update --update-state error
 ```
 
-Close each instance before starting another. Cmd+Q quits. Nothing installs into
-Applications or changes the installed app's data, shortcuts, or updater. `--live`
-does unbind overlapping system screenshot keys like shipping (see above); set
+Close each instance before starting another. Cmd+Q quits. The menu bar matches
+shipping's default macOS menu: Cmd+W closes the front window through its normal
+close path, Cmd+M minimizes, Cmd+H hides and text fields support Undo/Redo.
+Nothing installs into Applications or changes the installed app's data, shortcuts,
+or updater. `--live` does unbind overlapping system screenshot keys like shipping (see above); set
 `CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER=1` to keep them.
 Only the explicit live screen-access action requests capture permission.
 The executable needs its SwiftPM resource bundle; run it from the build directory.
@@ -505,9 +506,9 @@ new persists only to an explicit `--settings-file`.
 
 These screens are **not full pixel or functional parity**. Native Preferences
 includes Find, custom colors, persisted defaults and live system appearance.
-Image-backed history, real recording, transparent desktop windows, preview
-controls/pile and editor surfaces remain incomplete. Do not claim whole-app
-savings from these development scenes.
+The fixture scenes use synthetic history, recording and preview state; image-backed
+History, real recording, the preview pile and both editors run under `--live`.
+Do not claim whole-app savings from these development scenes.
 
 ## Checks and measurements
 

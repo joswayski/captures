@@ -1250,6 +1250,29 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(controller.window.isVisible)
     }
 
+    func testMenuCloseWindowRunsTheEditorCloseFlush() throws {
+        _ = NSApplication.shared
+        let placeholder = Selector(("menuPlaceholder:"))
+        let menu = AppMainMenu(appName: "Captures", quitTitle: "Quit Captures",
+            actions: AppMainMenuActions(target: NSObject(), quit: placeholder, find: placeholder,
+                                        findNext: placeholder, findPrevious: placeholder))
+        let close = try XCTUnwrap(menu.windowsMenu.items.first { $0.title == "Close Window" })
+        XCTAssertEqual(close.keyEquivalent, "w")
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: false))
+        var order: [String] = []
+        worker.onAutosave = { order.append("autosave") }
+        worker.onClose = { order.append("close") }
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+
+        // ⌘W sends performClose:, which runs `windowShouldClose` like the close button.
+        controller.window.perform(try XCTUnwrap(close.action), with: close)
+        XCTAssertEqual(order, ["autosave", "close"], "⌘W flushes the draft before freeing the session")
+        XCTAssertNil(controller.state.artifactID)
+        XCTAssertFalse(controller.window.isVisible)
+    }
+
     func testPendingEditCannotBeReplacedAndDirtyCompletionRemainsRecoverable() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "first"))
