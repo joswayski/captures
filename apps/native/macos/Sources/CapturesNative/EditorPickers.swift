@@ -186,7 +186,7 @@ final class CustomColorWell: NSColorWell {
 /// the CSS auto-fill grid. `compact` is the canvas background card's grid.
 final class ColorSwatchRow: NSView {
     override var isFlipped: Bool { true }
-    let fieldLabel: String
+    private(set) var fieldLabel: String
     let compact: Bool
     private(set) var swatchButtons: [ColorSwatchButton] = []
     let customWell: CustomColorWell
@@ -264,6 +264,17 @@ final class ColorSwatchRow: NSView {
     }
 
     func deactivate() { customWell.deactivate() }
+
+    /// Rename the field (shipping "Stroke color" vs "Color" for open tools)
+    /// and each swatch's accessible name.
+    func relabel(_ label: String) {
+        guard label != fieldLabel else { return }
+        fieldLabel = label
+        setAccessibilityLabel(label)
+        for button in swatchButtons {
+            button.setAccessibilityLabel(EditorColors.swatchLabel(label, button.swatchHex))
+        }
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)

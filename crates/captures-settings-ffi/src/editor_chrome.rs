@@ -49,6 +49,14 @@ enum ChromeRequest {
         bold: bool,
         italic: bool,
     },
+    /// An existing text layer (`element`) or the layer a Text click would
+    /// create (`create`), for the host-drawn inline editor.
+    InlineTextLayout {
+        #[serde(default)]
+        element: Option<Box<captures_app::editor::TextElement>>,
+        #[serde(default)]
+        create: Option<captures_app::editor_session::TextCreate>,
+    },
 }
 
 fn tool(item: &chrome::RailTool) -> Value {
@@ -285,6 +293,17 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
             }
             json!(chrome::draw_preview::brush(size, softness))
         }
+        ChromeRequest::InlineTextLayout { element, create } => {
+            let element = match (element, create) {
+                (Some(element), None) => *element,
+                (None, Some(create)) => {
+                    captures_app::editor_session::new_text_element(String::new(), &create)?
+                }
+                _ => return Err("Pass exactly one of element or create.".into()),
+            };
+            let layout = captures_app::editor_text::inline_editor_layout(&element)?;
+            json!({"element": element, "layout": layout})
+        }
         ChromeRequest::TextFace {
             family,
             bold,
@@ -320,7 +339,8 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
 /// `brush_preview {size, softness}`,
 /// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}` or
 /// `text_face {family, bold, italic}` (base64 font bytes, or null for a family
-/// this build does not bundle). Returns the owned
+/// this build does not bundle) or `inline_text_layout {element | create}`
+/// (`{element, layout}` for the inline text editor). Returns the owned
 /// `{ok,result}` / `{ok,error}` envelope; free with captures_settings_free_v1.
 ///
 /// # Safety
@@ -483,6 +503,22 @@ mod tests {
             false
         );
         assert_eq!(call(json!({"operation": "nope"}))["ok"], false);
+        let created = &call(json!({"operation": "inline_text_layout", "create": {
+            "point": {"x": 200., "y": 80.}, "text": "", "fontSize": 20., "fontFamily": "sans",
+            "color": "#2d9cff", "stylePreset": "rounded-box"}}))["result"];
+        assert_eq!(created["element"]["fontFamily"], "rounded");
+        assert_eq!(created["element"]["x"], 120.);
+        assert_eq!(
+            created["layout"]["plate_radius"].as_f64().unwrap() > 0.,
+            true
+        );
+        let existing = &call(json!({"operation": "inline_text_layout",
+            "element": created["element"].clone()}))["result"];
+        assert_eq!(existing["layout"], created["layout"]);
+        assert_eq!(
+            call(json!({"operation": "inline_text_layout"}))["ok"],
+            false
+        );
         let face = call(json!({"operation": "text_face", "family": "rounded",
                                "bold": true, "italic": false}));
         assert!(

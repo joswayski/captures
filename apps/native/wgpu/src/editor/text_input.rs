@@ -121,7 +121,12 @@ impl View {
         if input.blocked || input.phase.is_some() {
             return;
         }
-        if input.finish == Some(false) && !input.started {
+        // Shipping has no Cancel: after a failed Begin, finishing a blank box
+        // dismisses it (nothing reached the document); other text retries.
+        if !input.started
+            && (input.finish == Some(false)
+                || (input.finish == Some(true) && input.text.trim().is_empty()))
+        {
             let input = self.inline.take().unwrap();
             self.output = input.previous_output;
             self.select_layer_exact(input.previous_selection);
@@ -710,6 +715,14 @@ mod tests {
         ));
         view.receive(&ctx, Err("still unavailable".into()));
         view.finish_inline(false);
+        view.drain_inline(&tx);
+        assert!(view.inline.is_none() && view.output.is_some() && rx.try_recv().is_err());
+
+        // Without a Cancel button, clearing the box and finishing dismisses it.
+        let (ctx, mut view, tx, rx) = setup();
+        view.receive(&ctx, Err("font unavailable".into()));
+        view.inline.as_mut().unwrap().text = " \n".into();
+        view.finish_inline(true);
         view.drain_inline(&tx);
         assert!(view.inline.is_none() && view.output.is_some() && rx.try_recv().is_err());
 
