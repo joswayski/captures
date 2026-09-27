@@ -3300,9 +3300,8 @@ def main():
         # Each later file stacks below the previous import.
         assert batch_layers[2]["y"] >= batch_layers[1]["y"] + batch_layers[1]["height"]
         shot(editor, "import-multi-select")
-        toolbar_click("discard")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "discard multi-select import")
+        # Drafts autosave: discard through the restored-draft notice (#852).
+        editor = discard_draft("discard multi-select import")
         chooser.selected = imported_path
         toolbar_click("import")
         wait(lambda: chooser.pending, "image file picker opened")

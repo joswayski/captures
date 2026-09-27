@@ -44,6 +44,11 @@ enum ChromeRequest {
         cursor: [f64; 2],
         viewport: [f64; 2],
     },
+    TextFace {
+        family: String,
+        bold: bool,
+        italic: bool,
+    },
 }
 
 fn tool(item: &chrome::RailTool) -> Value {
@@ -280,6 +285,13 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
             }
             json!(chrome::draw_preview::brush(size, softness))
         }
+        ChromeRequest::TextFace {
+            family,
+            bold,
+            italic,
+        } => json!(captures_app::editor_fonts::bundled_face_base64(
+            &family, bold, italic
+        )),
         ChromeRequest::WandLoupePosition { cursor, viewport } => {
             if !cursor
                 .iter()
@@ -305,8 +317,10 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
 /// `tool_label {key}`, `zoom_label {percent}`,
 /// `canvas_offscreen {viewport:[x,y,w,h], canvas:[x,y,w,h]}`,
 /// `draw_tool_preview {tool, stroke_width, stroke_enabled}`,
-/// `brush_preview {size, softness}` or
-/// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}`. Returns the owned
+/// `brush_preview {size, softness}`,
+/// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}` or
+/// `text_face {family, bold, italic}` (base64 font bytes, or null for a family
+/// this build does not bundle). Returns the owned
 /// `{ok,result}` / `{ok,error}` envelope; free with captures_settings_free_v1.
 ///
 /// # Safety
@@ -469,6 +483,18 @@ mod tests {
             false
         );
         assert_eq!(call(json!({"operation": "nope"}))["ok"], false);
+        let face = call(json!({"operation": "text_face", "family": "rounded",
+                               "bold": true, "italic": false}));
+        assert!(
+            face["result"]
+                .as_str()
+                .is_some_and(|encoded| encoded.len() > 1000)
+        );
+        assert!(
+            call(json!({"operation": "text_face", "family": "Draft Font",
+                        "bold": false, "italic": false}))["result"]
+                .is_null()
+        );
         // SAFETY: Null input is reported as an error envelope.
         let null = unsafe { captures_editor_chrome_v1(std::ptr::null()) };
         // SAFETY: owned response, read then freed once.

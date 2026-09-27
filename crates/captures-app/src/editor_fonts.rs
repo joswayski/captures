@@ -143,6 +143,13 @@ pub fn bundled_face(family: &str, bold: bool, italic: bool) -> Option<Arc<[u8]>>
     bundled().files.get(&id).cloned()
 }
 
+/// [`bundled_face`] as base64, for hosts that receive editor data as JSON
+/// (AppKit registers it with Core Text to draw the inline editor).
+#[must_use]
+pub fn bundled_face_base64(family: &str, bold: bool, italic: bool) -> Option<String> {
+    bundled_face(family, bold, italic).map(|bytes| crate::editor_layers::base64(&bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +165,10 @@ mod tests {
             }
         }
         assert!(bundled_face("Captures Shaping Test", false, false).is_none());
+        assert!(
+            bundled_face_base64("mono", false, true)
+                .is_some_and(|encoded| encoded.len() % 4 == 0 && encoded.starts_with("AAEAAA"))
+        );
         assert_ne!(
             bundled_face("sans", true, false),
             bundled_face("sans", false, false)
