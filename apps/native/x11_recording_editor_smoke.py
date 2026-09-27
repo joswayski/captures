@@ -164,10 +164,28 @@ def main():
     def close(window):
         # Alt+F4 goes to whichever client Openbox has focused; while it briefly
         # clears the active window during activation the key closes nothing.
+        # Openbox can also hand focus back to another client (the History
+        # root) after activation, and Alt+F4 would then close that instead.
+        # Wait until the target or a modal child transient for it owns focus,
+        # re-activating the target meanwhile.
         run("xdotool", "windowactivate", "--sync", window)
-        # A modal child may legitimately own focus, so only wait for Openbox to
-        # finish the transfer rather than for this exact window.
-        wait(lambda: active_window() is not None, "close target owns focus")
+
+        def target_focused():
+            active = active_window()
+            if active is None:
+                return False
+            if int(active) == int(window):
+                return True
+            transient = subprocess.run(["xprop", "-id", active, "WM_TRANSIENT_FOR"], env=env,
+                                       capture_output=True, text=True, timeout=5).stdout
+            match = re.search(r"window id # (0x[0-9a-f]+)", transient)
+            if match and int(match.group(1), 16) == int(window):
+                return True
+            subprocess.run(["xdotool", "windowactivate", window], env=env,
+                           capture_output=True, timeout=5)
+            return False
+
+        wait(target_focused, "close target owns focus")
         run("xdotool", "key", "alt+F4", "sleep", ".5")
 
     # The editor reports named control rectangles (CAPTURES_NATIVE_LAYOUT_PROBE)
