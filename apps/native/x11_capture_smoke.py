@@ -195,10 +195,10 @@ def main():
     def screenshot(window, name):
         run("import", "-window", window, str(output / f"{name}.png"))
 
-    def pixels(window, crop):
+    def crop_rgb(window, crop):
         return run("import", "-window", window, "-crop", crop, "-depth", "8", "RGB:-")
 
-    def colors(rgb):
+    def distinct_colors(rgb):
         return len({rgb[i:i + 3] for i in range(0, len(rgb), 3)})
 
     def settled(window, crop, predicate, description):
@@ -206,7 +206,7 @@ def main():
         previous = [None]
 
         def probe():
-            current = pixels(window, crop)
+            current = crop_rgb(window, crop)
             stable, previous[0] = current == previous[0], current
             if not stable:
                 time.sleep(.1)
@@ -216,23 +216,23 @@ def main():
     def verify_guidance(selector, prefix):
         # Shipping CaptureGuidance: a glass chip whose top edge sits 16% down
         # the 900 px overlay (144 px), ducking within 28 px of the pointer.
-        settled(selector, GUIDANCE_CROP, lambda rgb: colors(rgb) > 16, "guidance chip settles")
-        column = pixels(selector, "1x120+640+100")
+        settled(selector, GUIDANCE_CROP, lambda rgb: distinct_colors(rgb) > 16, "guidance chip settles")
+        column = crop_rgb(selector, "1x120+640+100")
         rows = [column[i:i + 3] for i in range(0, len(column), 3)]
         top = 100 + next(i for i, row in enumerate(rows)
                          if max(abs(a - b) for a, b in zip(row, rows[0])) > 8)
         assert 143 <= top <= 145, f"guidance chip top edge at {top}px, not 16% of 900px"
-        row = pixels(selector, f"640x1+320+{top + 10}")
+        row = crop_rgb(selector, f"640x1+320+{top + 10}")
         pixels_in_row = [row[i:i + 3] for i in range(0, len(row), 3)]
         right = 320 + max(i for i, pixel in enumerate(pixels_in_row)
                           if max(abs(a - b) for a, b in zip(pixel, pixels_in_row[-1])) > 8)
         screenshot(selector, f"{prefix}-guidance")
         run("xdotool", "mousemove", "--window", selector, str(right + 20), str(top + 10))
-        settled(selector, GUIDANCE_CROP, lambda rgb: colors(rgb) <= 4,
+        settled(selector, GUIDANCE_CROP, lambda rgb: distinct_colors(rgb) <= 4,
                 "guidance chip ducks within 28px of the pointer")
         screenshot(selector, f"{prefix}-guidance-ducked")
         run("xdotool", "mousemove", "--window", selector, "640", "600")
-        settled(selector, GUIDANCE_CROP, lambda rgb: colors(rgb) > 16,
+        settled(selector, GUIDANCE_CROP, lambda rgb: distinct_colors(rgb) > 16,
                 "guidance chip returns once the pointer leaves")
 
     def background(index):

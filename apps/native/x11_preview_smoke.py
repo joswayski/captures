@@ -28,6 +28,8 @@ SELECTOR = "Captures Region Selection"
 CONTROLS = "Captures Capture Controls"
 # xdotool searches legacy WM_NAME, whose em dash is not decoded as UTF-8.
 EDITOR = "Screenshot editor.*"
+# Where the direct region overlay's guidance chip settles (top edge at 16%).
+GUIDANCE_CROP = "600x80+340+140"
 
 
 def main():
@@ -139,11 +141,17 @@ def main():
         # XSync acknowledges X11 input, not egui's next frame. Let release open
         # the clicked recorder/navigation target before sending its next key.
 
+    def wait_guidance(selector, description):
+        # The shipping guidance chip sits 16% from the top and ducks within
+        # 28 px of the pointer, so park the pointer away from it first.
+        run("xdotool", "mousemove", "--window", selector, "640", "600")
+        wait(lambda: int(run("import", "-window", selector, "-crop", GUIDANCE_CROP,
+            "-format", "%k", "info:")) > 16, description)
+
     def select_region(selector, rect):
-        # Direct region overlays have no toolbar: they paint centered guidance,
-        # and releasing the drag commits the capture like the shipping app.
-        wait(lambda: int(run("import", "-window", selector, "-crop", "640x120+320+390",
-            "-format", "%k", "info:")) > 16, "painted region guidance before drag")
+        # Direct region overlays have no toolbar, only the guidance chip, and
+        # releasing the drag commits the capture like the shipping app.
+        wait_guidance(selector, "painted region guidance before drag")
         x, y, width, height = rect
         run("xdotool", "windowfocus", "--sync", selector, "sleep", ".15",
             "mousemove", "--sync", "--window", selector, str(x - 1), str(y),
@@ -462,8 +470,7 @@ def main():
                 move_root(300, 280)
                 click(root, 636, 171)  # Capture region in the token-font History header.
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
-                wait(lambda: int(run("import", "-window", selector, "-crop", "640x120+320+390",
-                    "-format", "%k", "info:")) > 16, "painted region guidance")
+                wait_guidance(selector, "painted region guidance")
                 return selector
 
             def capture(rect):
