@@ -137,15 +137,63 @@ fn scrollbar_visuals(widgets: &mut egui::style::Widgets, t: &Tokens, glass: bool
     }
 }
 
+/// What a shipping scroll area's content closure needs: the surrounding
+/// widget visuals to restore, and a hook that runs once content is laid out.
+struct ScrollContent<'a> {
+    widgets: &'a egui::style::Widgets,
+    ctx: egui::Context,
+    animation_time: f32,
+    armed: std::cell::Cell<bool>,
+}
+
+impl ScrollContent<'_> {
+    /// Lay out the scroll area's content with the surrounding visuals, then
+    /// let egui paint the bars with instant hover transitions.
+    ///
+    /// Shipping bars look the same dormant, hovered and active (equal handle
+    /// opacities, `floating_width == bar_width`), yet egui still runs its
+    /// floating-bar hover animations and requests a repaint on every frame
+    /// of them whenever the pointer enters or leaves any scroll area. That
+    /// kept a settled window repainting for no visible change (see
+    /// `smoke.py`'s `uiPassesAfterTwoSeconds`). egui reads those animations'
+    /// duration from the global style after `add` returns, so zero it only
+    /// for the bar pass; content animations keep their normal timing.
+    fn add<R>(&self, ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        ui.visuals_mut().widgets = self.widgets.clone();
+        let result = add(ui);
+        self.armed.set(true);
+        self.ctx.global_style_mut(|style| style.animation_time = 0.);
+        result
+    }
+}
+
+impl Drop for ScrollContent<'_> {
+    fn drop(&mut self) {
+        if self.armed.get() {
+            let animation_time = self.animation_time;
+            self.ctx
+                .global_style_mut(|style| style.animation_time = animation_time);
+        }
+    }
+}
+
 fn scrolled<R>(
     ui: &mut egui::Ui,
     t: &Tokens,
     glass: bool,
-    show: impl FnOnce(&mut egui::Ui, &egui::style::Widgets) -> R,
+    show: impl FnOnce(&mut egui::Ui, &ScrollContent) -> R,
 ) -> R {
     let content = ui.visuals().widgets.clone();
     scrollbar_visuals(&mut ui.visuals_mut().widgets, t, glass);
-    let result = show(ui, &content);
+    let ctx = ui.ctx().clone();
+    let scope = ScrollContent {
+        widgets: &content,
+        animation_time: ctx.global_style().animation_time,
+        ctx,
+        armed: std::cell::Cell::new(false),
+    };
+    let result = show(ui, &scope);
+    drop(scope);
     ui.visuals_mut().widgets = content;
     result
 }
@@ -158,10 +206,7 @@ pub fn scroll_area<R>(
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     scrolled(ui, t, false, |ui, content| {
-        area.show(ui, |ui| {
-            ui.visuals_mut().widgets = content.clone();
-            add(ui)
-        })
+        area.show(ui, |ui| content.add(ui, add))
     })
 }
 
@@ -173,10 +218,7 @@ pub fn glass_scroll_area<R>(
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     scrolled(ui, t, true, |ui, content| {
-        area.show(ui, |ui| {
-            ui.visuals_mut().widgets = content.clone();
-            add(ui)
-        })
+        area.show(ui, |ui| content.add(ui, add))
     })
 }
 
@@ -188,10 +230,7 @@ pub fn scroll_viewport<R>(
     add: impl FnOnce(&mut egui::Ui, Rect) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     scrolled(ui, t, false, |ui, content| {
-        area.show_viewport(ui, |ui, viewport| {
-            ui.visuals_mut().widgets = content.clone();
-            add(ui, viewport)
-        })
+        area.show_viewport(ui, |ui, viewport| content.add(ui, |ui| add(ui, viewport)))
     })
 }
 
@@ -206,8 +245,7 @@ pub fn scroll_rows<R>(
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     scrolled(ui, t, false, |ui, content| {
         area.show_rows(ui, row_height, rows, |ui, range| {
-            ui.visuals_mut().widgets = content.clone();
-            add(ui, range)
+            content.add(ui, |ui| add(ui, range))
         })
     })
 }
@@ -634,125 +672,131 @@ impl<'a> Select<'a> {
                                 .max_height((layout.max_height as f32 - pad * 2. - 2.).max(1.));
                             scrolled(ui, t, glass, |ui, content| {
                                 area.show(ui, |ui: &mut egui::Ui| {
-                                    ui.visuals_mut().widgets = content.clone();
-                                    ui.spacing_mut().item_spacing.y = 0.;
-                                    list_clip = ui.clip_rect();
-                                    for (index, option) in options.iter().enumerate() {
-                                        let is_selected = index == selected_index
-                                            && options[index].value == *selected;
-                                        let copy_width = inner - row_x * 2. - gap - check_width;
-                                        let label = ui.fonts_mut(|fonts| {
-                                            fonts.layout(
-                                                option.label.to_owned(),
-                                                label_font.clone(),
-                                                Color32::PLACEHOLDER,
-                                                copy_width,
-                                            )
-                                        });
-                                        let small = (!option.description.is_empty()).then(|| {
-                                            ui.fonts_mut(|fonts| {
+                                    content.add(ui, |ui| {
+                                        ui.spacing_mut().item_spacing.y = 0.;
+                                        list_clip = ui.clip_rect();
+                                        for (index, option) in options.iter().enumerate() {
+                                            let is_selected = index == selected_index
+                                                && options[index].value == *selected;
+                                            let copy_width = inner - row_x * 2. - gap - check_width;
+                                            let label = ui.fonts_mut(|fonts| {
                                                 fonts.layout(
-                                                    option.description.to_owned(),
-                                                    small_font.clone(),
+                                                    option.label.to_owned(),
+                                                    label_font.clone(),
                                                     Color32::PLACEHOLDER,
                                                     copy_width,
                                                 )
-                                            })
-                                        });
-                                        let copy_height = label.size().y
-                                            + small
-                                                .as_ref()
-                                                .map_or(0., |small| small.size().y + 2.);
-                                        let row_height =
-                                            (copy_height + row_y * 2.).max(t.number("h-sm"));
-                                        let (row, row_response) = ui.allocate_exact_size(
-                                            egui::vec2(inner, row_height),
-                                            if option.disabled {
-                                                egui::Sense::hover()
-                                            } else {
-                                                egui::Sense::click()
-                                            },
-                                        );
-                                        row_response.widget_info(|| {
-                                            egui::WidgetInfo::selected(
-                                                egui::WidgetType::SelectableLabel,
-                                                !option.disabled,
-                                                is_selected,
-                                                option.label,
-                                            )
-                                        });
-                                        if !option.disabled && row_response.hovered() {
-                                            state.active = index;
-                                        }
-                                        if row_response.clicked() {
-                                            chosen = Some(index);
-                                        }
-                                        let active = state.active == index && !option.disabled;
-                                        if active {
-                                            ui.painter().rect_filled(
-                                                row,
-                                                t.number("r-sm"),
-                                                t.color(if glass {
-                                                    "glass-hover"
-                                                } else {
-                                                    "surface-hover"
-                                                }),
-                                            );
-                                        }
-                                        let color = t.color(
-                                            match (glass, option.disabled, active || is_selected) {
-                                                (false, true, _) => "text-faint",
-                                                (true, true, _) => "glass-text-subtle",
-                                                (false, false, true) => "text",
-                                                (true, false, true) => "glass-text",
-                                                (false, false, false) => "text-muted",
-                                                (true, false, false) => "glass-text-muted",
-                                            },
-                                        );
-                                        let top = row.center().y - copy_height / 2.;
-                                        let label_height = label.size().y;
-                                        ui.painter().galley(
-                                            egui::pos2(row.left() + row_x, top),
-                                            label,
-                                            color,
-                                        );
-                                        if let Some(small) = small {
-                                            ui.painter().galley(
-                                                egui::pos2(
-                                                    row.left() + row_x,
-                                                    top + label_height + 2.,
-                                                ),
-                                                small,
-                                                t.color(if glass {
-                                                    "glass-text-subtle"
-                                                } else {
-                                                    "text-faint"
-                                                }),
-                                            );
-                                        }
-                                        if is_selected {
-                                            let check = t.color(if glass {
-                                                "glass-text"
-                                            } else if dark {
-                                                "theme-accent"
-                                            } else {
-                                                "theme-accent-readable"
                                             });
-                                            crate::preferences_widgets::icon(
-                                                ui.painter(),
-                                                "check",
-                                                Rect::from_center_size(
-                                                    egui::pos2(
-                                                        row.right() - row_x - 6.,
-                                                        row.center().y,
-                                                    ),
-                                                    egui::Vec2::splat(12.),
-                                                ),
-                                                check,
+                                            let small =
+                                                (!option.description.is_empty()).then(|| {
+                                                    ui.fonts_mut(|fonts| {
+                                                        fonts.layout(
+                                                            option.description.to_owned(),
+                                                            small_font.clone(),
+                                                            Color32::PLACEHOLDER,
+                                                            copy_width,
+                                                        )
+                                                    })
+                                                });
+                                            let copy_height = label.size().y
+                                                + small
+                                                    .as_ref()
+                                                    .map_or(0., |small| small.size().y + 2.);
+                                            let row_height =
+                                                (copy_height + row_y * 2.).max(t.number("h-sm"));
+                                            let (row, row_response) = ui.allocate_exact_size(
+                                                egui::vec2(inner, row_height),
+                                                if option.disabled {
+                                                    egui::Sense::hover()
+                                                } else {
+                                                    egui::Sense::click()
+                                                },
                                             );
+                                            row_response.widget_info(|| {
+                                                egui::WidgetInfo::selected(
+                                                    egui::WidgetType::SelectableLabel,
+                                                    !option.disabled,
+                                                    is_selected,
+                                                    option.label,
+                                                )
+                                            });
+                                            if !option.disabled && row_response.hovered() {
+                                                state.active = index;
+                                            }
+                                            if row_response.clicked() {
+                                                chosen = Some(index);
+                                            }
+                                            let active = state.active == index && !option.disabled;
+                                            if active {
+                                                ui.painter().rect_filled(
+                                                    row,
+                                                    t.number("r-sm"),
+                                                    t.color(if glass {
+                                                        "glass-hover"
+                                                    } else {
+                                                        "surface-hover"
+                                                    }),
+                                                );
+                                            }
+                                            let color = t.color(
+                                                match (
+                                                    glass,
+                                                    option.disabled,
+                                                    active || is_selected,
+                                                ) {
+                                                    (false, true, _) => "text-faint",
+                                                    (true, true, _) => "glass-text-subtle",
+                                                    (false, false, true) => "text",
+                                                    (true, false, true) => "glass-text",
+                                                    (false, false, false) => "text-muted",
+                                                    (true, false, false) => "glass-text-muted",
+                                                },
+                                            );
+                                            let top = row.center().y - copy_height / 2.;
+                                            let label_height = label.size().y;
+                                            ui.painter().galley(
+                                                egui::pos2(row.left() + row_x, top),
+                                                label,
+                                                color,
+                                            );
+                                            if let Some(small) = small {
+                                                ui.painter().galley(
+                                                    egui::pos2(
+                                                        row.left() + row_x,
+                                                        top + label_height + 2.,
+                                                    ),
+                                                    small,
+                                                    t.color(if glass {
+                                                        "glass-text-subtle"
+                                                    } else {
+                                                        "text-faint"
+                                                    }),
+                                                );
+                                            }
+                                            if is_selected {
+                                                let check = t.color(if glass {
+                                                    "glass-text"
+                                                } else if dark {
+                                                    "theme-accent"
+                                                } else {
+                                                    "theme-accent-readable"
+                                                });
+                                                crate::preferences_widgets::icon(
+                                                    ui.painter(),
+                                                    "check",
+                                                    Rect::from_center_size(
+                                                        egui::pos2(
+                                                            row.right() - row_x - 6.,
+                                                            row.center().y,
+                                                        ),
+                                                        egui::Vec2::splat(12.),
+                                                    ),
+                                                    check,
+                                                );
+                                            }
+                                            rows.push(row);
                                         }
-                                        rows.push(row);
-                                    }
+                                    })
                                 });
                             });
                         });
@@ -1441,6 +1485,53 @@ mod tests {
         scrollbar_visuals(&mut widgets, &t, false);
         assert_eq!(widgets.inactive.bg_fill, t.color("border-strong"));
         assert_eq!(widgets.hovered.bg_fill, t.color("text-faint"));
+    }
+
+    #[test]
+    fn idle_scroll_bars_do_not_repaint_when_the_pointer_enters_or_leaves() {
+        // Shipping bars look identical dormant and hovered, so a pointer
+        // crossing a settled scroll area must not start a repaint loop
+        // (smoke.py's uiPassesAfterTwoSeconds regressed from egui's
+        // floating-bar hover fade after #841).
+        let (ctx, t) = setup();
+        let animation_time = ctx.global_style().animation_time;
+        let mut inner_time = None;
+        let mut draw = |ui: &mut egui::Ui| {
+            scroll_area(
+                ui,
+                &t,
+                egui::ScrollArea::vertical().max_height(200.),
+                |ui| {
+                    inner_time = Some(ctx.global_style().animation_time);
+                    ui.allocate_space(egui::vec2(300., 800.));
+                },
+            );
+        };
+        // Passes until egui stops asking for an immediate repaint.
+        let mut settle = |events: Vec<egui::Event>| {
+            let mut events = Some(events);
+            (1..=20)
+                .find(|_| {
+                    let output = frame(&ctx, events.take().unwrap_or_default(), &mut draw);
+                    !output.viewport_output[&egui::ViewportId::ROOT]
+                        .repaint_delay
+                        .is_zero()
+                })
+                .unwrap_or(usize::MAX)
+        };
+        settle(vec![]);
+        assert_eq!(settle(vec![]), 1, "an untouched scroll area is idle");
+        for pos in [egui::pos2(100., 100.), egui::pos2(500., 350.)] {
+            // The move's own pass plus egui's input follow-ups; the bars'
+            // invisible hover fade used to keep this going for ~14 passes.
+            let passes = settle(vec![egui::Event::PointerMoved(pos)]);
+            assert!(
+                passes <= 3,
+                "pointer at {pos:?} took {passes} passes to settle"
+            );
+        }
+        assert_eq!(inner_time, Some(animation_time), "content keeps its timing");
+        assert_eq!(ctx.global_style().animation_time, animation_time);
     }
 
     #[test]
