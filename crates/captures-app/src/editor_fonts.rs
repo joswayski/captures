@@ -143,6 +143,16 @@ pub fn bundled_face(family: &str, bold: bool, italic: bool) -> Option<Arc<[u8]>>
     bundled().files.get(&id).cloned()
 }
 
+/// Whether a draft's family key still names this build's bundled face (a
+/// reopened draft may pin its own font under the same key).
+#[must_use]
+pub fn is_bundled_family(key: &str, name: &str) -> bool {
+    bundled()
+        .families
+        .get(key)
+        .is_some_and(|bundled| bundled == name)
+}
+
 /// [`bundled_face`] as base64, for hosts that receive editor data as JSON
 /// (AppKit registers it with Core Text to draw the inline editor).
 #[must_use]
@@ -165,6 +175,8 @@ mod tests {
             }
         }
         assert!(bundled_face("Captures Shaping Test", false, false).is_none());
+        assert!(is_bundled_family("sans", "Liberation Sans"));
+        assert!(!is_bundled_family("sans", "Captures Shaping Test"));
         assert!(
             bundled_face_base64("mono", false, true)
                 .is_some_and(|encoded| encoded.len() % 4 == 0 && encoded.starts_with("AAEAAA"))

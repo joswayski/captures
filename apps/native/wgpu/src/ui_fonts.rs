@@ -89,17 +89,20 @@ fn editor_face_name(family: &str, bold: bool, italic: bool) -> String {
     )
 }
 
-/// The egui family for a text layer's document family key and traits: the
-/// bundled face this build embeds, or the UI face for a draft's own font (and
-/// in contexts that never installed the editor faces).
+/// The egui family for a text layer's document family key, the draft's font
+/// name for it, and traits: the bundled face this build embeds, or the UI face
+/// for a draft's own font (and in contexts that never installed the editor
+/// faces).
 pub fn editor_text_family(
     ctx: &egui::Context,
     family: &str,
+    name: Option<&str>,
     bold: bool,
     italic: bool,
 ) -> egui::FontFamily {
     let named = egui::FontFamily::Name(editor_face_name(family, bold, italic).into());
     if EDITOR_FAMILIES.contains(&family)
+        && name.is_none_or(|name| captures_app::editor_fonts::is_bundled_family(family, name))
         && ctx.fonts(|fonts| fonts.definitions().families.contains_key(&named))
     {
         named
@@ -213,7 +216,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.begin_pass(Default::default());
         assert_eq!(
-            editor_text_family(&ctx, "sans", false, false),
+            editor_text_family(&ctx, "sans", None, false, false),
             egui::FontFamily::Proportional,
             "uninstalled contexts fall back to the UI face"
         );
@@ -222,7 +225,7 @@ mod tests {
         ctx.begin_pass(Default::default());
         for family in EDITOR_FAMILIES {
             for (bold, italic) in EDITOR_TRAITS {
-                let face = editor_text_family(&ctx, family, bold, italic);
+                let face = editor_text_family(&ctx, family, None, bold, italic);
                 assert_ne!(face, egui::FontFamily::Proportional);
                 let galley = ctx.fonts_mut(|fonts| {
                     fonts.layout_no_wrap(
@@ -235,7 +238,16 @@ mod tests {
             }
         }
         assert_eq!(
-            editor_text_family(&ctx, "Captures Shaping Test", false, false),
+            editor_text_family(&ctx, "Captures Shaping Test", None, false, false),
+            egui::FontFamily::Proportional
+        );
+        assert_eq!(
+            editor_text_family(&ctx, "sans", Some("Captures Shaping Test"), false, false),
+            egui::FontFamily::Proportional,
+            "a draft's own font under the sans key is not the bundled face"
+        );
+        assert_ne!(
+            editor_text_family(&ctx, "sans", Some("Liberation Sans"), false, false),
             egui::FontFamily::Proportional
         );
         ctx.end_pass().textures_delta.clear();

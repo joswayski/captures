@@ -5316,7 +5316,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let pad = layout.padding.map { $0 * scale } // top, right, bottom, left
         let alpha = min(1, max(0, layout.opacity / 100))
         let color = NSColor(hex: String(layout.color.prefix(7))) ?? tokens.color("text")
-        let font = EditorTextFaces.font(family: layout.fontFamily, bold: layout.bold, italic: layout.italic,
+        let font = EditorTextFaces.font(family: layout.fontFamily, name: snapshot.fontFamilies[layout.fontFamily],
+                                        bold: layout.bold, italic: layout.italic,
                                         size: max(1, layout.fontSize * scale))
         let lineHeight = max(1, layout.lineHeight * scale)
         let paragraph = NSMutableParagraphStyle()

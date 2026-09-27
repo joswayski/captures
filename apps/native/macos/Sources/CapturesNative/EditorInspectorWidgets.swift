@@ -319,10 +319,13 @@ enum EditorTextFaces {
     private static var cache: [String: CTFontDescriptor] = [:]
     private static var missing: Set<String> = []
 
-    static func font(family: String, bold: Bool, italic: Bool, size: CGFloat) -> NSFont {
-        let key = "\(family):\(bold):\(italic)"
+    /// `name` is the draft's font name for `family`; a draft that pins its own
+    /// font under a bundled key does not get the bundled face.
+    static func font(family: String, name: String?, bold: Bool, italic: Bool, size: CGFloat) -> NSFont {
+        let key = "\(family):\(name ?? ""):\(bold):\(italic)"
         if cache[key] == nil, !missing.contains(key) {
-            let request: [String: Any] = ["operation": "text_face", "family": family, "bold": bold, "italic": italic]
+            var request: [String: Any] = ["operation": "text_face", "family": family, "bold": bold, "italic": italic]
+            if let name { request["name"] = name }
             if let encoded = EditorChrome.request(request) as? String,
                let data = Data(base64Encoded: encoded),
                let descriptor = CTFontManagerCreateFontDescriptorFromData(data as CFData) {

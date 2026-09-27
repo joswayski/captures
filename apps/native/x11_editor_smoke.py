@@ -2516,6 +2516,18 @@ def main():
                         "text quarter-turn")
             run("xdotool", "mousemove", "0", "0")
             shot(editor, "text-rotated")
+            # Double-clicking edits the turned label in place: the inline box
+            # rotates with the layer in the draft's own face, and Escape with
+            # no change adds no undo step.
+            before = draft_bytes()
+            x, y = fixture_point((370, 230))
+            run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
+                "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".5")
+            shot(editor, "text-rotated-inline")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            save_layers(lambda values: math.isclose(values[1].get("rotation", 0), math.pi / 2, abs_tol=1e-6)
+                        and values[1]["text"] == "L\nfi", "rotated inline edit round trip")
+            assert draft_bytes() == before, "an unchanged inline edit writes nothing"
             toolbar_click("undo")
             save_layers(lambda values: values[1].get("rotation", 0) == 0, "text rotation undone")
             close(editor)
@@ -2547,7 +2559,8 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["text-draft-restored", "font-bytes-preserved", "text-canvas-move-undo",
-                           "text-canvas-resize-undo", "text-canvas-rotation-undo", "text-minimum-reopen",
+                           "text-canvas-resize-undo", "text-canvas-rotation-undo",
+                           "rotated-inline-round-trip", "text-minimum-reopen",
                            "text-clipboard-dimensions-and-ink", "text-plate-and-original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native text draft: fonts, move/rotate/undo, save/reopen, minimum, clipboard pixels")

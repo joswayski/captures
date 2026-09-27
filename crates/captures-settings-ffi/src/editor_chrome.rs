@@ -46,6 +46,9 @@ enum ChromeRequest {
     },
     TextFace {
         family: String,
+        /// The draft's font name for `family`; a draft's own font is not bundled.
+        #[serde(default)]
+        name: Option<String>,
         bold: bool,
         italic: bool,
     },
@@ -306,11 +309,17 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
         }
         ChromeRequest::TextFace {
             family,
+            name,
             bold,
             italic,
-        } => json!(captures_app::editor_fonts::bundled_face_base64(
-            &family, bold, italic
-        )),
+        } => {
+            use captures_app::editor_fonts as fonts;
+            if name.is_some_and(|name| !fonts::is_bundled_family(&family, &name)) {
+                Value::Null
+            } else {
+                json!(fonts::bundled_face_base64(&family, bold, italic))
+            }
+        }
         ChromeRequest::WandLoupePosition { cursor, viewport } => {
             if !cursor
                 .iter()
@@ -338,8 +347,8 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
 /// `draw_tool_preview {tool, stroke_width, stroke_enabled}`,
 /// `brush_preview {size, softness}`,
 /// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}` or
-/// `text_face {family, bold, italic}` (base64 font bytes, or null for a family
-/// this build does not bundle) or `inline_text_layout {element | create}`
+/// `text_face {family, name?, bold, italic}` (base64 font bytes, or null for a
+/// family this build does not bundle) or `inline_text_layout {element | create}`
 /// (`{element, layout}` for the inline text editor). Returns the owned
 /// `{ok,result}` / `{ok,error}` envelope; free with captures_settings_free_v1.
 ///
@@ -530,6 +539,12 @@ mod tests {
             call(json!({"operation": "text_face", "family": "Draft Font",
                         "bold": false, "italic": false}))["result"]
                 .is_null()
+        );
+        assert!(
+            call(json!({"operation": "text_face", "family": "sans",
+                        "name": "Captures Shaping Test", "bold": false, "italic": false}))["result"]
+                .is_null(),
+            "a draft's own font under a bundled key is not the bundled face"
         );
         // SAFETY: Null input is reported as an error envelope.
         let null = unsafe { captures_editor_chrome_v1(std::ptr::null()) };

@@ -279,6 +279,7 @@ struct InlineGeometry {
 fn inline_geometry(
     ctx: &egui::Context,
     element: &TextElement,
+    font_name: Option<&str>,
     text: &str,
     preview: egui::Rect,
     scale: f32,
@@ -298,6 +299,7 @@ fn inline_geometry(
             crate::ui_fonts::editor_text_family(
                 ctx,
                 &element.font_family,
+                font_name,
                 element.bold,
                 element.italic,
             ),
@@ -406,10 +408,21 @@ pub(super) fn show(
         return;
     };
     let scale = preview.width() / view.canvas[0].max(1.) as f32;
+    let font_name = view
+        .presented
+        .as_ref()
+        .and_then(|presented| presented.font_families.get(&element.font_family).cloned());
     let Some(input) = &mut view.inline else {
         return;
     };
-    let Some(geometry) = inline_geometry(ui.ctx(), &element, &input.text, preview, scale) else {
+    let Some(geometry) = inline_geometry(
+        ui.ctx(),
+        &element,
+        font_name.as_deref(),
+        &input.text,
+        preview,
+        scale,
+    ) else {
         return;
     };
     let input_id = ui.scope_id().with((&input.id, "canvas-text-input"));
@@ -622,7 +635,8 @@ mod tests {
         element.base.rotation = Some(0.5);
         element.base.opacity = 50.;
         let preview = egui::Rect::from_min_size(egui::pos2(100., 50.), egui::vec2(320., 180.));
-        let geometry = inline_geometry(&ctx, &element, "Wide label text", preview, 0.5).unwrap();
+        let geometry =
+            inline_geometry(&ctx, &element, None, "Wide label text", preview, 0.5).unwrap();
         let layout = captures_app::editor_text::inline_editor_layout(&element).unwrap();
         // Auto width keeps the accepted plate's centre while the buffer grows.
         let accepted_center =
@@ -642,7 +656,7 @@ mod tests {
         assert!(plate.a() < 255 && radius > 0.);
         assert!(geometry.content.width() < geometry.frame.width());
         // Shipping's 48 × 28 minimum applies to a blank label.
-        let blank = inline_geometry(&ctx, &element, "", preview, 0.1).unwrap();
+        let blank = inline_geometry(&ctx, &element, None, "", preview, 0.1).unwrap();
         assert!(blank.frame.width() > 47.99 && blank.frame.height() > 27.99);
         ctx.end_pass().textures_delta.clear();
     }

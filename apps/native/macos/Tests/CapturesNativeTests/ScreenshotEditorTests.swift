@@ -5729,8 +5729,9 @@ final class ScreenshotEditorTests: XCTestCase {
         // Document rotation is clockwise in y-down space, like the viewport.
         frame.frameCenterRotation = 30
         let corner = frame.convert(NSPoint(x: frame.bounds.maxX, y: frame.bounds.minY), to: viewport)
-        XCTAssertEqual(corner.x, 200 + 100 * cos(.pi / 6) + 50 * sin(.pi / 6), accuracy: 0.5)
-        XCTAssertEqual(corner.y, 150 + 100 * sin(.pi / 6) - 50 * cos(.pi / 6), accuracy: 0.5)
+        let angle = Double.pi / 6
+        XCTAssertEqual(Double(corner.x), 200 + 100 * cos(angle) + 50 * sin(angle), accuracy: 0.5)
+        XCTAssertEqual(Double(corner.y), 150 + 100 * sin(angle) - 50 * cos(angle), accuracy: 0.5)
     }
 
     func testTextShadowAppliesLiveAndOnlyPatchesTheEnabledFlag() throws {
