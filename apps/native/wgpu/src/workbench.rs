@@ -1540,7 +1540,12 @@ impl eframe::App for Workbench {
         if onboarding_complete && let Some(live) = &mut self.live {
             live.launch_requested_capture(ctx, frame, self.preferences_state.snapshot());
         }
-        let quit_key = !self.preferences_state.is_recording_shortcut()
+        // Live shortcut recording happens in the Preferences window. A key
+        // that reaches the focused root means the recorder lost focus; its
+        // blur is processed by the Preferences pass that follows.
+        let recording = self.preferences_state.is_recording_shortcut()
+            && !(self.options.live && ctx.input(|input| input.viewport().focused == Some(true)));
+        let quit_key = !recording
             && ctx.input_mut(|input| {
                 input.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)
                     || input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)

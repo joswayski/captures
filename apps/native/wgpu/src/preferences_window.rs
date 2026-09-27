@@ -1,8 +1,33 @@
 //! The live Preferences window: a separate, resizable top-level window beside
 //! the Capture History root, as in the shipping app. It is an immediate child
 //! viewport so it can borrow the host's settings state directly.
+use std::cell::Cell;
+
 use captures_app::app_windows::{self, WindowSpec};
 use eframe::egui;
+
+thread_local! {
+    static IN_WINDOW_EVENT: Cell<bool> = const { Cell::new(false) };
+    static ROOT_PASS_REQUESTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `f` while the host dispatches a winit window event to eframe.
+///
+/// eframe creates an immediate viewport's native window only while it holds
+/// the active event loop, which it provides for window events. A hidden
+/// root is repainted outside them, so a window created then would fail.
+pub(crate) fn during_window_event<R>(f: impl FnOnce() -> R) -> R {
+    let previous = IN_WINDOW_EVENT.with(|cell| cell.replace(true));
+    let result = f();
+    IN_WINDOW_EVENT.with(|cell| cell.set(previous));
+    result
+}
+
+/// Whether a root pass must be dispatched as a window event so the
+/// Preferences window can be created. Clears the request.
+pub(crate) fn take_root_pass_request() -> bool {
+    ROOT_PASS_REQUESTED.with(|cell| cell.replace(false))
+}
 
 pub(crate) fn viewport() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("captures-preferences-window")
@@ -28,8 +53,14 @@ pub(crate) enum Shown<R> {
 pub(crate) struct PreferencesWindow {
     open: bool,
     focused: bool,
-    /// Declared hidden while a capture hides the workspace.
+    /// Hidden while a capture hides the workspace.
     hidden: bool,
+    /// The window's last on-screen frame (outer position, inner size).
+    frame: Option<(egui::Pos2, egui::Vec2)>,
+    /// Where a window hidden for a capture comes back.
+    restore: Option<(egui::Pos2, egui::Vec2)>,
+    /// Declared in the previous pass, so its native window exists.
+    declared: bool,
 }
 
 impl PreferencesWindow {
@@ -67,8 +98,10 @@ impl PreferencesWindow {
         *self = Self::default();
     }
 
-    /// Declare the window for this root pass. `hidden` keeps it (and its
-    /// state) while a capture hides the workspace.
+    /// Declare the window for this root pass. While a capture hides the
+    /// workspace (`hidden`) it is not declared: eframe paints every declared
+    /// immediate viewport, and presenting to an unmapped window can stall the
+    /// capture. It returns where it was, without taking focus.
     pub(crate) fn show<R>(
         &mut self,
         ctx: &egui::Context,
@@ -78,23 +111,49 @@ impl PreferencesWindow {
         if !self.open {
             return None;
         }
-        self.hidden = hidden;
+        if hidden {
+            if !self.hidden {
+                self.restore = self.frame;
+            }
+            self.hidden = true;
+            self.focused = false;
+            self.declared = false;
+            return None;
+        }
+        self.hidden = false;
+        if !self.declared && !IN_WINDOW_EVENT.with(Cell::get) {
+            // Create the window in a root pass the host dispatches as a
+            // window event (see `during_window_event`).
+            ROOT_PASS_REQUESTED.with(|cell| cell.set(true));
+            crate::live::request_hidden_root_paint(ctx);
+            ctx.request_repaint();
+            return None;
+        }
+        let mut builder = builder(app_windows::PREFERENCES);
+        if let Some((position, size)) = self.restore {
+            builder = builder.with_position(position).with_inner_size(size);
+        }
         let mut add = Some(add);
         let mut focused = self.focused;
-        let shown = ctx.show_viewport_immediate(
-            viewport(),
-            builder(app_windows::PREFERENCES).with_visible(!hidden),
-            |ui, _| {
-                if ui.input(|input| input.viewport().close_requested()) {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    return Shown::Closed;
+        let mut frame = self.frame;
+        let shown = ctx.show_viewport_immediate(viewport(), builder, |ui, _| {
+            if ui.input(|input| input.viewport().close_requested()) {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                return Shown::Closed;
+            }
+            ui.input(|input| {
+                let info = input.viewport();
+                focused = info.focused.unwrap_or(false);
+                if let (Some(outer), Some(inner)) = (info.outer_rect, info.inner_rect) {
+                    frame = Some((outer.min, inner.size()));
                 }
-                focused = ui.input(|input| input.viewport().focused.unwrap_or(false));
-                Shown::Content(add.take().map(|add| add(ui)))
-            },
-        );
+            });
+            Shown::Content(add.take().map(|add| add(ui)))
+        });
         self.focused = focused;
+        self.frame = frame;
+        self.declared = true;
         match shown {
             Shown::Closed => {
                 self.close();
@@ -116,6 +175,37 @@ mod tests {
         assert_eq!(builder.inner_size, Some(egui::vec2(880., 660.)));
         assert_eq!(builder.min_inner_size, Some(egui::vec2(560., 440.)));
         assert_eq!(builder.resizable, Some(true));
+    }
+
+    #[test]
+    fn a_capture_hides_the_window_and_restores_it_in_place() {
+        let ctx = egui::Context::default();
+        let mut window = PreferencesWindow::default();
+        window.open(&ctx);
+        window.frame = Some((egui::pos2(40., 60.), egui::vec2(700., 500.)));
+        let mut runs = 0;
+        ctx.run_ui(Default::default(), |ui| {
+            assert!(window.show(ui.ctx(), true, |_| runs += 1).is_none());
+        })
+        .textures_delta
+        .clear();
+        assert_eq!(runs, 0, "a hidden window is not declared or painted");
+        assert!(window.is_open() && !window.presented());
+        assert_eq!(
+            window.restore,
+            Some((egui::pos2(40., 60.), egui::vec2(700., 500.)))
+        );
+        during_window_event(|| {
+            ctx.run_ui(Default::default(), |ui| {
+                assert!(window.show(ui.ctx(), false, |_| runs += 1).is_some());
+            })
+            .textures_delta
+            .clear();
+        });
+        assert_eq!(runs, 1);
+        assert!(window.presented());
+        window.close();
+        assert_eq!(window.restore, None, "closing forgets the placement");
     }
 
     #[test]
@@ -147,14 +237,34 @@ mod tests {
         .clear();
         assert_eq!(runs, 0);
         window.open(&ctx);
+        // Outside a window event the first declaration waits for a root pass
+        // the host dispatches as one, where eframe can create the window.
+        let _ = take_root_pass_request();
         ctx.run_ui(Default::default(), |ui| {
-            assert!(matches!(
-                window.show(ui.ctx(), false, |_| runs += 1),
-                Some(Shown::Content(()))
-            ));
+            assert!(window.show(ui.ctx(), false, |_| runs += 1).is_none());
         })
         .textures_delta
         .clear();
+        assert_eq!(runs, 0);
+        assert!(take_root_pass_request());
+        during_window_event(|| {
+            ctx.run_ui(Default::default(), |ui| {
+                assert!(matches!(
+                    window.show(ui.ctx(), false, |_| runs += 1),
+                    Some(Shown::Content(()))
+                ));
+            })
+            .textures_delta
+            .clear();
+        });
         assert_eq!(runs, 1);
+        // Once created it is declared in any pass, window event or not.
+        ctx.run_ui(Default::default(), |ui| {
+            assert!(window.show(ui.ctx(), false, |_| runs += 1).is_some());
+        })
+        .textures_delta
+        .clear();
+        assert_eq!(runs, 2);
+        assert!(!take_root_pass_request());
     }
 }

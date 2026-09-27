@@ -1136,6 +1136,8 @@ def main():
                 run("xdotool", "key", "Escape")
                 wait(lambda: not windows(SELECTOR) and windows("Captures Preferences")
                      and windows("Capture History"), "cancel restores previously visible Preferences")
+                # A capture recreates the hidden Preferences window in place.
+                prefs = windows("Captures Preferences")[0]
                 run("xdotool", "windowactivate", "--sync", prefs, "key", "alt+F4")
                 wait(lambda: not windows("Captures Preferences"), "close Preferences")
                 assert windows("Capture History"), "closing Preferences leaves History open"
@@ -1207,6 +1209,10 @@ def main():
                 time.sleep(1)
 
                 def open_shortcuts():
+                    # A capture recreates the hidden Preferences window, so look
+                    # it up again rather than reuse an earlier window id.
+                    nonlocal root
+                    root = wait(lambda: windows("Captures Preferences"), "Preferences window")[0]
                     click(root, 98, 153)
                     time.sleep(.4)
 
@@ -1295,7 +1301,10 @@ def main():
                 record(0, "ctrl+alt+n", "Control+Alt+KeyN")
                 expected = stored_keys()
                 shot(root, "shortcuts-all-seven-edited")
-                click(root, 790, 35)  # Capture History… focuses History, leaving Preferences.
+                # Leave Preferences for History. Its Capture History… button moves
+                # while the save status shows, so activate the window directly.
+                history_window = windows("Capture History")[0]
+                run("xdotool", "windowactivate", "--sync", history_window)
                 time.sleep(.3)  # Settle navigation without injecting another event.
                 run("xdotool", "key", "ctrl+alt+r")
                 wait(lambda: windows(SELECTOR), "first global chord after leaving Preferences")
@@ -1303,7 +1312,8 @@ def main():
                 wait(lambda: not windows(SELECTOR) and windows("Capture History"), "navigation shortcut cancel")
                 open_shortcuts()
                 click(root, recorder_x, rows[0])
-                click(root, 790, 35)  # Leaving Preferences must cancel the recorder.
+                # Leaving Preferences must cancel the recorder.
+                run("xdotool", "windowactivate", "--sync", history_window)
                 run("xdotool", "key", "ctrl+q")
                 assert editor.wait(timeout=10) == 0, "stale recorder swallowed workspace Quit"
                 assert stored_keys() == expected
@@ -1331,6 +1341,7 @@ def main():
                 # No retained child viewport may bootstrap the hidden root's
                 # UI incidentally. This is the first preview after restart.
                 assert not windows(PREVIEW)
+                root = windows("Captures Preferences")[0]  # Recreated by New Capture.
                 run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
                 wait(lambda: not windows("Captures Preferences"), "close empty-preview Preferences")
                 history_window = wait(lambda: windows("Capture History"), "History stays open")[0]

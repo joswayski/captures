@@ -81,6 +81,7 @@ struct InputApplication<'a> {
     /// The Captures window that owns keyboard focus. Shortcut recording
     /// happens in the Preferences window, which is not the root.
     focused_window: Option<WindowId>,
+    root_id: Rc<std::cell::Cell<Option<WindowId>>>,
     modifiers: ModifiersState,
 }
 
@@ -166,7 +167,9 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
             state.borrow_mut().root_window = None;
             self.root_repaints.clear();
         }
-        self.inner.window_event(event_loop, window_id, event);
+        preferences_window::during_window_event(|| {
+            self.inner.window_event(event_loop, window_id, event);
+        });
         self.paste_input.end_event();
         self.outbound_drag.end_event();
         self.outbound_drag.service(event_loop);
@@ -177,6 +180,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         let _span = diagnostics::span("new-events");
         self.inner.new_events(event_loop, cause);
+        self.dispatch_requested_root_pass(event_loop);
         #[cfg(target_os = "windows")]
         self.service_root_repaint(event_loop);
     }
@@ -211,6 +215,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
             );
         }
         self.inner.user_event(event_loop, event);
+        self.dispatch_requested_root_pass(event_loop);
         #[cfg(target_os = "windows")]
         self.service_root_repaint(event_loop);
         if let Some((when, cumulative_pass_nr)) = root_repaint {
@@ -230,6 +235,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let _span = diagnostics::span("about-to-wait");
         self.inner.about_to_wait(event_loop);
+        self.dispatch_requested_root_pass(event_loop);
         self.outbound_drag.service(event_loop);
         #[cfg(target_os = "windows")]
         {
@@ -272,6 +278,26 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
 }
 
 impl InputApplication<'_> {
+    /// eframe repaints a hidden root outside window events, where it cannot
+    /// create the immediate Preferences window. Dispatch that root pass as a
+    /// redraw event instead when the window asks for one.
+    fn dispatch_requested_root_pass(&mut self, event_loop: &ActiveEventLoop) {
+        if event_loop.exiting() || !preferences_window::take_root_pass_request() {
+            return;
+        }
+        let Some(root) = self.root_id.get() else {
+            return;
+        };
+        diagnostics::event("preferences-root-pass", || json!({}));
+        self.paste_input
+            .begin_event(root, &WindowEvent::RedrawRequested);
+        preferences_window::during_window_event(|| {
+            self.inner
+                .window_event(event_loop, root, WindowEvent::RedrawRequested);
+        });
+        self.paste_input.end_event();
+    }
+
     #[cfg(target_os = "windows")]
     fn visible_root(
         &self,
@@ -310,8 +336,10 @@ impl InputApplication<'_> {
             );
             self.paste_input
                 .begin_event(window.id(), &WindowEvent::RedrawRequested);
-            self.inner
-                .window_event(event_loop, window.id(), WindowEvent::RedrawRequested);
+            preferences_window::during_window_event(|| {
+                self.inner
+                    .window_event(event_loop, window.id(), WindowEvent::RedrawRequested);
+            });
             self.paste_input.end_event();
             self.root_repaints
                 .prune(ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT));
@@ -441,6 +469,8 @@ fn main() -> eframe::Result {
     diagnostics::install_eframe_logger();
     let native_state = Rc::new(RefCell::new(RootState::default()));
     let create_native_state = native_state.clone();
+    let root_id = Rc::new(std::cell::Cell::new(None));
+    let create_root_id = root_id.clone();
     let outbound_drag = outbound_drag::Bridge::default();
     let create_drag = outbound_drag.clone();
     let inner = eframe::create_native(
@@ -453,6 +483,7 @@ fn main() -> eframe::Result {
                 .expect("native creation context has a root window");
             #[cfg(target_os = "windows")]
             create_drag.set_window(window);
+            create_root_id.set(Some(window.id()));
             *create_native_state.borrow_mut() = RootState {
                 egui_ctx: Some(cc.egui_ctx.clone()),
                 root_window_id: Some(window.id()),
@@ -483,6 +514,7 @@ fn main() -> eframe::Result {
         #[cfg(target_os = "windows")]
         root_suspended: false,
         focused_window: None,
+        root_id,
         modifiers: ModifiersState::default(),
     };
     event_loop.run_app(&mut application)?;
