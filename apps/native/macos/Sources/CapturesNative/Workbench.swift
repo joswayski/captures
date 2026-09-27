@@ -1675,7 +1675,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func presentHostError(title: String, message: String) {
-        guard window.attachedSheet == nil else {
+        // Before setup completes the alert belongs to the setup window, not
+        // the (still empty) History window.
+        let host: NSWindow = options.live && !onboardingReady
+            ? appWindows.prepare(.setup, build: { [weak self] _ in self?.renderSetup() }) : window
+        guard host.attachedSheet == nil else {
             Metrics.write(["event": "host-error", "detail": "\(title): \(message)"])
             return
         }
@@ -1684,11 +1688,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
-        if !window.isVisible {
-            window.makeKeyAndOrderFront(nil)
+        if !host.isVisible {
+            host.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
-        alert.beginSheetModal(for: window)
+        alert.beginSheetModal(for: host)
     }
 
     private var preferencesFocused: Bool {
