@@ -118,8 +118,12 @@ final class MiniPreviewTests: XCTestCase {
         let front = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }
             .first { $0.artifactID == "two" })
         let restY = rear.frame.minY, frontFrame = front.frame, windowFrame = panel.frame
+        // The shared pile pose moves the rear card between its rest and fan poses.
+        let rest = try XCTUnwrap(panel.previewView.pilePose(for: "one", depth: 1, hovered: false))
+        let fan = try XCTUnwrap(panel.previewView.pilePose(for: "one", depth: 1, hovered: true))
+        XCTAssertLessThan(fan.dy, rest.dy, "the hover fan lifts the rear card further")
         button.mouseEntered(with: try event(.leftMouseDown, point))
-        try waitUntil { abs(rear.frame.minY - (restY - 2.946)) < 0.001 }
+        try waitUntil { abs(rear.frame.minY - (restY + CGFloat(fan.dy - rest.dy))) < 0.001 }
         XCTAssertEqual(front.frame, frontFrame)
         XCTAssertEqual(panel.frame, windowFrame)
         try write(render(panel), name: "mini-preview-stack-hovered.png")
@@ -145,6 +149,55 @@ final class MiniPreviewTests: XCTestCase {
         try waitUntil { abs(rear.frame.minY - restY) < 0.001 }
         XCTAssertFalse(panel.previewView.pileHovered)
         XCTAssertTrue(panel.becomesKeyOnlyIfNeeded)
+    }
+
+    func testCollapsedPileAppliesTheSharedDepthPose() throws {
+        _ = NSApplication.shared
+        let ids = ["oldest", "middle", "newest"]
+        let images = Dictionary(uniqueKeysWithValues: ids.map { ($0, solidImage(.systemBlue)) })
+        for top in [false, true] {
+            let panel = fixturePanel(ids: ids, images: images, collapsed: true, topAnchor: top)
+            defer { panel.close() }
+            let view = panel.previewView
+            XCTAssertEqual(view.pileGravity, top ? -1 : 1, "corner piles sit at full gravity")
+            let front = try XCTUnwrap(view.card(for: "newest"))
+            XCTAssertNil(view.pilePose(for: "newest", depth: 0, hovered: false))
+            XCTAssertTrue(CATransform3DIsIdentity(try XCTUnwrap(front.layer).transform))
+            var previousScale = 1.0
+            for (depth, id) in [(1, "middle"), (2, "oldest")] {
+                let pose = try XCTUnwrap(view.pilePose(for: id, depth: depth, hovered: false))
+                XCTAssertEqual(pose.rotation_deg, 0, "no spin at the screen edge")
+                XCTAssertLessThan(pose.scale_x, previousScale)
+                previousScale = pose.scale_x
+                let card = try XCTUnwrap(view.card(for: id))
+                // Rear cards peek past the front card, toward the stack's open side.
+                let offset = (card.frame.midY - front.frame.midY) * (top ? 1 : -1)
+                XCTAssertEqual(card.frame.midY - front.frame.midY, CGFloat(pose.dy), accuracy: 0.001)
+                XCTAssertGreaterThan(offset, 0)
+                XCTAssertFalse(CATransform3DIsIdentity(try XCTUnwrap(card.layer).transform))
+            }
+            view.updatePileGravity(0)
+            let middle = try XCTUnwrap(view.pilePose(for: "middle", depth: 1, hovered: false))
+            XCTAssertGreaterThanOrEqual(abs(middle.rotation_deg), 2.7)
+            XCTAssertLessThanOrEqual(abs(middle.rotation_deg), 3)
+        }
+    }
+
+    func testPileTransformScalesAndSpinsAboutTheCardCentre() {
+        var pose = CapturesPreviewPilePose()
+        pose.scale_x = 0.5; pose.scale_y = 0.5; pose.rotation_deg = 90
+        let size = CGSize(width: 200, height: 100)
+        let transform = MiniPreviewView.pileTransform(pose, size: size, anchorPoint: .zero, flipped: true)
+        // The centre stays put; the right edge midpoint turns clockwise (down in y-down space).
+        let affine = CATransform3DGetAffineTransform(transform)
+        let centre = CGPoint(x: 100, y: 50).applying(affine)
+        XCTAssertEqual(centre.x, 100, accuracy: 1e-9); XCTAssertEqual(centre.y, 50, accuracy: 1e-9)
+        let edge = CGPoint(x: 200, y: 50).applying(affine)
+        XCTAssertEqual(edge.x, 100, accuracy: 1e-9); XCTAssertEqual(edge.y, 100, accuracy: 1e-9)
+        let identity = MiniPreviewView.pileTransform(CapturesPreviewPilePose(dx: 0, dy: 0, slot_dy: 0,
+            rotation_deg: 0, scale_x: 1, scale_y: 1), size: size, anchorPoint: CGPoint(x: 0.5, y: 0.5),
+            flipped: false)
+        XCTAssertTrue(CATransform3DIsIdentity(identity))
     }
 
     func testCardControlsFollowShippingTabOrderAndFocusRevealsThem() throws {

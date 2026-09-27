@@ -127,6 +127,106 @@ pub unsafe extern "C" fn captures_preview_geometry_v1(
     true
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewPilePose {
+    pub dx: f64,
+    pub dy: f64,
+    pub slot_dy: f64,
+    pub rotation_deg: f64,
+    pub scale_x: f64,
+    pub scale_y: f64,
+}
+
+/// Shipping collapsed-pile gravity (-1 top … 1 bottom) for the same inputs
+/// as `captures_preview_geometry_v1`. NaN for invalid input.
+///
+/// # Safety
+/// A non-null origin points to aligned readable storage during this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_gravity_v1(
+    monitor: CapturesPreviewMonitor,
+    count: usize,
+    origin: *const CapturesPreviewOrigin,
+    placement: u32,
+) -> f64 {
+    let mut geometry = CapturesPreviewGeometry::default();
+    // SAFETY: Same origin contract; the output is a local.
+    if !unsafe {
+        captures_preview_geometry_v1(monitor, count, true, origin, placement, &mut geometry)
+    } {
+        return f64::NAN;
+    }
+    let placement = match placement {
+        0 => MiniPreviewPlacement::BottomLeft,
+        1 => MiniPreviewPlacement::BottomRight,
+        2 => MiniPreviewPlacement::TopLeft,
+        _ => MiniPreviewPlacement::TopRight,
+    };
+    // SAFETY: Validated above by the geometry call.
+    let origin = unsafe { origin.as_ref() }.map(|origin| ThumbnailStackOrigin {
+        x: origin.x,
+        edge: origin.edge,
+        anchor: if origin.anchor == 1 {
+            ThumbnailStackAnchor::Top
+        } else {
+            ThumbnailStackAnchor::Bottom
+        },
+    });
+    preview::collapsed_stack_gravity(
+        ThumbnailMonitorBounds {
+            work_x: monitor.work_x,
+            work_y: monitor.work_y,
+            work_width: monitor.work_width,
+            work_height: monitor.work_height,
+            full_x: monitor.full_x,
+            full_y: monitor.full_y,
+            full_width: monitor.full_width,
+            full_height: monitor.full_height,
+            scale_factor: monitor.scale_factor,
+        },
+        count,
+        origin,
+        placement,
+    )
+}
+
+/// Shipping rear-card pile pose (spin, recession, jitter, tilt) in 2D.
+///
+/// # Safety
+/// `id` is a readable NUL-terminated UTF-8 string and `output` aligned
+/// writable storage during this call. False leaves output unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_pile_pose_v1(
+    id: *const c_char,
+    depth: usize,
+    hovered: bool,
+    gravity: f64,
+    top_anchor: bool,
+    output: *mut CapturesPreviewPilePose,
+) -> bool {
+    if id.is_null() || output.is_null() {
+        return false;
+    }
+    // SAFETY: Caller guarantees a readable terminated string.
+    let Ok(id) = unsafe { CStr::from_ptr(id) }.to_str() else {
+        return false;
+    };
+    let pose = preview::collapsed_card_pose(id, depth, hovered, gravity, top_anchor);
+    // SAFETY: Validated writable output.
+    unsafe {
+        output.write(CapturesPreviewPilePose {
+            dx: pose.dx,
+            dy: pose.dy,
+            slot_dy: pose.slot_dy,
+            rotation_deg: pose.rotation_deg,
+            scale_x: pose.scale_x,
+            scale_y: pose.scale_y,
+        });
+    }
+    true
+}
+
 /// Opaque, single-owner policy. Calls on one handle must never overlap.
 pub struct CapturesPreviewVisibility(ThumbnailVisibility);
 
@@ -871,6 +971,69 @@ mod tests {
             assert_eq!(parsed["sparkles"]["early"][0]["accent"], true);
         }
         assert_eq!(captures_preview_clear_delay_ms_v1(3, 0, false), 72.);
+    }
+
+    #[test]
+    fn pile_pose_and_gravity_cross_the_abi() {
+        let monitor = CapturesPreviewMonitor {
+            work_x: 0,
+            work_y: 25,
+            work_width: 1440,
+            work_height: 875,
+            full_x: 0,
+            full_y: 0,
+            full_width: 1440,
+            full_height: 900,
+            scale_factor: 1.,
+        };
+        // SAFETY: Null or local aligned storage; the id is a static C string.
+        unsafe {
+            assert_eq!(captures_preview_gravity_v1(monitor, 3, null(), 0), 1.);
+            assert_eq!(captures_preview_gravity_v1(monitor, 3, null(), 3), -1.);
+            assert!(captures_preview_gravity_v1(monitor, 3, null(), 9).is_nan());
+            let low = CapturesPreviewOrigin {
+                x: 0.,
+                edge: 5_000.,
+                anchor: 0,
+            };
+            assert_eq!(captures_preview_gravity_v1(monitor, 3, &low, 0), 1.);
+
+            let mut pose = CapturesPreviewPilePose::default();
+            assert!(!captures_preview_pile_pose_v1(
+                null(),
+                1,
+                false,
+                1.,
+                false,
+                &mut pose
+            ));
+            assert!(!captures_preview_pile_pose_v1(
+                c"a".as_ptr(),
+                1,
+                false,
+                1.,
+                false,
+                null_mut()
+            ));
+            assert!(captures_preview_pile_pose_v1(
+                c"capture-1".as_ptr(),
+                1,
+                false,
+                0.,
+                false,
+                &mut pose
+            ));
+            let expected = preview::collapsed_card_pose("capture-1", 1, false, 0., false);
+            assert_eq!(pose.rotation_deg, expected.rotation_deg);
+            assert_eq!(
+                (pose.dx, pose.dy, pose.slot_dy),
+                (expected.dx, expected.dy, expected.slot_dy)
+            );
+            assert_eq!(
+                (pose.scale_x, pose.scale_y),
+                (expected.scale_x, expected.scale_y)
+            );
+        }
     }
 
     #[test]
