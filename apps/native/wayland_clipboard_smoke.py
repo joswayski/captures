@@ -120,6 +120,8 @@ def main() -> None:
         config.write_text("output HEADLESS-1 resolution 800x600\nseat seat0 fallback true\n")
         log = root / "sway.log"
         env = os.environ.copy()
+        # Live hosts must never unbind the developer's real OS screenshot keys.
+        env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
         env.pop("DISPLAY", None)
         env.pop("SWAYSOCK", None)
         env.update({

@@ -37,6 +37,7 @@ pub mod recording_timeline;
 pub mod region;
 pub mod selection;
 pub mod shortcuts;
+pub mod system_shortcuts;
 pub mod tray_notice;
 pub mod update_notice;
 pub mod window;

@@ -113,6 +113,8 @@ def main():
         config = root / "sway.conf"
         config.write_text('output HEADLESS-1 resolution 900x500\nseat seat0 fallback true\nfocus_follows_mouse no\nfor_window [title="drag-(source|receiver)"] floating enable\n')
         env = os.environ.copy()
+        # Live hosts must never unbind the developer's real OS screenshot keys.
+        env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
         for key in ("DISPLAY", "SWAYSOCK", "WAYLAND_DISPLAY"):
             env.pop(key, None)
         env.update(XDG_RUNTIME_DIR=str(runtime), XDG_SESSION_TYPE="wayland", GDK_BACKEND="wayland", WLR_BACKENDS="headless", WLR_HEADLESS_OUTPUTS="1", WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman")
