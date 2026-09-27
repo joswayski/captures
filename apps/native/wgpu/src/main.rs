@@ -125,11 +125,13 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
                     self.shortcuts.resume_after_root_blur();
                 }
                 self.focused_window = Some(window_id);
+                preferences_window::set_native_focus(true);
             }
             WindowEvent::Focused(false) | WindowEvent::Destroyed
                 if self.focused_window == Some(window_id) =>
             {
                 self.focused_window = None;
+                preferences_window::set_native_focus(false);
                 self.shortcut_input.blur();
                 self.shortcuts.resume_after_root_blur();
             }

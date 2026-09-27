@@ -1344,7 +1344,8 @@ def main():
                 controls = wait(lambda: windows(CONTROLS), "edited New Capture chord after restart and blur")[0]
                 shot(controls, "controls-edited-shortcut")
                 run("xdotool", "key", "Escape")
-                wait(lambda: not windows(CONTROLS) and windows("Captures Preferences"), "New Capture restores visible Preferences")
+                wait(lambda: not windows(CONTROLS) and windows("Captures Preferences")
+                     and windows("Capture History"), "New Capture restores visible Preferences and History")
                 # No retained child viewport may bootstrap the hidden root's
                 # UI incidentally. This is the first preview after restart.
                 assert not windows(PREVIEW)

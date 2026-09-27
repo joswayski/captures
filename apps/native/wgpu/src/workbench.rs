@@ -1422,6 +1422,7 @@ impl eframe::App for Workbench {
             live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
             // A capture waits until the Preferences window is hidden too.
             live.set_companion_visible(self.preferences.presented());
+            live.set_root_shown(!self.root_hidden);
             if onboarding_complete
                 && !self.options.open_media.is_empty()
                 && !self.preferences_state.is_loading()
@@ -1715,6 +1716,7 @@ impl eframe::App for Workbench {
             }
             live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
             live.set_companion_visible(self.preferences.presented());
+            live.set_root_shown(!self.root_hidden);
             if recovery_requested {
                 self.show_root(&ctx);
             }

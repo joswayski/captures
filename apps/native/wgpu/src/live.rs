@@ -1184,6 +1184,9 @@ pub struct Live {
     workspace_hidden: bool,
     /// The host's Preferences window is still shown.
     companion_visible: bool,
+    /// Whether the host means History to be on screen (not closed to the
+    /// tray or launched hidden).
+    root_shown: bool,
     hide_started: Option<Instant>,
     hidden_since: Option<Instant>,
     capture_in_flight: bool,
@@ -1482,6 +1485,7 @@ impl Live {
             capture_waiting_for_hide: false,
             workspace_hidden: false,
             companion_visible: false,
+            root_shown: true,
             hide_started: None,
             hidden_since: None,
             capture_in_flight: false,
@@ -1731,6 +1735,11 @@ impl Live {
         self.companion_visible = visible;
     }
 
+    /// Whether History should be on screen when not hidden for a capture.
+    pub fn set_root_shown(&mut self, shown: bool) {
+        self.root_shown = shown;
+    }
+
     pub fn recording_controls_hidden(&self) -> bool {
         recording_controls_hidden(
             self.recording_controls_hidden,
@@ -1881,10 +1890,15 @@ impl Live {
             self.error = Some(error);
             return;
         }
-        self.restore_root_visible = frame
-            .winit_window()
-            .and_then(|window| window.is_visible())
-            .unwrap_or(true);
+        // winit on X11 reports a mapped window as not visible until its first
+        // VisibilityNotify, which can lag (for example while Preferences is
+        // mapped over History). Trust the host's intent when History is meant
+        // to be shown, and winit otherwise.
+        self.restore_root_visible = self.root_shown
+            || frame
+                .winit_window()
+                .and_then(|window| window.is_visible())
+                .unwrap_or(true);
         self.flow = Some(flow);
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
         self.open_editor_after_recording = settings

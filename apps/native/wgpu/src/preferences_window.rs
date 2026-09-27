@@ -9,6 +9,14 @@ use eframe::egui;
 thread_local! {
     static IN_WINDOW_EVENT: Cell<bool> = const { Cell::new(false) };
     static ROOT_PASS_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    static NATIVE_FOCUS: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Record whether any Captures window holds native keyboard focus. The
+/// Preferences viewport's own focus is read during a UI pass and can be one
+/// pass stale; a blur to another application must release shortcuts at once.
+pub(crate) fn set_native_focus(focused: bool) {
+    NATIVE_FOCUS.with(|cell| cell.set(focused));
 }
 
 /// Run `f` while the host dispatches a winit window event to eframe.
@@ -74,7 +82,7 @@ impl PreferencesWindow {
     }
 
     pub(crate) fn focused(&self) -> bool {
-        self.presented() && self.focused
+        self.presented() && self.focused && NATIVE_FOCUS.with(Cell::get)
     }
 
     /// Shipping `show_preferences`: create the window, or show, restore and
