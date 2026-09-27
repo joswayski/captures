@@ -543,8 +543,9 @@ offsets. Changes apply as you make them; a burst in one field is one undo step a
 each toggle is its own. Hidden and locked annotations remain editable.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
-**Import image** adds one PNG, JPEG, WebP or TIFF below the selected visible image,
-expanding the canvas when needed. Imports respect EXIF orientation, are undoable,
+**Add images** imports one or more PNG, JPEG, WebP or TIFF files: the first lands below
+the selected visible image, each later one below the previous, expanding the canvas
+when needed. Imports respect EXIF orientation, are undoable (one step per file),
 and keep their own draft pixels so reopening does not require the source file.
 Supported RGB/grayscale ICC profiles convert to sRGB; unsupported profiles and
 PNG gamma/chromaticity-only or CICP metadata require conversion to sRGB first.
@@ -579,7 +580,7 @@ aspect lock for custom sizes. Preview/save resize only the exported pixels and t
 published History image; the editable document, draft and full-resolution clipboard are unchanged.
 Its export bar uses the same shared save model and status copy as the
 Windows/Linux candidate, and preserves the draft. AppKit
-also imports one still image at a time as a new image layer using its color-managed
+also imports still images, one per new image layer, using its color-managed
 system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
 them in the draft without depending on the source file. ImageIO-supported sources use
 their first image; files without a usable color description are rejected rather than
@@ -620,7 +621,9 @@ survive saves and drafts. A selected layer that hangs past the canvas shows an
 **Expand canvas** action; hovering previews the grown canvas and one click grows it as
 a single undo step. Dropping PNG, JPEG, WebP or TIFF files on the canvas adds image
 layers where the placement guide shows (Place above/left/right/below, or stacked);
-each file is one undo step.
+each file is one undo step. As in shipping, the snapped edge and the hovered Expand
+canvas preview breathe with an accent bloom and streaming particles; with reduced
+motion they hold still and show no particles.
 Canvas moves now snap painted bounds to canvas and visible-layer edges, including
 locked layers, with alignment guides. The snap range stays constant on screen;
 numeric X/Y edits remain exact and do not snap. Clicks and small pointer movements

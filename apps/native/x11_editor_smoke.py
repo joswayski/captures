@@ -59,8 +59,9 @@ class FileChooser(dbus.service.Object):
         return dbus.ObjectPath(path)
 
     def respond(self, cancel):
+        selected = self.selected if isinstance(self.selected, list) else [self.selected]
         self.pending.Response(1 if cancel else 0, {} if cancel else {
-            "uris": dbus.Array([self.selected.as_uri()], signature="s"),
+            "uris": dbus.Array([path.as_uri() for path in selected], signature="s"),
         })
         self.pending = None
         return False
@@ -1829,6 +1830,13 @@ def main():
             shot(editor, "expand-applied")
             toolbar_click("undo")
             save_until(lambda: document_json()["width"] == 640, "Expand canvas is one undo step")
+            # Hovering the action arms the ghost: its crossed right side carries
+            # shipping's pulsing accent bar, with the bloom and particles beyond.
+            run("xdotool", "mousemove", "--sync", "--window", editor, str(right + 22), str(center_y),
+                "sleep", ".3")
+            settled_pixel("expand-armed-edge", (expanded["width"], 150), accent, 3)
+            run("xdotool", "mousemove", "--sync", "--window", editor, str(right - 200), str(center_y),
+                "sleep", ".3")
             toolbar_click("redo")
             save_until(lambda: document_json()["width"] == expanded["width"], "Expand canvas redo")
 
@@ -3236,11 +3244,33 @@ def main():
             "-draw", "rectangle 10,9 39,29", "-fill", "#2d64bd",
             "-draw", "rectangle 88,51 119,79", "-strip", "PNG32:" + str(imported_path))
         imported_bytes = imported_path.read_bytes()
+        # Shipping's `<input type="file" multiple>`: every chosen image becomes a
+        # layer through the canvas-drop queue; unsupported files are skipped.
+        batch = [output / "batch-a.png", output / "batch-notes.txt", output / "batch-b.png"]
+        run("convert", "-size", "40x30", "xc:#c0392b", "-strip", "PNG32:" + str(batch[0]))
+        batch[1].write_text("not an image")
+        run("convert", "-size", "50x20", "xc:#8e44ad", "-strip", "PNG32:" + str(batch[2]))
+        chooser.selected = batch
+        toolbar_click("import")
+        wait(lambda: chooser.pending, "multi-select image picker opened")
+        title, options = chooser.calls[-1]
+        assert title == "Import images" and not options.get("directory", False)
+        assert options.get("multiple", False), "Add images allows several files"
+        GLib.idle_add(chooser.respond, False)
+        batch_layers = save_layers(lambda values: len(values) == 3, "multi-select imported two layers")
+        assert [layer["name"] for layer in batch_layers[1:]] == ["batch-a.png", "batch-b.png"]
+        assert all(layer["source"] == "imported" for layer in batch_layers[1:])
+        # Each later file stacks below the previous import.
+        assert batch_layers[2]["y"] >= batch_layers[1]["y"] + batch_layers[1]["height"]
+        shot(editor, "import-multi-select")
+        toolbar_click("discard")
+        discard_confirm()
+        wait(lambda: not draft.exists(), "discard multi-select import")
+        chooser.selected = imported_path
         toolbar_click("import")
         wait(lambda: chooser.pending, "image file picker opened")
         title, options = chooser.calls[-1]
-        assert title == "Import image" and not options.get("directory", False)
-        assert not options.get("multiple", False)
+        assert title == "Import images" and options.get("multiple", False)
         shot(editor, "import-picker-pending")
         save(640, 360, 0, 0)  # A waiting picker must not occupy the session worker.
         before_import = draft_bytes()

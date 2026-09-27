@@ -349,6 +349,33 @@ const TRIM_EDGE_PULSE: &[Keyframe] = &[
     frame(0.5, Pose::with(0.9, 0., 1.)),
     frame(1., Pose::REST),
 ];
+/// `drop-snap-bloom-breathe`: the outward edge bloom of an image-drop snap,
+/// an armed Expand canvas edge and a Trim edges cut (0.82 ↔ 1 opacity,
+/// 1 ↔ 1.04 scale about the bloom's center).
+const SNAP_BLOOM_BREATHE: &[Keyframe] = &[
+    frame(0., Pose::with(0.82, 0., 1.)),
+    frame(0.5, Pose::with(1., 0., 1.04)),
+    frame(1., Pose::with(0.82, 0., 1.)),
+];
+/// `drop-snap-edge-pulse`: the accent edge bar of an image-drop snap and an
+/// armed Expand canvas edge (1 ↔ 0.88; hosts omit the `brightness(1.15)`
+/// filter).
+const SNAP_EDGE_PULSE: &[Keyframe] = &[
+    frame(0., Pose::REST),
+    frame(0.5, Pose::with(0.88, 0., 1.)),
+    frame(1., Pose::REST),
+];
+/// `canvas-expand-ghost-breathe`: the dashed post-expand canvas (0.88 ↔ 1).
+const EXPAND_GHOST_BREATHE: &[Keyframe] = &[
+    frame(0., Pose::with(0.88, 0., 1.)),
+    frame(0.5, Pose::REST),
+    frame(1., Pose::with(0.88, 0., 1.)),
+];
+
+/// `.screenshot-drop-snap-bloom` (and the expand/trim blooms) own `opacity`,
+/// which [`Motion::SnapBloomBreathe`] replaces while it runs. Hosts rest on it
+/// under reduced motion, where the loop has no fill mode.
+pub const SNAP_BLOOM_REST_OPACITY: f64 = 0.95;
 
 /// Shipping entrance, exit and lifecycle animations the native hosts play.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -455,10 +482,22 @@ pub enum Motion {
     /// `.screenshot-canvas-trim-edge::after`: `canvas-trim-edge-pulse 1.4s
     /// ease-in-out infinite`.
     TrimEdgePulse,
+    /// `.screenshot-drop-snap-bloom`, `.screenshot-canvas-expand-bloom` and
+    /// `.screenshot-canvas-trim-bloom`: `drop-snap-bloom-breathe 1.6s
+    /// ease-in-out infinite`. Under reduced motion hosts rest on
+    /// [`SNAP_BLOOM_REST_OPACITY`] at scale 1.
+    SnapBloomBreathe,
+    /// `.screenshot-drop-snap-guide::after` and
+    /// `.screenshot-canvas-expand-edge::after`: `drop-snap-edge-pulse 1.4s
+    /// ease-in-out infinite`; the bar rests at opacity 1 under reduced motion.
+    SnapEdgePulse,
+    /// `.screenshot-canvas-expand-ghost`: `canvas-expand-ghost-breathe 1.7s
+    /// ease-in-out infinite`; opacity 1 under reduced motion.
+    ExpandGhostBreathe,
 }
 
 impl Motion {
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 35] = [
         Self::UpdateNoticeIn,
         Self::UpdateNoticeRestartExit,
         Self::StartupNoticeIn,
@@ -491,6 +530,9 @@ impl Motion {
         Self::TrimRegionBreathe,
         Self::TrimKeepBreathe,
         Self::TrimEdgePulse,
+        Self::SnapBloomBreathe,
+        Self::SnapEdgePulse,
+        Self::ExpandGhostBreathe,
     ];
 
     /// Stable name used by the settings ABI.
@@ -528,6 +570,9 @@ impl Motion {
             Self::TrimRegionBreathe => "trim_region_breathe",
             Self::TrimKeepBreathe => "trim_keep_breathe",
             Self::TrimEdgePulse => "trim_edge_pulse",
+            Self::SnapBloomBreathe => "snap_bloom_breathe",
+            Self::SnapEdgePulse => "snap_edge_pulse",
+            Self::ExpandGhostBreathe => "expand_ghost_breathe",
         }
     }
 
@@ -624,6 +669,11 @@ impl Motion {
             }
             Self::TrimKeepBreathe => spec(Millis(1_700.), 0., CSS_EASE_IN_OUT, TRIM_KEEP_BREATHE),
             Self::TrimEdgePulse => spec(Millis(1_400.), 0., CSS_EASE_IN_OUT, TRIM_EDGE_PULSE),
+            Self::SnapBloomBreathe => spec(Millis(1_600.), 0., CSS_EASE_IN_OUT, SNAP_BLOOM_BREATHE),
+            Self::SnapEdgePulse => spec(Millis(1_400.), 0., CSS_EASE_IN_OUT, SNAP_EDGE_PULSE),
+            Self::ExpandGhostBreathe => {
+                spec(Millis(1_700.), 0., CSS_EASE_IN_OUT, EXPAND_GHOST_BREATHE)
+            }
         }
     }
 
@@ -1169,6 +1219,7 @@ pub fn catalog() -> serde_json::Value {
             "scale": [SNAP_PARTICLE_SCALE.0, SNAP_PARTICLE_SCALE.1],
         },
         "editor_cta": { "spread": EDITOR_CTA_SPREAD, "alpha": EDITOR_CTA_ALPHA },
+        "snap_bloom": { "rest_opacity": SNAP_BLOOM_REST_OPACITY },
     })
 }
 
@@ -1506,6 +1557,36 @@ mod tests {
             catalog["snap_particles"]["seeds"].as_array().unwrap().len(),
             14
         );
+    }
+
+    #[test]
+    fn drop_and_expand_edge_loops_match_shipping() {
+        let bloom = Motion::SnapBloomBreathe.resolve(&Shipping).unwrap();
+        assert_eq!(bloom.duration_ms, 1_600.);
+        let start = bloom.pose_repeating(0., false);
+        assert!(close(start.opacity, 0.82) && close(start.scale, 1.));
+        let peak = bloom.pose_repeating(800., false);
+        assert!(close(peak.opacity, 1.) && close(peak.scale, 1.04));
+        let rising = bloom.pose_repeating(1_600. + 400., false);
+        assert!(rising.opacity > 0.82 && rising.opacity < 1. && rising.scale > 1.);
+        let edge = Motion::SnapEdgePulse.resolve(&Shipping).unwrap();
+        assert_eq!(edge.duration_ms, 1_400.);
+        assert!(close(edge.pose_repeating(0., false).opacity, 1.));
+        assert!(close(edge.pose_repeating(700., false).opacity, 0.88));
+        let ghost = Motion::ExpandGhostBreathe.resolve(&Shipping).unwrap();
+        assert_eq!(ghost.duration_ms, 1_700.);
+        assert!(close(ghost.pose_repeating(0., false).opacity, 0.88));
+        assert!(close(ghost.pose_repeating(850., false).opacity, 1.));
+        let catalog = catalog();
+        assert_eq!(
+            catalog["keyframes"]["snap_bloom_breathe"]["duration"]["millis"],
+            1_600.
+        );
+        assert_eq!(
+            catalog["keyframes"]["expand_ghost_breathe"]["duration"]["millis"],
+            1_700.
+        );
+        assert_eq!(catalog["snap_bloom"]["rest_opacity"], 0.95);
     }
 
     #[test]

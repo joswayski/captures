@@ -730,7 +730,15 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             layoutExpandButton()
         }
     }
-    private(set) var expandArmed = false
+    private(set) var expandArmed = false { didSet { expandClock.update(running: expandArmed) } }
+    /// Resolves the armed ghost's breathing and edge loops; nil holds them still.
+    var motionTokens: Tokens?
+    var reducedMotion: () -> Bool = { NativeMotion.reduceMotion } {
+        didSet { expandClock.reducedMotion = reducedMotion }
+    }
+    private lazy var expandClock = NativeEdgeEffectClock(view: self)
+    /// True while the armed Expand canvas ghost schedules redraws.
+    var isExpandAnimating: Bool { expandClock.isAnimating }
     private(set) var hoverHint: String?
     private var hoverPoint: CGPoint?
     private var curveLayerID: String?
@@ -1047,12 +1055,31 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
                 strokeColor.withAlphaComponent(0.5).setStroke(); border.lineWidth = 1; border.stroke()
             }
             if expandArmed {
+                // `.screenshot-canvas-expand-ghost`: a breathing dashed outline
+                // whose crossed sides are brighter, each with an accent edge.
+                let reduced = reducedMotion()
+                let elapsed = expandClock.elapsed
+                let breathe = NativeEdgeEffects.loopOpacity("expand_ghost_breathe", at: elapsed,
+                                                            tokens: motionTokens, reduced: reduced)
                 let ghost = mapRect(expandPreview.rect)
-                let outline = NSBezierPath(roundedRect: ghost, xRadius: 3, yRadius: 3)
-                outline.lineWidth = 1.5; outline.setLineDash([6, 4], count: 2, phase: 0)
-                strokeColor.withAlphaComponent(0.42).setStroke(); outline.stroke()
-                for edge in expandPreview.edges {
-                    EditorDropGuideView.drawEdgeGlow(ghost, edge: edge, accent: strokeColor)
+                let sides: [(NativeCanvasExpand.Edge, CGPoint, CGPoint)] = [
+                    (.top, CGPoint(x: ghost.minX, y: ghost.minY), CGPoint(x: ghost.maxX, y: ghost.minY)),
+                    (.right, CGPoint(x: ghost.maxX, y: ghost.minY), CGPoint(x: ghost.maxX, y: ghost.maxY)),
+                    (.bottom, CGPoint(x: ghost.maxX, y: ghost.maxY), CGPoint(x: ghost.minX, y: ghost.maxY)),
+                    (.left, CGPoint(x: ghost.minX, y: ghost.maxY), CGPoint(x: ghost.minX, y: ghost.minY)),
+                ]
+                for (edge, from, to) in sides {
+                    let crossed = expandPreview.edges.contains(edge)
+                    let side = NSBezierPath(); side.move(to: from); side.line(to: to)
+                    side.lineWidth = crossed ? 2 : 1.5; side.setLineDash([6, 4], count: 2, phase: 0)
+                    strokeColor.withAlphaComponent((crossed ? 0.82 : 0.42) * breathe).setStroke(); side.stroke()
+                }
+                if let context = NSGraphicsContext.current?.cgContext {
+                    for edge in expandPreview.edges {
+                        NativeEdgeEffects.drawAccentEdge(context, target: ghost, edge: edge,
+                            depth: NativeEditorPreviewPaint.snap("bloom", 96), overhang: 0, accent: strokeColor,
+                            tokens: motionTokens, elapsed: elapsed, reduced: reduced)
+                    }
                 }
             }
         }
@@ -1452,7 +1479,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     static let estimateDelay: TimeInterval = 0.22
     static let exportConfirmationDuration: TimeInterval = 4
     private let writeClipboard: (Data) -> Bool
-    private let imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)?
+    /// Test seam for the Add images panel: reports every chosen file, or none.
+    private let imagePicker: ((NSWindow, @escaping ([URL]) -> Void) -> Void)?
     private let imageDecoder: (URL) throws -> EditorDecodedImage
     private static let imageDecodeQueue = DispatchQueue(label: "es.captures.native.editor-image-decode",
                                                         qos: .userInitiated)
@@ -1472,7 +1500,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          didSaveCopy: @escaping () -> Void = {},
          didReplaceOriginal: @escaping (String) -> Void = { _ in },
          revealFiles: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) },
-         imagePicker: ((NSWindow, @escaping (URL?) -> Void) -> Void)? = nil,
+         imagePicker: ((NSWindow, @escaping ([URL]) -> Void) -> Void)? = nil,
          imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode,
          writeClipboard: @escaping (Data) -> Bool = { png in
              let pasteboard = NSPasteboard.general
@@ -5462,10 +5490,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let token = importToken
         let generation = state.generation
         pendingDropURLs = []
-        let completion: (URL?) -> Void = { [weak self] url in
+        // Shipping's `<input type="file" multiple>` feeds the canvas-drop
+        // import: the first image takes the default placement and each later
+        // one stacks below the layer the previous one created.
+        let completion: ([URL]) -> Void = { [weak self] urls in
             DispatchQueue.main.async {
-                guard let self, let url else { return }
-                self.decodeImport(url, point: nil, token: token, generation: generation, artifactID: artifactID)
+                guard let self, !urls.isEmpty, self.importToken == token else { return }
+                let images = urls.filter(NativeEditorCanvas.isSupportedImage)
+                guard let first = images.first else { self.showError(NativeEditorCanvas.dropUnsupported); return }
+                self.pendingDropURLs = Array(images.dropFirst())
+                self.decodeImport(first, point: nil, token: token, generation: generation, artifactID: artifactID)
             }
         }
         if let imagePicker {
@@ -5474,7 +5508,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         let panel = Self.imagePanel()
         panel.beginSheetModal(for: window) { response in
-            completion(response == .OK ? panel.url : nil)
+            completion(response == .OK ? panel.urls : [])
         }
     }
 
@@ -5509,13 +5543,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     static func imagePanel() -> NSOpenPanel {
         let panel = NSOpenPanel()
-        panel.title = "Choose image"
-        panel.message = "Choose an image to add as a new layer"
-        panel.prompt = "Add Image"
+        panel.title = "Choose images"
+        panel.message = "Choose images to add as new layers"
+        panel.prompt = "Add Images"
         panel.allowedContentTypes = [.image]
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         return panel
     }
 
@@ -6231,6 +6265,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.dotFill = tokens.color("surface-raised")
         selectionOverlay.hintFill = tokens.color("glass-strong")
         selectionOverlay.hintText = tokens.color("glass-text")
+        selectionOverlay.motionTokens = tokens
+        dropGuideView.motionTokens = tokens
         dropGuideView.accent = tokens.color("theme-accent")
         dropGuideView.glassFill = tokens.color("glass-strong")
         dropGuideView.glassText = tokens.color("glass-text")

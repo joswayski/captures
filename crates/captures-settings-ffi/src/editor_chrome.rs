@@ -127,6 +127,7 @@ fn copy() -> Value {
             "keeps_aspect": g::KEEPS_ASPECT,
         },
         "trim": trim(),
+        "snap": snap(),
         "wand_loupe": wand_loupe(),
         "draw_preview": {
             "viewbox": chrome::draw_preview::VIEWBOX, "height": chrome::draw_preview::HEIGHT,
@@ -186,6 +187,17 @@ fn trim() -> Value {
         "keep_alpha": c::TRIM_KEEP_ALPHA, "keep_width": c::TRIM_KEEP_WIDTH,
         "keep_radius": c::TRIM_KEEP_RADIUS, "keep_glow_alpha": c::TRIM_KEEP_GLOW_ALPHA,
         "edge_bar": c::TRIM_EDGE_BAR, "bloom": c::TRIM_BLOOM, "bloom_stops": c::TRIM_BLOOM_STOPS,
+    })
+}
+
+/// Image-drop snap and Expand canvas edge paint (`.screenshot-drop-snap-*`,
+/// `.screenshot-canvas-expand-*`).
+fn snap() -> Value {
+    use captures_app::editor_canvas as c;
+    json!({
+        "bloom": c::SNAP_BLOOM, "bloom_fraction": c::SNAP_BLOOM_FRACTION,
+        "bloom_overhang": c::SNAP_BLOOM_OVERHANG, "bloom_stops": c::SNAP_BLOOM_STOPS,
+        "edge_bar": c::SNAP_EDGE_BAR,
     })
 }
 
@@ -402,6 +414,9 @@ mod tests {
         let result = &call(json!({"operation": "copy"}))["result"];
         assert_eq!(result["trim"]["rgb"], json!([255, 92, 106]));
         assert_eq!(result["trim"]["keep_width"], 1.5);
+        assert_eq!(result["snap"]["bloom"], 96.);
+        assert_eq!(result["snap"]["edge_bar"], 5.);
+        assert_eq!(result["snap"]["bloom_stops"][0], json!([0., 0.55]));
         assert_eq!(result["wand_loupe"]["size"], 84.);
         assert_eq!(result["wand_loupe"]["extent"], 11);
         assert_eq!(result["draw_preview"]["height"], 88.);
