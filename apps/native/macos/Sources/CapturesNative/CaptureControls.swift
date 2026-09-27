@@ -781,8 +781,8 @@ final class CaptureControlsView: NSView {
             }
             button.setAccessibilityRole(.radioButton)
             button.setAccessibilityLabel(mode.title)
-            // Shipping `CaptureTargetIcon`, from the shared icon set.
-            button.icon = .shipping(mode.iconName)
+            // Shipping `CaptureTargetIcon` (15 px), from the shared icon set.
+            button.icon = .shipping(mode.iconName); button.iconSide = 15
             button.enterActionBlock = { [weak self] in self?.confirm() }
             targetButtons[mode] = button
             x += width + 4
