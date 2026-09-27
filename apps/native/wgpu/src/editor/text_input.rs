@@ -23,7 +23,6 @@ pub(super) struct InlineText {
     started: bool,
     text: String,
     accepted: String,
-    anchor: Point,
     phase: Option<Phase>,
     finish: Option<bool>,
     blocked: bool,
@@ -41,7 +40,6 @@ impl View {
         &mut self,
         tx: &Sender<Job>,
         target: TextInputTarget,
-        anchor: Point,
     ) {
         if self.pending || self.inline.is_some() || self.closed || self.close_requested {
             return;
@@ -81,7 +79,6 @@ impl View {
             started: false,
             text: text.clone(),
             accepted: text,
-            anchor,
             phase: Some(Phase::Begin),
             finish: None,
             blocked: false,
@@ -237,6 +234,155 @@ impl View {
     }
 }
 
+impl View {
+    /// The text layer the inline editor draws: the session's transient layer
+    /// once Begin is accepted, else the existing layer or the unfitted layer a
+    /// Text click creates (`new_text_element`), so the box appears at once.
+    fn inline_element(&self) -> Option<TextElement> {
+        let input = self.inline.as_ref()?;
+        let presented = self.presented.as_ref()?;
+        let find = |id: &str| {
+            presented
+                .document
+                .elements
+                .iter()
+                .find_map(|element| match element {
+                    Element::Text(text) if text.base.id == id => Some(text.clone()),
+                    _ => None,
+                })
+        };
+        match (&presented.active_text_input, &input.target) {
+            (Some((token, id)), _) if token == &input.id => find(id),
+            (_, TextInputTarget::Existing { id }) => find(id),
+            (_, TextInputTarget::New { create }) => {
+                captures_app::editor_session::new_text_element(String::new(), create).ok()
+            }
+        }
+    }
+}
+
+/// Where and how the inline editor draws, in screen points.
+struct InlineGeometry {
+    /// The unrotated frame (plate or glyph box, at least 48 × 28 pt).
+    frame: egui::Rect,
+    /// The text box inside the frame's padding.
+    content: egui::Rect,
+    /// Clockwise radians about the frame centre.
+    angle: f32,
+    format: egui::TextFormat,
+    halign: egui::Align,
+    auto_width: bool,
+    plate: Option<(egui::Color32, f32)>,
+}
+
+fn inline_geometry(
+    ctx: &egui::Context,
+    element: &TextElement,
+    text: &str,
+    preview: egui::Rect,
+    scale: f32,
+) -> Option<InlineGeometry> {
+    use captures_app::editor_text::{INLINE_EDITOR_MIN_SIZE, inline_editor_layout};
+    let layout = inline_editor_layout(element).ok()?;
+    let [top, right, bottom, left] = layout.padding.map(|value| value as f32 * scale);
+    let alpha = (element.base.opacity / 100.).clamp(0., 1.) as f32;
+    let color = |value: &str| {
+        egui::Color32::from_hex(value)
+            .unwrap_or(egui::Color32::BLACK)
+            .gamma_multiply(alpha)
+    };
+    let format = egui::TextFormat {
+        font_id: egui::FontId::new(
+            element.font_size as f32 * scale,
+            crate::ui_fonts::editor_text_family(
+                ctx,
+                &element.font_family,
+                element.bold,
+                element.italic,
+            ),
+        ),
+        color: color(&element.color),
+        line_height: Some(layout.line_height as f32 * scale),
+        ..Default::default()
+    };
+    let halign = match element.align.as_str() {
+        "center" => egui::Align::Center,
+        "right" => egui::Align::RIGHT,
+        _ => egui::Align::LEFT,
+    };
+    let frame = layout.frame;
+    let accepted_width = frame.width as f32 * scale - left - right;
+    let galley = inline_galley(ctx, text, &format, halign, layout.auto_width, accepted_width);
+    // Auto-width labels grow with the typed buffer before the session refits
+    // them; the accepted box keeps its left edge, centre or right edge.
+    let content_width = if layout.auto_width {
+        galley.size().x.ceil() + 2.
+    } else {
+        accepted_width
+    };
+    let line_height = layout.line_height as f32 * scale;
+    let content_height = (galley.rows.len().max(1) as f32 * line_height).max(line_height);
+    let width = (content_width + left + right).max(INLINE_EDITOR_MIN_SIZE.0 as f32);
+    let height = (content_height + top + bottom).max(INLINE_EDITOR_MIN_SIZE.1 as f32);
+    let accepted_left = frame.x as f32 * scale;
+    let accepted_screen_width = frame.width as f32 * scale;
+    let x = if layout.auto_width {
+        match halign {
+            egui::Align::Center => accepted_left + (accepted_screen_width - width) / 2.,
+            egui::Align::RIGHT => accepted_left + accepted_screen_width - width,
+            egui::Align::LEFT => accepted_left,
+        }
+    } else {
+        accepted_left
+    };
+    let frame = egui::Rect::from_min_size(
+        preview.min + egui::vec2(x, frame.y as f32 * scale),
+        egui::vec2(width, height),
+    );
+    let content = egui::Rect::from_min_max(
+        frame.min + egui::vec2(left, top),
+        frame.max - egui::vec2(right, bottom),
+    );
+    Some(InlineGeometry {
+        frame,
+        content,
+        angle: layout.rotation as f32,
+        format,
+        halign,
+        auto_width: layout.auto_width,
+        plate: element
+            .background
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(|value| (color(value), layout.plate_radius as f32 * scale)),
+    })
+}
+
+fn inline_galley(
+    ctx: &egui::Context,
+    text: &str,
+    format: &egui::TextFormat,
+    halign: egui::Align,
+    auto_width: bool,
+    wrap_width: f32,
+) -> Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format.clone());
+    job.wrap.max_width = if auto_width { f32::INFINITY } else { wrap_width };
+    job.halign = halign;
+    job.keep_trailing_whitespace = true;
+    ctx.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+/// Shipping `.screenshot-inline-text-frame`: the text being typed sits on the
+/// canvas in the layer's own face, size, colour, plate and rotation, inside a
+/// 1 px accent outline `--s-3` outside the frame. Clicking away and Escape
+/// commit; Enter inserts a new line. The session preview omits this layer
+/// while the input is active.
+///
+/// Rotated labels paint their glyphs, plate and caret rotated about the frame
+/// centre; the selection highlight and pointer caret placement use the
+/// unrotated box (egui text fields cannot rotate). Outlined labels draw filled
+/// glyphs rather than shipping's transparent stroked ones.
 pub(super) fn show(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -244,30 +390,20 @@ pub(super) fn show(
     available: egui::Rect,
     preview: egui::Rect,
 ) {
+    let Some(element) = view.inline_element() else {
+        return;
+    };
+    let scale = preview.width() / view.canvas[0].max(1.) as f32;
     let Some(input) = &mut view.inline else {
         return;
     };
-    // This first native input surface is unrotated and uses the UI font. The
-    // underlying accepted preview remains the pinned-font, styled/rotated render.
-    // Never pretend the native text control supplies document layout metrics.
-    let scale = preview.width() / view.canvas[0] as f32;
-    let anchor = preview.min + egui::vec2(input.anchor.x as f32, input.anchor.y as f32) * scale;
-    let width = (tokens.number("s-12") * 5.).min(available.width());
-    let height = tokens.number("s-12") * 3.;
-    let position = egui::pos2(
-        anchor.x.clamp(
-            available.left(),
-            (available.right() - width).max(available.left()),
-        ),
-        anchor.y.clamp(
-            available.top(),
-            (available.bottom() - height).max(available.top()),
-        ),
-    );
+    let Some(geometry) = inline_geometry(ui.ctx(), &element, &input.text, preview, scale) else {
+        return;
+    };
     let input_id = ui.scope_id().with((&input.id, "canvas-text-input"));
     let finishing = input.phase == Some(Phase::Finish);
-    let frame = ui.ctx().cumulative_frame_nr();
-    let first_frame = *input.first_frame.get_or_insert(frame) == frame;
+    let frame_nr = ui.ctx().cumulative_frame_nr();
+    let first_frame = *input.first_frame.get_or_insert(frame_nr) == frame_nr;
     let blocked = input.blocked;
     // A backend may deliver Escape alongside a preedit dismissal/commit. That
     // key belongs to the IME, not the document's Finish action.
@@ -289,70 +425,139 @@ pub(super) fn show(
             }
         });
     }
-    let mut finish = None;
+    let rotated = geometry.angle.abs() > f32::EPSILON;
+    let pivot = geometry.frame.center();
+    let rotation = egui::emath::Rot2::from_angle(geometry.angle);
+    let rotate = |point: egui::Pos2| pivot + rotation * (point - pivot);
+    let text_color = geometry.format.color;
+    let mut lost_focus = false;
     let response = egui::Area::new(ui.scope_id().with((&input.id, "canvas-text-frame")))
         .order(egui::Order::Foreground)
-        .fixed_pos(position)
-        .constrain_to(available)
+        .fixed_pos(geometry.frame.min)
+        .constrain(false)
         .show(ui.ctx(), |ui| {
-            ui.set_width(width);
-            egui::Frame::new()
-                .fill(tokens.color("surface-raised"))
-                .stroke(egui::Stroke::new(1., tokens.color("theme-accent")))
-                .inner_margin(tokens.number("s-2"))
-                .show(ui, |ui| {
-                    let label = ui.label("Text input");
-                    let field = egui::ScrollArea::vertical()
-                        .max_height(tokens.number("s-12") * 2.)
-                        .show(ui, |ui| {
-                            ui.add_enabled(
-                                !finishing,
-                                egui::TextEdit::multiline(&mut input.text)
-                                    .id(input_id)
-                                    // Keep focus until earlier queued edits have run.
-                                    // The host handles Escape after the field below.
-                                    .event_filter(egui::EventFilter {
-                                        horizontal_arrows: true,
-                                        vertical_arrows: true,
-                                        escape: true,
-                                        ..Default::default()
-                                    })
-                                    .desired_width(width)
-                                    .desired_rows(3),
-                            )
-                            .labelled_by(label.id)
+            ui.set_clip_rect(available);
+            let painter = ui.painter().clone();
+            painter.add(
+                egui::epaint::RectShape::stroke(
+                    geometry.frame.expand(tokens.number("s-3")),
+                    tokens.number("r-sm"),
+                    egui::Stroke::new(1., tokens.color("theme-accent")),
+                    egui::StrokeKind::Inside,
+                )
+                .with_angle(geometry.angle),
+            );
+            if let Some((fill, radius)) = geometry.plate {
+                painter.add(
+                    egui::epaint::RectShape::filled(geometry.frame, radius, fill)
+                        .with_angle(geometry.angle),
+                );
+            }
+            let visuals = ui.visuals_mut();
+            visuals.selection.bg_fill = if rotated {
+                egui::Color32::TRANSPARENT
+            } else {
+                tokens.color("theme-accent").gamma_multiply(0.2)
+            };
+            visuals.selection.stroke.color = text_color;
+            visuals.text_cursor.stroke = egui::Stroke::new(
+                (geometry.format.font_id.size / 16.).clamp(1., 3.),
+                if rotated {
+                    egui::Color32::TRANSPARENT
+                } else {
+                    text_color
+                },
+            );
+            let mut format = geometry.format.clone();
+            if rotated {
+                format.color = egui::Color32::TRANSPARENT;
+            }
+            let (halign, auto_width, wrap) = (
+                geometry.halign,
+                geometry.auto_width,
+                geometry.content.width(),
+            );
+            let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _: f32| {
+                inline_galley(ui.ctx(), buffer.as_str(), &format, halign, auto_width, wrap)
+            };
+            let output = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(geometry.content), |ui| {
+                    egui::TextEdit::multiline(&mut input.text)
+                        .id(input_id)
+                        .frame(egui::Frame::NONE)
+                        .interactive(!finishing)
+                        .align(egui::Align2([halign, egui::Align::TOP]))
+                        .layouter(&mut layouter)
+                        .desired_width(geometry.content.width())
+                        .min_size(geometry.content.size())
+                        // Keep focus until earlier queued edits have run.
+                        // The host handles Escape after the field below.
+                        .event_filter(egui::EventFilter {
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            escape: true,
+                            ..Default::default()
                         })
-                        .inner;
-                    if input.focus {
-                        field.request_focus();
-                        input.focus = false;
-                    }
-                    if field.changed() {
-                        input.blocked = false;
-                    }
-                    ui.add_enabled_ui(!finishing, |ui| {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .button(if input.blocked { "Retry" } else { "Done" })
-                                .clicked()
-                            {
-                                finish = Some(true);
-                            }
-                            if ui.button("Cancel").clicked() {
-                                finish = Some(false);
-                            }
-                        });
-                    });
-                    ui.small("Enter: new line · Escape: finish");
-                });
+                        .show(ui)
+                })
+                .inner;
+            let field = &output.response.response;
+            field.widget_info(|| {
+                egui::WidgetInfo::text_edit(
+                    true,
+                    "",
+                    input.text.as_str(),
+                    captures_app::editor_chrome::text_format::INLINE_LABEL,
+                )
+            });
+            if input.focus {
+                field.request_focus();
+                input.focus = false;
+            }
+            if field.changed() {
+                input.blocked = false;
+            }
+            lost_focus = field.lost_focus();
+            if rotated {
+                let origin = output.galley_pos - egui::vec2(output.galley.rect.left(), 0.);
+                let mut shape = egui::epaint::TextShape::new(
+                    rotate(origin),
+                    output.galley.clone(),
+                    text_color,
+                );
+                shape.override_text_color = Some(text_color);
+                shape.angle = geometry.angle;
+                painter.add(shape);
+                if field.has_focus()
+                    && let Some(range) = output.cursor_range
+                {
+                    let caret = output
+                        .galley
+                        .pos_from_cursor(range.primary)
+                        .translate(origin.to_vec2());
+                    painter.line_segment(
+                        [
+                            rotate(caret.center_top()),
+                            rotate(caret.center_bottom()),
+                        ],
+                        egui::Stroke::new(
+                            (geometry.format.font_id.size / 16.).clamp(1., 3.),
+                            text_color,
+                        ),
+                    );
+                }
+            }
         })
         .response;
+    let mut finish = None;
     if ui.ctx().current_pass_index() == 0 && !finishing && !first_frame {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if !ime_owned_escape {
                 finish = Some(true);
             }
-        } else if !blocked && (!ui.input(|i| i.focused) || response.clicked_elsewhere()) {
+        } else if !blocked
+            && (!ui.input(|i| i.focused) || response.clicked_elsewhere() || lost_focus)
+        {
             finish.get_or_insert(true);
         }
     }
@@ -375,7 +580,6 @@ mod tests {
         view.begin_inline(
             &tx,
             TextInputTarget::Existing { id: "label".into() },
-            Point { x: 2., y: 1. },
         );
         assert!(matches!(
             rx.try_recv(),
@@ -548,7 +752,6 @@ mod tests {
                         style_preset: None,
                     },
                 },
-                Point { x: 23., y: 31. },
             );
             if update_in_flight {
                 receive();

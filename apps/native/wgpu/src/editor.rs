@@ -2962,7 +2962,6 @@ fn show_layer_canvas(
                         captures_app::editor_session::TextInputTarget::Existing {
                             id: text.base.id.clone(),
                         },
-                        point,
                     );
                     return;
                 }
@@ -3654,7 +3653,7 @@ fn show_shape(
                     },
                 }
             };
-            view.begin_inline(tx, target, point);
+            view.begin_inline(tx, target);
         }
         return;
     }

@@ -523,6 +523,8 @@ pub mod eraser {
 /// Shipping text format buttons (`.screenshot-format-buttons`): B, I, then
 /// the three alignment icons, in one five-column row.
 pub mod text_format {
+    /// The inline canvas editor's accessible name (shipping `aria-label`).
+    pub const INLINE_LABEL: &str = "Edit text on canvas";
     pub const BOLD: &str = "Bold";
     pub const ITALIC: &str = "Italic";
     /// `(value, accessible name, icon)`.

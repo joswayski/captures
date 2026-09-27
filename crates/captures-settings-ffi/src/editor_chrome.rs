@@ -169,7 +169,7 @@ fn eraser() -> Value {
 fn text_format() -> Value {
     use chrome::text_format as t;
     json!({
-        "bold": t::BOLD, "italic": t::ITALIC,
+        "inline_label": t::INLINE_LABEL, "bold": t::BOLD, "italic": t::ITALIC,
         "align": t::ALIGN
             .iter()
             .map(|(value, label, icon)| json!({"value": value, "label": label, "icon": icon}))
@@ -389,6 +389,7 @@ mod tests {
         assert_eq!(eraser["restore_hint"], "Paint to put back what you erased.");
         let format = &result["text_format"];
         assert_eq!(format["bold"], "Bold");
+        assert_eq!(format["inline_label"], "Edit text on canvas");
         assert_eq!(
             format["align"][2],
             json!({"value": "right", "label": "Align right", "icon": "align-right"})
