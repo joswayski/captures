@@ -565,8 +565,12 @@ struct View {
     close_after_save: bool,
     /// Shipping's 700 ms draft autosave timer.
     autosave: DraftAutosave,
+    /// Editor windows autosave; a detached view (unit tests) never arms it.
+    autosaves: bool,
     /// A background autosave in flight: whether a draft exists afterwards.
     autosave_rx: Option<Receiver<Result<bool, String>>>,
+    /// When the pending autosave wake-up fires; one timer at a time.
+    autosave_wake: Option<Instant>,
     error: Option<String>,
     viewport: Viewport,
     viewport_pan: Option<(egui::PointerButton, egui::Pos2)>,
@@ -674,7 +678,9 @@ impl Default for View {
             close_requested: false,
             close_after_save: false,
             autosave: DraftAutosave::default(),
+            autosaves: false,
             autosave_rx: None,
+            autosave_wake: None,
             error: None,
             viewport: Viewport::default(),
             viewport_pan: None,
@@ -819,8 +825,19 @@ impl View {
                 self.autosave_rx = Some(rx);
             }
         }
-        if let Some(due) = self.autosave.deadline() {
-            ctx.request_repaint_after(due.saturating_duration_since(now));
+        // A repaint request alone does not wake an idle deferred viewport, so a
+        // timer thread wakes it like a worker reply does. A pending timer that
+        // fires before a later deadline just schedules the next one.
+        if let Some(due) = self.autosave.deadline()
+            && self.autosave_wake.is_none_or(|wake_at| wake_at <= now)
+        {
+            self.autosave_wake = Some(due);
+            let ctx = ctx.clone();
+            let viewport = ctx.viewport_id();
+            thread::spawn(move || {
+                thread::sleep(due.saturating_duration_since(Instant::now()));
+                wake(&ctx, viewport);
+            });
         }
     }
 
@@ -943,7 +960,8 @@ impl View {
                     self.draft_restored = false;
                 }
                 // Shipping autosaves 700 ms after each change to the document.
-                if presented.unsaved
+                if self.autosaves
+                    && presented.unsaved
                     && self
                         .presented
                         .as_ref()
@@ -1841,6 +1859,7 @@ impl Editor {
                 default_stem,
                 original_bytes,
                 drawing_preview: Some(drawing_preview::State::new(ctx.clone(), viewport)),
+                autosaves: true,
                 ..View::default()
             })),
             tx,
@@ -5622,19 +5641,23 @@ fn show_annotation(
             );
         });
     }
-    ui.label(captures_app::editor_layers::menu::OPACITY);
     let mut opacity = view.layer_opacity;
-    let width = ui.available_width().min(240.);
-    if crate::primitives::RangeSlider::new(
-        "annotation-opacity",
-        captures_app::editor_layers::menu::OPACITY,
-        width,
-        0. ..=100.,
-        format!("{}%", opacity.round()),
-    )
-    .show(ui, tokens, &mut opacity)
-    .changed()
-    {
+    let changed = ui
+        .horizontal(|ui| {
+            ui.label(captures_app::editor_layers::menu::OPACITY);
+            let width = ui.available_width().min(200.);
+            crate::primitives::RangeSlider::new(
+                "annotation-opacity",
+                captures_app::editor_layers::menu::OPACITY,
+                width,
+                0. ..=100.,
+                format!("{}%", opacity.round()),
+            )
+            .show(ui, tokens, &mut opacity)
+            .changed()
+        })
+        .inner;
+    if changed {
         let id = id.to_owned();
         view.layer_opacity = opacity;
         view.live_edit(
@@ -8553,7 +8576,11 @@ mod tests {
         // Each toggle is its own undo step, as in shipping.
         let shadow = before.style.has_drop_shadow();
         assert_eq!(changed(&|f| f.style.drop_shadow = Some(!shadow)), None);
-        assert_eq!(changed(&|f| f.style.fill = Some("#ffffff".into())), None);
+        assert_eq!(changed(&|f| f.style.fill = None), None);
+        assert_eq!(
+            changed(&|f| f.style.fill = Some("#ffffff".into())),
+            Some("fill-color")
+        );
         assert_eq!(changed(&|f| f.style.stroke_enabled = Some(false)), None);
     }
 
@@ -10908,7 +10935,10 @@ mod tests {
     fn edits_autosave_the_draft_after_700ms_in_the_background() {
         let ctx = egui::Context::default();
         let (tx, rx) = mpsc::channel();
-        let mut view = View::default();
+        let mut view = View {
+            autosaves: true,
+            ..View::default()
+        };
         view.receive(&ctx, Ok(presented(false)));
         assert_eq!(view.autosave.deadline(), None, "opening is not an edit");
         let before = Instant::now();
