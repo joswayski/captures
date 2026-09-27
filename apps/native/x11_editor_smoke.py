@@ -2445,16 +2445,16 @@ def main():
 
         if args.text_draft_only:
             shot(editor, "text-draft-restored")
-            save_until(lambda: json.loads(draft.read_text())["updated_at_ms"] > 1,
-                       "font-backed draft save")
-            assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
-            assert json.loads(draft.read_text())["fonts"] == {
-                "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
             resize_editor(942, 701)
             toolbar_click("layers")  # Layers.
             fixture_click((370, 230))  # Select the text plate, including non-ink pixels.
             drag((600, 230), (625, 247))
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (275, 57), "text moved")
+            # The edit autosaved the restored draft with its pinned font bytes.
+            assert json.loads(draft.read_text())["updated_at_ms"] > 1, "font-backed draft autosave"
+            assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
+            assert json.loads(draft.read_text())["fonts"] == {
+                "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
             shot(editor, "text-moved")
             toolbar_click("undo")
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (250, 40), "text move undone")
