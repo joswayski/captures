@@ -736,8 +736,16 @@ fn field_label(ui: &mut egui::Ui, tokens: &Tokens, text: &str) {
     );
 }
 
-/// `.screenshot-layer-menu-action`: an 18 px icon and a label; `footer` uses
-/// the bordered control look, `danger` the signal text.
+/// How a `.screenshot-layer-menu-action` row is drawn: a plain item, the
+/// bordered footer control, or the footer's danger variant.
+#[derive(Clone, Copy, PartialEq)]
+enum Tone {
+    Item,
+    Footer,
+    Danger,
+}
+
+/// `.screenshot-layer-menu-action`: an 18 px icon and a label.
 fn menu_action(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -745,9 +753,10 @@ fn menu_action(
     label: &str,
     tooltip: &str,
     enabled: bool,
-    footer: bool,
-    danger: bool,
+    tone: Tone,
 ) -> bool {
+    let footer = tone != Tone::Item;
+    let danger = tone == Tone::Danger;
     let (rect, response) = ui.allocate_exact_size(
         vec2(ui.available_width(), 34.),
         if enabled {
@@ -1077,8 +1086,7 @@ fn settings_menu(
                                                 label,
                                                 tip,
                                                 shared::can_arrange(document, &base.id, front),
-                                                false,
-                                                false,
+                                                Tone::Item,
                                             ) {
                                                 view.submit(
                                                     tx,
@@ -1116,8 +1124,13 @@ fn settings_menu(
                                             let allowed =
                                                 layer_action_enabled(view, action, Some(&base.id));
                                             if menu_action(
-                                                ui, tokens, glyph, label, tip, allowed, false,
-                                                false,
+                                                ui,
+                                                tokens,
+                                                glyph,
+                                                label,
+                                                tip,
+                                                allowed,
+                                                Tone::Item,
                                             ) {
                                                 dispatch_layer_action(
                                                     view,
@@ -1148,8 +1161,7 @@ fn settings_menu(
                                                 copy::DUPLICATE,
                                                 copy::DUPLICATE_TIP,
                                                 true,
-                                                true,
-                                                false,
+                                                Tone::Footer,
                                             ) {
                                                 dispatch_layer_action(
                                                     view,
@@ -1171,8 +1183,7 @@ fn settings_menu(
                                                 copy::DELETE,
                                                 copy::DELETE_TIP,
                                                 deletable,
-                                                true,
-                                                true,
+                                                Tone::Danger,
                                             ) {
                                                 dispatch_layer_action(
                                                     view,
