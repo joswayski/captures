@@ -31,6 +31,19 @@ enum ChromeRequest {
         viewport: [f64; 4],
         canvas: [f64; 4],
     },
+    DrawToolPreview {
+        tool: String,
+        stroke_width: f64,
+        stroke_enabled: bool,
+    },
+    BrushPreview {
+        size: f64,
+        softness: f64,
+    },
+    WandLoupePosition {
+        cursor: [f64; 2],
+        viewport: [f64; 2],
+    },
 }
 
 fn tool(item: &chrome::RailTool) -> Value {
@@ -110,10 +123,39 @@ fn copy() -> Value {
             "max_size": g::MAX_SIZE, "proportional": g::PROPORTIONAL, "locked": g::LOCKED,
             "keeps_aspect": g::KEEPS_ASPECT,
         },
+        "trim": trim(),
+        "wand_loupe": wand_loupe(),
+        "draw_preview": {
+            "viewbox": chrome::draw_preview::VIEWBOX, "height": chrome::draw_preview::HEIGHT,
+            "checker": chrome::draw_preview::CHECKER,
+        },
         "blend_modes": captures_app::editor_layers::BLEND_MODES
             .iter()
             .map(|(value, label)| json!({"value": value, "label": label}))
             .collect::<Vec<_>>(),
+    })
+}
+
+/// Trim edges hover preview paint (`.screenshot-canvas-trim-*`).
+fn trim() -> Value {
+    use captures_app::editor_canvas as c;
+    json!({
+        "rgb": c::TRIM_RGB, "region_alpha": c::TRIM_REGION_ALPHA,
+        "keep_alpha": c::TRIM_KEEP_ALPHA, "keep_width": c::TRIM_KEEP_WIDTH,
+        "keep_radius": c::TRIM_KEEP_RADIUS, "keep_glow_alpha": c::TRIM_KEEP_GLOW_ALPHA,
+        "edge_bar": c::TRIM_EDGE_BAR, "bloom": c::TRIM_BLOOM, "bloom_stops": c::TRIM_BLOOM_STOPS,
+    })
+}
+
+/// Remove-background wand loupe metrics (`WandColorLoupe`).
+fn wand_loupe() -> Value {
+    use captures_app::editor_image_background as w;
+    let (dark, light, cell) = w::WAND_LOUPE_CHECKER;
+    json!({
+        "size": w::WAND_LOUPE_SIZE, "offset": w::WAND_LOUPE_OFFSET,
+        "margin": w::WAND_LOUPE_MARGIN, "extent": w::WAND_LOUPE_SAMPLE_EXTENT,
+        "checker_dark": dark, "checker_light": light, "checker_cell": cell,
+        "grid_alpha": w::WAND_LOUPE_GRID_ALPHA, "meta_gap": w::WAND_LOUPE_META_GAP,
     })
 }
 
@@ -164,13 +206,53 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
                 rect(canvas)?
             ))
         }
+        ChromeRequest::DrawToolPreview {
+            tool,
+            stroke_width,
+            stroke_enabled,
+        } => {
+            if !stroke_width.is_finite() {
+                return Err("invalid stroke width".into());
+            }
+            json!(chrome::draw_preview::stroke(
+                &tool,
+                stroke_width,
+                stroke_enabled
+            ))
+        }
+        ChromeRequest::BrushPreview { size, softness } => {
+            if !size.is_finite() || !softness.is_finite() {
+                return Err("invalid brush".into());
+            }
+            json!(chrome::draw_preview::brush(size, softness))
+        }
+        ChromeRequest::WandLoupePosition { cursor, viewport } => {
+            if !cursor
+                .iter()
+                .chain(&viewport)
+                .all(|value| value.is_finite())
+            {
+                return Err("invalid loupe position".into());
+            }
+            json!(captures_app::editor_image_background::wand_loupe_position(
+                captures_app::editor::Point {
+                    x: cursor[0],
+                    y: cursor[1],
+                },
+                viewport[0],
+                viewport[1],
+            ))
+        }
     })
 }
 
 /// Screenshot-editor chrome copy and policy. `request_json` is one of
 /// `{"operation":"copy"}`, `header_layout {width}`, `shapes_tooltip {current}`,
-/// `tool_label {key}`, `zoom_label {percent}` or
-/// `canvas_offscreen {viewport:[x,y,w,h], canvas:[x,y,w,h]}`. Returns the owned
+/// `tool_label {key}`, `zoom_label {percent}`,
+/// `canvas_offscreen {viewport:[x,y,w,h], canvas:[x,y,w,h]}`,
+/// `draw_tool_preview {tool, stroke_width, stroke_enabled}`,
+/// `brush_preview {size, softness}` or
+/// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}`. Returns the owned
 /// `{ok,result}` / `{ok,error}` envelope; free with captures_settings_free_v1.
 ///
 /// # Safety
@@ -239,6 +321,33 @@ mod tests {
         assert_eq!(colors["custom_color"], "Custom color");
         assert_eq!(colors["compact_cell"], 36.);
         assert_eq!(colors["menu_width"], 248.);
+    }
+
+    #[test]
+    fn draw_previews_trim_paint_and_wand_loupe_round_trip() {
+        let result = &call(json!({"operation": "copy"}))["result"];
+        assert_eq!(result["trim"]["rgb"], json!([255, 92, 106]));
+        assert_eq!(result["trim"]["keep_width"], 1.5);
+        assert_eq!(result["wand_loupe"]["size"], 84.);
+        assert_eq!(result["wand_loupe"]["extent"], 11);
+        assert_eq!(result["draw_preview"]["height"], 88.);
+        let stroke = call(
+            json!({"operation": "draw_tool_preview", "tool": "rectangle",
+            "stroke_width": 8., "stroke_enabled": true}),
+        );
+        assert_eq!(stroke["result"]["label"], "Stroke preview");
+        assert_eq!(stroke["result"]["shapes"][0]["kind"], "rounded_rect");
+        assert_eq!(stroke["result"]["shapes"][0]["radius"], 6.);
+        let brush = call(json!({"operation": "brush_preview", "size": 120., "softness": 0.}));
+        assert_eq!(brush["result"]["brush"]["radius"], 30.);
+        assert_eq!(brush["result"]["label"], "Brush preview");
+        let position = call(json!({"operation": "wand_loupe_position",
+            "cursor": [40., 50.], "viewport": [800., 600.]}));
+        assert_eq!(position["result"], json!({"x": 58., "y": 68.}));
+        assert_eq!(
+            call(json!({"operation": "brush_preview", "size": null, "softness": 0.}))["ok"],
+            false
+        );
     }
 
     #[test]

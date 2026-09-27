@@ -1191,6 +1191,36 @@ pub unsafe extern "C" fn captures_editor_preview_drawing_v1(
     frame
 }
 
+/// Remove-background wand colour loupe at document point (`x`, `y`): the
+/// magnified natural pixels and label of the image a wand click there would
+/// edit (`captures_app::editor_image_background::WandLoupe`: pixel, color,
+/// tiles, extent, text, transparent, accessible_label), or `null` when the
+/// point is off every visible image. Read-only; no render or I/O.
+///
+/// # Safety
+/// Non-null handle is live and is not mutated/freed concurrently. Returns owned
+/// success/error JSON; free with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_wand_loupe_v1(
+    handle: *const EditorSession,
+    x: f64,
+    y: f64,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if !x.is_finite() || !y.is_finite() {
+            return Err("Wand loupe coordinates must be finite.".to_owned());
+        }
+        // SAFETY: caller retains a live session without concurrent mutations.
+        let session = unsafe { handle.as_ref() }.ok_or("editor handle is null")?;
+        Ok(json!(session.wand_loupe(Point { x, y })))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(result) => json!({"ok":true,"result":result}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
 /// Retain the current frame without copying pixels; null input returns null.
 ///
 /// # Safety
@@ -1808,6 +1838,48 @@ mod tests {
                     false
                 );
             }
+        }
+    }
+
+    #[test]
+    fn wand_loupe_samples_natural_pixels_and_snapshots_carry_trim_state() {
+        let (_data, request, original) = editor_fixture();
+        // SAFETY: all inputs are retained C strings; responses/session freed once.
+        unsafe {
+            let session = open_editor(&request);
+            let loupe = take_json(captures_editor_wand_loupe_v1(session, 2.5, 1.5));
+            assert_eq!(loupe["ok"], true);
+            assert_eq!(loupe["result"]["pixel"], json!([2, 1]));
+            let [r, g, b, _] = original.get_pixel(2, 1).0;
+            assert_eq!(loupe["result"]["text"], format!("#{r:02x}{g:02x}{b:02x}"));
+            assert_eq!(loupe["result"]["tiles"].as_array().unwrap().len(), 121);
+            let off = take_json(captures_editor_wand_loupe_v1(session, 50., 1.));
+            assert_eq!(off["result"], serde_json::Value::Null);
+            let invalid = take_json(captures_editor_wand_loupe_v1(session, f64::NAN, 1.));
+            assert_eq!(invalid["ok"], false);
+            assert_eq!(
+                take_json(captures_editor_wand_loupe_v1(ptr::null(), 1., 1.))["ok"],
+                false
+            );
+
+            let resized = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"resize_canvas\",\"width\":10,\"height\":3}".as_ptr(),
+            ));
+            let snapshot = &resized["result"];
+            assert_eq!(snapshot["can_trim"], true);
+            assert_eq!(snapshot["trim_preview"]["edges"], json!(["right"]));
+            assert_eq!(
+                snapshot["trim_preview"]["keep"],
+                json!({"x": 0., "y": 0., "width": 7., "height": 3.})
+            );
+            let trimmed = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"trim_canvas\"}".as_ptr(),
+            ));
+            assert_eq!(trimmed["result"]["can_trim"], false);
+            assert_eq!(trimmed["result"]["trim_preview"], serde_json::Value::Null);
+            captures_editor_free_v1(session);
         }
     }
 

@@ -519,6 +519,10 @@ struct NativeEditorSnapshot: Equatable {
     let curveHandles: [String: NativeCurveHandles]
     /// Overflow ghost and Expand canvas action per layer past the canvas edge.
     let canvasExpand: [String: NativeCanvasExpand]
+    /// Shipping `canTrimEdges`: Trim edges is disabled when false.
+    let canTrim: Bool
+    /// What the Trim edges hover/focus preview cuts, or nil when nothing on-canvas.
+    let trimPreview: NativeTrimPreview?
 
     init?(_ value: [String: Any]) {
         guard let artifactID = value["artifact_id"] as? String,
@@ -632,6 +636,9 @@ struct NativeEditorSnapshot: Equatable {
             .compactMapValues(NativeCurveHandles.init)
         canvasExpand = (value["canvas_expand"] as? [String: [String: Any]] ?? [:])
             .compactMapValues(NativeCanvasExpand.init)
+        // Older host-only fixtures predate `can_trim`; they keep Trim enabled.
+        canTrim = value["can_trim"] as? Bool ?? true
+        trimPreview = (value["trim_preview"] as? [String: Any]).flatMap { NativeTrimPreview($0) }
     }
 }
 
@@ -960,6 +967,21 @@ private final class NativeEditorSession {
         return EditorPresentation(snapshot: snapshot, image: try frame.image())
     }
 
+    /// The Wand loupe at a document point, or nil off every visible image.
+    func wandLoupe(at point: CGPoint) throws -> NativeWandLoupe? {
+        guard let response = captures_editor_wand_loupe_v1(handle, Double(point.x), Double(point.y)) else {
+            throw AppBridgeError.invalidResponse
+        }
+        defer { captures_settings_free_v1(response) }
+        guard let envelope = try JSONSerialization.jsonObject(
+                with: Data(bytes: response, count: strlen(response))) as? [String: Any],
+              let ok = envelope["ok"] as? Bool else { throw AppBridgeError.invalidResponse }
+        guard ok else { throw AppBridgeError.backend(envelope["error"] as? String ?? "Wand loupe failed.") }
+        guard let result = envelope["result"] as? [String: Any] else { return nil }
+        guard let loupe = NativeWandLoupe(result) else { throw AppBridgeError.invalidResponse }
+        return loupe
+    }
+
     func previewDrawing(_ object: [String: Any]) throws -> CGImage {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         var response: UnsafeMutablePointer<CChar>?
@@ -1113,8 +1135,18 @@ protocol EditorWorking: AnyObject {
                  completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
     func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
+    /// Read-only Wand loupe sample at a document point on the session queue;
+    /// nil off every visible image or on failure.
+    func wandLoupe(at point: CGPoint, completion: @escaping (NativeWandLoupe?) -> Void)
     func close()
     func prepareForTermination(textInput: EditorTerminationTextInput?) -> Result<Void, Error>
+}
+
+extension EditorWorking {
+    /// Workers without a session (test fixtures) show no loupe.
+    func wandLoupe(at point: CGPoint, completion: @escaping (NativeWandLoupe?) -> Void) {
+        completion(nil)
+    }
 }
 
 /// The opaque mutable session never leaves this queue. Frame ownership is split
@@ -1178,6 +1210,14 @@ final class EditorWorker: EditorWorking {
                 return try session.previewDrawing(object)
             }
             DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func wandLoupe(at point: CGPoint, completion: @escaping (NativeWandLoupe?) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let loupe = (try? storage.session?.wandLoupe(at: point)) ?? nil
+            DispatchQueue.main.async { completion(loupe) }
         }
     }
 

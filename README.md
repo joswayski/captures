@@ -684,16 +684,21 @@ survives draft restore. It changes the canvas fill, not backgrounds within image
 **Trim edges** fits the canvas to visible layer geometry, preserving off-canvas
 content and moving hidden layers with the document. It does not scan image alpha
 to remove transparent borders. Trimming supports undo/redo and draft restore.
+The button is disabled when there is nothing to trim; hovering or focusing it
+previews the cut: the discarded margins turn red, a dashed outline marks the
+kept area and the cut edges pulse (static under reduced motion).
 Both hosts also connect **Draw → Wand**: click an image to remove similar colors,
 using a 0–255 tolerance and either a contiguous region or all matching pixels.
 The frontmost visible image is editable even when locked; transparent pixels do
-not let clicks reach images underneath. Each edit clears the canvas fill, keeps
+not let clicks reach images underneath. While the Wand hovers an image, a colour
+loupe beside the crosshair magnifies the image pixels and shows the sampled hex. Each edit clears the canvas fill, keeps
 the original image pixels, and supports undo/redo and draft restore. The original
 History capture remains unchanged. **Erase** and **Restore** use adjustable brush
 diameter and softness; Restore paints from the retained original image. The brush
 ring shows size while shared-renderer pixels preview the stroke during dragging.
 Release commits one undo step; Escape, focus loss or changing tools cancels the
-preview without editing. The shipping brush cursor design and physical-platform
+preview without editing. Properties shows a stroke or brush preview for drawing
+tools and Erase/Restore, and Apply crop pulses while a crop is staged. The shipping brush cursor design and physical-platform
 input acceptance remain parity work.
 Text controls support multiline content, pinned font families (listed as Sans serif,
 Serif, Monospace and Rounded), size, bold/italic,

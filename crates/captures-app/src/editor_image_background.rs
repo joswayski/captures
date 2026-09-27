@@ -224,3 +224,195 @@ pub fn remove_color(
     }
     changed
 }
+
+/// Shipping `WAND_LOUPE_SAMPLE_EXTENT`: the odd natural-pixel neighborhood the
+/// remove-background wand loupe magnifies, so a true center pixel exists.
+pub const WAND_LOUPE_SAMPLE_EXTENT: u32 = 11;
+/// `WAND_LOUPE_SIZE_PX`: the loupe circle's diameter in points.
+pub const WAND_LOUPE_SIZE: f64 = 84.;
+/// `WAND_LOUPE_OFFSET_PX`: gap from the crosshair so the loupe never covers
+/// the sampled pixel.
+pub const WAND_LOUPE_OFFSET: f64 = 18.;
+/// `wandLoupeScreenPosition`'s viewport margin.
+pub const WAND_LOUPE_MARGIN: f64 = 8.;
+/// `paintWandColorLoupe`'s checkerboard (dark, light, cell) behind
+/// transparent samples; shipping hard-codes these literals.
+pub const WAND_LOUPE_CHECKER: ([u8; 3], [u8; 3], f64) =
+    ([0xc4, 0xc4, 0xc8], [0xec, 0xec, 0xee], 6.);
+/// Alpha of the black grid between magnified source pixels.
+pub const WAND_LOUPE_GRID_ALPHA: f64 = 0.18;
+/// `.screenshot-wand-loupe-meta`: the swatch + hex pill sits this far below
+/// the circle.
+pub const WAND_LOUPE_META_GAP: f64 = 6.;
+
+/// The remove-background wand's colour loupe at one pointer position.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct WandLoupe {
+    /// Natural pixel the wand keys on (the highlighted center tile).
+    pub pixel: (u32, u32),
+    /// Straight-alpha RGBA of that pixel.
+    pub color: [u8; 4],
+    /// `extent × extent` tiles row by row around `pixel`; `None` outside the
+    /// image, where the checkerboard shows through.
+    pub tiles: Vec<Option<[u8; 4]>>,
+    pub extent: u32,
+    /// `.screenshot-wand-loupe-hex`: `#rrggbb`, or `empty` when transparent.
+    pub text: String,
+    pub transparent: bool,
+    /// The loupe's `aria-label`.
+    pub accessible_label: String,
+}
+
+/// `rgbaToHex`: `#rrggbb`, ignoring alpha.
+#[must_use]
+pub fn rgba_hex([r, g, b, _]: [u8; 4]) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// The frontmost visible image under `point` and its natural pixel: the layer
+/// and sample the wand click edits and the loupe magnifies. Locked images
+/// count, as in the shipping wand.
+#[must_use]
+pub fn wand_target(
+    document: &crate::editor::Document,
+    point: crate::editor::Point,
+) -> Option<(usize, &crate::editor::ImageElement, (u32, u32))> {
+    document
+        .elements
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, element)| match element {
+            crate::editor::Element::Image(image) if image.base.visible => image
+                .natural_pixel_at(point)
+                .map(|pixel| (index, image, pixel)),
+            _ => None,
+        })
+}
+
+/// Shipping `WandColorLoupe` + `paintWandColorLoupe`: the magnified natural
+/// pixels around the wand's sample, clamped so edge pixels still fill the
+/// loupe, plus the sampled colour's label. `None` hides the loupe (the
+/// pointer is off every visible image, or its asset is unavailable).
+pub fn wand_loupe<'a>(
+    document: &crate::editor::Document,
+    asset: impl Fn(&str) -> Option<&'a RgbaImage>,
+    point: crate::editor::Point,
+) -> Option<WandLoupe> {
+    let (_, image, pixel) = wand_target(document, point)?;
+    let source = asset(&image.src)?;
+    if source.width() == 0 || source.height() == 0 {
+        return None;
+    }
+    let (x, y) = (
+        pixel.0.min(source.width() - 1),
+        pixel.1.min(source.height() - 1),
+    );
+    let extent = WAND_LOUPE_SAMPLE_EXTENT | 1;
+    let half = i64::from(extent / 2);
+    let mut tiles = Vec::with_capacity((extent * extent) as usize);
+    for row in 0..i64::from(extent) {
+        for column in 0..i64::from(extent) {
+            let sx = i64::from(x) - half + column;
+            let sy = i64::from(y) - half + row;
+            tiles.push(
+                (sx >= 0
+                    && sy >= 0
+                    && sx < i64::from(source.width())
+                    && sy < i64::from(source.height()))
+                .then(|| source.get_pixel(sx as u32, sy as u32).0),
+            );
+        }
+    }
+    let color = source.get_pixel(x, y).0;
+    let transparent = color[3] == 0;
+    let hex = rgba_hex(color);
+    Some(WandLoupe {
+        pixel: (x, y),
+        color,
+        tiles,
+        extent,
+        text: if transparent {
+            "empty".into()
+        } else {
+            hex.clone()
+        },
+        transparent,
+        accessible_label: if transparent {
+            "Sample color: transparent".into()
+        } else {
+            format!("Sample color {hex}")
+        },
+    })
+}
+
+/// Shipping `wandLoupeScreenPosition`: the loupe's top-left beside the
+/// cursor, flipped left/up near the viewport's right/bottom edges and kept
+/// [`WAND_LOUPE_MARGIN`] inside it. Coordinates are y-down points.
+#[must_use]
+pub fn wand_loupe_position(
+    cursor: crate::editor::Point,
+    viewport_width: f64,
+    viewport_height: f64,
+) -> crate::editor::Point {
+    let (size, offset, margin) = (WAND_LOUPE_SIZE, WAND_LOUPE_OFFSET, WAND_LOUPE_MARGIN);
+    let mut left = cursor.x + offset;
+    let mut top = cursor.y + offset;
+    if left + size > viewport_width - margin {
+        left = cursor.x - offset - size;
+    }
+    if top + size > viewport_height - margin {
+        top = cursor.y - offset - size;
+    }
+    crate::editor::Point {
+        x: left.min(viewport_width - size - margin).max(margin),
+        y: top.min(viewport_height - size - margin).max(margin),
+    }
+}
+
+#[cfg(test)]
+mod loupe_tests {
+    use super::*;
+    use crate::editor::{Document, Point};
+
+    #[test]
+    fn loupe_position_flips_near_the_viewport_edges() {
+        // Shipping `imageBackground.test.ts` cases.
+        let open = wand_loupe_position(Point { x: 40., y: 50. }, 800., 600.);
+        assert_eq!(open, Point { x: 58., y: 68. });
+        let corner = wand_loupe_position(Point { x: 790., y: 590. }, 800., 600.);
+        assert!(corner.x + WAND_LOUPE_SIZE <= 792. && corner.y + WAND_LOUPE_SIZE <= 592.);
+        assert_eq!(corner, Point { x: 688., y: 488. });
+        let tiny = wand_loupe_position(Point { x: 5., y: 5. }, 60., 60.);
+        assert_eq!(tiny, Point { x: 8., y: 8. }, "never leaves the margin");
+    }
+
+    #[test]
+    fn loupe_magnifies_the_wand_target_and_labels_its_colour() {
+        let document = Document::new_capture("fixture:base", 20., 10., None);
+        let mut pixels = RgbaImage::from_pixel(20, 10, Rgba([0x12, 0x34, 0x56, 255]));
+        pixels.put_pixel(0, 0, Rgba([255, 0, 0, 0]));
+        let asset = |src: &str| (src == "fixture:base").then_some(&pixels);
+
+        let loupe = wand_loupe(&document, asset, Point { x: 3.5, y: 4.5 }).unwrap();
+        assert_eq!(loupe.pixel, (3, 4));
+        assert_eq!(loupe.text, "#123456");
+        assert_eq!(loupe.accessible_label, "Sample color #123456");
+        assert_eq!(loupe.tiles.len(), 121);
+        // Column 0 of the window is x = -2: outside, so the checker shows.
+        assert_eq!(loupe.tiles[0], None);
+        assert_eq!(loupe.tiles[60], Some([0x12, 0x34, 0x56, 255]));
+
+        let empty = wand_loupe(&document, asset, Point { x: 0.2, y: 0.2 }).unwrap();
+        assert!(empty.transparent);
+        assert_eq!(empty.text, "empty");
+        assert_eq!(empty.accessible_label, "Sample color: transparent");
+
+        assert_eq!(wand_loupe(&document, asset, Point { x: 25., y: 4. }), None);
+        assert_eq!(
+            wand_loupe(&document, |_| None, Point { x: 3., y: 4. }),
+            None
+        );
+        assert_eq!(rgba_hex([1, 2, 255, 0]), "#0102ff");
+    }
+}

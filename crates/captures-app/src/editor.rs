@@ -1525,9 +1525,10 @@ impl Document {
         self.height = clamp(height.round(), 1., MAX_CANVAS_DIMENSION);
     }
 
-    /// Fit the canvas to visible layer geometry, including locked/transparent
-    /// layers and off-canvas content. This does not scan flattened alpha pixels.
-    pub fn trim_to_content(&mut self) -> Result<(), String> {
+    /// Shipping `visibleContentBounds`: the union of every visible layer's
+    /// painted bounds (locked and off-canvas layers included, hidden layers
+    /// ignored), at least 1 × 1. `None` when nothing is visible.
+    pub fn visible_content_bounds(&self) -> Result<Option<Rect>, String> {
         let mut content: Option<Rect> = None;
         for element in self
             .elements
@@ -1549,9 +1550,17 @@ impl Document {
                 }
             });
         }
-        if let Some(mut bounds) = content {
-            bounds.width = bounds.width.max(1.);
-            bounds.height = bounds.height.max(1.);
+        Ok(content.map(|bounds| Rect {
+            width: bounds.width.max(1.),
+            height: bounds.height.max(1.),
+            ..bounds
+        }))
+    }
+
+    /// Fit the canvas to visible layer geometry, including locked/transparent
+    /// layers and off-canvas content. This does not scan flattened alpha pixels.
+    pub fn trim_to_content(&mut self) -> Result<(), String> {
+        if let Some(bounds) = self.visible_content_bounds()? {
             self.fit_canvas_to_bounds(bounds);
         }
         Ok(())
@@ -2022,13 +2031,10 @@ impl Document {
     }
 
     fn fit_canvas_to_bounds(&mut self, bounds: Rect) {
-        let x = bounds.x.floor();
-        let y = bounds.y.floor();
-        let right = (bounds.x + bounds.width).ceil();
-        let bottom = (bounds.y + bounds.height).ceil();
-        self.width = (right - x).max(1.);
-        self.height = (bottom - y).max(1.);
-        self.translate(-x, -y);
+        let frame = crate::editor_canvas::trim_frame(bounds);
+        self.width = frame.width;
+        self.height = frame.height;
+        self.translate(-frame.x, -frame.y);
     }
 
     fn expand_canvas_to_bounds(&mut self, bounds: Rect) {

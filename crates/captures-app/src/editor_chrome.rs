@@ -467,8 +467,224 @@ pub mod colors {
     }
 }
 
+/// Shipping `DrawToolPreview`: the stroke or brush sample above the drawing
+/// defaults in Properties. Geometry is in the shipping SVG's `0 0 160 72`
+/// view box; hosts fit that box (`preserveAspectRatio` meet) into an
+/// [`HEIGHT`]-tall checkerboard card and apply the colour, fill and opacity.
+pub mod draw_preview {
+    use crate::editor::{ClosedShapeKind, Point, Rect};
+    use serde::Serialize;
+
+    pub const VIEWBOX: [f64; 2] = [160., 72.];
+    /// `.screenshot-draw-preview { height: 88px }`, border included.
+    pub const HEIGHT: f64 = 88.;
+    /// Checkerboard square: `background-size: 16px` gives 8 px squares.
+    pub const CHECKER: f64 = 8.;
+    pub const STROKE_LABEL: &str = "Stroke preview";
+    pub const BRUSH_LABEL: &str = "Brush preview";
+
+    #[derive(Clone, Debug, PartialEq, Serialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    pub enum Shape {
+        RoundedRect {
+            rect: Rect,
+            radius: f64,
+        },
+        Ellipse {
+            rect: Rect,
+        },
+        /// A polyline; `closed` paths take the fill colour.
+        Path {
+            points: Vec<Point>,
+            closed: bool,
+        },
+    }
+
+    /// The Erase/Restore brush dab: opaque to `hard_stop` (0...1 of the
+    /// radius), then fading to clear at the rim, in `--solid`.
+    #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+    pub struct Brush {
+        pub center: Point,
+        pub radius: f64,
+        pub hard_stop: f64,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize)]
+    pub struct Preview {
+        /// The card's accessible name.
+        pub label: &'static str,
+        /// View-box stroke width; 0 draws no stroke.
+        pub stroke_width: f64,
+        pub shapes: Vec<Shape>,
+        pub brush: Option<Brush>,
+    }
+
+    fn point(x: f64, y: f64) -> Point {
+        Point { x, y }
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Flatten the shipping pen sample
+    /// `M22 48c18-28 28-32 38-12s18 16 36-16 22-8 42 8` into a polyline.
+    fn pen_path() -> Vec<Point> {
+        let segments = [
+            [
+                point(22., 48.),
+                point(40., 20.),
+                point(50., 16.),
+                point(60., 36.),
+            ],
+            [
+                point(60., 36.),
+                point(70., 56.),
+                point(78., 52.),
+                point(96., 20.),
+            ],
+            [
+                point(96., 20.),
+                point(114., -12.),
+                point(118., 12.),
+                point(138., 28.),
+            ],
+        ];
+        let mut points = vec![segments[0][0]];
+        for [p0, p1, p2, p3] in segments {
+            for step in 1..=16 {
+                let t = f64::from(step) / 16.;
+                let u = 1. - t;
+                let blend = |a: f64, b: f64, c: f64, d: f64| {
+                    u * u * u * a + 3. * u * u * t * b + 3. * u * t * t * c + t * t * t * d
+                };
+                points.push(point(
+                    blend(p0.x, p1.x, p2.x, p3.x),
+                    blend(p0.y, p1.y, p2.y, p3.y),
+                ));
+            }
+        }
+        points
+    }
+
+    /// Stroke sample for a drawing tool key (`rectangle`, `ellipse`, `line`,
+    /// `arrow`, `triangle`, `diamond`, `star`; anything else is the pen
+    /// squiggle). Closed shapes pass `stroke_enabled: false` to hide the
+    /// outline, as shipping's `strokeEnabled` does.
+    #[must_use]
+    pub fn stroke(tool: &str, stroke_width: f64, stroke_enabled: bool) -> Preview {
+        let polygon = |kind: ClosedShapeKind| Shape::Path {
+            points: kind
+                .polygon(point(38., 12.), point(122., 60.))
+                .unwrap_or_default(),
+            closed: true,
+        };
+        let shapes = match tool {
+            "rectangle" => vec![Shape::RoundedRect {
+                rect: rect(38., 16., 84., 40.),
+                radius: 6.,
+            }],
+            "ellipse" => vec![Shape::Ellipse {
+                rect: rect(38., 16., 84., 40.),
+            }],
+            "line" => vec![Shape::Path {
+                points: vec![point(28., 50.), point(132., 22.)],
+                closed: false,
+            }],
+            "arrow" => vec![
+                Shape::Path {
+                    points: vec![point(30., 50.), point(118., 24.)],
+                    closed: false,
+                },
+                Shape::Path {
+                    points: vec![point(104., 20.), point(122., 20.), point(122., 38.)],
+                    closed: false,
+                },
+            ],
+            "triangle" => vec![polygon(ClosedShapeKind::Triangle)],
+            "diamond" => vec![polygon(ClosedShapeKind::Diamond)],
+            "star" => vec![polygon(ClosedShapeKind::Star)],
+            _ => vec![Shape::Path {
+                points: pen_path(),
+                closed: false,
+            }],
+        };
+        Preview {
+            label: STROKE_LABEL,
+            stroke_width: if stroke_enabled {
+                (stroke_width * 0.42).clamp(1.75, 12.)
+            } else {
+                0.
+            },
+            shapes,
+            brush: None,
+        }
+    }
+
+    /// Erase/Restore brush sample: `8 + (size − 4) / 116 × 22` view-box
+    /// radius, opaque to `max(4, (1 − softness / 100) × 72)` %.
+    #[must_use]
+    pub fn brush(size: f64, softness: f64) -> Preview {
+        Preview {
+            label: BRUSH_LABEL,
+            stroke_width: 0.,
+            shapes: Vec::new(),
+            brush: Some(Brush {
+                center: point(80., 36.),
+                radius: 8. + ((size - 4.) / 116.) * 22.,
+                hard_stop: ((1. - softness / 100.) * 72.).max(4.) / 100.,
+            }),
+        }
+    }
+
+    /// Where the view box lands inside a `width × height` card interior:
+    /// `(scale, left, top)` for `preserveAspectRatio="xMidYMid meet"`.
+    #[must_use]
+    pub fn fit(width: f64, height: f64) -> (f64, f64, f64) {
+        let scale = (width / VIEWBOX[0]).min(height / VIEWBOX[1]).max(0.);
+        (
+            scale,
+            (width - VIEWBOX[0] * scale) / 2.,
+            (height - VIEWBOX[1] * scale) / 2.,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn draw_tool_preview_matches_shipping_geometry() {
+        use super::draw_preview::{self as preview, Shape};
+        let rectangle = preview::stroke("rectangle", 8., true);
+        assert_eq!(rectangle.label, "Stroke preview");
+        assert!((rectangle.stroke_width - 3.36).abs() < 1e-9);
+        assert!(matches!(rectangle.shapes[0], Shape::RoundedRect { radius, .. } if radius == 6.));
+        assert_eq!(preview::stroke("line", 2., true).stroke_width, 1.75);
+        assert_eq!(preview::stroke("line", 40., true).stroke_width, 12.);
+        assert_eq!(preview::stroke("star", 8., false).stroke_width, 0.);
+        assert!(matches!(&preview::stroke("star", 8., true).shapes[0],
+            Shape::Path { points, closed: true } if points.len() == 10));
+        assert_eq!(preview::stroke("arrow", 8., true).shapes.len(), 2);
+        let Shape::Path { points, closed } = &preview::stroke("pen", 8., true).shapes[0] else {
+            panic!("pen is a path");
+        };
+        assert!(!closed);
+        assert_eq!(points.first().map(|p| (p.x, p.y)), Some((22., 48.)));
+        assert_eq!(points.last().map(|p| (p.x, p.y)), Some((138., 28.)));
+
+        let brush = preview::brush(4., 100.).brush.unwrap();
+        assert_eq!((brush.radius, brush.hard_stop), (8., 0.04));
+        let brush = preview::brush(120., 0.).brush.unwrap();
+        assert_eq!((brush.radius, brush.hard_stop), (30., 0.72));
+        assert_eq!(preview::brush(28., 18.).label, "Brush preview");
+        assert_eq!(preview::fit(320., 72.), (1., 80., 0.));
+    }
+
     use super::*;
     use serde_json::json;
 
