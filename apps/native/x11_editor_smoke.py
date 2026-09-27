@@ -500,32 +500,42 @@ def main():
         run("xdotool", "key", "Return", "sleep", ".3")
 
     # Shipping header (52px): the Canvas toolbar on the left; Undo/Redo (only
-    # above 1040px), the zoom group, Add images and the draft menu on the right.
+    # above 1040px), the zoom group and Add images on the right. Drafts autosave.
     # Widths below are measured under the token fonts.
     ADD_IMAGES_WIDTH = 116
     HEADER_Y = 26
+    # The restored-draft notice's Discard and Dismiss, from the window's right edge.
+    DRAFT_DISCARD_RIGHT = 110
+    DRAFT_DISMISS_RIGHT = 42
     # Top-left of the background card's swatch grid relative to its trigger-derived
     # left edge, and the first tile row's centre.
     BACKGROUND_GRID_X = 13
     BACKGROUND_GRID_Y = 115
     # Bottom-clamped Layers → Annotation style rows (see `bottom`): first swatch
     # row centres and toggles, for fill-only, stroke+fill and shadow layouts.
-    ANNOTATION_FILL_ROW = 349
-    ANNOTATION_STROKE_TOGGLE = 234
-    ANNOTATION_STROKE_ROW = 124
-    ANNOTATION_STROKE_WIDTH = 234
-    ANNOTATION_FILL_TOGGLE = 278
-    ANNOTATION_SHADOW_ROW = 218
-    ANNOTATION_SHADOW_TOGGLE = 146
+    # Styles apply live (no Apply row at the end); shipping's Opacity slider
+    # sits between the stroke width and the fill toggle.
+    ANNOTATION_OPACITY_ROWS = 48  # One 36 px slider row plus the 12 px item gap.
+    ANNOTATION_FILL_ROW = 393
+    ANNOTATION_STROKE_TOGGLE = 278 - ANNOTATION_OPACITY_ROWS
+    ANNOTATION_STROKE_ROW = 168 - ANNOTATION_OPACITY_ROWS
+    ANNOTATION_STROKE_WIDTH = 278 - ANNOTATION_OPACITY_ROWS
+    ANNOTATION_FILL_TOGGLE = 322
+    ANNOTATION_SHADOW_ROW = 262
+    ANNOTATION_SHADOW_TOGGLE = 190
+    # Outline layout (stroke on, fill and shadow off): the two toggles.
+    ANNOTATION_OUTLINE_FILL_TOGGLE = 459
+    ANNOTATION_OUTLINE_SHADOW_TOGGLE = 503
+    # Shadow layout: the opacity, blur, X and Y offset fields.
+    ANNOTATION_SHADOW_FIELDS = (371, 415, 459, 503)
 
     def header_controls(width):
         compact = width <= 1040
         slider, preset = (72, 72) if compact else (92, 76)
-        add_right = width - 12 - 34 - 4
+        add_right = width - 12
         zoom_left = add_right - ADD_IMAGES_WIDTH - 8 - (3 * 30 + slider + preset + 6)
         x = zoom_left + 1
-        points = {"more": width - 29, "import": add_right - ADD_IMAGES_WIDTH // 2,
-                  "fit": x + 15, "minus": x + 46}
+        points = {"import": add_right - ADD_IMAGES_WIDTH // 2, "fit": x + 15, "minus": x + 46}
         pad = 6 if compact else 8
         points["slider-min"] = x + 62 + pad
         points["slider-max"] = x + 62 + slider - pad - 1
@@ -635,10 +645,6 @@ def main():
                 click(editor, 28, 52 + 8 + 7 * 40 + 30)  # Empty rail: drop field focus.
                 run("xdotool", "key", "ctrl+z" if name == "undo" else "ctrl+shift+z",
                     "sleep", ".2")
-        elif name in ("save-draft", "discard"):
-            width = editor_width()
-            click(editor, width - 29, HEADER_Y)
-            click(editor, width - 80, 66 if name == "save-draft" else 110)
         elif name == "import":
             click(editor, header_controls(editor_width())[0]["import"], HEADER_Y)
         elif name == "layers":
@@ -676,12 +682,9 @@ def main():
         # Preset menu rows, 44px apart from y=64, right-aligned to the preset.
         return header_controls(editor_width())[0]["zoom"] + 10
 
-    def discard_confirm():
-        # The confirmation banner sits above the header; actions are right-aligned.
-        click(editor, editor_width() - 171, 20)
-
-    def discard_cancel():
-        click(editor, editor_width() - 64, 20)
+    def discard_restored(window):
+        # Shipping's restored-draft notice above the header: Discard, then Dismiss.
+        click(window, editor_width_of(window) - DRAFT_DISCARD_RIGHT, 20)
 
     def blur_click():
         # Empty rail space below the tools: takes focus from fields, edits nothing.
@@ -880,16 +883,32 @@ def main():
 
         def saved(width, height, x, y):
             if not draft.exists():
-                return False
+                # No draft means the original capture: autosave drops a draft
+                # whose document is back at the capture, as shipping does.
+                return (width, height, x, y) == (640, 360, 0, 0)
             document = json.loads(draft.read_text())["document"]
             layer = document["elements"][0]
             return (document["width"], document["height"], layer["x"], layer["y"]) == (width, height, x, y)
 
+        def settled_draft():
+            # Shipping autosaves 700 ms after the latest edit. Once the editor is
+            # idle, wait until the draft (or its absence) has held for longer.
+            wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                 "editor idle before reading the draft")
+            last, since = draft_bytes(), time.monotonic()
+            deadline = since + 20
+            while time.monotonic() < deadline:
+                time.sleep(.1)
+                current = draft_bytes()
+                if current != last:
+                    last, since = current, time.monotonic()
+                elif time.monotonic() - since >= 1:
+                    return
+            raise AssertionError("the autosaved draft never settled")
+
         def save_until(predicate, description):
             def attempt():
-                # Save is idempotent; an edit can still be queued while X11
-                # exposes the prior idle title. Never retry a non-idempotent edit.
-                toolbar_click("save-draft")
+                settled_draft()
                 return predicate()
             wait(attempt, description)
             # The manifest is written before the worker's UI snapshot arrives.
@@ -918,7 +937,7 @@ def main():
             card_width = (972 - 2 * 16) / 3
             return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
 
-        def reopen(edit_y=554):
+        def reopen(edit_y=554, keep_banner=False):
             export_bar["open"] = False  # Every editor window starts collapsed.
             tool_state["draw"] = "rectangle"  # Each editor starts with Rectangle.
             click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
@@ -928,13 +947,37 @@ def main():
             time.sleep(.6)
             if restored:
                 # A restored draft shows shipping's banner above the header; keep
-                # the authored layout by dismissing it (Discard stays explicit).
+                # the authored layout by dismissing it unless Discard follows.
                 shot(window, "restored-draft-banner")
-                click(window, editor_width_of(window) - 42, 20)
+                if not keep_banner:
+                    click(window, editor_width_of(window) - DRAFT_DISMISS_RIGHT, 20)
             return window
 
+        def discard_draft(description):
+            # Shipping discards only from the restored-draft notice: close (the
+            # draft flushes), reopen at the same size, then Discard.
+            size = window_size()
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), f"{description}: editor closes")
+            assert draft.exists(), f"{description}: closing keeps the autosaved draft"
+            window = reopen(keep_banner=True)
+            discard_restored(window)
+            wait(lambda: not draft.exists(), description)
+            run("xdotool", "windowsize", "--sync", window, *map(str, size), "sleep", ".3")
+            return window
+
+        # The original capture's single layer. No draft means the document is
+        # back at the capture: shipping autosave drops such a draft.
+        # Its session-local asset source is not on disk, so stand in a stable one.
+        ORIGINAL_LAYERS = [{"kind": "image", "id": "capture-background", "source": "background",
+                            "src": "draft-asset:original-capture", "locked": True, "visible": True}]
+
+        def draft_bytes():
+            # None while no draft exists (the document is the original capture).
+            return draft.read_bytes() if draft.exists() else None
+
         def layers():
-            return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else []
+            return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else ORIGINAL_LAYERS
 
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
@@ -965,7 +1008,7 @@ def main():
             draw_tool("rectangle")
             drag((320, 250), (480, 370))
             save_layers(lambda values: len(values) == 2, "external image edit is a real draft")
-            preserved_draft = draft.read_bytes()
+            preserved_draft = draft_bytes()
             assert all(path.read_bytes() == before for path, before in source_bytes.items())
 
             # A second executable must forward, not initialize another renderer,
@@ -985,7 +1028,7 @@ def main():
                  "forwarded canonical alias focuses existing edited window")
             assert len(windows("Captures Screenshot Editor")) == 3
             assert len(opened_entries()) == 3
-            assert draft.read_bytes() == preserved_draft
+            assert draft_bytes() == preserved_draft
             assert len(layers()) == 2
 
             run("xdotool", "windowminimize", root)
@@ -1000,22 +1043,31 @@ def main():
             wait(lambda: app.poll() is not None, "external image batch quits")
             assert app.returncode == 0
 
-            # A closed edited source must not silently discard its saved work.
-            app = spawn("app-draft", app_command + ["--open-image", str(source_png)])
-            root = wait(lambda: windows("Capture History"), "draft guard History")[0]
-            time.sleep(2)
-            assert not windows("Captures Screenshot Editor"), "saved draft blocks source reload"
-            assert draft.read_bytes() == preserved_draft
-            shot(root, "external-draft-blocked")
-            # The open error banner above the grid moves the cards 60px lower.
-            editor = reopen(614)  # The existing History route still restores the saved edit.
+            # History still restores the autosaved edit of a closed source.
+            app = spawn("app-draft", app_command)
+            root = wait(lambda: windows("Capture History"), "draft History")[0]
+            assert draft_bytes() == preserved_draft
+            editor = reopen(keep_banner=True)
             shot(editor, "external-draft-restored")
             assert len(layers()) == 2
-            toolbar_click("discard")
-            discard_confirm()
-            wait(lambda: not draft.exists(), "explicitly discard the saved draft")
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "restored draft editor closes")
+            assert draft_bytes() == preserved_draft, "closing an unchanged restored draft keeps it"
             close(root)
-            wait(lambda: app.poll() is not None, "draft-resolution process quits")
+            wait(lambda: app.poll() is not None, "draft History process quits")
+            assert app.returncode == 0
+
+            # Opening the closed source again reloads it and drops its draft, as
+            # shipping does, once the source decodes.
+            app = spawn("app-draft-reload", app_command + ["--open-image", str(source_png)])
+            root = wait(lambda: windows("Capture History"), "source reload History")[0]
+            editor = wait(lambda: windows("Captures Screenshot Editor"), "reloaded source editor")[0]
+            wait(lambda: not draft.exists(), "reloading a closed source drops its draft")
+            run("xdotool", "windowmove", "--sync", editor, "100", "80")
+            time.sleep(1)
+            shot(editor, "external-source-reopened")
+            close(root)
+            wait(lambda: app.poll() is not None, "source reload process quits")
             assert app.returncode == 0
 
             run("convert", str(source_png), "-fill", "#1234ab", "-draw", "rectangle 8,8 50,50",
@@ -1042,14 +1094,14 @@ def main():
                 "checks": ["startup-files-with-spaces", "bad-file-does-not-stop-later-files",
                            "png-jpeg-webp-owned-pixels", "canonical-alias-no-duplicate",
                            "multiple-native-editors", "open-does-not-create-draft",
-                           "edits-do-not-overwrite-source", "closed-draft-blocks-reload",
-                           "history-restores-saved-draft", "explicit-discard-allows-source-reload",
+                           "edits-do-not-overwrite-source", "history-restores-autosaved-draft",
+                           "closed-source-reload-drops-draft",
                            "reload-preserves-history-identity", "reloaded-source-pixels",
                            "secondary-exits-before-renderer-and-settings",
                            "forwarded-relative-alias-preserves-edits",
                            "empty-relaunch-restores-preferences"],
             }, indent=2) + "\n")
-            print("PASS native external images: batch, aliases, errors, pixels, drafts and safe reload")
+            print("PASS native external images: batch, aliases, errors, pixels, autosaved drafts and source reload")
             return
 
         if args.combine_only:
@@ -1194,9 +1246,10 @@ def main():
             rail_click("arrow")
             shot(editor, "tool-rail-minimum-arrow")
             resize_editor(1000, 901, "sleep", ".3")
-            toolbar_click("discard")
-            discard_confirm()
-            wait(lambda: not draft.exists(), "discard rail fixture")
+            # Undo back to the capture: shipping autosave then drops the draft.
+            blur_click()
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            wait(lambda: not draft.exists(), "undoing the rail fixture drops the draft")
             blur_click()
             run("xdotool", "key", "s", "sleep", ".3")
             drag((320, 250), (480, 370))
@@ -1208,17 +1261,17 @@ def main():
                                 "V selects and moves, not draws")[-1]
             assert moved == dict(star, x=star["x"] + 21, y=star["y"] + 17,
                                  endX=star["endX"] + 21, endY=star["endY"] + 17), moved
-            before_crop = draft.read_bytes()
+            before_crop = draft_bytes()
             run("xdotool", "key", "c", "sleep", ".3")
             drag((330, 270), (460, 350))
             run("xdotool", "key", "c", "sleep", ".3")
             shot(editor, "shortcut-crop-candidate")
             run("xdotool", "key", "v", "sleep", ".3")
-            assert draft.read_bytes() == before_crop, "tool selection/cancellation must not save edits"
+            assert draft_bytes() == before_crop, "tool selection/cancellation must not save edits"
             assert save_layers(lambda values: len(values) == 2, "crop cancellation")[-1] == moved
-            toolbar_click("discard")
-            discard_confirm()
-            wait(lambda: not draft.exists(), "discard tool-key fixture")
+            blur_click()
+            run("xdotool", "key", "ctrl+z", "sleep", ".3", "key", "ctrl+z", "sleep", ".3")
+            wait(lambda: not draft.exists(), "undoing the tool-key fixture drops the draft")
             blur_click()  # Leave control focus before selecting a canvas tool.
             run("xdotool", "key", "r", "sleep", ".3")
             drag((320, 250), (480, 370))
@@ -1236,14 +1289,11 @@ def main():
             canvas_click("width")  # Focus canvas width, not a document action.
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "field focus keeps document")[-1] == shape
-            toolbar_click("discard")  # Open discard confirmation.
+            blur_click()  # Leaving the field returns shortcuts to the document.
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            discard_cancel()  # Banner confirmation: cancel discard.
-            assert save_layers(lambda values: len(values) == 2, "confirmation owns shortcuts")[-1] == shape
-            run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            save_layers(lambda values: len(values) == 1, "document shortcut restored after dialog")
+            save_layers(lambda values: len(values) == 1, "document shortcut after leaving the field")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
-            assert save_layers(lambda values: len(values) == 2, "redo after dialog")[-1] == shape
+            assert save_layers(lambda values: len(values) == 2, "redo after leaving the field")[-1] == shape
             toolbar_click("layers")  # Layers; select the restored shape, not the original.
             layer_click(0)
             run("xdotool", "key", "ctrl+d", "sleep", ".3")
@@ -1318,12 +1368,12 @@ def main():
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 3, "reopen has no layer clipboard")[-1] == pasted_twice
             toolbar_click("layers")
-            before_menu = draft.read_bytes()
+            before_menu = draft_bytes()
             window_move(layer_row(1), "sleep", ".2", "mousedown", "3",
                         "sleep", ".15", "mouseup", "3", "sleep", ".3")
             shot(editor, "layer-context-menu")
             run("xdotool", "key", "Escape", "sleep", ".3")
-            assert draft.read_bytes() == before_menu, "opening/cancelling a row menu must not edit"
+            assert draft_bytes() == before_menu, "opening/cancelling a row menu must not edit"
             resize_editor(760, 540, "sleep", ".3")
             window_move(layer_row(0), "sleep", ".2", "mousedown", "3",
                         "sleep", ".15", "mouseup", "3", "sleep", ".3")
@@ -1332,7 +1382,7 @@ def main():
             # fail this flow, not silently produce a menu-free review capture.
             row_x, row_y = layer_row(0)
             click(editor, row_x + 30, row_y + 15)
-            assert draft.read_bytes() == before_menu
+            assert draft_bytes() == before_menu
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             menu_paste = save_layers(lambda values: len(values) == 4, "context-menu copy then paste")[-1]
             assert menu_paste == dict(pasted_twice, id=menu_paste["id"],
@@ -1367,7 +1417,7 @@ def main():
             draw_tool("rectangle")
             drag((320, 250), (480, 370))
             save_layers(lambda values: len(values) == 2, "edited original fixture")
-            saved_draft = draft.read_bytes()
+            saved_draft = draft_bytes()
             # A saved source starts beside itself: same folder and name, Save overwrites.
             export_click("filename")
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
@@ -1390,7 +1440,7 @@ def main():
                 artifact_id, original_metadata["created_at"], str(source_export))
             assert updated["size_bytes"] == len(source_export.read_bytes())
             assert len(list(history.glob("*/metadata.json"))) == 1
-            assert draft.read_bytes() == saved_draft
+            assert draft_bytes() == saved_draft
             replaced = source_export.read_bytes()
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo preserved after output")
@@ -1451,10 +1501,10 @@ def main():
             layer_click(0, "lock")  # Unlock the original image for canvas rotation.
             save_layers(lambda values: not values[0]["locked"], "unlocked original")
             shot(editor, "rotation-snap-controls")
-            before = draft.read_bytes()
+            before = draft_bytes()
             prop_field(304, 37, x=50)
             shot(editor, "rotation-snap-custom")
-            assert draft.read_bytes() == before, "snap preference must not edit or save a draft"
+            assert draft_bytes() == before, "snap preference must not edit or save a draft"
             # Full-canvas image uses the inset top grip at (558,117), pivot (558,269).
             # Vector (0,-152) to (100,-110) is 42.27°, giving 37°, not default 45°.
             rotation_start = fixture_point((328, 117))
@@ -1463,9 +1513,9 @@ def main():
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, rotation_end), "keydown", "Shift_L", "sleep", ".3")
             shot(editor, "rotation-snap-transient")
-            assert draft.read_bytes() == before
+            assert draft_bytes() == before
             run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "keyup", "Shift_L")
-            assert draft.read_bytes() == before
+            assert draft_bytes() == before
             drag((558, 117), (658, 159), shift=True)
             angle = 37 * math.pi / 180
             save_layers(lambda values: math.isclose(values[0].get("rotation", 0), angle, abs_tol=1e-12),
@@ -1509,7 +1559,7 @@ def main():
             # below the DrawToolPreview card.
             resize_editor(942, 1001 + DRAW_PREVIEW_ROWS)
             save(640, 360, 0, 0)
-            before = draft.read_bytes()
+            before = draft_bytes()
             toolbar_click("draw")
             inspector_click(16, shape_row(308))  # Enable the initially disabled closed-shape stroke.
             shot(editor, "drawing-default-controls")
@@ -1518,14 +1568,14 @@ def main():
             field(shape_row(470), "37", 87)
             field(shape_row(586), "#abcdef", 145)
             shot(editor, "drawing-custom-controls")
-            assert draft.read_bytes() == before, "default controls alone wrote a draft"
+            assert draft_bytes() == before, "default controls alone wrote a draft"
 
             start, end = document_point((250, 45)), document_point((350, 145))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".3")
             shot(editor, "drawing-styled-transient")
-            assert draft.read_bytes() == before, "transient drawing wrote a draft"
+            assert draft_bytes() == before, "transient drawing wrote a draft"
             run("xdotool", "mouseup", "1", "sleep", ".3")
             created = save_layers(lambda values: len(values) == 2, "styled rectangle created")[-1]
             assert created["opacity"] == 37 and created["style"]["strokeWidth"] == 13, created
@@ -1573,7 +1623,7 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo invisible line")
             toolbar_click("draw")
-            before = draft.read_bytes()
+            before = draft_bytes()
             field(shape_row(426), "100", 87)
             inspector_click(16, shape_row(467))  # Line's pre-placement Drop shadow.
             shot(editor, "drawing-shadow-controls")
@@ -1583,7 +1633,7 @@ def main():
             field(shape_row(670), "-23", 100)
             field(shape_row(714), "31", 100)
             shot(editor, "drawing-shadow-custom-controls")
-            assert draft.read_bytes() == before, "shadow defaults alone wrote a draft"
+            assert draft_bytes() == before, "shadow defaults alone wrote a draft"
             start, end = document_point((250, 70)), document_point((370, 70))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
@@ -1591,12 +1641,12 @@ def main():
             shot(editor, "drawing-shadow-transient")
             document_pixel("drawing-shadow-transient", 300, 70, (18, 52, 86), 1)
             document_pixel("drawing-shadow-transient", 277, 101, (240, 192, 64), 1)
-            assert draft.read_bytes() == before, "pixel preview wrote a draft"
+            assert draft_bytes() == before, "pixel preview wrote a draft"
             run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
             shot(editor, "drawing-shadow-cancelled")
             document_pixel("drawing-shadow-cancelled", 300, 70, (40, 110, 166), 1)
             document_pixel("drawing-shadow-cancelled", 277, 101, (40, 110, 166), 1)
-            assert draft.read_bytes() == before, "cancelled preview wrote a draft"
+            assert draft_bytes() == before, "cancelled preview wrote a draft"
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".5", "mouseup", "1", "sleep", ".3")
@@ -1650,16 +1700,16 @@ def main():
                 ("star", (818, 419), (658, 299), (738, 359)),
             ]:
                 draw_tool(name)
-                before = draft.read_bytes()
+                before = draft_bytes()
                 transient_start, transient_end = canvas_point(start), canvas_point(end)
                 run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, transient_start),
                     "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                     *map(str, transient_end), "sleep", ".3")
                 shot(editor, f"polygon-{name}-transient")
                 pixel(f"polygon-{name}-transient", *canvas_point(center), (255, 59, 92))
-                assert draft.read_bytes() == before, "transient polygon cannot write the draft"
+                assert draft_bytes() == before, "transient polygon cannot write the draft"
                 run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
-                assert draft.read_bytes() == before
+                assert draft_bytes() == before
                 drag(start, (start[0], end[1]))
                 save_layers(lambda values: len(values) == len(ids) + 1, "zero-width polygon rejected")
                 drag(start, end)
@@ -2003,10 +2053,10 @@ def main():
                 draw_tool("text")
                 click(editor, *document_point(point))
 
-            before = draft.read_bytes()
+            before = draft_bytes()
             begin_input((80, 60))
             shot(editor, "text-input-empty")
-            assert draft.read_bytes() == before
+            assert draft_bytes() == before
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "blank input creates no layer")
 
@@ -2017,7 +2067,7 @@ def main():
             click(editor, x + 100, y + 110)  # Cancel in the composing panel.
             save_layers(lambda values: len(values) == 1, "Cancel restores the original document")
 
-            before = draft.read_bytes()
+            before = draft_bytes()
             begin_input((80, 60))
             # One paste avoids flooding X11 with thousands of synthetic key events.
             oversized = b"x" * 4097
@@ -2031,7 +2081,7 @@ def main():
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".3")
             assert run("xclip", "-selection", "clipboard", "-o") == oversized
             shot(editor, "text-input-error")
-            assert draft.read_bytes() == before, "failed previews must not save"
+            assert draft_bytes() == before, "failed previews must not save"
             run("xdotool", "key", "ctrl+a")
             type_text("Recovered", 1)
             run("xdotool", "key", "Escape", "sleep", ".3")
@@ -2040,14 +2090,14 @@ def main():
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "recovered input is one undo step")
 
-            before = draft.read_bytes()
+            before = draft_bytes()
             begin_input((80, 60))
             type_text("Alpha", 1)
             run("xdotool", "key", "Return")
             type_text("Beta", 1)
             time.sleep(.3)
             shot(editor, "text-input-typing")
-            assert draft.read_bytes() == before, "typing previews must not persist a draft"
+            assert draft_bytes() == before, "typing previews must not persist a draft"
             run("xdotool", "key", "Escape", "sleep", ".3")
             created = save_layers(lambda values: len(values) == 2, "multiline input finished")[-1]
             assert created["text"] == "Alpha\nBeta"
@@ -2152,7 +2202,7 @@ def main():
             resize_editor(1000, 1001)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "default rounded creation single undo")
-            before = draft.read_bytes()
+            before = draft_bytes()
             toolbar_click("draw")
             draw_tool("text")
             inspector_click(95, draw_row(337))
@@ -2162,7 +2212,7 @@ def main():
             field(draw_row(385), 37.5, x=59)
             field(draw_row(455), "#2367ab", x=105)
             shot(editor, "text-defaults-staged")
-            assert draft.read_bytes() == before, "defaults must not write a draft"
+            assert draft_bytes() == before, "defaults must not write a draft"
             fixture_click((208, 169))  # Document (200,80), at actual-size scale.
             type_text("Native")
             shot(editor, "text-defaults-composing")
@@ -2355,14 +2405,14 @@ def main():
             layer_click(0)
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, f"text-minimum-reopened-{args.appearance}")
-            before_scroll = draft.read_bytes()
+            before_scroll = draft_bytes()
             properties_move(
                 "click", "--repeat", "7", "--delay", "80", "5", "sleep", ".3")
             shot(editor, f"text-minimum-controls-{args.appearance}")
             properties_move(
                 "click", "--repeat", "4", "--delay", "80", "5", "sleep", ".3")
             shot(editor, f"text-minimum-shadow-controls-{args.appearance}")
-            assert draft.read_bytes() == before_scroll, "scrolling text controls must not edit"
+            assert draft_bytes() == before_scroll, "scrolling text controls must not edit"
             reopened = layers()[-1]
             assert reopened["id"] == created["id"] and reopened["text"] == "Readable native text"
             assert reopened["fontFamily"] == "serif"
@@ -2395,16 +2445,18 @@ def main():
 
         if args.text_draft_only:
             shot(editor, "text-draft-restored")
-            save_until(lambda: json.loads(draft.read_text())["updated_at_ms"] > 1,
-                       "font-backed draft save")
-            assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
-            assert json.loads(draft.read_text())["fonts"] == {
-                "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
+            # Dismiss the restored-draft notice so the authored layout applies.
+            click(editor, editor_width() - DRAFT_DISMISS_RIGHT, 20)
             resize_editor(942, 701)
             toolbar_click("layers")  # Layers.
             fixture_click((370, 230))  # Select the text plate, including non-ink pixels.
             drag((600, 230), (625, 247))
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (275, 57), "text moved")
+            # The edit autosaved the restored draft with its pinned font bytes.
+            assert json.loads(draft.read_text())["updated_at_ms"] > 1, "font-backed draft autosave"
+            assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
+            assert json.loads(draft.read_text())["fonts"] == {
+                "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
             shot(editor, "text-moved")
             toolbar_click("undo")
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (250, 40), "text move undone")
@@ -2474,7 +2526,7 @@ def main():
                       f"1x1+{inspector_x(115)}+{properties_top() + ERASER_MODE_ROW + 16 + 12 + 44}",
                       "-depth", "8", "rgb:-")
             assert (min(dab) >= 200) if args.appearance == "dark" else (max(dab) <= 60), dab
-            before = draft.read_bytes()
+            before = draft_bytes()
             brush_start = fixture_point((108, 189))
             brush_end = fixture_point((208, 229))
             run("xdotool", "mousemove", "--window", editor, *map(str, brush_start), "mousedown", "1",
@@ -2486,14 +2538,18 @@ def main():
                 return run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
                            "-depth", "8", "rgb:-")
             assert brush_pixel("brush-active") != brush_pixel("brush-controls"), "erase must show live pixels before release"
-            assert draft.read_bytes() == before, "brush preview must not persist pixels"
+            assert draft_bytes() == before, "brush preview must not persist pixels"
             run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
             shot(editor, "brush-cancelled")
             assert brush_pixel("brush-cancelled") == brush_pixel("brush-controls"), "Escape restores published pixels"
             save_layers(lambda values: values[0]["src"] == source, "escape cancels brush")
             drag((338, 189), (438, 229))
             erased = save_layers(lambda values: values[0]["src"] != source, "erase completed stroke")[0]
-            assert erased["originalSrc"] == source and erased["locked"]
+            # The unedited capture has no draft, so its session asset first
+            # appears as the edited layer's original.
+            original_src = erased["originalSrc"]
+            assert original_src.startswith("draft-asset:") and original_src != erased["src"]
+            assert erased["locked"]
             asset_pixel(erased, 100, 100, (0, 0, 0, 0))
             asset_pixel(erased, 150, 120, (0, 0, 0, 0))
             asset_pixel(erased, 200, 140, (0, 0, 0, 0))
@@ -2507,19 +2563,19 @@ def main():
             toolbar_click("redo")
             save_layers(lambda values: values[0]["src"] == erased["src"], "brush redo")
             draw_tool("restore")
-            before = draft.read_bytes()
+            before = draft_bytes()
             start, end = fixture_point((108, 189)), fixture_point((208, 229))
             run("xdotool", "mousemove", "--window", editor, *map(str, start), "mousedown", "1",
                 "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, end), "sleep", ".3")
             shot(editor, "brush-restore-active")
             document_pixel("brush-restore-active", 100, 100, (229, 179, 68))
-            assert draft.read_bytes() == before, "restore preview must not persist pixels"
+            assert draft_bytes() == before, "restore preview must not persist pixels"
             run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
             shot(editor, "brush-restore-cancelled")
             assert brush_pixel("brush-restore-cancelled") == brush_pixel("brush-erased"), "cancelled restore retains erased pixels"
             drag((338, 189), (438, 229))
             restored = save_layers(lambda values: values[0]["src"] != erased["src"], "restore stroke")[0]
-            assert restored["originalSrc"] == source
+            assert restored["originalSrc"] == original_src
             asset_pixel(restored, 150, 120, (229, 179, 68, 255))
             shot(editor, "brush-restored")
             toolbar_click("undo")
@@ -2586,7 +2642,9 @@ def main():
             # Pick authored document point (100,100). Original capture stays locked.
             fixture_click((108, 189))
             edited = save_layers(lambda values: values[0]["src"] != source, "wand edit")[0]
-            assert edited["locked"] and edited["originalSrc"] == source
+            original_src = edited["originalSrc"]
+            assert original_src.startswith("draft-asset:") and original_src != edited["src"]
+            assert edited["locked"]
 
             asset_pixel(edited, 100, 100, (0, 0, 0, 0))
             asset_pixel(edited, 310, 60, (229, 179, 68, 255))
@@ -2606,7 +2664,7 @@ def main():
             global_edit = save_layers(lambda values: values[0]["src"] != source, "global wand")[0]
             asset_pixel(global_edit, 100, 100, (0, 0, 0, 0))
             asset_pixel(global_edit, 310, 60, (0, 0, 0, 0))
-            assert global_edit["originalSrc"] == source
+            assert global_edit["originalSrc"] == original_src
             shot(editor, "wand-global")
             close(editor)
             wait(lambda: not windows("Captures Screenshot Editor"), "wand draft closes")
@@ -2738,10 +2796,10 @@ def main():
             save(720, 360, 0, 0)
             canvas_field("height", 420)
             save(720, 420, 0, 0)
-            before = draft.read_bytes()
+            before = draft_bytes()
             background_open()
             shot(editor, "background-controls")
-            assert draft.read_bytes() == before, "opening the card must not edit the draft"
+            assert draft_bytes() == before, "opening the card must not edit the draft"
 
             def background_is(color):
                 return json.loads(draft.read_text())["document"]["background"] == color
@@ -3000,13 +3058,13 @@ def main():
         fixture_pixel("freehand-dot", 470, 420, (255, 59, 92))
         toolbar_click("undo")
         save_layers(lambda values: len(values) == 2, "freehand dot undo")
-        before_cancel = draft.read_bytes()
+        before_cancel = draft_bytes()
         cancel_start = fixture_point((170, 400))
         cancel_end = fixture_point((230, 410))
         run("xdotool", "mousemove", "--window", editor, *map(str, cancel_start), "mousedown", "1",
             "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, cancel_end),
             "sleep", ".2", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
-        assert draft.read_bytes() == before_cancel
+        assert draft_bytes() == before_cancel
         toolbar_click("redo")
         assert save_layers(lambda values: len(values) == 3, "cancel preserves freehand redo")[-1]["id"] == dot["id"]
         drag((320, 500), (420, 560))
@@ -3027,9 +3085,7 @@ def main():
         fixture_pixel("freehand-reopened", 141, 254, (255, 59, 92))
         assert layers()[1]["id"] == curve["id"] and layers()[1]["points"] == curve["points"]
         assert (artifact / "capture.png").read_bytes() == original
-        toolbar_click("discard")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "discard freehand edits")
+        editor = discard_draft("discard freehand edits")
 
         resize_editor(942, 701)
         toolbar_click("draw")
@@ -3049,14 +3105,14 @@ def main():
         point_line = save_layers(lambda values: len(values) == 4, "zero-length line click")[-1]
         assert (point_line["x"], point_line["y"]) == (point_line["endX"], point_line["endY"])
         draw_tool("arrow")
-        before_arrow = draft.read_bytes()
+        before_arrow = draft_bytes()
         arrow_start = fixture_point((520, 320))
         arrow_end = fixture_point((350, 190))
         run("xdotool", "mousemove", "--window", editor, *map(str, arrow_start), "mousedown", "1",
             "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, arrow_end), "sleep", ".3")
         shot(editor, "open-shape-arrow-transient")
         fixture_pixel("open-shape-arrow-transient", 435, 255, (255, 59, 92))
-        assert draft.read_bytes() == before_arrow
+        assert draft_bytes() == before_arrow
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         save_layers(lambda values: len(values) == 4, "arrow Escape cancellation")
         drag((750, 320), (580, 190))
@@ -3084,9 +3140,7 @@ def main():
         fixture_pixel("open-shape-reopened", 435, 255, (255, 59, 92))
         assert layers()[-1]["id"] == arrow["id"]
         assert (artifact / "capture.png").read_bytes() == original
-        toolbar_click("discard")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "discard open-shape edits")
+        editor = discard_draft("discard open-shape edits")
 
         # Leave room below the annotation form for rotation-snap controls, and
         # above it for the Layers section, so the bottom-scrolled form fits in
@@ -3112,19 +3166,11 @@ def main():
         def scroll_inspector_end():
             properties_move("click", "--repeat", "25", "5")
 
-        unchanged = draft.read_bytes()
-        inspector_click(50, bottom(503))  # Unchanged Apply is disabled.
+        # Shipping applies each style change as it is made: no Apply or Reset.
+        unchanged = draft_bytes()
         swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
-        assert draft.read_bytes() == unchanged
-        shot(editor, "annotation-unapplied")
-        fixture_pixel("annotation-unapplied", 170, 310, (255, 59, 92))
-        inspector_click(150, bottom(503))  # Reset does not mutate the document.
-        assert draft.read_bytes() == unchanged
-        inspector_click(50, bottom(503))  # A broken Reset would apply the staged green here.
-        save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "reset cleared staged fill")
-        swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
-        inspector_click(50, bottom(503))
-        save_layers(lambda values: values[-1]["style"]["fill"] == "#36c96b", "annotation fill")
+        save_layers(lambda values: values[-1]["style"]["fill"] == "#36c96b", "annotation fill applies live")
+        assert draft_bytes() != unchanged
         shot(editor, "annotation-fill")
         fixture_pixel("annotation-fill", 170, 310, (54, 201, 107))
         toolbar_click("undo")
@@ -3137,42 +3183,38 @@ def main():
         swatch_click(ANNOTATION_STROKE_ROW, "#8b5cf6")
         field(bottom(ANNOTATION_STROKE_WIDTH), 12, 130)
         inspector_click(15, bottom(ANNOTATION_FILL_TOGGLE))  # Clear fill.
-        scroll_inspector_end()
-        inspector_click(50, bottom(503))
         save_layers(lambda values: values[-1]["style"]["fill"] is None and values[-1]["style"]["strokeWidth"] == 12, "annotation outline")
+        scroll_inspector_end()
         shot(editor, "annotation-outline")
         fixture_pixel("annotation-outline", 170, 310, (40, 110, 166))
         fixture_pixel("annotation-outline", 93, 310, (139, 92, 246))
-        inspector_click(15, bottom(415))  # Restore fill; choose a color other than the stroke.
+        inspector_click(15, bottom(ANNOTATION_OUTLINE_FILL_TOGGLE))  # Restore fill; choose a color other than the stroke.
         scroll_inspector_end()
         swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
-        inspector_click(15, bottom(459))  # Enable custom shadow controls.
+        inspector_click(15, bottom(ANNOTATION_OUTLINE_SHADOW_TOGGLE))  # Enable custom shadow controls.
         scroll_inspector_end()
         shot(editor, "annotation-shadow-fields")
         swatch_click(ANNOTATION_SHADOW_ROW, "#ff8a22")
-        field(bottom(327), 80, 125)
-        field(bottom(371), 0)
-        field(bottom(415), 25, 90)
-        field(bottom(459), -12, 90)
-        inspector_click(50, bottom(503))
-        styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}).get("offsetX") == 25, "custom annotation shadow")[-1]
+        opacity_y, blur_y, x_y, y_y = ANNOTATION_SHADOW_FIELDS
+        field(bottom(opacity_y), 80, 125)
+        field(bottom(blur_y), 0)
+        field(bottom(x_y), 25, 90)
+        field(bottom(y_y), -12, 90)
+        styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}) == {"color": "#ff8a22", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}, "custom annotation shadow")[-1]
         assert styled["id"] == annotation["id"] and styled["locked"]
-        assert styled["style"]["dropShadowStyle"] == {"color": "#ff8a22", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}
+        assert styled["style"]["fill"] == "#36c96b" and styled["style"]["strokeWidth"] == 12
         shot(editor, "annotation-shadow")
         fixture_pixel("annotation-shadow", 279, 310, (212, 132, 60), tolerance=1)
         swatch_click(ANNOTATION_SHADOW_ROW, "custom")  # The custom tile opens the picker inline.
         shot(editor, "annotation-color-picker")
         swatch_click(ANNOTATION_SHADOW_ROW, "custom")  # And closes it without an edit.
         inspector_click(15, bottom(ANNOTATION_SHADOW_TOGGLE))  # Disable shadow without losing custom knobs.
-        scroll_inspector_end()
-        inspector_click(50, bottom(503))
         disabled = save_layers(lambda values: values[-1]["style"]["dropShadow"] is False, "shadow off")[-1]
         assert disabled["style"]["dropShadowStyle"] == styled["style"]["dropShadowStyle"]
+        scroll_inspector_end()
         shot(editor, "annotation-shadow-off")
         fixture_pixel("annotation-shadow-off", 279, 310, (40, 110, 166))
-        inspector_click(15, bottom(459))
-        properties_move("click", "--repeat", "25", "5")
-        inspector_click(50, bottom(503))
+        inspector_click(15, bottom(ANNOTATION_OUTLINE_SHADOW_TOGGLE))
         save_layers(lambda values: values[-1]["style"] == styled["style"], "shadow settings restored")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         properties_move("click", "--repeat", "25", "5")
@@ -3185,9 +3227,7 @@ def main():
         fixture_pixel("annotation-reopened", 279, 310, (212, 132, 60), tolerance=1)
         assert layers()[-1]["style"] == styled["style"]
         assert (artifact / "capture.png").read_bytes() == original
-        toolbar_click("discard")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "discard annotation edits")
+        editor = discard_draft("discard annotation edits")
         resize_editor(1000, 701)
 
         # These synthetic hex colors are sRGB. Keep the fixture untagged rather
@@ -3203,10 +3243,10 @@ def main():
         assert not options.get("multiple", False)
         shot(editor, "import-picker-pending")
         save(640, 360, 0, 0)  # A waiting picker must not occupy the session worker.
-        before_import = draft.read_bytes()
+        before_import = draft_bytes()
         GLib.idle_add(chooser.respond, True)
         time.sleep(.4)
-        assert draft.read_bytes() == before_import
+        assert draft_bytes() == before_import
 
         invalid = output / "broken.png"
         invalid.write_text("not an image")
@@ -3216,7 +3256,7 @@ def main():
         GLib.idle_add(chooser.respond, False)
         time.sleep(.8)
         shot(editor, "import-decode-error")
-        assert draft.read_bytes() == before_import
+        assert draft_bytes() == before_import
         chooser.selected = imported_path
         toolbar_click("import")
         wait(lambda: chooser.pending, "retry import")
@@ -3257,14 +3297,14 @@ def main():
         assert layers()[-1]["id"] == imported_id
 
         layer_click(0)  # Redo retained the original's selection; pick the imported row.
-        resize_before = draft.read_bytes()
+        resize_before = draft_bytes()
         resize_start = fixture_point((387, 489))
         resize_end = fixture_point((423, 489))
         run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, resize_start),
             "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
             *map(str, resize_end), "sleep", ".3")
         shot(editor, "layer-resize-active-guides")
-        assert draft.read_bytes() == resize_before, "resize preview must remain transient"
+        assert draft_bytes() == resize_before, "resize preview must remain transient"
         run("xdotool", "mouseup", "1", "sleep", ".3")
         # Fit stays at 1×. Resize follows the absolute pointer, not the press
         # one point inside the grip (adding the raw delta would give 156).
@@ -3307,7 +3347,7 @@ def main():
         # At 1× the 120x80 image's grip is (558,425), around pivot (558,489).
         # Start five points above the grip, within its hit radius.
         # Exercise a free-angle transient first; Escape must leave draft/pixels intact.
-        rotation_before = draft.read_bytes()
+        rotation_before = draft_bytes()
         free_rotation_start = fixture_point((328, 420))
         free_rotation_end = fixture_point((363, 400))
         run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, free_rotation_start),
@@ -3315,7 +3355,7 @@ def main():
             *map(str, free_rotation_end), "sleep", ".3")
         shot(editor, "layer-rotation-free-transient")
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
-        assert draft.read_bytes() == rotation_before
+        assert draft_bytes() == rotation_before
         # Vector (0,-69) to (39,-79) is 26.27 degrees, snapping to 30 degrees.
         drag((558, 420), (597, 410), shift=True)
         rotated = save_layers(
@@ -3348,9 +3388,7 @@ def main():
         assert math.isclose(layers()[-1]["rotation"], math.pi / 6, abs_tol=1e-12)
         assert saved(640, 440, 0, 0)
         # Discard returns to the original capture, without deleting exports or source data.
-        toolbar_click("discard")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "discard imported draft")
+        editor = discard_draft("discard imported draft")
         chooser.selected = artifact / "capture.png"
         toolbar_click("import")
         wait(lambda: chooser.pending, "picker before close")
@@ -3447,16 +3485,16 @@ def main():
         fixture_pixel("layers-moved", 361, 277, (229, 179, 68))
         # Canvas picking is based on the rendered document, not the layer-list selection.
         # Escape cancels the translated outline without touching the saved draft.
-        canvas_before = draft.read_bytes()
+        canvas_before = draft_bytes()
         move_start = fixture_point((361, 277))
         move_preview = fixture_point((401, 307))
         run("xdotool", "mousemove", "--window", editor, *map(str, move_start), "mousedown", "1",
             "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, move_preview), "sleep", ".2")
         shot(editor, "layers-canvas-active-outline")
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
-        assert draft.read_bytes() == canvas_before
+        assert draft_bytes() == canvas_before
         fixture_click((30, 200))  # Empty point before the unlocked copy clears selection.
-        assert draft.read_bytes() == canvas_before
+        assert draft_bytes() == canvas_before
         # The raw horizontal delta lands just inside the canvas edge's magnetic
         # range. The shared move geometry snaps the duplicate's left edge to the
         # canvas/background layer edge while retaining the asymmetric raw Y move.
@@ -3465,7 +3503,7 @@ def main():
             "sleep", ".2", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
             "--window", editor, *map(str, snap_target), "sleep", ".3")
         shot(editor, "layers-canvas-snapped-guides")
-        assert draft.read_bytes() == canvas_before
+        assert draft_bytes() == canvas_before
         run("xdotool", "mouseup", "1", "sleep", ".2")
         # Fit leaves the 640px image at 1×. Raw x=6 snaps to zero; Y stays exact.
         expected_position = (0, 100)
@@ -3561,9 +3599,7 @@ def main():
         shot(editor, "layers-empty")
         toolbar_click("undo")
         save_layers(lambda values: [value["id"] for value in values] == [copy_id], "undo empty document")
-        toolbar_click("discard")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "discard layer edits")
+        editor = discard_draft("discard layer edits")
         toolbar_click("geometry")  # Geometry has an independent scroll position.
 
         # Odd height keeps the centered 1:1 document origin pixel-aligned.
@@ -3591,13 +3627,13 @@ def main():
         shot(editor, "shape-ellipse")
         fixture_pixel("shape-ellipse", 463, 374, (255, 59, 92))
         fixture_pixel("shape-ellipse", 380, 350, (40, 110, 166))
-        before_draw = draft.read_bytes()
+        before_draw = draft_bytes()
         shape_start = fixture_point((90, 300))
         shape_end = fixture_point((190, 380))
         run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, shape_start), "mousedown", "1",
             "sleep", ".2", "mousemove", "--sync", "--window", editor, *map(str, shape_end), "sleep", ".3")
         shot(editor, "shape-transient")
-        assert draft.read_bytes() == before_draw
+        assert draft_bytes() == before_draw
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         save_layers(lambda values: len(values) == 3, "escape cancels shape")
         drag((320, 300), (320, 380))  # Degenerate zero-width gesture.
@@ -3624,9 +3660,7 @@ def main():
         assert saved(640, expected_height, 0, 0)
         shot(editor, "shape-outside-expanded")
         assert (artifact / "capture.png").read_bytes() == original
-        toolbar_click("discard")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "discard shape edits")
+        editor = discard_draft("discard shape edits")
         toolbar_click("geometry")  # The Crop tool starts a crop selection.
 
         drag((638, 359), (278, 119))  # Reverse drag: 40,30 with size 360x240.
@@ -3639,7 +3673,7 @@ def main():
         run("xdotool", "key", "Escape", "sleep", ".2")
         shot(editor, "crop-cancelled")
         save(640, 360, 0, 0)  # Escape must not crop or mutate the document.
-        before_selection = draft.read_bytes()
+        before_selection = draft_bytes()
         # Shipping's `cta-pulse` on Apply crop: an accent halo swells just
         # outside the button only while a crop is staged.
         halo = (inspector_x(50), properties_top() + 335 - 47 - 16 - 3)
@@ -3652,7 +3686,7 @@ def main():
         crop_click(159, 335)
         drag((278, 119), (438, 219), shift=True)
         shot(editor, "crop-shift-square")
-        assert draft.read_bytes() == before_selection
+        assert draft_bytes() == before_selection
 
         def pulsing():
             shot(editor, "crop-apply-pulse")
@@ -3709,7 +3743,7 @@ def main():
         shot(editor, "editor-resized")
         fixture_pixel("editor-resized", 428, 289, (46, 158, 113))
 
-        saved_draft = draft.read_bytes()
+        saved_draft = draft_bytes()
         resize_editor(1000, 901)
         export_settings(True)
         # Compress shows the before/after comparison on its own: the edited
@@ -3748,7 +3782,7 @@ def main():
         compare_settled("output-retry")
         assert not divider_shown("output-retry")
         fixture_pixel("output-retry", 428, 289, (46, 158, 113))
-        assert draft.read_bytes() == saved_draft, "preview must not write a draft"
+        assert draft_bytes() == saved_draft, "preview must not write a draft"
         assert not (output / "exports").exists(), "preview must not publish files"
 
         exported = output / "exports" / "edited.webp"
@@ -3779,7 +3813,7 @@ def main():
         for _, options in chooser.calls[1:]:
             assert bytes(options["current_folder"]).rstrip(b"\0") == os.fsencode(initial_directory)
         assert not list(initial_directory.iterdir()) and not list(exported.parent.iterdir())
-        assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 1
+        assert draft_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 1
         shot(editor, "export-folder-selected")
         export_click("save")
         wait(exported.exists, "new edited copy published")
@@ -3794,7 +3828,7 @@ def main():
         for path in (exported, metadata[0].parent / "capture.png"):
             assert run("identify", "-format", "%wx%h", str(path)) == b"480x300"
             assert run("convert", str(path), "-crop", "1x1+450+250", "-depth", "8", "rgb:-") == bytes((46, 158, 113))
-        assert draft.read_bytes() == saved_draft, "export must not save the draft"
+        assert draft_bytes() == saved_draft, "export must not save the draft"
         shot(root, "export-history-refreshed")
         shot(editor, "export-saved")
         # The saved file becomes the file Save overwrites, in place and in History.
@@ -3827,7 +3861,7 @@ def main():
         resize_editor(1000, 901)
         history.unlink()
         (output / "previous-history").rename(history)
-        assert draft.read_bytes() == saved_draft
+        assert draft_bytes() == saved_draft
         assert (artifact / "capture.png").read_bytes() == original
 
         export_click("copy")  # Copy the edited canvas, not the History source.
@@ -3839,7 +3873,7 @@ def main():
         assert run("identify", "-format", "%wx%h", str(clipboard_png)) == b"480x300"
         for x, y, expected in ((70, 80, (229, 179, 68)), (450, 250, (46, 158, 113))):
             assert run("convert", str(clipboard_png), "-crop", f"1x1+{x}+{y}", "-depth", "8", "rgb:-") == bytes(expected)
-        assert draft.read_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 2
+        assert draft_bytes() == saved_draft and len(list(history.glob("*/metadata.json"))) == 2
         assert len(list((output / "exports").iterdir())) == 2
         shot(editor, "clipboard-copied")
         export_settings(False)
@@ -3852,16 +3886,13 @@ def main():
         shot(editor, "editor-reopened")
         fixture_pixel("editor-reopened", 428, 289, (46, 158, 113))
         canvas_field("width", 510)
-        close(editor)
-        shot(editor, "editor-unsaved-close")
-        click(editor, editor_width() - 180, 20)  # Close without saving retains the previous draft.
-        wait(lambda: not windows("Captures Screenshot Editor"), "unsaved editor closes")
-        assert saved(480, 300, -40, -30)
-        editor = reopen()
-        toolbar_click("discard")
-        shot(editor, "editor-discard-confirmation")
-        discard_confirm()
-        wait(lambda: not draft.exists(), "explicit discard removes the saved draft")
+        close(editor)  # Shipping closes at once and flushes the new edit.
+        wait(lambda: not windows("Captures Screenshot Editor"), "edited editor closes without a prompt")
+        wait(lambda: saved(510, 300, -40, -30), "closing flushes the latest edit")
+        editor = reopen(keep_banner=True)
+        shot(editor, "editor-restored-draft-notice")
+        discard_restored(editor)
+        wait(lambda: not draft.exists(), "restored-draft Discard removes the saved draft")
         shot(editor, "editor-discarded")
 
         # Force a genuine filesystem failure without replacing a user's data.
@@ -3869,8 +3900,8 @@ def main():
         drafts.rename(output / "previous-drafts")
         drafts.write_text("blocks directory creation")
         canvas_field("width", 500)
-        toolbar_click("save-draft")
-        shot(editor, "editor-save-error")
+        time.sleep(1.5)  # The autosave fails quietly, as in shipping.
+        shot(editor, "editor-autosave-failed")
         assert app.poll() is None and windows("Captures Screenshot Editor")
         close(root)  # With no tray host, normal root close must flush or cancel.
         assert app.poll() is None and windows("Captures Screenshot Editor"), "failed flush must cancel quit"
@@ -3899,15 +3930,16 @@ def main():
                        "open-shape-transient-escape-short-cancel", "open-shape-undo-redo-minimum-reopen",
                        "freehand-quadratic-preview-and-render-pixels", "freehand-sampling-dot",
                        "freehand-cancel-retains-redo", "freehand-outside-expansion-minimum-reopen",
-                       "annotation-unapplied-reset-noop", "annotation-locked-fill-stroke-pixels",
+                       "annotation-live-swatch", "annotation-locked-fill-stroke-pixels",
                        "annotation-style-undo-redo", "annotation-shadow-toggle-retains-custom",
                        "annotation-color-picker-minimum-reopen-pixels",
-                       "canvas", "undo-redo", "draft-reopen", "close-preserves-draft",
+                       "canvas", "undo-redo", "draft-reopen", "close-flushes-latest-edit",
                        "image-picker-pending-cancel-retry", "image-import-exact-pixels",
                        "image-import-owned-draft-reopen", "image-picker-stale-close-result",
                        "layer-resize-guides-commit-undo-draft-reopen-pixels",
                        "layer-rotation-free-cancel-shift-snap", "layer-rotation-undo-draft-reopen-pixels",
-                       "explicit-discard", "save-error", "quit-error-retry", "original-unchanged",
+                       "close-flushes-draft", "restored-draft-discard", "autosave-failure-quiet",
+                       "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-canvas-click-drag-escape",
                        "layer-canvas-snap-edge-pixels-undo-reopen",
                        "layer-opacity-visibility-pixels",
@@ -3923,7 +3955,7 @@ def main():
                        "clipboard-edited-pixels-no-persistence", "clipboard-survives-editor-close"],
             "originalSha256": hashlib.sha256(original).hexdigest(),
         }, indent=2) + "\n")
-        print("PASS native editor: layers, crop, canvas, undo/redo, draft reopen, close/discard, save/quit recovery, original unchanged")
+        print("PASS native editor: layers, crop, canvas, undo/redo, autosaved draft reopen, close flush/discard, quit recovery, original unchanged")
     finally:
         for child in reversed(children):
             if child.poll() is None:

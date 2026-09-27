@@ -538,8 +538,9 @@ short arrow gestures are discarded and drafts retain completed shapes and stroke
 Both hosts use shared polygon geometry for transient previews and committed layers.
 Pen smooths sampled points and retains click-only dots.
 **Layers → Annotation style** edits fill, stroke and shadow color (the shipping
-eight swatches plus a custom color), width, opacity, blur and offsets. Apply style
-creates one undo step; Reset fields cancels unapplied changes. Hidden and locked annotations remain editable.
+eight swatches plus a custom color), width, layer opacity and shadow opacity, blur and
+offsets. Changes apply as you make them; a burst in one field is one undo step and
+each toggle is its own. Hidden and locked annotations remain editable.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
 **Import image** adds one PNG, JPEG, WebP or TIFF below the selected visible image,
@@ -594,9 +595,9 @@ layer. Pre-placement drop-shadow controls include color, opacity, blur and X/Y
 offsets. While dragging an annotation, both hosts update its pixels and shadow
 through the shared renderer in the background; Escape restores the unchanged image.
 An approximate vector guide appears until the first pixel frame is ready.
-Its Layers panel also edits annotation fill, stroke and shadow settings with an explicit
-Apply style action. Unapplied fields can be reset; shared Rust owns style defaults,
-rendering, undo and draft persistence.
+Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
+as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
+persistence.
 In both native hosts, **Layers** supports clicking the edited preview to select an
 unlocked visible layer, or empty space to clear selection. Drag shows a translated
 selection outline; release moves the layer in one undoable edit. Escape, focus loss,
@@ -659,8 +660,9 @@ Shapes opens Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the
 choice. The rail chooses the inspector (there are no section tabs); pending work
 disables it. Like shipping, the header holds the canvas W × H fields, Trim edges and
 the canvas background, then Undo/Redo (hidden at 1040 points and narrower), the zoom
-group and Add images; native drafts keep Save draft and Discard edits… in a header
-menu. Reopening a draft shows the shipping restored-edits notice, and Recenter
+group and Add images. Like shipping, both hosts autosave the edit draft 700 ms after
+each change and flush it when the editor closes, without a save prompt. Reopening a
+draft shows the shipping restored-edits notice with Discard, and Recenter
 appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit

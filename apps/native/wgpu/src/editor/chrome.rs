@@ -75,7 +75,6 @@ pub(super) fn edit_enabled(view: &View) -> bool {
         && view.inline.is_none()
         && !view.closed
         && !view.close_requested
-        && !view.confirm_discard
 }
 
 /// Laid-out header regions, for the no-overlap layout rule (read by tests).
@@ -84,14 +83,14 @@ pub(super) fn edit_enabled(view: &View) -> bool {
 pub(super) struct Header {
     /// The left Canvas toolbar, clipped to the space the controls leave.
     pub canvas: egui::Rect,
-    /// Union of the right-aligned history, zoom, image and draft controls.
+    /// Union of the right-aligned history, zoom and image controls.
     pub controls: egui::Rect,
     /// Undo/Redo are hidden at or below 1040 points, as in shipping.
     pub history_visible: bool,
 }
 
-/// Banners above the header row: a restored draft and confirmations. Errors
-/// use the export status line, as in shipping.
+/// Banners above the header row: the restored-draft notice. Errors use the
+/// export status line, as in shipping.
 pub(super) fn show_banners(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     if view.draft_restored {
         let mut discard = false;
@@ -112,63 +111,7 @@ pub(super) fn show_banners(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, 
         });
         if discard {
             // Shipping discards the restored draft immediately.
-            view.draft_restored = false;
-            view.submit(tx, Request::DiscardDraft);
-        }
-    }
-    if view.close_requested && !view.pending {
-        let mut action = None;
-        banner(
-            ui,
-            tokens,
-            "caution",
-            "Save unsaved edits before closing?",
-            |ui| {
-                for (index, label) in ["Save and close", "Close without saving", "Cancel close"]
-                    .into_iter()
-                    .enumerate()
-                    .rev()
-                {
-                    if banner_button(ui, tokens, label, true, index < 2).clicked() {
-                        action = Some(index);
-                    }
-                }
-            },
-        );
-        match action {
-            Some(0) => {
-                view.close_after_save = true;
-                view.save_draft(tx);
-            }
-            Some(1) => view.closed = true,
-            Some(_) => view.close_requested = false,
-            None => {}
-        }
-    }
-    if view.confirm_discard {
-        let mut action = None;
-        banner(
-            ui,
-            tokens,
-            "caution",
-            "Discard all edits and the saved draft? The original capture and exports stay unchanged.",
-            |ui| {
-                let enabled = !view.pending;
-                if banner_button(ui, tokens, "Cancel discard", enabled, false).clicked() {
-                    action = Some(false);
-                }
-                if banner_button(ui, tokens, "Discard edits", enabled, true).clicked() {
-                    action = Some(true);
-                }
-            },
-        );
-        match action {
-            Some(true) => {
-                view.confirm_discard = false;
-                view.submit(tx, Request::DiscardDraft);
-            }
-            Some(false) => view.confirm_discard = false,
-            None => {}
+            view.discard_draft(tx);
         }
     }
 }
@@ -291,7 +234,7 @@ fn banner_button(
 }
 
 /// The 52 px header row: the Canvas toolbar on the left; Undo, Redo, the zoom
-/// group, Add images and the native draft menu on the right.
+/// group and Add images on the right (drafts autosave, as in shipping).
 ///
 /// Controls are laid out first, right to left. The Canvas toolbar gets the width
 /// left over; like shipping's `overflow: hidden` it first drops its label and
@@ -321,7 +264,6 @@ pub(super) fn show_header(
                 .layout(Layout::right_to_left(Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = tokens.number("s-2");
-                draft_menu(ui, tokens, view, tx, enabled);
                 add_images(ui, tokens, view, enabled);
                 zoom_group(ui, tokens, view, layout);
                 if layout.show_history {
@@ -386,29 +328,6 @@ fn quiet_button(
     );
     accessible(&response, egui::WidgetType::Button, false, label);
     response
-}
-
-fn draft_menu(
-    ui: &mut egui::Ui,
-    tokens: &Tokens,
-    view: &mut View,
-    tx: &Sender<Job>,
-    enabled: bool,
-) {
-    let response =
-        quiet_button(ui, tokens, "more", copy::DRAFT_MENU, enabled).on_hover_text(copy::DRAFT_MENU);
-    egui::Popup::menu(&response)
-        .align(egui::RectAlign::BOTTOM_END)
-        .show(|ui| {
-            if ui.button(copy::SAVE_DRAFT).clicked() {
-                view.save_draft(tx);
-                ui.close();
-            }
-            if ui.button(copy::DISCARD_EDITS).clicked() {
-                view.confirm_discard = true;
-                ui.close();
-            }
-        });
 }
 
 /// Shipping `.screenshot-add-image`: a bordered control with the image icon.
@@ -1096,8 +1015,7 @@ fn canvas_background(
             let live = view.presented.is_some()
                 && view.inline.is_none()
                 && !view.closed
-                && !view.close_requested
-                && !view.confirm_discard;
+                && !view.close_requested;
             let shown = view.shown_background();
             let mut solid = shown.is_some();
             let toggle = ui.add_enabled(

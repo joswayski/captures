@@ -1,10 +1,16 @@
 import AppKit
 
-/// Unpublished fields for one selected annotation. Rust owns defaults and the
-/// document transaction; this view submits only values the user changed.
-final class EditorAnnotationControls: NSView {
+/// Style fields for one selected annotation. Shipping applies stroke, opacity,
+/// fill and shadow changes as they are made; Rust owns defaults and the
+/// document transaction, and this view reports only values the user changed.
+final class EditorAnnotationControls: NSView, NSTextFieldDelegate {
     override var isFlipped: Bool { true }
-    var apply: ([String: Any]) -> Void = { _ in }
+    /// A changed style: the minimal patch against the published style and the
+    /// live-undo field it belongs to. A burst in one field (typing, swatches)
+    /// folds into one undo step; a toggle (`nil`) is its own step.
+    var apply: (_ patch: [String: Any], _ field: String?) -> Void = { _, _ in }
+    /// Shipping's Opacity slider (0–100), applied live like the layer menu's.
+    var opacityChanged: (Double) -> Void = { _ in }
     var reportError: (String) -> Void = { _ in }
     var resized: (CGFloat) -> Void = { _ in }
     private let tokens: Tokens
@@ -18,7 +24,8 @@ final class EditorAnnotationControls: NSView {
     /// Shipping `ColorField` rows keyed by their label.
     private var swatchRows: [String: ColorSwatchRow] = [:]
     private var toggles: [String: CaptureButton] = [:]
-    private var actions: [CaptureButton] = []
+    private let opacitySlider = TokenSlider(value: 100, minValue: 0, maxValue: 100, target: nil, action: nil)
+    private let opacityValue = NSTextField(labelWithString: "100%")
     private let numbers: [(String, WritableKeyPath<NativeAnnotationStyle, Double>)] = [
         ("Stroke width", \.strokeWidth), ("Shadow opacity", \.shadowOpacity),
         ("Shadow blur", \.shadowBlur), ("Shadow X", \.shadowX), ("Shadow Y", \.shadowY),
@@ -34,25 +41,25 @@ final class EditorAnnotationControls: NSView {
         heading.frame = NSRect(x: 0, y: 0, width: 272, height: 26)
         addSubview(heading); rows.append((heading, .always))
         toggle("Stroke", group: .closed)
-        color(EditorColors.text("stroke_color"), group: .stroke) { $0.color = $1 }
+        color(EditorColors.text("stroke_color"), field: "stroke-color", group: .stroke) { $0.color = $1 }
         number(numbers[0].0, group: .stroke)
+        opacityRow()
         toggle("Fill", group: .closed)
-        color(EditorColors.text("fill_color"), group: .fill) { $0.fill = $1 }
+        color(EditorColors.text("fill_color"), field: "fill-color", group: .fill) { $0.fill = $1 }
         toggle("Shadow", group: .always)
-        color(EditorColors.text("shadow_color"), group: .shadow) { $0.shadowColor = $1 }
+        color(EditorColors.text("shadow_color"), field: "shadow-color", group: .shadow) { $0.shadowColor = $1 }
         for (name, _) in numbers.dropFirst() { number(name, group: .shadow) }
-        let buttons = row(.always)
-        let apply = CaptureButton("Apply style", frame: NSRect(x: 0, y: 0, width: 128, height: 30),
-                                  tokens: tokens) { [weak self] in self?.submit() }
-        let reset = CaptureButton("Reset fields", frame: NSRect(x: 144, y: 0, width: 128, height: 30),
-                                  tokens: tokens) { [weak self] in self?.setStyle(self?.original) }
-        buttons.addSubview(apply); buttons.addSubview(reset); actions = [apply, reset]
         setStyle(nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func setStyle(_ style: NativeAnnotationStyle?) {
+        // A live edit landed: the published style caught up with the fields, so
+        // keep the field being typed in (and its caret) as it is.
+        if let style, let draft, original != nil, style == draft {
+            original = style; refresh(); return
+        }
         // End editing before replacing fields, so a field editor cannot later
         // commit an old layer's text into the new selection.
         if fields.values.contains(where: { $0.currentEditor() != nil && $0.currentEditor() === window?.firstResponder }) {
@@ -67,6 +74,13 @@ final class EditorAnnotationControls: NSView {
             for (name, key) in numbers { fields[name]?.stringValue = format(style[keyPath: key]) }
         }
         refresh()
+    }
+
+    /// The selected layer's opacity, unless the slider is being dragged.
+    func setOpacity(_ value: Double?) {
+        guard let value else { return }
+        if window?.firstResponder !== opacitySlider { opacitySlider.doubleValue = value }
+        opacityValue.stringValue = "\(Int(opacitySlider.doubleValue.rounded()))%"
     }
 
     func setReady(_ value: Bool) { ready = value; refresh() }
@@ -92,8 +106,11 @@ final class EditorAnnotationControls: NSView {
             button.title = enabled ? "On" : "Off"; button.selected = enabled
             button.setAccessibilityValue(enabled)
         }
-        let controls: [NSControl] = Array(fields.values) + Array(toggles.values) + actions
+        let controls: [NSControl] = Array(fields.values) + Array(toggles.values)
         for control in controls { control.isEnabled = ready && draft != nil }
+        // Like the layer menu's slider, Opacity stays live while an edit
+        // applies; its changes queue.
+        opacitySlider.isEnabled = draft != nil
         for swatches in swatchRows.values {
             swatches.isEnabled = ready && draft != nil
             if !ready || swatches.isHiddenOrHasHiddenAncestor { swatches.deactivate() }
@@ -102,23 +119,51 @@ final class EditorAnnotationControls: NSView {
         resized(y)
     }
 
-    private func submit() {
-        guard ready, let original, var edited = draft else { return }
-        // Preserve full-precision values when only their rounded display is unchanged.
-        for (name, key) in numbers where fields[name]?.superview?.isHidden == false {
-            let text = fields[name]!.stringValue
-            if text != format(original[keyPath: key]) {
-                guard let value = formatter.number(from: text)?.doubleValue, value.isFinite,
-                      name != "Stroke width" || value > 0 else {
-                    reportError("Enter a valid \(name.lowercased())."); return
-                }
-                edited[keyPath: key] = value
+    /// Report the draft's changes against the published style, if any.
+    private func emit(field: String?) {
+        guard ready, let original, let draft else { return }
+        let patch = draft.patch(from: original)
+        if !patch.isEmpty { apply(patch, field) }
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField else { return }
+        numberChanged(field, reportInvalid: false)
+    }
+
+    @objc private func numberCommitted(_ sender: NSTextField) {
+        numberChanged(sender, reportInvalid: true)
+    }
+
+    /// Shipping NumberInput: a valid value applies as it is typed; a partial
+    /// or invalid entry waits (Enter explains why).
+    private func numberChanged(_ field: NSTextField, reportInvalid: Bool) {
+        guard ready, var edited = draft, let original,
+              let entry = numbers.first(where: { fields[$0.0] === field }) else { return }
+        let (name, key) = entry
+        let text = field.currentEditor()?.string ?? field.stringValue
+        let value: Double
+        if text == format(original[keyPath: key]) {
+            // Preserve full precision when only the rounded display is unchanged.
+            value = original[keyPath: key]
+        } else {
+            guard let parsed = formatter.number(from: text)?.doubleValue, parsed.isFinite,
+                  name != "Stroke width" || parsed > 0 else {
+                if reportInvalid { reportError("Enter a valid \(name.lowercased()).") }
+                return
             }
+            value = parsed
         }
-        // Swatch and custom colors are staged on the draft; an untouched legacy
-        // value is never revalidated.
-        let patch = edited.patch(from: original)
-        if !patch.isEmpty { apply(patch) }
+        guard value != edited[keyPath: key] else { return }
+        edited[keyPath: key] = value
+        draft = edited
+        emit(field: name.lowercased().replacingOccurrences(of: " ", with: "-"))
+    }
+
+    @objc private func opacitySliderChanged() {
+        let value = opacitySlider.doubleValue.rounded()
+        opacityValue.stringValue = "\(Int(value))%"
+        opacityChanged(value)
     }
 
     private func format(_ value: Double) -> String {
@@ -140,12 +185,29 @@ final class EditorAnnotationControls: NSView {
         let parent = row(group, title: name)
         let field = NSTextField(frame: NSRect(x: 130, y: 8, width: 142, height: 30))
         field.formatter = formatter; field.alignment = .right
+        field.delegate = self; field.target = self; field.action = #selector(numberCommitted(_:))
         field.setAccessibilityLabel(name); fields[name] = field; parent.addSubview(field)
     }
 
+    /// Shipping's Opacity `RangeSlider`: label, live slider and percentage.
+    private func opacityRow() {
+        let parent = row(.always, title: "Opacity")
+        opacityValue.frame = NSRect(x: 226, y: 12, width: 46, height: 20)
+        opacityValue.alignment = .right
+        opacityValue.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        opacityValue.textColor = tokens.color("text-muted")
+        parent.addSubview(opacityValue)
+        opacitySlider.frame = NSRect(x: 130, y: 10, width: 92, height: 24)
+        opacitySlider.tokens = tokens
+        opacitySlider.isContinuous = true
+        opacitySlider.target = self; opacitySlider.action = #selector(opacitySliderChanged)
+        opacitySlider.setAccessibilityLabel("Opacity")
+        parent.addSubview(opacitySlider)
+    }
+
     /// A shipping `ColorField`: legend, eight swatches and a custom tile. A
-    /// choice stages the draft; Apply still commits the style as one step.
-    private func color(_ name: String, group: Group,
+    /// choice applies at once; choices in one field fold into one undo step.
+    private func color(_ name: String, field: String, group: Group,
                        stage: @escaping (inout NativeAnnotationStyle, String) -> Void) {
         let parent = row(group)
         let legend = NSTextField(labelWithString: name)
@@ -159,6 +221,7 @@ final class EditorAnnotationControls: NSView {
         swatches.changed = { [weak self] value in
             guard let self, self.ready, var draft = self.draft else { return }
             stage(&draft, value); self.draft = draft
+            self.emit(field: field)
         }
         parent.addSubview(swatches)
         parent.frame.size.height = swatches.frame.maxY
@@ -178,6 +241,7 @@ final class EditorAnnotationControls: NSView {
             default: draft.dropShadow.toggle()
             }
             self.draft = draft; self.refresh()
+            self.emit(field: nil)
         }
         button.setAccessibilityRole(.checkBox); button.setAccessibilityLabel(name)
         toggles[name] = button; parent.addSubview(button)

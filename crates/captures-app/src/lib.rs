@@ -363,21 +363,14 @@ fn open_image(root: &Path, path: &Path, open_artifact_ids: &[String]) -> Result<
             already_open: true,
         });
     }
-    if let Some(entry) = previous.as_ref() {
-        let draft =
-            captures_history::entry_directory(&root.with_file_name("editor-drafts"), &entry.id)?;
-        match fs::symlink_metadata(draft) {
-            Ok(_) => return Err(Error::Image(
-                "This image has a saved editor draft. Open it from History to restore or discard the draft before reopening the source.".into(),
-            )),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-
     let pixels = editor_image_decode::decode_opened_image(&source).map_err(Error::Image)?;
     let png = captures_history::encode_png(&pixels)?;
     let preview = captures_history::encode_thumbnail_png(&pixels)?;
+    if let Some(entry) = previous.as_ref() {
+        // Shipping reloads a closed source and drops its autosaved draft, but
+        // only after the new pixels decode: a bad source keeps the draft.
+        captures_history::editor_draft::discard(&root.with_file_name("editor-drafts"), &entry.id)?;
+    }
     let mut entry = previous.unwrap_or_else(|| HistoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         kind: ArtifactKind::Screenshot,

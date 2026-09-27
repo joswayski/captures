@@ -91,7 +91,7 @@ fn opens_asymmetric_png_jpeg_webp_as_owned_history_without_changing_source() {
 }
 
 #[test]
-fn aliases_and_open_ids_preserve_draft_and_closed_reload_reuses_id() {
+fn aliases_and_open_ids_preserve_draft_and_closed_reload_replaces_it() {
     let data = tempfile::tempdir().unwrap();
     let root = data.path().join("capture-history");
     let source = data.path().join("source.png");
@@ -121,20 +121,13 @@ fn aliases_and_open_ids_preserve_draft_and_closed_reload_reuses_id() {
     assert_eq!(fs::read(&first.image_path).unwrap(), old_png);
     assert_eq!(fs::read(draft.join("manifest.json")).unwrap(), manifest);
     assert_eq!(session.pixels().dimensions(), (91, 63));
-    let error = open(&root, &alias, vec![]).unwrap_err().to_string();
-    assert!(
-        error.contains("History") && error.contains("discard"),
-        "{error}"
-    );
+    // A corrupt source never replaces History or drops the only draft.
+    assert!(open(&root, &alias, vec![]).is_err());
     assert_eq!(fs::read(&first.image_path).unwrap(), old_png);
     assert_eq!(fs::read(draft.join("manifest.json")).unwrap(), manifest);
 
-    // A closed editor cannot discard its only draft merely by retrying open.
+    // Shipping reloads a closed, readable source and drops its draft.
     drop(session);
-    captures_history::editor_draft::discard(&root.with_file_name("editor-drafts"), &id).unwrap();
-    assert!(open(&root, &alias, vec![]).is_err()); // Now decoding rejects the corrupt source.
-    assert_eq!(fs::read(&first.image_path).unwrap(), old_png);
-
     let replacement = RgbaImage::from_fn(37, 19, |x, y| Rgba([x as u8 * 4, 29, y as u8 * 11, 255]));
     replacement.save(&source).unwrap();
     let source_bytes = fs::read(&source).unwrap();

@@ -30,8 +30,8 @@ use captures_app::{
     editor_image_background::BrushMode,
     editor_output::SavedExport,
     editor_session::{
-        EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImportImage,
-        OpenRequest, PngOptions, Request, TextCreate, TextPatch,
+        DraftAutosave, EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize,
+        ImportImage, OpenRequest, PngOptions, Request, TextCreate, TextPatch,
     },
     editor_text::{TextStylePreset, font_family_options, shadow_style},
     editor_viewport::{Viewport, wheel_zoom_factor, zoom_from_slider, zoom_slider_position},
@@ -79,6 +79,11 @@ enum Job {
     Flush {
         input: Option<text_input::FlushInput>,
         reply: Sender<Result<(), String>>,
+    },
+    /// Shipping's debounced draft autosave. It runs behind accepted edits
+    /// without blocking the editor and replies whether a draft now exists.
+    Autosave {
+        reply: Sender<Result<bool, String>>,
     },
     Shutdown,
 }
@@ -281,6 +286,7 @@ fn output_preset(options: &ExportOptions) -> Option<&'static str> {
     export::quality_preset(options.quality_value).map(|preset| preset.label)
 }
 
+#[derive(Clone, PartialEq)]
 struct AnnotationFields {
     style: ElementStyle,
     shadow: DropShadowStyle,
@@ -377,6 +383,31 @@ impl TextValues {
 }
 
 impl AnnotationFields {
+    /// The live-undo field a change belongs to: a color or number burst folds
+    /// into one undo step; a toggle (`None`) is its own step.
+    fn changed_field(&self, before: &Self) -> Option<&'static str> {
+        let (style, old) = (&self.style, &before.style);
+        if style.has_stroke() != old.has_stroke()
+            || style.fill.is_some() != old.fill.is_some()
+            || style.has_drop_shadow() != old.has_drop_shadow()
+        {
+            return None;
+        }
+        let (shadow, previous) = (&self.shadow, &before.shadow);
+        [
+            (style.color != old.color, "stroke-color"),
+            (style.stroke_width != old.stroke_width, "stroke-width"),
+            (style.fill != old.fill, "fill-color"),
+            (shadow.color != previous.color, "shadow-color"),
+            (shadow.opacity != previous.opacity, "shadow-opacity"),
+            (shadow.blur != previous.blur, "shadow-blur"),
+            (shadow.offset_x != previous.offset_x, "shadow-x"),
+            (shadow.offset_y != previous.offset_y, "shadow-y"),
+        ]
+        .into_iter()
+        .find_map(|(changed, field)| changed.then_some(field))
+    }
+
     fn new(style: &ElementStyle) -> Self {
         Self {
             style: style.clone(),
@@ -528,9 +559,18 @@ struct View {
     inline: Option<text_input::InlineText>,
     pending: bool,
     closed: bool,
+    /// Close was asked for; the draft flushes before the window closes.
     close_requested: bool,
+    /// The close flush is in flight; its reply closes the window.
     close_after_save: bool,
-    confirm_discard: bool,
+    /// Shipping's 700 ms draft autosave timer.
+    autosave: DraftAutosave,
+    /// Editor windows autosave; a detached view (unit tests) never arms it.
+    autosaves: bool,
+    /// A background autosave in flight: whether a draft exists afterwards.
+    autosave_rx: Option<Receiver<Result<bool, String>>>,
+    /// When the pending autosave wake-up fires; one timer at a time.
+    autosave_wake: Option<Instant>,
     error: Option<String>,
     viewport: Viewport,
     viewport_pan: Option<(egui::PointerButton, egui::Pos2)>,
@@ -637,7 +677,10 @@ impl Default for View {
             closed: false,
             close_requested: false,
             close_after_save: false,
-            confirm_discard: false,
+            autosave: DraftAutosave::default(),
+            autosaves: false,
+            autosave_rx: None,
+            autosave_wake: None,
             error: None,
             viewport: Viewport::default(),
             viewport_pan: None,
@@ -734,11 +777,99 @@ impl View {
             self.section = Section::Layers;
             return;
         }
-        if self.pending || self.unsaved() {
-            self.close_requested = true;
+        // Shipping closes without asking and flushes the draft (see
+        // `View::drive_close`).
+        self.close_requested = true;
+    }
+
+    /// Close once nothing is in flight: flush a pending or unsaved draft on
+    /// the worker first (the reply closes the window), else close now.
+    fn drive_close(&mut self, tx: &Sender<Job>) {
+        if !self.close_requested || self.close_after_save || self.pending {
+            return;
+        }
+        if self.inline.is_some() || !self.live_queue.is_empty() {
+            return;
+        }
+        if self.presented.is_some() && self.autosave.take_flush(self.unsaved()) {
+            self.close_after_save = true;
+            self.submit(tx, Self::autosave_request());
+            if !self.pending {
+                // The worker is gone; the last saved draft stays on disk.
+                self.closed = true;
+            }
         } else {
             self.closed = true;
         }
+    }
+
+    fn autosave_request() -> Request {
+        Request::AutosaveDraft {
+            updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
+        }
+    }
+
+    /// Start a due autosave behind any accepted edits, and keep the frame
+    /// loop awake until the next one is due.
+    fn drive_autosave(&mut self, ctx: &egui::Context, tx: &Sender<Job>) {
+        let now = Instant::now();
+        if !self.pending
+            && self.inline.is_none()
+            && self.autosave_rx.is_none()
+            && !self.close_requested
+            && self.presented.is_some()
+            && self.autosave.take_due(now)
+        {
+            let (reply, rx) = mpsc::channel();
+            if tx.send(Job::Autosave { reply }).is_ok() {
+                self.autosave_rx = Some(rx);
+            }
+        }
+        // A repaint request alone does not wake an idle deferred viewport, so a
+        // timer thread wakes it like a worker reply does. A pending timer that
+        // fires before a later deadline just schedules the next one.
+        if let Some(due) = self.autosave.deadline()
+            && self.autosave_wake.is_none_or(|wake_at| wake_at <= now)
+        {
+            self.autosave_wake = Some(due);
+            let ctx = ctx.clone();
+            let viewport = ctx.viewport_id();
+            thread::spawn(move || {
+                thread::sleep(due.saturating_duration_since(Instant::now()));
+                wake(&ctx, viewport);
+            });
+        }
+    }
+
+    /// Apply a finished background autosave. Its reply always precedes the
+    /// replies of edits queued after it, so it is read first.
+    fn receive_autosave(&mut self) -> bool {
+        let Some(result) = self.autosave_rx.as_ref().map(Receiver::try_recv) else {
+            return false;
+        };
+        let result = match result {
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => Err(String::new()),
+            Ok(result) => result,
+        };
+        self.autosave_rx = None;
+        // A failed autosave stays quiet, as in shipping: the next edit or
+        // the close flush retries.
+        if let (Ok(has_draft), Some(presented)) = (result, &mut self.presented) {
+            presented.unsaved = false;
+            presented.has_draft = has_draft;
+            if !has_draft {
+                self.draft_restored = false;
+            }
+        }
+        true
+    }
+
+    /// The restored-draft notice's Discard: back to the original capture.
+    fn discard_draft(&mut self, tx: &Sender<Job>) {
+        self.draft_restored = false;
+        self.autosave.cancel();
+        self.submit(tx, Request::DiscardDraft);
     }
 
     fn receive(&mut self, ctx: &egui::Context, result: Result<Presented, String>) {
@@ -828,6 +959,18 @@ impl View {
                 if !presented.has_draft {
                     self.draft_restored = false;
                 }
+                // Shipping autosaves 700 ms after each change to the document.
+                if self.autosaves
+                    && presented.unsaved
+                    && self
+                        .presented
+                        .as_ref()
+                        .is_none_or(|old| !old.unsaved || old.document != presented.document)
+                {
+                    self.autosave.edited(Instant::now());
+                } else if !presented.unsaved {
+                    self.autosave.cancel();
+                }
                 self.presented = Some(presented);
                 self.ensure_export_target();
                 if !copied_layer {
@@ -849,9 +992,6 @@ impl View {
                 }
                 self.error = None;
                 self.received_inline();
-                if self.close_after_save || (self.close_requested && !self.unsaved()) {
-                    self.closed = true;
-                }
             }
             Err(error) => {
                 self.pending_layer_selection = None;
@@ -872,25 +1012,15 @@ impl View {
                 self.reset_background_fields();
             }
         }
-        if self.close_requested && !self.unsaved() {
+        // The close flush is best-effort, as in shipping: the window closes
+        // even when the draft could not be written.
+        if std::mem::take(&mut self.close_after_save) {
             self.closed = true;
         }
-        self.close_after_save = false;
     }
 
     fn submit(&mut self, tx: &Sender<Job>, request: Request) {
         self.submit_job(tx, Job::Apply(request));
-    }
-
-    fn save_draft(&mut self, tx: &Sender<Job>) {
-        if self.presented.is_some() {
-            self.submit(
-                tx,
-                Request::SaveDraft {
-                    updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
-                },
-            );
-        }
     }
 
     fn reset_background_fields(&mut self) {
@@ -1312,7 +1442,7 @@ impl View {
         }
         // Preserve the one-in-flight edit contract. A selected file waits until
         // an accepted edit or a discard confirmation has finished.
-        if self.pending || self.inline.is_some() || self.confirm_discard {
+        if self.pending || self.inline.is_some() {
             return false;
         }
         let Some(result) = self.import_picker.as_ref().map(Receiver::try_recv) else {
@@ -1374,6 +1504,8 @@ impl View {
 
     fn select_layer(&mut self, id: Option<String>) {
         let previous_text = self.text.clone();
+        let previous_layer = self.selected_layer.clone();
+        let previous_annotation = self.annotation.take();
         let elements = self
             .presented
             .as_ref()
@@ -1385,11 +1517,16 @@ impl View {
                 .or_else(|| elements.last())
         });
         self.selected_layer = layer.map(|element| element.base().id.clone());
+        // Live style edits still queued keep the fields the user is changing.
+        let keep = !self.live_queue.is_empty() && previous_layer == self.selected_layer;
         self.annotation = layer.and_then(|element| match element {
             Element::Shape(shape) => Some(AnnotationFields::new(&shape.style)),
             Element::Path(path) => Some(AnnotationFields::new(&path.style)),
             _ => None,
         });
+        if keep && self.annotation.is_some() && previous_annotation.is_some() {
+            self.annotation = previous_annotation;
+        }
         self.text = layer.and_then(|element| match element {
             Element::Text(text) => {
                 let accepted = TextValues::from_element(text);
@@ -1465,12 +1602,6 @@ impl View {
             },
         );
     }
-
-    fn submit_layer(&mut self, tx: &Sender<Job>, edit: LayerEdit) {
-        if let Some(id) = self.selected_layer.clone() {
-            self.submit(tx, Request::Layer { id, edit });
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -1526,9 +1657,7 @@ fn save_dirty(session: &mut EditorSession) -> Result<(), String> {
         return Err("Finish or cancel text input before saving a draft.".into());
     }
     if session.snapshot().unsaved_changes {
-        session.execute(Request::SaveDraft {
-            updated_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
-        })?;
+        session.execute(View::autosave_request())?;
     }
     Ok(())
 }
@@ -1678,6 +1807,18 @@ impl Editor {
                             presented.saved = Some((plan, saved));
                             Ok(presented)
                         }),
+                    Job::Autosave { reply } => {
+                        let result = session
+                            .as_mut()
+                            .ok_or_else(|| "Editor is unavailable.".to_owned())
+                            .and_then(|session| {
+                                session.execute(View::autosave_request())?;
+                                Ok(session.snapshot().has_draft)
+                            });
+                        let _ = reply.send(result);
+                        wake(&wake_ctx, viewport);
+                        continue;
+                    }
                     Job::Flush { input, reply } => {
                         let result = session.as_mut().map_or(Ok(()), |session| {
                             if let Some(input) = input {
@@ -1718,6 +1859,7 @@ impl Editor {
                 default_stem,
                 original_bytes,
                 drawing_preview: Some(drawing_preview::State::new(ctx.clone(), viewport)),
+                autosaves: true,
                 ..View::default()
             })),
             tx,
@@ -1746,6 +1888,9 @@ impl Editor {
 
     pub fn receive(&self, ctx: &egui::Context) {
         if self.view.lock().unwrap().receive_folder() {
+            ctx.request_repaint_of(self.viewport);
+        }
+        if self.view.lock().unwrap().receive_autosave() {
             ctx.request_repaint_of(self.viewport);
         }
         while let Ok(result) = self.rx.try_recv() {
@@ -1818,6 +1963,8 @@ impl Editor {
                         .send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     view.request_close();
                 }
+                view.flush_live(&tx);
+                view.drive_close(&tx);
                 if view.closed {
                     wake(ui.ctx(), viewport);
                     return;
@@ -1854,6 +2001,7 @@ impl Drop for Editor {
 fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     view.flush_background(tx);
     view.flush_live(tx);
+    view.drive_autosave(ui.ctx(), tx);
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
@@ -1883,21 +2031,16 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     if view.section != Section::Geometry {
         view.cancel_crop();
     }
-    if view.section != Section::Draw
-        || view.close_requested
-        || view.confirm_discard
-        || !ui.input(|input| input.focused)
-    {
+    if view.section != Section::Draw || view.close_requested || !ui.input(|input| input.focused) {
         view.cancel_drawing();
     }
-    if view.section != Section::Layers || view.close_requested || view.confirm_discard {
+    if view.section != Section::Layers || view.close_requested {
         view.layers.menu = None;
         view.layers.rename = None;
     }
     if view.section != Section::Layers
         || view.pending
         || view.close_requested
-        || view.confirm_discard
         || !ui.input(|input| input.focused)
     {
         view.cancel_layer_gesture();
@@ -1990,7 +2133,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 && view.inline.is_none()
                 && !view.pending
                 && !view.close_requested
-                && !view.confirm_discard
             {
                 show_shape(ui, tokens, view, tx, available, preview, intercepted);
             } else {
@@ -2000,14 +2142,12 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 && view.inline.is_none()
                 && !view.pending
                 && !view.close_requested
-                && !view.confirm_discard
             {
                 show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             }
             if view.section == Section::Layers
                 && view.crop_previous.is_none()
                 && !view.close_requested
-                && !view.confirm_discard
                 && !view.drop.hovering
             {
                 canvas::show_expand(ui, tokens, view, tx, available, preview);
@@ -2429,7 +2569,6 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
     if ctx.current_pass_index() != 0
         || !ctx.input(|input| input.focused)
         || view.close_requested
-        || view.confirm_discard
         || egui::Popup::is_any_open(ctx)
     {
         return;
@@ -2455,7 +2594,6 @@ fn handle_tool_shortcuts(ctx: &egui::Context, view: &mut View) {
         || view.inline.is_some()
         || view.closed
         || view.close_requested
-        || view.confirm_discard
         || view.import_picker.is_some()
         || view.folder_picker.is_some()
     {
@@ -2510,7 +2648,6 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         || view.inline.is_some()
         || view.closed
         || view.close_requested
-        || view.confirm_discard
     {
         return;
     }
@@ -2665,11 +2802,7 @@ fn handle_viewport_input(ui: &egui::Ui, view: &mut View, available: egui::Rect) 
     }
     view.viewport_intercepted = false;
     let focused = ui.input(|input| input.focused);
-    if !focused
-        || view.close_requested
-        || view.confirm_discard
-        || egui::Popup::is_any_open(ui.ctx())
-    {
+    if !focused || view.close_requested || egui::Popup::is_any_open(ui.ctx()) {
         view.viewport_pan = None;
         view.cancel_edit_gestures();
         return false;
@@ -4141,8 +4274,7 @@ fn show_export_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sen
         && !view.pending
         && view.inline.is_none()
         && !view.closed
-        && !view.close_requested
-        && !view.confirm_discard;
+        && !view.close_requested;
     let (horizontal, vertical) = (tokens.number("s-5"), tokens.number("s-4"));
     let height = export_bar_height(tokens, view.export_settings_open);
     egui::Panel::bottom("editor-export-bar")
@@ -5029,12 +5161,7 @@ enum LayerAction {
 }
 
 fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str>) -> bool {
-    if view.pending
-        || view.inline.is_some()
-        || view.closed
-        || view.close_requested
-        || view.confirm_discard
-    {
+    if view.pending || view.inline.is_some() || view.closed || view.close_requested {
         return false;
     }
     let Some(presented) = &view.presented else {
@@ -5185,28 +5312,28 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
     match element {
         Element::Text(_) => show_text(ui, tokens, view, tx),
         Element::Image(image) => show_image_geometry(ui, tokens, view, tx, image),
+        // Style fields stay live while an edit applies; their edits queue.
         Element::Shape(shape) => {
-            ui.add_enabled_ui(!view.pending, |ui| {
-                show_annotation(
-                    ui,
-                    tokens,
-                    view,
-                    tx,
-                    &shape.style,
-                    matches!(
-                        shape.shape.as_str(),
-                        "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
-                    ),
-                );
-                if !shape.base.locked {
+            show_annotation(
+                ui,
+                tokens,
+                view,
+                tx,
+                &shape.base.id,
+                &shape.style,
+                matches!(
+                    shape.shape.as_str(),
+                    "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+                ),
+            );
+            if !shape.base.locked {
+                ui.add_enabled_ui(!view.pending, |ui| {
                     canvas::show_curve_controls(ui, tokens, view, tx, shape);
-                }
-            });
+                });
+            }
         }
         Element::Path(path) => {
-            ui.add_enabled_ui(!view.pending, |ui| {
-                show_annotation(ui, tokens, view, tx, &path.style, false);
-            });
+            show_annotation(ui, tokens, view, tx, &path.base.id, &path.style, false);
         }
     }
     ui.add_space(tokens.number("s-5"));
@@ -5477,17 +5604,22 @@ fn shadow_fields(ui: &mut egui::Ui, swatches: Option<&Tokens>, shadow: &mut Drop
     }
 }
 
+/// Shipping applies stroke, opacity, fill and shadow changes as they are made
+/// (`ScreenshotEditor.tsx` shape/path properties). A burst in one field is
+/// one undo step (`Request::Live`); each toggle is its own.
 fn show_annotation(
     ui: &mut egui::Ui,
     tokens: &Tokens,
     view: &mut View,
     tx: &Sender<Job>,
+    id: &str,
     original: &ElementStyle,
     closed: bool,
 ) {
     let Some(fields) = &mut view.annotation else {
         return;
     };
+    let before = fields.clone();
     ui.separator();
     ui.heading("Annotation style");
     let style = &mut fields.style;
@@ -5509,6 +5641,38 @@ fn show_annotation(
             );
         });
     }
+    let mut opacity = view.layer_opacity;
+    let changed = ui
+        .horizontal(|ui| {
+            ui.label(captures_app::editor_layers::menu::OPACITY);
+            let width = ui.available_width().min(200.);
+            crate::primitives::RangeSlider::new(
+                "annotation-opacity",
+                captures_app::editor_layers::menu::OPACITY,
+                width,
+                0. ..=100.,
+                format!("{}%", opacity.round()),
+            )
+            .show(ui, tokens, &mut opacity)
+            .changed()
+        })
+        .inner;
+    if changed {
+        let id = id.to_owned();
+        view.layer_opacity = opacity;
+        view.live_edit(
+            tx,
+            format!("opacity:{id}"),
+            Request::Layer {
+                id,
+                edit: LayerEdit::Opacity { opacity },
+            },
+        );
+    }
+    let Some(fields) = &mut view.annotation else {
+        return;
+    };
+    let style = &mut fields.style;
     if closed {
         let mut filled = style.fill.is_some();
         if ui.checkbox(&mut filled, "Filled shape").changed() {
@@ -5525,42 +5689,42 @@ fn show_annotation(
     if shadow {
         shadow_fields(ui, Some(tokens), &mut fields.shadow);
     }
+    ui.small("Changes apply as you edit. Hidden and locked annotations remain editable.");
+    if *fields == before {
+        return;
+    }
     let patch = fields.patch(original);
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(
-                patch != AnnotationStylePatch::default(),
-                egui::Button::new("Apply style"),
-            )
-            .clicked()
-        {
-            let invalid = [
-                patch.color.as_deref(),
-                match &patch.fill {
-                    OptionalNullable::Value(fill) => Some(fill.as_str()),
-                    _ => None,
-                },
-                patch
-                    .drop_shadow_style
-                    .as_ref()
-                    .and_then(|shadow| shadow.color.as_deref()),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|color| egui::Color32::from_hex(color).is_err());
-            if invalid {
-                view.error =
-                    Some("Use a hex color such as #ff3b5c. Style changes were not applied.".into());
-            } else {
-                view.submit_layer(tx, LayerEdit::AnnotationStyle { patch });
-            }
-        }
-        if ui.button("Reset fields").clicked() {
-            view.annotation = Some(AnnotationFields::new(original));
-            view.error = None;
-        }
-    });
-    ui.small("Apply changes one undo step. Hidden and locked annotations remain editable.");
+    let invalid = [
+        patch.color.as_deref(),
+        match &patch.fill {
+            OptionalNullable::Value(fill) => Some(fill.as_str()),
+            _ => None,
+        },
+        patch
+            .drop_shadow_style
+            .as_ref()
+            .and_then(|shadow| shadow.color.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|color| egui::Color32::from_hex(color).is_err());
+    if patch == AnnotationStylePatch::default() || invalid {
+        return;
+    }
+    let field = fields.changed_field(&before);
+    let id = id.to_owned();
+    let key = match field {
+        Some(field) => format!("style:{id}:{field}"),
+        None => view.live_once("style"),
+    };
+    view.live_edit(
+        tx,
+        key,
+        Request::Layer {
+            id,
+            edit: LayerEdit::AnnotationStyle { patch },
+        },
+    );
 }
 
 #[cfg(test)]
@@ -5591,11 +5755,10 @@ mod tests {
                 LayerAction::MergeDown,
                 Some("removed")
             ));
-            for blocked in 0..4 {
+            for blocked in 0..3 {
                 view.pending = blocked == 0;
-                view.confirm_discard = blocked == 1;
-                view.close_requested = blocked == 2;
-                view.closed = blocked == 3;
+                view.close_requested = blocked == 1;
+                view.closed = blocked == 2;
                 dispatch_layer_action(&mut view, &tx, action, Some(target.clone()));
                 assert!(rx.try_recv().is_err());
             }
@@ -5975,11 +6138,10 @@ mod tests {
             Some("removed")
         ));
         assert!(layer_action_enabled(&view, LayerAction::Paste, None));
-        for blocked in 0..4 {
+        for blocked in 0..3 {
             view.pending = blocked == 0;
-            view.confirm_discard = blocked == 1;
-            view.close_requested = blocked == 2;
-            view.closed = blocked == 3;
+            view.close_requested = blocked == 1;
+            view.closed = blocked == 2;
             for action in [
                 LayerAction::Copy,
                 LayerAction::Paste,
@@ -6078,7 +6240,7 @@ mod tests {
     }
 
     #[test]
-    fn restored_draft_banner_draft_menu_and_layer_quick_actions_follow_shipping() {
+    fn restored_draft_banner_and_layer_quick_actions_follow_shipping() {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
@@ -6144,7 +6306,6 @@ mod tests {
             "Zoom out",
             "Zoom in",
             "Add images",
-            "Draft actions",
             "Canvas width",
             "Canvas height",
             "Trim edges",
@@ -6195,15 +6356,19 @@ mod tests {
         );
         view.pending = false;
 
-        // Native drafts stay explicit behind the header's draft menu.
+        // Drafts autosave, as in shipping: the header has no draft menu.
         let output = frame(&mut view, vec![]);
-        click(&mut view, find(&output, "Draft actions"));
-        let output = frame(&mut view, vec![]);
-        click(&mut view, find(&output, "Save draft"));
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Job::Apply(Request::SaveDraft { .. }))
-        ));
+        let update = output.platform_output.accesskit_update.as_ref().unwrap();
+        for label in ["Draft actions", "Save draft", "Discard edits…"] {
+            assert!(
+                !update
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some(label)),
+                "{label}"
+            );
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -6304,10 +6469,9 @@ mod tests {
             }],
         );
         assert!(!egui::Popup::is_any_open(&ctx));
-        for blocked in 0..3 {
+        for blocked in 0..2 {
             view.pending = blocked == 0;
-            view.confirm_discard = blocked == 1;
-            view.close_requested = blocked == 2;
+            view.close_requested = blocked == 1;
             click(&mut view, rail(4));
             assert_eq!(view.draw_shape, DrawShape::Star);
         }
@@ -6399,11 +6563,10 @@ mod tests {
             frame(&mut view, vec![key(egui::Key::P, modifiers)]);
             assert_eq!(view.section, Section::Layers);
         }
-        for blocked in 0..4 {
+        for blocked in 0..3 {
             view.pending = blocked == 0;
             view.close_requested = blocked == 1;
-            view.confirm_discard = blocked == 2;
-            view.closed = blocked == 3;
+            view.closed = blocked == 2;
             frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
             assert_eq!(view.section, Section::Layers);
         }
@@ -6559,12 +6722,15 @@ mod tests {
             "copy ignores invalid export dimensions"
         );
         view.pending = false;
-        view.confirm_discard = true;
+        view.close_requested = true;
         click(&mut view, size, copy);
         click(&mut view, size, save);
-        assert!(rx.try_recv().is_err(), "confirmation blocks both actions");
+        assert!(
+            rx.try_recv().is_err(),
+            "a closing editor blocks both actions"
+        );
 
-        view.confirm_discard = false;
+        view.close_requested = false;
         view.section = Section::Geometry;
         view.export_options.size = ExportSize::Custom {
             width: 13,
@@ -7305,10 +7471,10 @@ mod tests {
             }],
             false,
         );
-        view.confirm_discard = true;
+        view.close_requested = true;
         frame(&mut view, vec![key(egui::Key::D, true)], false);
         assert!(rx.try_recv().is_err());
-        view.confirm_discard = false;
+        view.close_requested = false;
         view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
         frame(
             &mut view,
@@ -7472,9 +7638,9 @@ mod tests {
         );
         assert!(rx.try_recv().is_err() && !view.pending);
         frame(&mut view, vec![], false);
-        view.confirm_discard = true;
+        view.close_requested = true;
         assert_eq!(frame(&mut view, vec![key(false)], false), 1);
-        view.confirm_discard = false;
+        view.close_requested = false;
         view.shape_drag = Some((Point { x: 3., y: 7. }, Point { x: 20., y: 30. }));
         assert_eq!(frame(&mut view, vec![key(false), key(true)], false), 0);
         assert!(view.shape_drag.is_none());
@@ -7594,10 +7760,10 @@ mod tests {
         );
         frame(&mut view, vec![physical(egui::Key::Minus)], true);
         assert_eq!(view.viewport.zoom_percent, 100.);
-        view.confirm_discard = true;
+        view.close_requested = true;
         frame(&mut view, vec![key(egui::Key::Plus, true)], true);
         assert_eq!(view.viewport.zoom_percent, 100.);
-        view.confirm_discard = false;
+        view.close_requested = false;
         frame(&mut view, vec![key(egui::Key::Plus, true)], false);
         assert_eq!(view.viewport.zoom_percent, 100.);
         frame(&mut view, vec![key(egui::Key::Plus, true); 20], true);
@@ -8288,7 +8454,7 @@ mod tests {
             egui::UiBuilder::new().max_rect(screen),
         );
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
-        show_annotation(&mut ui, &tokens, &mut view, &tx, &original, true);
+        show_annotation(&mut ui, &tokens, &mut view, &tx, "shape", &original, true);
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         let fields = view.annotation.as_ref().unwrap();
@@ -8299,7 +8465,7 @@ mod tests {
     }
 
     #[test]
-    fn annotation_stroke_color_uses_shared_swatches_and_stages_until_apply() {
+    fn annotation_stroke_color_uses_shared_swatches_and_applies_live() {
         let ctx = egui::Context::default();
         let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
         let original = ElementStyle {
@@ -8308,6 +8474,7 @@ mod tests {
         };
         let mut view = View {
             annotation: Some(AnnotationFields::new(&original)),
+            pending: false,
             ..View::default()
         };
         let (tx, rx) = mpsc::channel();
@@ -8323,7 +8490,7 @@ mod tests {
                 },
                 |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        show_annotation(ui, &tokens, view, &tx, &original, false)
+                        show_annotation(ui, &tokens, view, &tx, "shape", &original, false)
                     });
                 },
             );
@@ -8369,11 +8536,16 @@ mod tests {
         }
         let fields = view.annotation.as_ref().unwrap();
         assert_eq!(fields.style.color, "#2d9cff");
-        assert_eq!(fields.patch(&original).color.as_deref(), Some("#2d9cff"));
+        // Shipping applies the swatch at once, folded by field for undo.
+        let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
+            panic!("a swatch applies live");
+        };
+        assert_eq!(key, "style:shape:stroke-color");
         assert!(
-            rx.try_recv().is_err(),
-            "a swatch stages; Apply style commits"
+            matches!(*request, Request::Layer { ref id, edit: LayerEdit::AnnotationStyle { ref patch } }
+            if id == "shape" && patch.color.as_deref() == Some("#2d9cff"))
         );
+        assert!(rx.try_recv().is_err(), "one edit per change");
         // The active ring moves to the chosen swatch.
         let output = frame(&mut view, vec![]);
         let accent = tokens.color("theme-accent");
@@ -8381,6 +8553,35 @@ mod tests {
             output.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Circle(circle) if circle.center == blue && circle.stroke.color == accent))
         );
+    }
+
+    #[test]
+    fn live_annotation_changes_fold_by_field_and_toggles_stand_alone() {
+        let before = AnnotationFields::new(&ElementStyle::default());
+        let changed = |edit: &dyn Fn(&mut AnnotationFields)| {
+            let mut after = before.clone();
+            edit(&mut after);
+            after.changed_field(&before)
+        };
+        assert_eq!(
+            changed(&|f| f.style.stroke_width += 3.),
+            Some("stroke-width")
+        );
+        assert_eq!(
+            changed(&|f| f.style.color = "#2d9cff".into()),
+            Some("stroke-color")
+        );
+        assert_eq!(changed(&|f| f.shadow.blur += 1.), Some("shadow-blur"));
+        assert_eq!(changed(&|f| f.shadow.offset_y -= 1.), Some("shadow-y"));
+        // Each toggle is its own undo step, as in shipping.
+        let shadow = before.style.has_drop_shadow();
+        assert_eq!(changed(&|f| f.style.drop_shadow = Some(!shadow)), None);
+        assert_eq!(changed(&|f| f.style.fill = None), None);
+        assert_eq!(
+            changed(&|f| f.style.fill = Some("#ffffff".into())),
+            Some("fill-color")
+        );
+        assert_eq!(changed(&|f| f.style.stroke_enabled = Some(false)), None);
     }
 
     #[test]
@@ -10586,7 +10787,13 @@ mod tests {
         assert_eq!(view.selected_layer.as_deref(), Some("copy"));
         assert_eq!(view.layer_geometry, [7., 3., 24., 24.]);
         let (tx, rx) = mpsc::channel();
-        view.submit_layer(&tx, LayerEdit::Visibility { visible: false });
+        view.submit(
+            &tx,
+            Request::Layer {
+                id: "copy".into(),
+                edit: LayerEdit::Visibility { visible: false },
+            },
+        );
         assert!(
             matches!(rx.recv().unwrap(), Job::Apply(Request::Layer { id, edit: LayerEdit::Visibility { visible: false } }) if id == "copy")
         );
@@ -10671,28 +10878,100 @@ mod tests {
     }
 
     #[test]
-    fn close_waits_for_pending_edits_and_failed_save_keeps_the_window_recoverable() {
+    fn close_waits_for_pending_edits_then_flushes_the_draft_without_asking() {
         let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
         let mut view = View::default();
         view.request_close();
-        assert!(!view.closed);
+        view.drive_close(&tx);
+        assert!(
+            !view.closed && rx.try_recv().is_err(),
+            "the open finishes first"
+        );
         view.receive(&ctx, Ok(presented(true)));
         assert!(view.close_requested && !view.closed && view.unsaved());
-        view.close_after_save = true;
+        // Shipping closes without a prompt and flushes the draft first.
+        view.drive_close(&tx);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::AutosaveDraft { .. }))
+        ));
+        assert!(view.pending && !view.closed);
+        view.drive_close(&tx);
+        assert!(rx.try_recv().is_err(), "one flush per close");
+        // The flush is best-effort, as in shipping: a failure still closes.
         view.receive(&ctx, Err("disk full".into()));
-        assert!(!view.closed && view.unsaved());
-        assert_eq!(view.error.as_deref(), Some("disk full"));
-        assert!(!view.close_after_save);
-        view.close_after_save = true;
-        view.receive(&ctx, Ok(presented(false)));
         assert!(view.closed);
         // A stale completion cannot reopen a closed controller.
         view.receive(&ctx, Ok(presented(true)));
-        assert!(view.closed && !view.unsaved());
+        assert!(view.closed);
+
+        // Nothing to save closes at once.
+        let mut saved = View::default();
+        saved.receive(&ctx, Ok(presented(false)));
+        saved.request_close();
+        saved.drive_close(&tx);
+        assert!(saved.closed && rx.try_recv().is_err());
+        // A pending autosave still flushes.
+        let mut timed = View::default();
+        timed.receive(&ctx, Ok(presented(false)));
+        timed.autosave.edited(Instant::now());
+        timed.request_close();
+        timed.drive_close(&tx);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::AutosaveDraft { .. }))
+        ));
+        timed.receive(&ctx, Ok(presented(false)));
+        assert!(timed.closed);
         let mut failed_open = View::default();
         failed_open.request_close();
         failed_open.receive(&ctx, Err("missing screenshot".into()));
+        failed_open.drive_close(&tx);
         assert!(failed_open.closed);
+    }
+
+    #[test]
+    fn edits_autosave_the_draft_after_700ms_in_the_background() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
+        let mut view = View {
+            autosaves: true,
+            ..View::default()
+        };
+        view.receive(&ctx, Ok(presented(false)));
+        assert_eq!(view.autosave.deadline(), None, "opening is not an edit");
+        let before = Instant::now();
+        view.receive(&ctx, Ok(presented(true)));
+        let due = view.autosave.deadline().expect("an edit arms the autosave");
+        assert!(due >= before + DraftAutosave::DELAY);
+        view.drive_autosave(&ctx, &tx);
+        assert!(rx.try_recv().is_err(), "not before 700 ms");
+        view.autosave = DraftAutosave::default();
+        view.autosave.edited(Instant::now() - DraftAutosave::DELAY);
+        view.pending = true;
+        view.drive_autosave(&ctx, &tx);
+        assert!(rx.try_recv().is_err(), "waits behind a running edit");
+        view.pending = false;
+        view.drive_autosave(&ctx, &tx);
+        let Ok(Job::Autosave { reply }) = rx.try_recv() else {
+            panic!("a due autosave runs on the worker");
+        };
+        // It never blocks editing or retitles the window.
+        assert!(!view.pending && view.autosave_rx.is_some());
+        reply.send(Ok(true)).unwrap();
+        assert!(view.receive_autosave());
+        let presented = view.presented.as_ref().unwrap();
+        assert!(!presented.unsaved && presented.has_draft);
+        assert!(view.autosave_rx.is_none() && view.autosave.deadline().is_none());
+        // Discarding the restored draft cancels a pending save.
+        view.autosave.edited(Instant::now());
+        view.discard_draft(&tx);
+        assert!(view.autosave.deadline().is_none());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::DiscardDraft))
+        ));
     }
 
     fn canvas_view(

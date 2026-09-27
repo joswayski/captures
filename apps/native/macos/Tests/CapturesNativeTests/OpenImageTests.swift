@@ -80,7 +80,10 @@ final class OpenImageTests: XCTestCase {
         }
         try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
             .first { $0.title == "Apply crop" }).performClick(nil)
-        try waitUntil { editor.title.contains("Unsaved") }
+        // The window title stays the same (drafts autosave); the crop shows in the fields.
+        let cropped = { self.descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains { $0.contains("120 × 80") } }
+        try waitUntil { cropped() }
         let artifacts = try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
         XCTAssertEqual(artifacts.count, 1)
@@ -100,23 +103,23 @@ final class OpenImageTests: XCTestCase {
         controller.openImages([source.path])
         try waitUntil { !controller.externalOpenPending }
         XCTAssertTrue(editor.isVisible)
-        XCTAssertTrue(editor.title.contains("Unsaved"), "duplicate focus must retain staged edits")
-        XCTAssertTrue(descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
-            .contains { $0.contains("120 × 80") }, "duplicate focus must retain the accepted crop")
+        XCTAssertTrue(cropped(), "duplicate focus must retain the accepted crop")
         XCTAssertEqual(try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
 
+        // Shipping closes without a prompt (the draft autosaves); reopening the
+        // closed source reloads it and drops that draft.
         editor.performClose(nil)
-        editor.endSheet(try XCTUnwrap(editor.attachedSheet), returnCode: .alertSecondButtonReturn)
+        XCTAssertNil(editor.attachedSheet)
         try waitUntil { !editor.isVisible }
+        EditorWorker.flush() // The close flush lands before the source reloads.
         controller.openImages([source.path])
-        try waitUntil { !controller.externalOpenPending && editor.isVisible
-            && !editor.title.contains("Unsaved") }
+        try waitUntil { !controller.externalOpenPending && editor.isVisible && !cropped() }
         let reopened = try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
         XCTAssertEqual(reopened.count, 1)
         XCTAssertEqual(((reopened[0]["entry"] as? [String: Any])?["id"] as? String), id,
-                       "closing without saving reloads the canonical source under the same History ID")
+                       "reopening a closed source reloads it under the same History ID")
     }
 
     func testRealBridgePreviewEditTargetsArtifactWithoutShowingOrChangingHistory() throws {
@@ -199,10 +202,12 @@ final class OpenImageTests: XCTestCase {
         }
         try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
             .first { $0.title == "Apply crop" }).performClick(nil)
-        try waitUntil { editor.title.contains("Unsaved") }
+        let cropped = { self.descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
+            .contains { $0.contains("120 × 80") } }
+        try waitUntil { cropped() }
         editor.orderOut(nil)
         controller.openPreview(first)
-        try waitUntil { editor.isVisible && editor.title.contains("Unsaved") }
+        try waitUntil { editor.isVisible && cropped() }
         XCTAssertTrue(NSApp.windows.first { $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible } === editor)
         XCTAssertTrue(descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
             .contains { $0.contains("120 × 80") }, "duplicate Edit must preserve the staged crop")

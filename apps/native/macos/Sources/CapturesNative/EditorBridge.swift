@@ -1138,6 +1138,10 @@ protocol EditorWorking: AnyObject {
     /// Read-only Wand loupe sample at a document point on the session queue;
     /// nil off every visible image or on failure.
     func wandLoupe(at point: CGPoint, completion: @escaping (NativeWandLoupe?) -> Void)
+    /// Shipping's debounced draft autosave (`captures_app::editor_session::
+    /// DraftAutosave`): saves behind accepted edits on the session queue and
+    /// returns the saved snapshot, without rendering a frame.
+    func autosaveDraft(completion: @escaping (Result<NativeEditorSnapshot, Error>) -> Void)
     func close()
     func prepareForTermination(textInput: EditorTerminationTextInput?) -> Result<Void, Error>
 }
@@ -1344,6 +1348,22 @@ final class EditorWorker: EditorWorking {
         }
     }
 
+    func autosaveDraft(completion: @escaping (Result<NativeEditorSnapshot, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> NativeEditorSnapshot in
+                guard let session = storage.session else {
+                    throw AppBridgeError.backend("The screenshot editor is closed.")
+                }
+                let snapshot = try session.request(["operation": "autosave_draft",
+                                                    "updated_at_ms": Self.timestamp()])
+                storage.snapshot = snapshot
+                return snapshot
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     func close() {
         let storage = storage
         Self.queue.async {
@@ -1378,7 +1398,7 @@ final class EditorWorker: EditorWorking {
                 }
                 if storage.snapshot?.unsavedChanges == true {
                     storage.snapshot = try session.request([
-                        "operation": "save_draft",
+                        "operation": "autosave_draft",
                         "updated_at_ms": Self.timestamp(),
                     ])
                 }

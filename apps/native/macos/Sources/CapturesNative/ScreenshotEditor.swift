@@ -22,6 +22,14 @@ struct ScreenshotEditorState: Equatable {
         snapshot = value; busy = false; return true
     }
 
+    /// A background autosave's snapshot: same document, now in the draft.
+    /// Ignored once a command is running or the session changed.
+    mutating func autosaved(_ value: NativeEditorSnapshot, generation: Int) -> Bool {
+        guard self.generation == generation, !busy, artifactID == value.artifactID,
+              snapshot != nil else { return false }
+        snapshot = value; return true
+    }
+
     mutating func completeOutput(generation: Int, artifactID: String) -> Bool {
         guard self.generation == generation, self.artifactID == artifactID,
               snapshot != nil else { return false }
@@ -1292,14 +1300,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var zoomOutButton: CaptureButton!
     private var zoomInButton: CaptureButton!
     private var addImagesButton: CaptureButton!
-    private var draftMenuButton: CaptureButton!
-    /// Native drafts are explicit (shipping autosaves), so Save draft and
-    /// Discard edits share one compact header menu.
-    let draftMenu = NSMenu(title: EditorChrome.text("header", "draft_menu"))
-    private let saveDraftItem = NSMenuItem(title: EditorChrome.text("header", "save_draft"),
-                                           action: nil, keyEquivalent: "")
-    private let discardItem = NSMenuItem(title: EditorChrome.text("header", "discard_edits"),
-                                         action: nil, keyEquivalent: "")
     private var recenterButton: CaptureButton!
     private let railPanel = Surface()
     private let railRule = Surface()
@@ -1416,7 +1416,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var estimateWork: DispatchWorkItem?
     private var originalBytes: UInt64?
     private var fields: [NSTextField] = []
-    private var closeAfterCommand = false
+    /// Shipping's 700 ms draft autosave (`EditorChrome.metric("draft_autosave_ms")`).
+    private var autosaveWork: DispatchWorkItem?
+    /// Bumps with every published edit; a stale autosave result is ignored.
+    private var autosaveSerial = 0
+    static var autosaveDelay: TimeInterval {
+        let milliseconds = EditorChrome.metric("draft_autosave_ms")
+        return TimeInterval(milliseconds > 0 ? milliseconds : 700) / 1_000
+    }
     private var selectedLayerID: String?
     private var selectedLayerIndex = 0
     private var preferredLayerID: String?
@@ -1519,13 +1526,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             completion?(false)
             return
         }
-        if state.artifactID != artifact.id,
-           state.snapshot?.unsavedChanges == true || !liveQueue.isEmpty || inlineTextInput != nil {
-            showError("Finish text input and save or discard screenshot edits before opening another capture.")
+        if state.artifactID != artifact.id, !liveQueue.isEmpty || inlineTextInput != nil {
+            showError("Finish text input before opening another capture.")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             completion?(false)
             return
         }
+        // Edits in the capture being replaced autosave first, as on close.
+        if state.artifactID != artifact.id { flushDraft() }
         if state.artifactID == artifact.id, state.snapshot != nil {
             // "Show in editor" also brings back a minimized editor.
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -1571,7 +1579,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.startExportTarget(presentation.snapshot)
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = presentation.snapshot.hasDraft
-                    ? "Draft restored." : "Ready. Changes affect only the native editor draft."
+                    ? "Draft restored." : "Ready. Changes save automatically as a draft."
             case .failure(let error):
                 guard self.state.fail(generation: generation) else {
                     completion?(false); return
@@ -1651,23 +1659,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             status.stringValue = "Wait for the current editor action to finish."
             return false
         }
-        guard state.snapshot?.unsavedChanges == true else { closeNow(); return false }
-        let alert = NSAlert()
-        alert.messageText = "Save screenshot edits?"
-        alert.informativeText = "Save a native draft to continue later, close without saving this session, or cancel."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Save and Close")
-        alert.addButton(withTitle: "Close Without Saving")
-        alert.addButton(withTitle: "Cancel Close")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            switch response {
-            case .alertFirstButtonReturn: self?.saveDraft(closeAfter: true)
-            // Freeing a session has no implicit write. This drops only changes
-            // since the last save and retains any previously persisted draft.
-            case .alertSecondButtonReturn: self?.closeNow()
-            default: break
-            }
-        }
+        // Shipping closes without asking; `closeNow` flushes the draft first.
+        closeNow()
         return false
     }
 
@@ -1754,10 +1747,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var chromeTop: CGFloat { headerBar.frame.maxY }
 
     /// The 52pt shipping header: the Canvas toolbar on the left; Undo/Redo (only
-    /// above 1040pt), the zoom group, Add images and the draft menu on the right.
+    /// above 1040pt), the zoom group and Add images on the right. Drafts autosave.
     /// Controls are placed first; the Canvas toolbar takes what remains.
     private func layoutHeader() {
-        guard let addImagesButton, let draftMenuButton, let fitButton else { return }
+        guard let addImagesButton, let fitButton else { return }
         let width = root.bounds.width
         let pad = tokens.number("s-5")
         let small = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
@@ -1785,9 +1778,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let control = EditorChrome.metric("header_control")
         let y = (height - control) / 2
         let spacing = tokens.number("s-2")
-        draftMenuButton.frame = NSRect(x: width - pad - control, y: y, width: control, height: control)
         let addWidth = 2 * pad + 16 + tokens.number("s-3") + titleWidth(addImagesButton.title)
-        addImagesButton.frame = NSRect(x: draftMenuButton.frame.minX - spacing - addWidth, y: y,
+        addImagesButton.frame = NSRect(x: width - pad - addWidth, y: y,
                                        width: addWidth, height: control)
         let zoomButton = EditorChrome.metric("zoom_button")
         let zoomWidth = 3 * zoomButton + layout.sliderWidth + layout.presetWidth + 4 + 2
@@ -2384,16 +2376,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         addImagesButton.icon = .shipping("image")
         addImagesButton.textSize = tokens.number("text-sm")
 
-        draftMenuButton = headerIcon("more", label: EditorChrome.text("header", "draft_menu")) { [weak self] in
-            guard let self, let control = self.draftMenuButton else { return }
-            self.draftMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: control.bounds.maxY + 4), in: control)
-        }
-        draftMenuButton.toolTip = EditorChrome.text("header", "draft_menu")
-        draftMenu.autoenablesItems = false
-        saveDraftItem.target = self; saveDraftItem.action = #selector(saveDraftFromMenu)
-        discardItem.target = self; discardItem.action = #selector(discardFromMenu)
-        draftMenu.addItem(saveDraftItem); draftMenu.addItem(discardItem)
-
         railPanel.setAccessibilityLabel("Screenshot tools")
         root.addSubview(railPanel)
         railPanel.addSubview(railRule)
@@ -2445,16 +2427,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func redoDocument() {
         guard state.snapshot?.canRedo == true, !state.busy, inlineTextInput == nil else { return }
         command(["operation": "redo"], message: "Redoing…")
-    }
-
-    @objc private func saveDraftFromMenu() {
-        guard saveDraftItem.isEnabled else { return }
-        saveDraft()
-    }
-
-    @objc private func discardFromMenu() {
-        guard discardItem.isEnabled else { return }
-        confirmDiscard()
     }
 
     /// Shipping's banner Discard resets immediately, without confirmation.
@@ -3005,10 +2977,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         rotationSnap.delegate = self
         rotationSnap.target = self; rotationSnap.action = #selector(rotationSnapChanged)
         annotationControls = EditorAnnotationControls(tokens: tokens, formatter: editorNumberFormatter)
-        annotationControls.apply = { [weak self] patch in
-            guard let self, !self.state.busy, let layer = self.selectedLayer else { return }
-            self.layerCommand(layer, edit: ["action": "annotation_style", "patch": patch],
-                              message: "Applying annotation style…")
+        // Shipping applies style changes live; a burst in one field is one undo step.
+        annotationControls.apply = { [weak self] patch, field in
+            guard let self, let layer = self.selectedLayer else { return }
+            let key = field.map { "style:\(layer.id):\($0)" } ?? self.liveOnceKey("style")
+            self.liveEdit(key: key, request: ["operation": "layer", "id": layer.id,
+                "edit": ["action": "annotation_style", "patch": patch]])
+        }
+        annotationControls.opacityChanged = { [weak self] opacity in
+            guard let self, let layer = self.selectedLayer else { return }
+            self.liveEdit(key: "opacity:\(layer.id)", request: ["operation": "layer", "id": layer.id,
+                "edit": ["action": "opacity", "opacity": opacity]])
         }
         annotationControls.reportError = { [weak self] message in self?.showError(message) }
         annotationControls.resized = { [weak self] height in
@@ -4714,7 +4693,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 if commit { self.invalidateOutput() }
                 self.status.textColor = self.tokens.color("text-muted")
                 self.status.stringValue = commit
-                    ? (presentation.snapshot.unsavedChanges ? "Unsaved changes." : "Text finished.")
+                    ? (presentation.snapshot.unsavedChanges ? "Changes save automatically." : "Text finished.")
                     : "Text input cancelled."
                 self.updateControls()
                 if self.closeAfterTextInput {
@@ -5564,7 +5543,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.preferredLayerID = imported.layerID
                 self.publish(imported.presentation, resetCrop: false)
                 self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = "Image added. Unsaved changes."
+                self.status.stringValue = "Image added. Changes save automatically."
                 if !self.pendingDropURLs.isEmpty, let artifactID = self.state.artifactID {
                     // Later files in one drop stack below the layer just added.
                     let next = self.pendingDropURLs.removeFirst()
@@ -5815,26 +5794,49 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Changing canvas background…")
     }
 
-    private func saveDraft(closeAfter: Bool = false) {
-        closeAfterCommand = closeAfter
-        command(["operation": "save_draft", "updated_at_ms": EditorWorker.timestamp()],
-                message: "Saving draft…")
+    private func discardEdits() {
+        autosaveWork?.cancel(); autosaveWork = nil
+        command(["operation": "discard_draft"], message: "Discarding edits…", resetCrop: true)
     }
 
-    private func confirmDiscard() {
-        let alert = NSAlert()
-        alert.messageText = "Discard all screenshot edits?"
-        alert.informativeText = "This removes the native editor draft and restores the original History image."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Discard Edits"); alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.discardEdits() }
+    /// Restart shipping's autosave timer after an accepted change.
+    private func scheduleAutosave(_ snapshot: NativeEditorSnapshot) {
+        autosaveSerial += 1
+        autosaveWork?.cancel(); autosaveWork = nil
+        guard snapshot.unsavedChanges else { return }
+        armAutosave()
+    }
+
+    private func armAutosave() {
+        let work = DispatchWorkItem { [weak self] in self?.autosaveNow() }
+        autosaveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.autosaveDelay, execute: work)
+    }
+
+    /// Save in the background: the editor stays usable and the save runs behind
+    /// any accepted edit on the session queue.
+    private func autosaveNow() {
+        autosaveWork = nil
+        guard state.snapshot?.unsavedChanges == true else { return }
+        // A running edit or inline text publishes (and re-arms) when it lands.
+        guard !state.busy, inlineTextInput == nil, liveQueue.isEmpty else { armAutosave(); return }
+        let serial = autosaveSerial, generation = state.generation
+        worker.autosaveDraft { [weak self] result in
+            // A failed autosave stays quiet, as in shipping: the next edit or
+            // the close flush retries.
+            guard let self, case .success(let saved) = result, self.autosaveSerial == serial,
+                  self.state.autosaved(saved, generation: generation) else { return }
+            if !saved.hasDraft && self.draftRestored { self.draftRestored = false; self.layoutEditor() }
         }
     }
 
-    private func discardEdits(closeAfter: Bool = false) {
-        closeAfterCommand = closeAfter
-        command(["operation": "discard_draft"], message: "Discarding edits…", resetCrop: true)
+    /// Closing or switching captures: write a pending or unsaved draft now.
+    private func flushDraft() {
+        let pending = autosaveWork != nil
+        autosaveWork?.cancel(); autosaveWork = nil
+        autosaveSerial += 1
+        guard pending || state.snapshot?.unsavedChanges == true else { return }
+        worker.autosaveDraft { _ in }
     }
 
     private func command(_ object: [String: Any], message: String, resetCrop: Bool = false,
@@ -5868,14 +5870,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     self.publish(presentation, resetCrop: resetCrop)
                     self.status.textColor = self.tokens.color("text-muted")
                     self.status.stringValue = presentation.snapshot.unsavedChanges
-                        ? "Unsaved changes." : presentation.snapshot.hasDraft ? "Draft saved." : "Original restored."
+                        ? "Changes save automatically." : presentation.snapshot.hasDraft ? "Draft saved." : "Original restored."
                 }
                 if selectToolOnSuccess { self.activateTool(section: Section.layers, shape: nil) }
-                if self.closeAfterCommand { self.closeAfterCommand = false; self.closeNow(); return }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
                 self.preferredLayerID = nil
-                self.closeAfterCommand = false
                 // A rejected live edit ends its burst; queued edits built on it drop too.
                 self.liveQueue.removeAll()
                 self.showError("Editor action failed: \(error.localizedDescription)")
@@ -5913,8 +5913,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishCreateTextDefaults()
         reconcileLayerSelection(snapshot.layers)
         publishLayerCount(snapshot.layers.count)
-        window.title = snapshot.unsavedChanges
-            ? EditorWindowTitle.screenshot + " — Unsaved" : EditorWindowTitle.screenshot
+        // Shipping keeps one title; drafts autosave instead of flagging it.
+        window.title = EditorWindowTitle.screenshot
+        scheduleAutosave(snapshot)
         // New pixels or dimensions: refresh the summary, re-estimate the export
         // and re-encode the comparison's After side.
         refreshExportBar()
@@ -5926,7 +5927,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelCrop()
         cancelDrawing()
         cancelPendingImport()
-        closeAfterCommand = false; closeAfterTextInput = false
+        // Shipping flushes the draft on close; it runs before the session is freed.
+        flushDraft()
+        closeAfterTextInput = false
         inlineTextInput = nil; hideInlineTextEditor()
         selectedLayerID = nil; preferredLayerID = nil
         backgroundSwatches?.deactivate(); queuedBackground = nil
@@ -5961,9 +5964,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
         redoButton?.isEnabled = ready && state.snapshot?.canRedo == true
-        saveDraftItem.isEnabled = ready && state.snapshot?.unsavedChanges == true
-        discardItem.isEnabled = ready && (state.snapshot?.hasDraft == true || state.snapshot?.unsavedChanges == true)
-        draftMenuButton?.isEnabled = ready
         draftDiscardButton?.isEnabled = ready
         addImagesButton?.isEnabled = ready && !importLoading
         addLayerButton?.isEnabled = ready && !importLoading
@@ -5989,10 +5989,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if ready && !liveQueue.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.flushLiveQueue() }
         }
-        annotationControls?.setReady(ready)
         curveControls?.setReady(ready)
         // Live fields stay editable while an edit applies; their edits queue.
         let live = state.snapshot != nil && inlineTextInput == nil
+        annotationControls?.setReady(live)
         let layer = live ? selectedLayer : nil
         rotationSnap.isEnabled = layer != nil
         let resizable = layer?.kind == .image && layer?.locked == false
@@ -6028,7 +6028,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func publishSelectedLayerFields() {
-        annotationControls?.setStyle(selectedLayer?.annotation)
+        // Queued live style edits keep the fields the user is changing.
+        let layerID = selectedLayer?.id
+        if !liveQueue.contains(where: { layerID != nil && $0.key.hasPrefix("style:\(layerID!):") }) {
+            annotationControls?.setStyle(selectedLayer?.annotation)
+        }
+        if !liveQueue.contains(where: { layerID != nil && $0.key == "opacity:\(layerID!)" }) {
+            annotationControls?.setOpacity(selectedLayer?.opacity)
+        }
         publishTextFields(preserveStaged: true)
         publishDrawToolControls()
         selectionOverlay.documentJSON = state.snapshot?.documentJSON
@@ -6280,7 +6287,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         for control in menuControls.compactMap({ $0 }) { control.tokens = tokens; control.needsDisplay = true }
         layerTable?.reloadData()
         let controls: [CaptureButton?] = [trimButton, backgroundButton, undoButton, redoButton, fitButton,
-                                          zoomOutButton, zoomInButton, addImagesButton, draftMenuButton,
+                                          zoomOutButton, zoomInButton, addImagesButton,
                                           recenterButton, draftDiscardButton, draftDismissButton, addLayerButton]
         for control in controls.compactMap({ $0 }) { control.tokens = tokens; control.needsDisplay = true }
     }

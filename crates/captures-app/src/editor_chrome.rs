@@ -66,11 +66,8 @@ pub mod header {
     pub const ZOOM_PRESETS: [f64; 3] = [50., 100., 200.];
     pub const ADD_IMAGES: &str = "Add images";
     pub const RECENTER: &str = "Recenter";
-    /// Native drafts are explicit (shipping autosaves), so both hosts keep
-    /// these actions in one compact header menu.
-    pub const DRAFT_MENU: &str = "Draft actions";
-    pub const SAVE_DRAFT: &str = "Save draft";
-    pub const DISCARD_EDITS: &str = "Discard edits…";
+    /// Drafts autosave (`editor_session::DraftAutosave`), as in shipping;
+    /// only the restored-draft notice offers Discard.
     pub const DRAFT_RESTORED: &str = "Restored unsaved edits from last time.";
     pub const DRAFT_DISCARD: &str = "Discard";
     pub const DRAFT_DISMISS: &str = "Dismiss";

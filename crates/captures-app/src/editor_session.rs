@@ -8,6 +8,7 @@ use std::{
     io::{Cursor, Read},
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use captures_history::{ArtifactKind, HistoryEntry, editor_draft};
@@ -29,6 +30,56 @@ use crate::{
 
 const ASSET_PREFIX: &str = "draft-asset:";
 const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Shipping `SCREENSHOT_EDITOR_DRAFT_SAVE_MS`: the draft autosaves this long
+/// after the latest edit.
+pub const DRAFT_AUTOSAVE_MS: u64 = 700;
+
+/// Shipping's debounced draft autosave, for hosts to drive from their event
+/// loop. Every accepted edit restarts the timer; when it elapses the host
+/// sends [`Request::AutosaveDraft`] on the session worker. Closing the editor
+/// flushes a pending save at once instead of asking, as shipping does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DraftAutosave {
+    due: Option<Instant>,
+}
+
+impl DraftAutosave {
+    pub const DELAY: Duration = Duration::from_millis(DRAFT_AUTOSAVE_MS);
+
+    /// An accepted edit left changes that are not in the draft yet.
+    pub fn edited(&mut self, now: Instant) {
+        self.due = Some(now + Self::DELAY);
+    }
+
+    /// Forget a pending save (the draft was discarded or already written).
+    pub fn cancel(&mut self) {
+        self.due = None;
+    }
+
+    /// When the pending save is due, for scheduling a wake-up.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        self.due
+    }
+
+    /// True once when the pending save is due; the host sends `SaveDraft`.
+    /// A host that cannot save yet (another edit in flight, inline text
+    /// open) simply asks again later.
+    pub fn take_due(&mut self, now: Instant) -> bool {
+        if self.due.is_some_and(|due| now >= due) {
+            self.due = None;
+            return true;
+        }
+        false
+    }
+
+    /// Closing: true when the draft must be written before the session is
+    /// freed, because a save is pending or changes are still unsaved.
+    pub fn take_flush(&mut self, unsaved_changes: bool) -> bool {
+        self.due.take().is_some() || unsaved_changes
+    }
+}
 
 pub use captures_image::{ExportFormat, ExportOptions, ExportQuality, ExportSize, PngOptions};
 
@@ -255,6 +306,12 @@ pub enum Request {
     SaveDraft {
         updated_at_ms: u64,
     },
+    /// Shipping's autosave and close flush (see [`DraftAutosave`]): like
+    /// `SaveDraft`, except a document back at the unedited capture removes
+    /// the draft instead of saving it.
+    AutosaveDraft {
+        updated_at_ms: u64,
+    },
     DiscardDraft,
 }
 
@@ -363,6 +420,13 @@ pub struct EditorSession {
     fonts: Option<SessionFonts>,
     pixels: Arc<RgbaImage>,
     has_draft: bool,
+    /// The unedited document when it is known without decoding the original
+    /// again (opened without a draft, or after Discard). Autosaving a document
+    /// equal to it removes the draft instead, like shipping's clean check.
+    baseline: Option<Document>,
+    /// Image sources whose PNG the saved draft already holds. Sources are
+    /// immutable, so later autosaves only write new images and the manifest.
+    persisted_assets: BTreeSet<String>,
     layer_clipboard: Option<Element>,
     layer_paste_count: u32,
     text_input: Option<TransientTextInput>,
@@ -463,6 +527,11 @@ impl EditorSession {
             })
             .transpose()?;
         let pixels = Arc::new(render_frame(&document, &assets, fonts.as_mut())?);
+        let persisted_assets = if has_draft {
+            sources(&document).into_iter().map(str::to_owned).collect()
+        } else {
+            BTreeSet::new()
+        };
         Ok(Self {
             artifact_id: request.artifact_id,
             history_root: request.history_root,
@@ -473,11 +542,13 @@ impl EditorSession {
                 .clamp(24., 72.),
             history: DocumentHistory::new(document.clone()),
             original_path,
+            baseline: (!has_draft).then(|| document.clone()),
             persisted: document,
             assets,
             fonts,
             pixels,
             has_draft,
+            persisted_assets,
             layer_clipboard: None,
             layer_paste_count: 0,
             text_input: None,
@@ -1297,6 +1368,7 @@ impl EditorSession {
                 return Err("The text input token is stale.".into());
             }
             Request::SaveDraft { updated_at_ms } => return self.save_draft(updated_at_ms),
+            Request::AutosaveDraft { updated_at_ms } => return self.autosave_draft(updated_at_ms),
             Request::DiscardDraft => return self.discard_draft(),
             Request::CopyLayer { id } => {
                 let element = self
@@ -1345,6 +1417,7 @@ impl EditorSession {
             | Request::UpdateTextInput { .. }
             | Request::FinishTextInput { .. }
             | Request::SaveDraft { .. }
+            | Request::AutosaveDraft { .. }
             | Request::DiscardDraft
             | Request::RemoveImageBackground { .. }
             | Request::PaintImageBackground { .. }
@@ -1502,20 +1575,50 @@ impl EditorSession {
         Ok(())
     }
 
+    fn autosave_draft(&mut self, updated_at_ms: u64) -> Result<(), String> {
+        let document = self.history.current();
+        if self.baseline.as_ref() == Some(document) {
+            // Back to the unedited capture: shipping keeps no draft for it.
+            editor_draft::discard(&self.drafts_root, &self.artifact_id)
+                .map_err(|error| error.to_string())?;
+            self.persisted = document.clone();
+            self.persisted_assets.clear();
+            self.has_draft = false;
+            return Ok(());
+        }
+        self.save_draft(updated_at_ms)
+    }
+
     fn save_draft(&mut self, updated_at_ms: u64) -> Result<(), String> {
+        match self.write_draft(updated_at_ms) {
+            // The draft folder changed underneath us: resend every image.
+            Err(error) if error.contains(editor_draft::ASSET_MISSING) => {
+                self.persisted_assets.clear();
+                self.write_draft(updated_at_ms)
+            }
+            result => result,
+        }
+    }
+
+    fn write_draft(&mut self, updated_at_ms: u64) -> Result<(), String> {
         let document = self.history.current();
         let mut total = 0;
         let mut assets = Vec::new();
         for source in sources(document) {
-            let png = captures_history::encode_png(&self.assets[source])
-                .map_err(|error| error.to_string())?;
-            total += png.len();
-            if total > 80 * 1024 * 1024 {
-                return Err("Unsaved edits are too large to keep as a draft.".into());
-            }
+            let png = if self.persisted_assets.contains(source) {
+                None
+            } else {
+                let png = captures_history::encode_png(&self.assets[source])
+                    .map_err(|error| error.to_string())?;
+                total += png.len();
+                if total > 80 * 1024 * 1024 {
+                    return Err("Unsaved edits are too large to keep as a draft.".into());
+                }
+                Some(png)
+            };
             assets.push(editor_draft::AssetInput {
                 id: asset_id(source)?.into(),
-                png: Some(png),
+                png,
             });
         }
         editor_draft::save_with_fonts(
@@ -1537,6 +1640,7 @@ impl EditorSession {
                 .map(|fonts| &fonts.assets),
         )
         .map_err(|error| error.to_string())?;
+        self.persisted_assets = sources(document).into_iter().map(str::to_owned).collect();
         self.persisted = document.clone();
         self.has_draft = true;
         Ok(())
@@ -1552,7 +1656,9 @@ impl EditorSession {
         editor_draft::discard(&self.drafts_root, &self.artifact_id)
             .map_err(|error| error.to_string())?;
         self.history = DocumentHistory::new(original.clone());
+        self.baseline = Some(original.clone());
         self.persisted = original;
+        self.persisted_assets.clear();
         self.assets = assets;
         self.pixels = Arc::new(pixels);
         self.has_draft = false;
