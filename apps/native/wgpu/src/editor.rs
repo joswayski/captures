@@ -2216,7 +2216,7 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
         view.draw_shape,
         DrawShape::Wand | DrawShape::Erase | DrawShape::Restore
     ) {
-        ui.label("Remove a color, paint it out, or paint it back.");
+        ui.label(captures_app::editor_chrome::eraser::INTRO);
         // Shipping `.screenshot-format-buttons-3`: three equal toggle buttons.
         let gap = tokens.number("s-2");
         let (row, _) = ui.allocate_exact_size(
@@ -2291,19 +2291,29 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
         view.last_grouped_shape = view.draw_shape;
     }
     if view.draw_shape == DrawShape::Wand {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Tolerance");
-            ui.add(
-                egui::DragValue::new(&mut view.wand_tolerance)
-                    .range(0. ..=255.)
-                    .max_decimals(0)
-                    .speed(1.),
-            );
-            ui.checkbox(&mut view.wand_contiguous, "Contiguous");
-        });
-        ui.label("Click an image to remove pixels matching that color. Transparent areas still select the frontmost visible image.");
-        ui.small("Tolerance controls the color range. Contiguous limits removal to the connected area around the click.");
+        use captures_app::editor_chrome::eraser as e;
+        let marks = e::TOLERANCE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
+        // Slider values are the wand's 0–255 channel distance; shipping stops at 120.
+        view.wand_tolerance = view.wand_tolerance.clamp(e::TOLERANCE_RANGE.0, e::TOLERANCE_RANGE.1);
+        let text = e::tolerance_text(view.wand_tolerance);
+        labelled_slider(
+            ui,
+            tokens,
+            e::TOLERANCE,
+            crate::primitives::RangeSlider::new(
+                "wand-tolerance",
+                e::TOLERANCE_LABEL,
+                ui.available_width(),
+                e::TOLERANCE_RANGE.0..=e::TOLERANCE_RANGE.1,
+                text,
+            )
+            .marks(&marks),
+            &mut view.wand_tolerance,
+        );
+        ui.checkbox(&mut view.wand_contiguous, e::CONTIGUOUS);
+        ui.label(e::wand_hint(view.wand_contiguous));
     } else if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
+        use captures_app::editor_chrome::eraser as e;
         chrome::draw_tool_preview(
             ui,
             tokens,
@@ -2312,30 +2322,44 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             None,
             1.,
         );
-        ui.horizontal(|ui| {
-            ui.label("Diameter");
-            ui.add(
-                egui::DragValue::new(&mut view.brush_size)
-                    .range(4. ..=120.)
-                    .max_decimals(0)
-                    .suffix(" px")
-                    .speed(1.),
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("Softness");
-            ui.add(
-                egui::DragValue::new(&mut view.brush_softness)
-                    .range(0. ..=100.)
-                    .max_decimals(0)
-                    .suffix("%")
-                    .speed(1.),
-            );
-        });
-        ui.label("Pixels preview while dragging. Release commits one undo step; Escape cancels.");
-        ui.small(
-            "Erase makes pixels transparent. Restore uses the image’s retained original pixels.",
+        let size_marks = e::SIZE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
+        let text = e::size_text(view.brush_size);
+        labelled_slider(
+            ui,
+            tokens,
+            e::SIZE,
+            crate::primitives::RangeSlider::new(
+                "brush-size",
+                e::SIZE_LABEL,
+                ui.available_width(),
+                e::SIZE_RANGE.0..=e::SIZE_RANGE.1,
+                text,
+            )
+            .marks(&size_marks),
+            &mut view.brush_size,
         );
+        let softness_marks =
+            e::SOFTNESS_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
+        let text = e::softness_text(view.brush_softness);
+        labelled_slider(
+            ui,
+            tokens,
+            e::SOFTNESS,
+            crate::primitives::RangeSlider::new(
+                "brush-softness",
+                e::SOFTNESS_LABEL,
+                ui.available_width(),
+                e::SOFTNESS_RANGE.0..=e::SOFTNESS_RANGE.1,
+                text,
+            )
+            .marks(&softness_marks),
+            &mut view.brush_softness,
+        );
+        ui.label(if view.draw_shape == DrawShape::Erase {
+            e::ERASE_HINT
+        } else {
+            e::RESTORE_HINT
+        });
     } else if view.draw_shape == DrawShape::Text {
         ui.label("New text style");
         if let Some(presented) = &view.presented {
@@ -2355,7 +2379,7 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
                     .speed(1.),
             );
         });
-        annotation_color(ui, "Color", &mut view.new_text_color);
+        swatch_color(ui, tokens, colors::COLOR, &mut view.new_text_color);
         ui.label("Click to type on the canvas, or click existing text to edit it.");
         ui.small(
             "These defaults apply only to new text in this editor. Box styles center on the click.",
@@ -2390,9 +2414,14 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             }
         }
         if !closed || style.has_stroke() {
-            annotation_color(
+            swatch_color(
                 ui,
-                if closed { "Stroke color" } else { "Color" },
+                tokens,
+                if closed {
+                    colors::STROKE_COLOR
+                } else {
+                    colors::COLOR
+                },
                 &mut style.color,
             );
             ui.horizontal(|ui| {
@@ -2420,7 +2449,7 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
                 style.fill = filled.then(|| style.color.clone());
             }
             if let Some(fill) = &mut style.fill {
-                annotation_color(ui, "Fill color", fill);
+                swatch_color(ui, tokens, colors::FILL_COLOR, fill);
             }
         }
         let mut enabled = style.has_drop_shadow();
@@ -5506,23 +5535,20 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
             .range(8. ..=512.)
             .show(ui, tokens, &mut fields.staged.font_size);
     });
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut fields.staged.bold, "Bold");
-        ui.checkbox(&mut fields.staged.italic, "Italic");
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Align");
-        for (value, label) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
-            ui.selectable_value(&mut fields.staged.align, value.into(), label);
-        }
-    });
-    annotation_color(ui, "Text color", &mut fields.staged.color);
+    text_format_buttons(
+        ui,
+        tokens,
+        &mut fields.staged.bold,
+        &mut fields.staged.italic,
+        &mut fields.staged.align,
+    );
+    swatch_color(ui, tokens, colors::TEXT_COLOR, &mut fields.staged.color);
     let mut plate = fields.staged.background.is_some();
     if ui.checkbox(&mut plate, "Background plate").changed() {
         fields.staged.background = plate.then(|| "#f7f7f5".into());
     }
     if let Some(background) = &mut fields.staged.background {
-        annotation_color(ui, "Plate color", background);
+        swatch_color(ui, tokens, colors::BACKGROUND, background);
         ui.checkbox(&mut fields.staged.rounded_background, "Rounded plate");
     }
     ui.horizontal_wrapped(|ui| {
@@ -5578,6 +5604,126 @@ fn annotation_color(ui: &mut egui::Ui, label: &str, value: &mut String) {
                 .labelled_by(label.id);
         });
     });
+}
+
+/// Shipping `.screenshot-format-buttons`: B, I and the three alignment icons
+/// in five equal 32 pt columns; the active ones fill with the accent.
+fn text_format_buttons(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    bold: &mut bool,
+    italic: &mut bool,
+    align: &mut String,
+) {
+    use captures_app::editor_chrome::text_format as f;
+    let gap = tokens.number("s-2");
+    let (row, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), f::BUTTON_HEIGHT as f32),
+        egui::Sense::hover(),
+    );
+    let columns = f::COLUMNS as f32;
+    let width = (row.width() - (columns - 1.) * gap) / columns;
+    for index in 0..f::COLUMNS {
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(row.left() + index as f32 * (width + gap), row.top()),
+            egui::vec2(width, row.height()),
+        );
+        let (label, active) = match index {
+            0 => (f::BOLD, *bold),
+            1 => (f::ITALIC, *italic),
+            _ => {
+                let (value, label, _) = f::ALIGN[index - 2];
+                (label, align == value)
+            }
+        };
+        let response = ui.interact(
+            rect,
+            ui.scope_id().with(("text-format", label)),
+            egui::Sense::click(),
+        );
+        let (fill, border, ink) = if active {
+            (
+                tokens.color("theme-accent"),
+                tokens.color("theme-accent"),
+                tokens.color("theme-accent-ink"),
+            )
+        } else {
+            (
+                tokens.color(if response.hovered() {
+                    "control-hover"
+                } else {
+                    "control"
+                }),
+                tokens.color("border-subtle"),
+                tokens.color("text-muted"),
+            )
+        };
+        ui.painter().rect(
+            rect,
+            tokens.number("r-sm"),
+            fill,
+            egui::Stroke::new(1., border),
+            egui::StrokeKind::Inside,
+        );
+        if response.has_focus() {
+            crate::primitives::focus_ring(ui, tokens, rect, tokens.number("r-sm"));
+        }
+        if index < 2 {
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                if index == 0 { "B" } else { "I" },
+                0.,
+                egui::TextFormat {
+                    font_id: egui::FontId::new(
+                        tokens.number("text-sm"),
+                        egui::FontFamily::Name(crate::ui_fonts::SEMIBOLD.into()),
+                    ),
+                    color: ink,
+                    italics: index == 1,
+                    ..Default::default()
+                },
+            );
+            let galley = ui.painter().layout_job(job);
+            ui.painter()
+                .galley(rect.center() - galley.size() / 2., galley, ink);
+        } else {
+            chrome::icon(
+                ui.painter(),
+                f::ALIGN[index - 2].2,
+                rect.center(),
+                f::ICON as f32,
+                1.8,
+                ink,
+            );
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label)
+        });
+        if response.clicked() {
+            match index {
+                0 => *bold = !*bold,
+                1 => *italic = !*italic,
+                _ => *align = f::ALIGN[index - 2].0.into(),
+            }
+        }
+    }
+}
+
+/// Shipping `<label>Name<RangeSlider/></label>`: the visible name above the
+/// slider, whose readout, ticks and mark labels follow it.
+fn labelled_slider(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    label: &str,
+    slider: crate::primitives::RangeSlider,
+    value: &mut f64,
+) -> bool {
+    ui.label(
+        RichText::new(label)
+            .size(tokens.number("text-sm"))
+            .color(tokens.color("text-muted")),
+    );
+    slider.show(ui, tokens, value).changed()
 }
 
 /// Shipping `ColorField` swatches for a staged annotation color.

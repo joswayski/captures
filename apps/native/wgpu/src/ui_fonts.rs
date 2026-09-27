@@ -209,11 +209,13 @@ mod tests {
     #[test]
     fn editor_text_faces_are_installed_for_every_bundled_family_and_trait() {
         let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
         assert_eq!(
             editor_text_family(&ctx, "sans", false, false),
             egui::FontFamily::Proportional,
             "uninstalled contexts fall back to the UI face"
         );
+        ctx.end_pass().textures_delta.clear();
         install(&ctx);
         ctx.begin_pass(Default::default());
         for family in EDITOR_FAMILIES {
