@@ -75,8 +75,10 @@ def main():
                             "--settings-file", str(output / f"{appearance}.json"), "--appearance", appearance],
                             env={**env, "CAPTURES_NATIVE_LAYOUT_PROBE": "1"}, stdout=layout_out, stderr=log)
                     children.append(app)
-                    root = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Capture History$").decode().splitlines()[0]
-                    preferences = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid),
+                    # xdotool matches any criterion by default; require all of them.
+                    root = run("xdotool", "search", "--all", "--sync", "--onlyvisible", "--pid", str(app.pid),
+                               "--name", "^Capture History$").decode().splitlines()[0]
+                    preferences = run("xdotool", "search", "--all", "--sync", "--onlyvisible", "--pid", str(app.pid),
                                       "--name", "^Captures Preferences$").decode().splitlines()[0]
                     time.sleep(1)
                     layout = {"offset": 0, "controls": {}}
