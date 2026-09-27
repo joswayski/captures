@@ -612,6 +612,8 @@ final class OnboardingView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         KeyViewLoop.install(keyViewOrder, window: window, initial: firstControl)
+        // The CTA pulse stops off-window and restarts from its first draw.
+        if window == nil { stopPulse() } else { needsDisplay = true }
     }
     required init?(coder: NSCoder) { nil }
 
@@ -748,11 +750,6 @@ final class OnboardingView: NSView {
                                               tokens: tokens, reduced: reduced)
         let opacity = CGFloat(pose?.opacity ?? 0)
         return (Self.ctaSpread * opacity, opacity)
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil { stopPulse() } else { needsDisplay = true }
     }
 
     private func stopPulse() {
