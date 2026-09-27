@@ -488,8 +488,11 @@ canvas background card) and, on the right, Undo/Redo, the Fit/−/log slider/+/p
 zoom group and Add images. As in shipping, Undo/Redo hide at 1040 points and below
 (Cmd/Ctrl Z still work) and the slider and preset narrow from 92/76 to 72/72; the
 Canvas toolbar drops its label, then shows Trim and Background icon-only, before
-clipping. Native drafts remain explicit, so Save draft and Discard edits… share one
-header draft menu. A draft found at open shows the shipping "Restored unsaved edits
+clipping. Drafts autosave as in shipping (`editor_session::DraftAutosave`, 700 ms
+after each change, in the background on each host's session worker) and flush on
+close without a prompt; `Request::AutosaveDraft` removes the draft when undo returns
+to the unedited capture, and draft saves only write new images. There is no header
+draft menu. A draft found at open shows the shipping "Restored unsaved edits
 from last time." banner; its Discard resets without confirmation and Dismiss hides
 it. Recenter becomes the fixed-glass pill shown only while pan leaves the canvas
 mostly off screen. The Geometry/Layers/Draw tabs are gone: the rail's tool chooses
@@ -513,8 +516,10 @@ Transform tiles, Bring to front/Send to back (`LayerEdit::Arrange`), Merge down,
 Merge visible, Flatten image, Duplicate and Delete. Image Width/Height/X/Y
 (`LayerEdit::Geometry`, aspect-preserving like shipping) and selected text apply
 live; `Request::Live` folds each field's burst into one undo step, and edits made
-while a job runs queue on the host. Annotation style keeps its staged Apply style,
-and native controls keep their own styling.
+while a job runs queue on the host. Annotation stroke color and width, opacity,
+fill and shadow also apply live (Apply style and Reset fields are gone): a burst in
+one field folds into one undo step and each toggle is its own. Native controls keep
+their own styling.
 X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
@@ -541,7 +546,7 @@ the last solid color (initially `#f7f7f5`). The shared renderer composites benea
 existing layers. Color changes participate in undo/redo and draft reopen; copy/export
 use the newly rendered pixels. These are canvas fills, not image-background removal
 or text backgrounds. Stroke, fill and shadow colors in Layers → Annotation style use
-the same swatch row (staged until Apply style). Text style menus show the shipping
+the same swatch row and apply at once. Text style menus show the shipping
 preview chips, preset labels use shipping title case (Mono Box, Rounded Box) and
 the font menu lists Sans serif, Serif, Monospace and Rounded rather than pinned
 asset names. AppKit Geometry scrolls to keep
@@ -1887,8 +1892,8 @@ Host property controls are tracked below; physical-platform acceptance remains o
 
 The first wgpu editor window now opens isolated History screenshots on its own
 serialized worker, with fit preview, numeric crop/canvas fields, undo/redo,
-save draft and confirmed discard. Closing unsaved edits offers save, keep the last
-persisted draft without saving the new edits, or cancel. Normal quit drains queued
+and a draft that autosaves after each change. Closing flushes the draft without a
+prompt, as in shipping. Normal quit drains queued
 edits and saves dirty sessions; failure cancels quit and focuses the recoverable
 editor. The original History PNG and exports remain unchanged. Live workspace and
 editor windows use persisted appearance without first visiting Preferences.
@@ -2013,15 +2018,15 @@ callback. Both queue startup inputs and serialize opens against editor focus and
 History refresh; unsupported
 paths do not block later ones. Still images reuse the bounded, color-managed decoder
 above, excluding TIFF. Already-open canonical sources preserve active edits; a
-closed source reloads under the same History ID only if no saved editor draft exists.
+closed source reloads under the same History ID and, as in shipping, drops its
+autosaved draft, but only after the new pixels decode (a bad source keeps the draft).
 AppKit waits for its current editor open to settle before advancing the batch;
-pending text or unsaved edits block switching without losing the new History item.
-With a draft, the user must restore or discard it from History first so an interrupted
-reload cannot hide the only copy. Screenshot source bytes stay untouched and the
+pending text blocks switching without losing the new History item, and edits in the
+replaced capture autosave first. Screenshot source bytes stay untouched and the
 source path remains the export bar's default overwrite target. Private X11 exercises bad-file
 continuation, three editors, canonical aliases, decoded pixels, untouched sources,
-saved-draft refusal/History restoration and same-ID source reload after explicit
-discard in both appearances. Windows and Wayland use the same host code but this
+History draft restoration and same-ID source reload that drops the draft in both
+appearances. Windows and Wayland use the same host code but this
 entry point remains presentation-unverified there; AppKit uses macOS CI bridge/window
 tests. Neither host registers file associations or claims physical file-open acceptance.
 Broader platform image formats remain separate work; live single-instance
@@ -2060,7 +2065,7 @@ clipboard controls are described below; physical-platform acceptance remains ope
 The AppKit editor host now enables **Edit screenshot** only for screenshot History
 entries. Its dedicated serialized worker owns the shared Rust session and publishes
 independently retained RGBA frames to a fit preview. The window exposes crop geometry,
-canvas sizing, Undo/Redo, explicit draft save and confirmed draft discard; shared Rust
+canvas sizing, Undo/Redo and an autosaved draft; shared Rust
 remains the only geometry/render authority. Geometry and Layers views retain the fit
 preview; the front-to-back layer panel exposes visibility, lock, opacity, absolute
 X/Y movement through shared deltas, image rename, duplicate, delete and adjacent
@@ -2118,9 +2123,9 @@ these paths. Linux X11 is exercised with software rendering; AppKit has automate
 host tests/fixtures. Physical macOS input/accessibility, Windows and Wayland
 presentation remain unverified, and this does not close a migration acceptance gate.
 The AppKit **Layers** view connects fill/stroke toggles for closed shapes, annotation
-color/width, and shadow color/opacity/blur/offset controls. Apply style submits one
-minimal shared patch through the existing serialized worker and invalidates encoded
-output; Reset fields, selection changes and worker failures restore published values.
+color/width, opacity, and shadow color/opacity/blur/offset controls. Each change
+submits a minimal shared patch live through the existing serialized worker and
+invalidates encoded output; selection changes restore published values.
 Rust projects resolved defaults separately from the authored document. Merely opening
 controls does not materialize legacy fields or truncate full-precision numbers to the
 three-decimal display. Disabled shadow fields cannot accidentally re-enable a shadow.

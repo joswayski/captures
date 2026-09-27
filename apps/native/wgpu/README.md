@@ -129,10 +129,10 @@ checks empty/pending submission gates, retained text through window close/reopen
 and failure, offline retry, and clean exit in both appearances. Shared client tests cover HTTP success, cooldown and payload
 privacy against disposable loopback servers. Physical input/AT acceptance remains open.
 
-A screenshot History card's Edit opens a worker-owned crop/canvas/draft editor. Undo/redo,
-Save draft and confirmed Discard edits (in the header's draft menu), and unsaved-close
-choices preserve the original capture and exports. Closing without saving preserves any
-older saved draft. The shipping header also holds the canvas W × H fields, Trim edges,
+A screenshot History card's Edit opens a worker-owned crop/canvas/draft editor. Like
+shipping, the draft autosaves in the background 700 ms after each change and closing
+flushes it without a prompt; the original capture and exports stay unchanged, and a
+restored draft's notice offers Discard. The shipping header also holds the canvas W × H fields, Trim edges,
 the canvas background, the zoom group and Add images; the rail chooses the inspector.
 The Crop tool selects on the preview, including reverse and outside-image
 drags. Free, 1:1, 4:3, 3:2 and 16:9 presets use shared Rust geometry; hold Shift
@@ -162,8 +162,9 @@ cancels the unfinished stroke. The chosen tool remains active. Resize/curve grip
 other drawing tools remain unconnected.
 Layers → Annotation style now edits closed-shape fill/stroke toggles, stroke/fill
 colors, stroke width and drop-shadow color, opacity, blur and offsets. Stroke, fill
-and shadow colors use the shipping swatch row with a custom color and edit local values; Apply style sends only changed fields as one
-undoable patch. Reset fields or changing the selected layer drops unapplied values.
+and shadow colors use the shipping swatch row with a custom color. Changes apply live
+with only the changed fields; a burst in one field is one undo step and each toggle
+is its own. An Opacity slider sits below the stroke width, as in shipping.
 Shared Rust supplies shadow defaults/clamps; toggling shadow off preserves its
 stored custom settings. Hidden and locked annotations remain editable. Open shapes
 and paths omit fill/stroke toggles, while images and text have no annotation controls.
@@ -214,7 +215,7 @@ only private-X11/software-GL presentation has been exercised.
 Run `python apps/native/x11_editor_smoke.py --binary
 apps/native/wgpu/target/release/captures-wgpu-workbench --output editor-smoke
 --appearance light` (also run dark). It checks asymmetric crop/resize preview
-pixels, undo/redo, saved draft geometry and reopening, unsaved close, discard,
+pixels, undo/redo, autosaved draft geometry and reopening, close flush, discard,
 filesystem save failure and cancelled quit, retry and clean exit. Layer checks
 exercise actual moved/half-opacity/hidden pixels, flags, order, deletion, empty
 document undo and persisted fields after reopening. Screenshots

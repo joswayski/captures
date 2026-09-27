@@ -1162,7 +1162,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(state.artifactID)
     }
 
-    func testCloseWithoutSavingRetainsPersistedDraftAndDiscardIsExplicit() throws {
+    func testCloseFlushesTheDraftWithoutAskingAndRestoredDraftDiscardIsExplicit() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
@@ -1170,47 +1170,62 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         XCTAssertEqual(worker.draftsRoot, "/native/editor-drafts")
 
+        // Shipping closes without a prompt and flushes the draft first.
         XCTAssertFalse(controller.windowShouldClose(controller.window))
-        let closeSheet = try XCTUnwrap(controller.window.attachedSheet)
-        let closeTitles = try XCTUnwrap(closeSheet.contentView).subviews
-            .flatMap { [$0] + descendants(in: $0) }
-            .compactMap { ($0 as? NSButton)?.title }
-        XCTAssertTrue(Set(["Save and Close", "Close Without Saving", "Cancel Close"])
-            .isSubset(of: Set(closeTitles)))
-        controller.window.endSheet(closeSheet, returnCode: .alertSecondButtonReturn)
-        waitUntil { worker.closeCount == 1 }
+        XCTAssertNil(controller.window.attachedSheet)
+        XCTAssertEqual(worker.autosaves, 1, "closing writes unsaved edits to the draft")
+        XCTAssertEqual(worker.closeCount, 1)
+        XCTAssertFalse(controller.window.isVisible)
         XCTAssertFalse(worker.requests.contains { $0["operation"] as? String == "discard_draft" })
+        XCTAssertFalse(worker.requests.contains { $0["operation"] as? String == "save_draft" })
 
+        // Only the restored-draft notice discards, as in shipping.
         let discardWorker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: false, draft: true))
         let discardController = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: discardWorker)
         defer { discardController.window.orderOut(nil) }
         discardController.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try performDraftAction("Discard edits…", in: discardController)
-        let discardSheet = try XCTUnwrap(discardController.window.attachedSheet)
-        discardController.window.endSheet(discardSheet, returnCode: .alertFirstButtonReturn)
+        XCTAssertTrue(discardController.draftRestored)
+        XCTAssertTrue(descendants(in: discardController.root).compactMap { $0 as? CaptureButton }
+            .allSatisfy { $0.accessibilityLabel() != "Draft actions" }, "no header draft menu")
+        try button("Discard", in: discardController.root).performClick(nil)
+        XCTAssertNil(discardController.window.attachedSheet)
         waitUntil { discardWorker.requests.contains { $0["operation"] as? String == "discard_draft" } }
+        XCTAssertFalse(discardController.draftRestored)
+        // A saved session closes without writing anything.
+        XCTAssertFalse(discardController.windowShouldClose(discardController.window))
+        XCTAssertEqual(discardWorker.autosaves, 0)
+        XCTAssertEqual(discardWorker.closeCount, 1)
     }
 
-    func testSaveFailureAndTerminationFailureKeepRecoverableWindow() throws {
+    func testAutosaveRunsInTheBackgroundAndFailuresStayQuiet() throws {
         _ = NSApplication.shared
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: false))
-        worker.failOperation = "save_draft"
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: false, draft: false))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try performDraftAction("Save draft", in: controller)
+        XCTAssertEqual(ScreenshotEditorController.autosaveDelay, 0.7, accuracy: 1e-9)
+        worker.snapshot = snapshot(id: "shot", width: 321, height: 199, unsaved: true, draft: false)
+        worker.autosavedSnapshot = snapshot(id: "shot", width: 321, height: 199, unsaved: false, draft: true)
+        try commitCanvasSize("321", "199", in: controller.root)
         waitUntil { !controller.state.busy }
+        XCTAssertEqual(controller.window.title, EditorWindowTitle.screenshot, "no Unsaved title; drafts autosave")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(worker.autosaves, 0, "not before 700 ms")
+        waitUntil(timeout: 3) { worker.autosaves == 1 }
+        XCTAssertFalse(controller.state.busy, "autosave never blocks editing")
+        XCTAssertTrue(controller.state.snapshot?.hasDraft == true)
+        XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true)
+        XCTAssertFalse(worker.requests.contains { $0["operation"] as? String == "save_draft" })
+
+        // A failed autosave stays quiet, as in shipping; quitting still reports.
+        worker.failOperation = "autosave_draft"
+        worker.autosavedSnapshot = nil
+        worker.snapshot = snapshot(id: "shot", width: 300, height: 199, unsaved: true, draft: true)
+        try commitCanvasSize("300", "199", in: controller.root)
+        waitUntil(timeout: 3) { worker.autosaves == 2 }
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
         XCTAssertTrue(controller.window.isVisible)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("fixture save failed") })
-
-        XCTAssertFalse(controller.windowShouldClose(controller.window))
-        let closeSheet = try XCTUnwrap(controller.window.attachedSheet)
-        controller.window.endSheet(closeSheet, returnCode: .alertFirstButtonReturn)
-        waitUntil { !controller.state.busy }
-        XCTAssertTrue(controller.window.isVisible, "failed Save and Close keeps the draft recoverable")
-        XCTAssertEqual(worker.closeCount, 0)
-
+        XCTAssertFalse(labels(in: controller.root).contains { $0.contains("fixture save failed") })
         worker.terminationResult = .failure(AppBridgeError.backend("fixture quit save failed"))
         XCTAssertFalse(controller.prepareForTermination())
         XCTAssertTrue(controller.window.isVisible)
@@ -1218,21 +1233,19 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.closeCount, 0)
     }
 
-    func testSaveAndClosePersistsBeforeFreeingSession() throws {
+    func testClosePersistsBeforeFreeingSession() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: false))
+        var order: [String] = []
+        worker.onAutosave = { order.append("autosave") }
+        worker.onClose = { order.append("close") }
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
 
         XCTAssertFalse(controller.windowShouldClose(controller.window))
-        let closeSheet = try XCTUnwrap(controller.window.attachedSheet)
-        controller.window.endSheet(closeSheet, returnCode: .alertFirstButtonReturn)
-        waitUntil { worker.closeCount == 1 }
-
-        XCTAssertEqual(worker.requests.count, 1)
-        XCTAssertEqual(worker.requests[0]["operation"] as? String, "save_draft")
-        XCTAssertNotNil(worker.requests[0]["updated_at_ms"] as? UInt64)
+        XCTAssertEqual(order, ["autosave", "close"], "the draft is written before the session is freed")
+        XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertNil(controller.state.artifactID)
         XCTAssertFalse(controller.window.isVisible)
     }
@@ -1261,8 +1274,7 @@ final class ScreenshotEditorTests: XCTestCase {
         waitUntil { !controller.state.busy }
         XCTAssertEqual(controller.state.artifactID, "first")
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
-        XCTAssertTrue(controller.window.title.contains("Unsaved"))
-        XCTAssertTrue(try draftAction("Save draft", in: controller).isEnabled)
+        waitUntil(timeout: 3) { worker.autosaves == 1 }
     }
 
     func testCropOverlayMapsScaledImageCoordinatesAndLatchesSharedAspect() {
@@ -1760,9 +1772,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(bitmap.pixelsWide, 10); XCTAssertEqual(bitmap.pixelsHigh, 5)
             XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 9, y: 4)).alphaComponent, 0)
             XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 2, y: 1)).alphaComponent, 1)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.drafts.path))
-            try performDraftAction("Save draft", in: controller)
-            waitUntil { !controller.state.busy && controller.state.snapshot?.hasDraft == true }
+            // Edits autosave the draft, as in shipping; closing flushes it.
+            waitUntil(timeout: 5) { !controller.state.busy && controller.state.snapshot?.hasDraft == true }
             _ = controller.windowShouldClose(controller.window)
             controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
             waitUntil { controller.state.snapshot != nil && !controller.state.busy }
@@ -2576,24 +2587,11 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.snapshot = snapshot(id: "shot", width: 640, height: 360,
                                        unsaved: true, draft: true)
             try button("Apply crop", in: controller.root).performClick(nil)
+            // Shipping closes without a save prompt; the draft flushes first.
             XCTAssertFalse(controller.windowShouldClose(controller.window))
-            let closeSheet = try XCTUnwrap(controller.window.attachedSheet)
-            settle(closeSheet)
-            try render(try XCTUnwrap(closeSheet.contentView),
-                       name: "screenshot-editor-unsaved-close-\(appearance)")
-            controller.window.endSheet(closeSheet, returnCode: .alertThirdButtonReturn)
-
-            worker.failOperation = "save_draft"
-            worker.failureMessage = "The draft could not be saved because the isolated editor-drafts location is unavailable. Your unsaved screenshot edits remain open and recoverable."
-            try performDraftAction("Save draft", in: controller)
-            try render(controller.root, name: "screenshot-editor-save-error-\(appearance)")
-
-            try performDraftAction("Discard edits…", in: controller)
-            let discardSheet = try XCTUnwrap(controller.window.attachedSheet)
-            settle(discardSheet)
-            try render(try XCTUnwrap(discardSheet.contentView),
-                       name: "screenshot-editor-discard-\(appearance)")
-            controller.window.endSheet(discardSheet, returnCode: .alertSecondButtonReturn)
+            XCTAssertNil(controller.window.attachedSheet)
+            XCTAssertEqual(worker.autosaves, 1)
+            XCTAssertFalse(controller.window.isVisible)
         }
     }
 
@@ -3416,7 +3414,7 @@ final class ScreenshotEditorTests: XCTestCase {
         reopened.close(); EditorWorker.flush()
     }
 
-    func testAnnotationFieldsPreservePrecisionAndLegacyValuesAndEmitMinimalPatch() throws {
+    func testAnnotationFieldsApplyLiveMinimalPatchesFoldedByField() throws {
         _ = NSApplication.shared
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "de_DE"); formatter.numberStyle = .decimal
@@ -3427,15 +3425,29 @@ final class ScreenshotEditorTests: XCTestCase {
         let original = try XCTUnwrap(NativeAnnotationStyle(values))
         controls.setStyle(original); controls.setReady(true)
         var patches: [[String: Any]] = []
+        var keys: [String?] = []
         var errors: [String] = []
-        controls.apply = { patches.append($0) }; controls.reportError = { errors.append($0) }
-        XCTAssertEqual(try field("Stroke width", in: controls).stringValue, "8,123")
-        try button("Apply style", in: controls).performClick(nil)
+        var opacities: [Double] = []
+        controls.apply = { patch, field in patches.append(patch); keys.append(field) }
+        controls.reportError = { errors.append($0) }
+        controls.opacityChanged = { opacities.append($0) }
+        XCTAssertTrue(descendants(in: controls).compactMap { $0 as? CaptureButton }
+            .allSatisfy { $0.title != "Apply style" && $0.title != "Reset fields" },
+                      "shipping applies style changes as they are made")
+        let width = try field("Stroke width", in: controls)
+        XCTAssertEqual(width.stringValue, "8,123")
+        _ = width.sendAction(width.action, to: width.target)
         XCTAssertTrue(patches.isEmpty, "displaying resolved values is not an edit")
-        try field("Shadow Y", in: controls).stringValue = "-12,75"
-        try button("Apply style", in: controls).performClick(nil)
+        // Each valid value applies as it is typed; a partial entry waits.
+        let shadowY = try field("Shadow Y", in: controls)
+        shadowY.stringValue = "-"
+        controls.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: shadowY))
+        XCTAssertTrue(patches.isEmpty && errors.isEmpty)
+        shadowY.stringValue = "-12,75"
+        controls.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: shadowY))
         XCTAssertEqual(patches.count, 1)
         XCTAssertEqual(patches[0] as NSDictionary, ["dropShadowStyle": ["offsetY": -12.75]] as NSDictionary)
+        XCTAssertEqual(keys, ["shadow-y"])
         XCTAssertTrue(errors.isEmpty, "unchanged legacy colors are not revalidated")
         // Stroke, fill and shadow colors use the shared shipping swatch row.
         for name in ["Stroke color", "Fill color", "Shadow color"] {
@@ -3448,38 +3460,55 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(try swatchRow("Stroke color", in: controls).swatchButtons.contains(where: \.active),
                        "a legacy value matches no swatch")
         try swatchButton("Stroke color: #2d9cff", in: controls).performClick(nil)
-        XCTAssertEqual(patches.count, 1, "a swatch stages; Apply style commits")
+        XCTAssertEqual(patches.count, 2, "a swatch applies at once")
+        XCTAssertEqual(patches.last?["color"] as? String, "#2d9cff")
+        XCTAssertEqual(keys.last, "stroke-color")
         XCTAssertTrue(try swatchButton("Stroke color: #2d9cff", in: controls).active)
-        try button("Reset fields", in: controls).performClick(nil)
-        XCTAssertFalse(try swatchButton("Stroke color: #2d9cff", in: controls).active)
-        try button("Apply style", in: controls).performClick(nil)
-        XCTAssertEqual(patches.count, 1, "Reset drops the staged swatch")
         let picker = try swatchRow("Stroke color", in: controls).customWell
         picker.color = NSColor(srgbRed: 0.2, green: 0.4, blue: 0.6, alpha: 1)
         _ = picker.sendAction(picker.action, to: picker.target)
-        try button("Apply style", in: controls).performClick(nil)
-        XCTAssertEqual(patches.last as NSDictionary?, ["color": "#336699"] as NSDictionary)
+        XCTAssertEqual(patches.last?["color"] as? String, "#336699")
+        XCTAssertEqual(keys.last, "stroke-color", "one color burst folds into one undo step")
+
+        // The published style catches up: typing keeps its field and caret.
+        var landed = original
+        landed.color = "#336699"; landed.shadowY = -12.75
+        controls.setStyle(landed)
+        let count = patches.count
+        width.stringValue = "0"
+        _ = width.sendAction(width.action, to: width.target)
+        XCTAssertEqual(errors, ["Enter a valid stroke width."])
+        XCTAssertEqual(patches.count, count, "an invalid entry never applies")
 
         controls.setStyle(original)
-        try field("Shadow blur", in: controls).stringValue = "99"
         try annotationToggle("Shadow", in: controls).performClick(nil)
-        try annotationToggle("Fill", in: controls).performClick(nil)
-        try button("Apply style", in: controls).performClick(nil)
-        XCTAssertEqual(patches.last as NSDictionary?, ["dropShadow": false, "fill": NSNull()] as NSDictionary)
+        XCTAssertEqual(patches.last as NSDictionary?, ["dropShadow": false] as NSDictionary)
+        XCTAssertEqual(keys.last, .some(nil), "each toggle is its own undo step")
         XCTAssertTrue(try field("Shadow blur", in: controls).isHiddenOrHasHiddenAncestor)
+        try annotationToggle("Fill", in: controls).performClick(nil)
+        XCTAssertEqual(patches.last as NSDictionary?, ["dropShadow": false, "fill": NSNull()] as NSDictionary)
+
+        let opacity = try XCTUnwrap(descendants(in: controls).compactMap { $0 as? NSSlider }
+            .first { $0.accessibilityLabel() == "Opacity" })
+        controls.setOpacity(80)
+        XCTAssertEqual(opacity.doubleValue, 80)
+        opacity.doubleValue = 42.4
+        _ = opacity.sendAction(opacity.action, to: opacity.target)
+        XCTAssertEqual(opacities, [42])
 
         values["closed"] = false
         controls.setStyle(try XCTUnwrap(NativeAnnotationStyle(values)))
         XCTAssertTrue(try annotationToggle("Stroke", in: controls).isHiddenOrHasHiddenAncestor)
         XCTAssertTrue(try annotationToggle("Fill", in: controls).isHiddenOrHasHiddenAncestor)
-        try field("Stroke width", in: controls).stringValue = "3,25"
-        try button("Apply style", in: controls).performClick(nil)
+        width.stringValue = "3,25"
+        controls.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
         XCTAssertEqual(patches.last as NSDictionary?, ["strokeWidth": 3.25] as NSDictionary)
+        XCTAssertEqual(keys.last, "stroke-width")
         controls.setReady(false)
-        XCTAssertFalse(try button("Apply style", in: controls).isEnabled)
+        XCTAssertFalse(width.isEnabled)
     }
 
-    func testAnnotationSelectionBusyFailureAndOutputInvalidation() throws {
+    func testAnnotationStylesApplyLiveQueueWhileBusyAndFoldUndoByField() throws {
         _ = NSApplication.shared
         var hidden = shapeLayer(id: "shape", x: 5, y: 7)
         hidden["locked"] = true; hidden["visible"] = false
@@ -3489,36 +3518,54 @@ final class ScreenshotEditorTests: XCTestCase {
         let worker = FakeEditorWorker(snapshot: published)
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
+        controller.window.setContentSize(NSSize(width: 1000, height: 600))
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showComparison(controller, worker)
         let sections = try segmented("Editor section", in: controller.root)
         sections.selectedSegment = 1; _ = sections.sendAction(sections.action, to: sections.target)
-        try button("Apply style", in: controller.root).performClick(nil)
         XCTAssertTrue(worker.requests.isEmpty)
-        XCTAssertNotNil(controller.compareView.afterImage, "an unchanged style keeps the comparison")
+        XCTAssertNotNil(controller.compareView.afterImage, "showing the style is not an edit")
         worker.deferRequests = true
         try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
-        try button("Apply style", in: controller.root).performClick(nil)
         XCTAssertEqual(worker.requests.last?["id"] as? String, "shape")
         let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual(edit as NSDictionary, ["action": "annotation_style", "patch": ["fill": "#36c96b"]] as NSDictionary)
+        XCTAssertEqual(worker.liveKeys, ["style:shape:fill-color"])
         XCTAssertTrue(controller.state.busy)
         XCTAssertEqual(worker.compares.count, 1, "a pending edit does not encode")
-        XCTAssertFalse(try swatchRow("Fill color", in: controller.root).isEnabled)
-        XCTAssertFalse(try swatchButton("Fill color: #36c96b", in: controller.root).isEnabled)
-        XCTAssertFalse(try table("Screenshot layers", in: controller.root).isEnabled)
-        worker.completePending(with: published)
-        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
-        worker.deferRequests = false; worker.failLayerAction = "annotation_style"
+        // Fields stay live while an edit applies; the newest change per field queues.
+        XCTAssertTrue(try swatchRow("Fill color", in: controller.root).isEnabled)
         try swatchButton("Fill color: #2d9cff", in: controller.root).performClick(nil)
-        try button("Apply style", in: controller.root).performClick(nil)
-        XCTAssertFalse(controller.state.busy)
-        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
-        XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0)
         try swatchButton("Fill color: #8b5cf6", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.requests.count, 1)
+        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#8b5cf6",
+                       "a queued change is not reset by the landing edit")
+        worker.completePending(with: published)
+        XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#8b5cf6")
+        waitUntil { worker.liveKeys.count == 2 }
+        XCTAssertEqual(worker.liveKeys, ["style:shape:fill-color", "style:shape:fill-color"],
+                       "one fill burst is one undo step")
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["patch"] as? NSDictionary,
+                       ["fill": "#8b5cf6"] as NSDictionary)
+        worker.deferRequests = false
+        worker.completePending(with: published)
+        try annotationToggle("Shadow", in: controller.root).performClick(nil)
+        XCTAssertTrue(worker.liveKeys.last?.hasPrefix("style:once:") == true, "a toggle is its own step")
+        let opacity = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSSlider }
+            .first { $0.accessibilityLabel() == "Opacity" })
+        opacity.doubleValue = 55
+        _ = opacity.sendAction(opacity.action, to: opacity.target)
+        XCTAssertEqual(worker.liveKeys.last, "opacity:shape")
+        XCTAssertEqual(worker.requests.last?["edit"] as? NSDictionary,
+                       ["action": "opacity", "opacity": 55.0] as NSDictionary)
+
+        worker.failLayerAction = "annotation_style"
+        try swatchButton("Stroke color: #2d9cff", in: controller.root).performClick(nil)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0)
         let layerTable = try table("Screenshot layers", in: controller.root)
         layerTable.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
-        XCTAssertTrue(try button("Apply style", in: controller.root).isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(try swatchRow("Fill color", in: controller.root).isHiddenOrHasHiddenAncestor)
         layerTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
     }
@@ -3530,10 +3577,12 @@ final class ScreenshotEditorTests: XCTestCase {
                 layers: [shapeLayer(id: "shape", x: 5, y: 7)], annotations: ["shape": annotationStyle()]))
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
+            controller.window.setContentSize(NSSize(width: 1000, height: 600))
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showLayers(in: controller.root)
-            let apply = try button("Apply style", in: controller.root)
-            let scroll = try XCTUnwrap(apply.enclosingScrollView)
+            let shadowY = try field("Shadow Y", in: controller.root)
+            let scroll = try XCTUnwrap(shadowY.enclosingScrollView)
+            let document = try XCTUnwrap(scroll.documentView)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: 550))
             scroll.reflectScrolledClipView(scroll.contentView)
             controller.root.layoutSubtreeIfNeeded()
@@ -3544,16 +3593,15 @@ final class ScreenshotEditorTests: XCTestCase {
                               "\(row.fieldLabel) tiles stay inside their row")
             }
             try render(controller.root, name: "screenshot-editor-style-\(appearance)")
-            let document = try XCTUnwrap(scroll.documentView)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
             scroll.reflectScrolledClipView(scroll.contentView)
-            XCTAssertTrue(scroll.contentView.bounds.contains(apply.convert(apply.bounds, to: scroll.contentView)),
-                          "style actions remain reachable in the minimum window")
+            XCTAssertTrue(scroll.contentView.bounds.contains(shadowY.convert(shadowY.bounds, to: scroll.contentView)),
+                          "the last style field remains reachable in the minimum window")
             worker.failLayerAction = "annotation_style"
             worker.failureMessage = "The annotation style could not be applied. The previous draft, layer selection, pixels and undo history remain recoverable."
             try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
-            try button("Apply style", in: controller.root).performClick(nil)
             try render(controller.root, name: "screenshot-editor-style-error-minimum-\(appearance)")
+            worker.failLayerAction = nil
             try annotationToggle("Shadow", in: controller.root).performClick(nil)
             try annotationToggle("Fill", in: controller.root).performClick(nil)
             try render(controller.root, name: "screenshot-editor-style-disabled-\(appearance)")
@@ -4410,8 +4458,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(rgba(undone.image, x: 10, y: 10), [247, 247, 245, 255])
             try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
-            try performDraftAction("Save draft", in: controller)
-            waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
+            // The edit autosaves 700 ms later, as in shipping.
+            waitUntil(timeout: 5) { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
             live.close(); EditorWorker.flush()
             let reopened = EditorWorker()
             let done = expectation(description: "reopen moved canvas")
@@ -4482,8 +4530,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(rgba(undone.image, x: 160, y: 60), [247, 247, 245, 255])
             try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
-            try performDraftAction("Save draft", in: controller)
-            waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
+            // The edit autosaves 700 ms later, as in shipping.
+            waitUntil(timeout: 5) { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
             live.close(); EditorWorker.flush()
             let reopened = EditorWorker()
             let restored = expectation(description: "reopen rotated draft")
@@ -4580,8 +4628,8 @@ final class ScreenshotEditorTests: XCTestCase {
                                 x: 260, y: 165), [247, 247, 245, 255])
             try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.canRedo == false }
-            try performDraftAction("Save draft", in: controller)
-            waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
+            // The edit autosaves 700 ms later, as in shipping.
+            waitUntil(timeout: 5) { !controller.state.busy && controller.state.snapshot?.unsavedChanges == false }
             live.close(); EditorWorker.flush()
             let reopened = EditorWorker(), restored = expectation(description: "reopen resized draft")
             reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
@@ -6748,18 +6796,6 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = control.sendAction(control.action, to: control.target)
     }
 
-    /// Native drafts are explicit: Save draft and Discard edits… live in the
-    /// header's draft menu.
-    private func draftAction(_ title: String, in controller: ScreenshotEditorController) throws -> NSMenuItem {
-        try XCTUnwrap(controller.draftMenu.items.first { $0.title == title })
-    }
-
-    private func performDraftAction(_ title: String, in controller: ScreenshotEditorController) throws {
-        let item = try draftAction(title, in: controller)
-        guard item.isEnabled else { return }
-        controller.draftMenu.performActionForItem(at: controller.draftMenu.index(of: item))
-    }
-
     /// The header canvas fields commit one resize on Enter or leaving a field.
     private func commitCanvasSize(_ width: String, _ height: String, in view: NSView) throws {
         let widthField = try field("Canvas width", in: view)
@@ -7105,6 +7141,12 @@ private final class FakeEditorWorker: EditorWorking {
     var importedSnapshot: NativeEditorSnapshot?
     var response: (([String: Any]) -> NativeEditorSnapshot?)?
     var terminationResult: Result<Void, Error> = .success(())
+    /// Background autosaves; they never appear in `requests`.
+    var autosaves = 0
+    /// What an autosave returns; nil keeps `snapshot`.
+    var autosavedSnapshot: NativeEditorSnapshot?
+    var onAutosave: () -> Void = {}
+    var onClose: () -> Void = {}
     var terminationTextInputs: [EditorTerminationTextInput?] = []
     private var pendingCompletion: ((Result<EditorPresentation, Error>) -> Void)?
     private var pendingEncodeCompletion: ((Result<EditorOutputPresentation, Error>) -> Void)?
@@ -7242,7 +7284,17 @@ private final class FakeEditorWorker: EditorWorking {
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))
     }
 
-    func close() { closeCount += 1 }
+    func autosaveDraft(completion: @escaping (Result<NativeEditorSnapshot, Error>) -> Void) {
+        autosaves += 1
+        onAutosave()
+        if failOperation == "autosave_draft" {
+            completion(.failure(AppBridgeError.backend(failureMessage))); return
+        }
+        if let autosavedSnapshot { snapshot = autosavedSnapshot }
+        completion(.success(snapshot))
+    }
+
+    func close() { closeCount += 1; onClose() }
     func prepareForTermination(textInput: EditorTerminationTextInput? = nil) -> Result<Void, Error> {
         terminationTextInputs.append(textInput)
         return terminationResult
