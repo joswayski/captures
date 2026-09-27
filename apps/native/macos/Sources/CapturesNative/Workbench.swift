@@ -731,31 +731,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 forName: NativeInstance.wakeNotification, object: nil, queue: .main
             ) { [weak self] _ in self?.drainInstanceRequests() }
         }
-        let menu = NSMenu()
-        let item = NSMenuItem()
-        menu.addItem(item)
-        let appMenu = NSMenu()
-        let quit = appMenu.addItem(withTitle: options.live ? "Quit Captures" : "Quit Captures Native Workbench",
-                                   action: #selector(quitApplication), keyEquivalent: "q")
-        quit.target = self
-        item.submenu = appMenu
-        let editItem = NSMenuItem()
-        menu.addItem(editItem)
-        let editMenu = NSMenu(title: "Edit")
-        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-        editMenu.addItem(.separator())
-        let find = editMenu.addItem(withTitle: "Find…", action: #selector(showFind), keyEquivalent: "f")
-        find.target = self
-        let next = editMenu.addItem(withTitle: "Find Next", action: #selector(findNext), keyEquivalent: "g")
-        next.target = self
-        let previous = editMenu.addItem(withTitle: "Find Previous", action: #selector(findPrevious), keyEquivalent: "G")
-        previous.keyEquivalentModifierMask = [.command, .shift]
-        previous.target = self
-        editItem.submenu = editMenu
-        NSApp.mainMenu = menu
+        AppMainMenu(appName: options.live ? "Captures" : "Captures Native Workbench",
+                    quitTitle: options.live ? "Quit Captures" : "Quit Captures Native Workbench",
+                    actions: AppMainMenuActions(target: self, quit: #selector(quitApplication),
+                                                find: #selector(showFind), findNext: #selector(findNext),
+                                                findPrevious: #selector(findPrevious)))
+            .install(in: NSApp)
         if options.live {
             // The shipping Capture History window; Preferences and setup open
             // in their own windows (`AppWindows`).
