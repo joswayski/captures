@@ -517,10 +517,7 @@ mod tests {
             "color": "#2d9cff", "stylePreset": "rounded-box"}}))["result"];
         assert_eq!(created["element"]["fontFamily"], "rounded");
         assert_eq!(created["element"]["x"], 120.);
-        assert_eq!(
-            created["layout"]["plate_radius"].as_f64().unwrap() > 0.,
-            true
-        );
+        assert!(created["layout"]["plate_radius"].as_f64().unwrap() > 0.);
         let existing = &call(json!({"operation": "inline_text_layout",
             "element": created["element"].clone()}))["result"];
         assert_eq!(existing["layout"], created["layout"]);
