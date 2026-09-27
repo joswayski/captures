@@ -303,6 +303,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Actio
     let glyph = egui::IdSalt::new("recording-saved-reveal-icon");
     let ink = tokens.color("glass-text");
     ui.scope_builder(egui::UiBuilder::new().max_rect(layout.button), |ui| {
+        ui.spacing_mut().button_padding = egui::vec2(tokens.number("s-4"), 0.);
         let visuals = &mut ui.visuals_mut().widgets;
         visuals.inactive.weak_bg_fill = tokens.color("glass-hover");
         visuals.hovered.weak_bg_fill = tokens.color("glass-active");
@@ -312,6 +313,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> Option<Actio
             RichText::new(label).font(button_font).color(ink),
         ))
         .gap(tokens.number("s-3"))
+        .wrap_mode(egui::TextWrapMode::Extend)
         .stroke(Stroke::new(1., tokens.color("glass-border-strong")))
         .corner_radius(tokens.number("r-md"))
         .min_size(layout.button.size());

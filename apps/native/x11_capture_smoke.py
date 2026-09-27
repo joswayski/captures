@@ -319,7 +319,7 @@ def main():
                     run("xdotool", "key", f"ctrl+shift+{key}", "sleep", ".2")
                     assert windows(title) == [selector], "target shortcut replaced or captured the selector"
                 else:
-                    click(selector, {"region": 492, "window": 568, "display": 653}[target], 811)
+                    click(selector, {"region": 530, "window": 627, "display": 738}[target], 811)
 
             def begin_selection(full_display=False, select=True, check_guidance=False):
                 nonlocal checked_toolbar_drag

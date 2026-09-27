@@ -722,25 +722,25 @@ pcm.!pulse {
             wait(lambda: not windows("Capture History"), "root hidden in tray")
             exports = output / "exports"
             exports.write_text("blocked output directory")
-            notice_click(notice, 300, 89)
+            notice_click(notice, 375, 58)
             wait(lambda: windows("Could not save recording"), "save failure presented")
             shot(notice, "notice-save-error")
             assert json.loads(metadata.read_text())["saved_path"] is None
             assert media.read_bytes() == original and windows("Could not save recording")
             exports.unlink()
-            notice_click(notice, 300, 89)
+            notice_click(notice, 375, 58)
             wait(lambda: windows("Recording saved"), "saved state presented")
             saved = Path(wait(lambda: json.loads(metadata.read_text()).get("saved_path"), "notice export"))
             assert saved.parent == exports and saved.read_bytes() == original
             assert len(list(exports.iterdir())) == 1
             shot(notice, "notice-saved")
             saved.unlink()
-            notice_click(notice, 300, 89)
+            notice_click(notice, 375, 58)
             wait(lambda: windows("Could not show recording"), "missing export error presented")
             assert not (output / "revealed-path.txt").exists()
             shot(notice, "notice-reveal-error")
             saved.write_bytes(original)
-            notice_click(notice, 300, 89)
+            notice_click(notice, 375, 58)
             wait(lambda: not windows("Could not show recording"), "successful reveal dismissal")
             wait(lambda: (output / "revealed-path.txt").exists(), "OS reveal launcher")
             assert (output / "revealed-path.txt").read_text().strip() == str(exports)
@@ -758,7 +758,7 @@ pcm.!pulse {
                     assert windows("Recording ready"), "notice expired too early"
                     wait(lambda: not windows("Recording ready"), "15.2-second expiry with hidden root")
                 elif action == "dismiss":
-                    notice_click(notice, 423, 18)
+                    notice_click(notice, 418, 22)
                     wait(lambda: not windows("Recording ready"), "explicit notice dismissal")
                 else:
                     run("xdotool", "key", "ctrl+shift+F10")
