@@ -499,8 +499,11 @@ fn paint_surface(
         );
     }
     let selected = selection.map(|rect| coordinates.rect(rect));
-    // Shipping `CaptureDim` region shade, for both the direct overlay and New Capture.
-    let veil = tokens.color("capture-shade");
+    // Shipping `CaptureDim` region shade, for both the direct overlay and New
+    // Capture, fading in as the overlay is revealed.
+    let veil = tokens
+        .color("capture-shade")
+        .gamma_multiply(guidance.shade_opacity(ui, tokens));
     if let Some(rect) = selected.filter(|rect| rect.is_positive()) {
         for outside in [
             egui::Rect::from_min_max(surface.min, Pos2::new(surface.right(), rect.top())),
@@ -706,7 +709,7 @@ mod tests {
                 menu,
                 confirm: false,
             },
-            &mut crate::capture_controls::GuidanceState::default(),
+            &mut crate::capture_controls::GuidanceState::revealed(),
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
@@ -715,6 +718,56 @@ mod tests {
             .into_iter()
             .map(|clipped| clipped.shape)
             .collect()
+    }
+
+    #[test]
+    fn region_shade_fades_in_once_the_overlay_is_revealed() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let shade = tokens.color("capture-shade");
+        let mut guidance = crate::capture_controls::GuidanceState::default();
+        let mut alpha = |time: f64| {
+            let mut input = raw(screen, Vec::new());
+            input.time = Some(time);
+            ctx.begin_pass(input);
+            let ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("selector-shade-test"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            paint_surface(
+                &ui,
+                CoordinateMap {
+                    surface: screen,
+                    bounds: BOUNDS,
+                },
+                &tokens,
+                None,
+                None,
+                SurfaceState {
+                    dragging: false,
+                    feedback: 0,
+                    menu: false,
+                    confirm: false,
+                },
+                &mut guidance,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect) if rect.rect == screen => Some(rect.fill.a()),
+                    _ => None,
+                })
+                .unwrap_or(0)
+        };
+        assert_eq!(alpha(1.), 0, "the dim starts clear over the frozen frame");
+        let halfway = alpha(1.14);
+        assert!(halfway > 0 && halfway < shade.a(), "{halfway}");
+        assert_eq!(alpha(1.3), shade.a(), "--dur-4 later it rests at the token");
     }
 
     #[test]

@@ -491,6 +491,121 @@ impl StackFan {
     }
 }
 
+/// `THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX` / `_Y_PX`: the lean's bounds.
+pub const DRAG_SWAY_MAX: (f64, f64) = (3.0, 2.0);
+const DRAG_SWAY_WOBBLE_SPRING: f64 = 500.0;
+const DRAG_SWAY_WOBBLE_DAMPING: f64 = 32.0;
+const DRAG_SWAY_POINTER_SPEED_GAIN: f64 = 0.0012;
+const DRAG_SWAY_DRIVE_IN_RATE: f64 = 55.0;
+const DRAG_SWAY_DRIVE_OUT_RATE: f64 = 10.0;
+/// The first sample after the lean starts counts as one 16 ms frame.
+pub const DRAG_SWAY_DEFAULT_DT_MS: f64 = 16.0;
+const DRAG_SWAY_MAX_DT_MS: f64 = 48.0;
+const DRAG_SWAY_POSITION_EPSILON: f64 = 0.001;
+const DRAG_SWAY_VELOCITY_EPSILON: f64 = 0.01;
+
+/// Shipping's velocity-driven lean of a carried pile
+/// (`tickThumbnailStackDragSwayState`): the pointer's speed sets a drive
+/// the pile picks up quickly and releases gently, followed by an
+/// under-damped spring, so the rear cards trail the carry, overshoot it a
+/// little and ease back when it stops. Points, negative x for a rightward
+/// carry.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DragSway {
+    position: (f64, f64),
+    velocity: (f64, f64),
+    drive: (f64, f64),
+}
+
+impl DragSway {
+    /// Advance by a pointer step of `(dx, dy)` points over `dt_ms` (zero
+    /// when the pointer held still this frame). Reduced motion never leans.
+    pub fn tick(&mut self, dx: f64, dy: f64, dt_ms: f64, reduced_motion: bool) {
+        if reduced_motion {
+            *self = Self::default();
+            return;
+        }
+        if !dt_ms.is_finite() || dt_ms <= 0.0 {
+            return;
+        }
+        let dt = dt_ms.min(DRAG_SWAY_MAX_DT_MS) / 1000.0;
+        let advance = |position: f64, velocity: f64, drive: f64, step: f64, max: f64| {
+            let desired = (-(step / dt) * DRAG_SWAY_POINTER_SPEED_GAIN).clamp(-max, max);
+            let rate = if step == 0.0 {
+                DRAG_SWAY_DRIVE_OUT_RATE
+            } else {
+                DRAG_SWAY_DRIVE_IN_RATE
+            };
+            let drive = drive + (desired - drive) * (1.0 - (-rate * dt).exp());
+            let velocity = velocity * (-DRAG_SWAY_WOBBLE_DAMPING * dt).exp()
+                + (drive - position) * DRAG_SWAY_WOBBLE_SPRING * dt;
+            let position = (position + velocity * dt).clamp(-max, max);
+            // A clamp is a boundary, not stored momentum.
+            let velocity = if position.abs() == max { 0.0 } else { velocity };
+            (position, velocity, drive)
+        };
+        let x = advance(
+            self.position.0,
+            self.velocity.0,
+            self.drive.0,
+            dx,
+            DRAG_SWAY_MAX.0,
+        );
+        let y = advance(
+            self.position.1,
+            self.velocity.1,
+            self.drive.1,
+            dy,
+            DRAG_SWAY_MAX.1,
+        );
+        *self = Self {
+            position: (x.0, y.0),
+            velocity: (x.1, y.1),
+            drive: (x.2, y.2),
+        };
+        if self.settled() {
+            *self = Self::default();
+        }
+    }
+
+    /// The lean now, `(--thumbnail-drag-sway-x, --thumbnail-drag-sway-y)`.
+    pub fn offset(&self) -> (f64, f64) {
+        self.position
+    }
+
+    /// `[position x, y, velocity x, y, drive x, y]`, for hosts that keep
+    /// the state across an ABI.
+    pub fn state(&self) -> [f64; 6] {
+        [
+            self.position.0,
+            self.position.1,
+            self.velocity.0,
+            self.velocity.1,
+            self.drive.0,
+            self.drive.1,
+        ]
+    }
+
+    pub fn from_state([px, py, vx, vy, dx, dy]: [f64; 6]) -> Self {
+        Self {
+            position: (px, py),
+            velocity: (vx, vy),
+            drive: (dx, dy),
+        }
+    }
+
+    /// Nothing left to animate: well below a visible subpixel.
+    pub fn settled(&self) -> bool {
+        let small = |value: f64, epsilon: f64| value.abs() <= epsilon;
+        small(self.position.0, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.position.1, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.drive.0, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.drive.1, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.velocity.0, DRAG_SWAY_VELOCITY_EPSILON)
+            && small(self.velocity.1, DRAG_SWAY_VELOCITY_EPSILON)
+    }
+}
+
 /// Show less morph progress (0 = the 28 pt stack icon, 1 = the pill) for the
 /// width tween and the icon/label crossfade tween.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -917,6 +1032,36 @@ mod tests {
             duration_ms: 200.0,
             easing: CubicBezier::LINEAR,
         }
+    }
+
+    #[test]
+    fn drag_sway_trails_the_carry_and_settles_at_rest() {
+        let mut sway = DragSway::default();
+        assert!(sway.settled());
+        // A fast rightward carry leans the pile left, within its bounds, and
+        // the under-damped spring carries it past the drive it follows.
+        let mut overshot = false;
+        for _ in 0..10 {
+            sway.tick(30.0, 0.0, 16.0, false);
+            overshot |= sway.offset().0 < sway.state()[4];
+        }
+        let (x, y) = sway.offset();
+        assert!(x < -1.0 && x >= -DRAG_SWAY_MAX.0, "{x}");
+        assert_eq!(y, 0.0);
+        assert!(overshot, "the lean overshoots its drive");
+        // Stopping lets it ease back and settle exactly at rest.
+        for _ in 0..240 {
+            sway.tick(0.0, 0.0, 16.0, false);
+        }
+        assert!(sway.settled() && sway.offset() == (0.0, 0.0));
+        // Clamped at its bound, and reduced motion never leans.
+        sway.tick(0.0, 5_000.0, 16.0, false);
+        for _ in 0..20 {
+            sway.tick(0.0, 5_000.0, 16.0, false);
+        }
+        assert!(sway.offset().1 >= -DRAG_SWAY_MAX.1);
+        sway.tick(40.0, 40.0, 16.0, true);
+        assert_eq!(sway, DragSway::default());
     }
 
     #[test]

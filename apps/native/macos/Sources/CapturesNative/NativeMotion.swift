@@ -21,6 +21,8 @@ struct MotionKeyframes {
         /// CSS `filter: blur()` radius, or the dismiss streak's horizontal
         /// deviation. Hosts apply it where they can.
         var blur: Double = 0
+        /// CSS `filter: brightness()` factor (1 leaves colours alone).
+        var brightness: Double = 1
 
         var isRest: Bool {
             opacity == 1 && translateY == 0 && scale == 1 && translateX == 0 && scaleX == 1
@@ -63,7 +65,8 @@ struct MotionKeyframes {
                   scale: (frame["scale"] as? NSNumber)?.doubleValue ?? 1,
                   translateX: (frame["translate_x"] as? NSNumber)?.doubleValue ?? 0,
                   scaleX: (frame["scale_x"] as? NSNumber)?.doubleValue ?? 1,
-                  blur: (frame["blur"] as? NSNumber)?.doubleValue ?? 0)
+                  blur: (frame["blur"] as? NSNumber)?.doubleValue ?? 0,
+                  brightness: (frame["brightness"] as? NSNumber)?.doubleValue ?? 1)
         }
     }
 
@@ -186,7 +189,8 @@ enum NativeMotion {
                                          translateY: mix(a.translateY, b.translateY),
                                          scale: mix(a.scale, b.scale),
                                          translateX: mix(a.translateX, b.translateX),
-                                         scaleX: mix(a.scaleX, b.scaleX), blur: mix(a.blur, b.blur))
+                                         scaleX: mix(a.scaleX, b.scaleX), blur: mix(a.blur, b.blur),
+                                         brightness: mix(a.brightness, b.brightness))
         }
         return last
     }
@@ -334,5 +338,61 @@ enum NativeMotion {
         guard !reduced, let spec = catalog.keyframes[name] else { return 0 }
         return play(name, on: view, tokens: tokens, segment: spec.restOffsets.last...1,
                     holdEnd: true, reduced: false)
+    }
+}
+
+/// A self-drawn boolean `transition`, such as a segment label easing to its
+/// hovered or selected colour: eased 0…1 progress toward the latest target.
+/// It redraws its view on a display-rate timer only while it runs, and the
+/// first target lands at once (nothing animates on creation).
+final class NativeBoolTransition {
+    private let name: String
+    private let tokens: Tokens
+    private weak var view: NSView?
+    private var target: Bool?
+    private var from = 0.0
+    private var started: CFTimeInterval = 0
+    private var timer: Timer?
+
+    init(_ name: String, tokens: Tokens, view: NSView) {
+        self.name = name; self.tokens = tokens; self.view = view
+    }
+    deinit { timer?.invalidate() }
+
+    /// Whether a change is still easing, for tests.
+    var isRunning: Bool { timer != nil }
+
+    /// Retarget to `on` when it changed and return the progress now.
+    func progress(toward on: Bool, now: CFTimeInterval = CACurrentMediaTime(),
+                  reduced: Bool = NativeMotion.reduceMotion) -> Double {
+        if target == nil {
+            target = on; from = on ? 1 : 0; started = -.infinity
+        } else if target != on {
+            from = value(at: now, reduced: reduced); target = on; started = now
+            startTimer(reduced: reduced)
+        }
+        return value(at: now, reduced: reduced)
+    }
+
+    private func value(at now: CFTimeInterval, reduced: Bool) -> Double {
+        let goal = target == true ? 1.0 : 0.0
+        let spec = NativeMotion.transition(name, tokens: tokens, reduced: reduced)
+        guard spec.duration > 0 else { return goal }
+        let t = min(1, max(0, (now - started) / spec.duration))
+        return from + (goal - from) * NativeMotion.ease(spec.timing, t)
+    }
+
+    private func startTimer(reduced: Bool) {
+        let duration = NativeMotion.transition(name, tokens: tokens, reduced: reduced).duration
+        guard timer == nil, duration > 0, view?.window != nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self, let view = self.view else { timer.invalidate(); return }
+            view.needsDisplay = true
+            if CACurrentMediaTime() - self.started >= duration {
+                timer.invalidate(); self.timer = nil
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 }

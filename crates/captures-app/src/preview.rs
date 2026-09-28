@@ -575,6 +575,33 @@ pub fn collapsed_card_pose(
     gravity: f64,
     top_anchor: bool,
 ) -> CollapsedCardPose {
+    pile_pose(id, depth, hovered, gravity, top_anchor, (0.0, 0.0))
+}
+
+/// Shipping `.thumbnail-stack-dragging.thumbnail-stack-drag-sway` while the
+/// pile is carried: the fanned pose plus the velocity lean
+/// (`--thumbnail-drag-sway-x/-y`, see
+/// [`crate::preview_motion::DragSway`]): `translateX += sway.x · pd · 0.7`,
+/// `translateY += sway.y · pd · 0.2 · gravity` and
+/// `rotateZ += sway.x · pd · 0.12deg`, about each card's anchored edge.
+pub fn collapsed_card_sway_pose(
+    id: &str,
+    depth: usize,
+    gravity: f64,
+    top_anchor: bool,
+    sway: (f64, f64),
+) -> CollapsedCardPose {
+    pile_pose(id, depth, true, gravity, top_anchor, sway)
+}
+
+fn pile_pose(
+    id: &str,
+    depth: usize,
+    hovered: bool,
+    gravity: f64,
+    top_anchor: bool,
+    (sway_x, sway_y): (f64, f64),
+) -> CollapsedCardPose {
     if depth == 0 {
         return CollapsedCardPose {
             scale_x: 1.0,
@@ -597,11 +624,11 @@ pub fn collapsed_card_pose(
     let expand_sign = if top_anchor { -1.0 } else { 1.0 };
     let pd = stack_pose_depth(depth as f64);
     let (tx, ty, tz) = (
-        pd * dx_k,
-        (-pd * peek + stack_peek_jitter(depth)) * gravity,
+        pd * dx_k + sway_x * pd * 0.7,
+        (-pd * peek + stack_peek_jitter(depth) + sway_y * pd * 0.2) * gravity,
         pd * z_k,
     );
-    let spin = (stack_layer_rotation_deg(id, depth) * proximity).to_radians();
+    let spin = (stack_layer_rotation_deg(id, depth) * proximity + sway_x * pd * 0.12).to_radians();
     let tilt = (pd * tilt_k * expand_sign).to_radians();
     let scale = 1.0 - pd * scale_k + pd * proximity * scale_k;
     // `transform-origin: 50% calc(50% * (1 + sign))`: the anchored edge.
@@ -1273,6 +1300,48 @@ mod tests {
         let (x, y, z) = (x + pd * -0.8, y + oy + ty, z + pd * -24.0);
         let k = STACK_PERSPECTIVE_PX / (STACK_PERSPECTIVE_PX - z);
         (x * k, y * k)
+    }
+
+    #[test]
+    fn drag_sway_leans_the_fanned_pose_like_the_shipping_transform() {
+        // `.thumbnail-stack-drag-sway`: the hover transform plus the lean.
+        let css = |id: &str, depth: usize, gravity: f64, (sx, sy): (f64, f64), u: f64, v: f64| {
+            let pd = stack_pose_depth(depth as f64);
+            let proximity = 1.0 - gravity.abs();
+            let tilt = (pd * -0.7_f64).to_radians();
+            let scale = 1.0 - pd * 0.02 + pd * proximity * 0.02;
+            let spin =
+                (stack_layer_rotation_deg(id, depth) * proximity + sx * pd * 0.12).to_radians();
+            let oy = THUMBNAIL_CARD_HEIGHT / 2.0;
+            let (x, y) = (scale * u, scale * (v - oy));
+            let (y, z) = (y * tilt.cos(), y * tilt.sin());
+            let (x, y) = (
+                x * spin.cos() - y * spin.sin(),
+                x * spin.sin() + y * spin.cos(),
+            );
+            let tx = pd * -0.6 + sx * pd * 0.7;
+            let ty = (pd * -16.0 + stack_peek_jitter(depth) + sy * pd * 0.2) * gravity;
+            let (x, y, z) = (x + tx, y + oy + ty, z + pd * -18.0);
+            let k = STACK_PERSPECTIVE_PX / (STACK_PERSPECTIVE_PX - z);
+            (x * k, y * k)
+        };
+        for (id, depth, gravity, sway) in [
+            ("capture-1", 1, 1.0, (-3.0, 2.0)),
+            ("card", 3, 0.4, (1.5, -2.0)),
+        ] {
+            let pose = collapsed_card_sway_pose(id, depth, gravity, false, sway);
+            for (u, v) in [(0.0, 0.0), (-142.0, -80.0), (142.0, 80.0)] {
+                let (x, y) = css(id, depth, gravity, sway, u, v);
+                let (px, py) = project_card_point(&pose.projection, u, v);
+                assert!((pose.dx + px - x).abs() < 1e-9, "{id} x {u},{v}");
+                assert!((pose.dy + py - y).abs() < 1e-9, "{id} y {u},{v}");
+            }
+        }
+        // No lean is exactly the fanned pose.
+        assert_eq!(
+            collapsed_card_sway_pose("card", 2, 1.0, false, (0.0, 0.0)),
+            collapsed_card_pose("card", 2, true, 1.0, false)
+        );
     }
 
     #[test]

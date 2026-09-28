@@ -299,6 +299,20 @@ bool captures_preview_pile_pose_v1(const char *id, size_t depth, bool hovered,
 bool captures_preview_pile_projection_v1(const char *id, size_t depth, bool hovered,
     double gravity, bool top_anchor, double output[9]);
 double captures_preview_pile_media_blur_v1(size_t depth, bool hovered);
+/* A carried pile's rear-card pose with shipping's drag lean: the fanned pose
+ * plus sway points of lean (see captures_preview_drag_sway_tick_v1). Writes
+ * the flattened pose and the projective map. False leaves both unchanged. */
+bool captures_preview_pile_sway_pose_v1(const char *id, size_t depth, double gravity,
+    bool top_anchor, double sway_x, double sway_y, CapturesPreviewPilePose *pose,
+    double projection[9]);
+/* Shipping's carried-pile lean (position in points, velocity, drive); zeroed
+ * is at rest. Tick advances it by a pointer step (points, y down) over dt_ms
+ * and returns whether it settled (then zeroed); null counts as settled. */
+typedef struct {
+    double position_x, position_y, velocity_x, velocity_y, drive_x, drive_y;
+} CapturesDragSway;
+bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, double dy,
+    double dt_ms, bool reduced_motion);
 /* Shipping hover-fan stagger: milliseconds a pile card at depth waits before
  * its fan transition (transform, shade and glow; media blur when media). */
 double captures_preview_fan_delay_ms_v1(size_t depth, bool media);

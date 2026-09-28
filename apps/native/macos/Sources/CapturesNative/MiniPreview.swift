@@ -1128,12 +1128,14 @@ private final class MiniPreviewExpandButton: NSButton {
     private var frameOrigin = NSPoint.zero
     private var dragging = false
     private let fan: (Bool) -> Void
+    /// The carried pile's desktop pointer, nil when the carry ends.
+    private let carry: (NSPoint?) -> Void
     private var tracking: NSTrackingArea?
 
     init(frame: NSRect, count: Int, move: @escaping (NSPoint) -> Void,
-         fan: @escaping (Bool) -> Void,
+         fan: @escaping (Bool) -> Void, carry: @escaping (NSPoint?) -> Void = { _ in },
          action: @escaping () -> Void) {
-        actionBlock = action; self.move = move; self.fan = fan
+        actionBlock = action; self.move = move; self.fan = fan; self.carry = carry
         super.init(frame: frame)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
@@ -1165,9 +1167,11 @@ private final class MiniPreviewExpandButton: NSButton {
         guard dragging || max(abs(delta.width), abs(delta.height)) >= 4 else { return }
         dragging = true
         move(NSPoint(x: frameOrigin.x + delta.width, y: frameOrigin.y + delta.height))
+        carry(current)
     }
     override func mouseUp(with event: NSEvent) {
         let clicked = press != nil && !dragging && bounds.contains(convert(event.locationInWindow, from: nil))
+        if dragging { carry(nil) }
         press = nil; dragging = false
         fan(bounds.contains(convert(event.locationInWindow, from: nil)))
         if clicked { actionBlock() }
@@ -1381,7 +1385,8 @@ final class MiniPreviewView: NSView {
             layouts[id].map { (id, $0) }
         }).first(where: { $0.1.interactive }), let card = cards[front.0] {
             let expand = MiniPreviewExpandButton(frame: card.frame, count: ids.count, move: move,
-                fan: { [weak self] hovered in self?.setPileHovered(hovered) }) {
+                fan: { [weak self] hovered in self?.setPileHovered(hovered) },
+                carry: { [weak self] point in self?.carryPile(at: point) }) {
                 setCollapsed(false)
             }
             document.addSubview(expand); pileExpandButton = expand
@@ -1471,6 +1476,7 @@ final class MiniPreviewView: NSView {
         setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "\(ids.count) screenshot mini previews")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { carryTimer?.invalidate() }
 
     func setStatus(_ value: String, detail: String? = nil, for artifactID: String) {
         cards[artifactID]?.setStatus(value, detail: detail)
@@ -1834,8 +1840,13 @@ final class MiniPreviewView: NSView {
         guard hovered != pileHovered else { return }
         pileHovered = hovered
         setSparkling(hovered)
-        // `--stack-fan-dur` / `--stack-fan-ease`, each layer 16 ms later per
-        // depth: the lift cascades instead of moving as a slab.
+        animatePile(hovered: hovered)
+    }
+
+    /// Ease every card to its rest or fanned pose from where it is now over
+    /// `--stack-fan-dur` / `--stack-fan-ease`, each layer 16 ms later per
+    /// depth: the lift cascades instead of moving as a slab.
+    private func animatePile(hovered: Bool) {
         let fan = NativeMotion.transition("preview_stack_fan", tokens: tokens)
         for (id, card) in cards {
             guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]) else { continue }
@@ -1871,6 +1882,89 @@ final class MiniPreviewView: NSView {
             card.setFrameOrigin(pileOrigin(id, layout: layout, hovered: pileHovered))
         }
         applyPilePoses(hovered: pileHovered, duration: 0)
+        if carryReady { applyCarryPoses() }
+    }
+
+    // Shipping drag sway (`.thumbnail-stack-drag-sway`): once a carry has
+    // held the fan open for its gather (`thumbnailStackFanCollapseMs`), the
+    // rear cards lean with the pointer's velocity through the shared spring;
+    // dropping eases them back over the fan's staggered transition.
+    private var carryStarted: CFTimeInterval?
+    private var carryReady = false
+    private var carrySway = CapturesDragSway()
+    private var carryPointer: NSPoint?
+    private var carrySample: (point: NSPoint, time: CFTimeInterval)?
+    private var carryTimer: Timer?
+    /// The carried pile's lean now, in points (y down), for tests.
+    var pileLean: (x: Double, y: Double) { (carrySway.position_x, carrySway.position_y) }
+
+    /// A carry's desktop pointer (screen points), or nil when it ends.
+    func carryPile(at point: NSPoint?) {
+        guard stackCollapsed else { return }
+        guard let point else { endCarry(); return }
+        carryPointer = point
+        if carryStarted == nil {
+            carryStarted = CACurrentMediaTime(); carryReady = false
+            carrySway = CapturesDragSway(); carrySample = nil
+        }
+        guard !NativeMotion.reduceMotion, carryTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.stepCarry() }
+        RunLoop.main.add(timer, forMode: .common)
+        carryTimer = timer
+    }
+
+    /// One display frame of the carry: wait out the gather, then tick the
+    /// lean with the pointer's step since the last frame.
+    func stepCarry(now: CFTimeInterval = CACurrentMediaTime()) {
+        guard let started = carryStarted, let pointer = carryPointer else { stopCarryTimer(); return }
+        if !carryReady {
+            let fan = NativeMotion.transition("preview_stack_fan", tokens: tokens)
+            let deepest = restLayouts.values.map(\.depth).max() ?? 0
+            guard now - started >= fan.duration + captures_preview_fan_delay_ms_v1(deepest, false) / 1000
+            else { return }
+            carryReady = true; carrySway = CapturesDragSway(); carrySample = (pointer, now)
+        }
+        let last = carrySample ?? (pointer, now - 0.016)
+        // Screen y points up; the shipping lean's y points down.
+        let settled = captures_preview_drag_sway_tick_v1(&carrySway, Double(pointer.x - last.point.x),
+            Double(last.point.y - pointer.y), (now - last.time) * 1000, NativeMotion.reduceMotion)
+        carrySample = (pointer, now)
+        applyCarryPoses()
+        // A still pointer lets the timer stop; the next sample restarts it.
+        if settled { stopCarryTimer() }
+    }
+
+    private func stopCarryTimer() { carryTimer?.invalidate(); carryTimer = nil }
+
+    private func endCarry() {
+        let leaned = carryReady && (carrySway.position_x != 0 || carrySway.position_y != 0)
+        stopCarryTimer()
+        carryStarted = nil; carryReady = false; carrySway = CapturesDragSway()
+        carrySample = nil; carryPointer = nil
+        if leaned { animatePile(hovered: pileHovered) }
+    }
+
+    /// The fanned pile with the current lean, applied at once.
+    private func applyCarryPoses() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        for (id, card) in cards {
+            guard let layout = hoverLayouts[id], layout.depth > 0, let layer = card.layer else { continue }
+            var pose = CapturesPreviewPilePose()
+            var matrix = [Double](repeating: 0, count: 9)
+            let ok = id.withCString { name in
+                matrix.withUnsafeMutableBufferPointer {
+                    captures_preview_pile_sway_pose_v1(name, layout.depth, pileGravity, anchoredAtTop,
+                        carrySway.position_x, carrySway.position_y, &pose, $0.baseAddress)
+                }
+            }
+            guard ok else { continue }
+            layer.removeAnimation(forKey: "pile-pose"); layer.removeAnimation(forKey: "pile-fan-position")
+            card.setFrameOrigin(NSPoint(x: CGFloat(geometry.padding) + CGFloat(pose.dx),
+                                        y: CGFloat(layout.y) + CGFloat(pose.slot_dy)))
+            layer.transform = Self.pileTransform(projection: matrix, size: card.bounds.size,
+                                                 anchorPoint: layer.anchorPoint, flipped: document.isFlipped)
+        }
     }
 
     /// Shipping rear-card pile pose (`captures_preview_pile_pose_v1`).

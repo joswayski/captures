@@ -1432,6 +1432,109 @@ fn fan_id() -> egui::Id {
     egui::Id::unique("mini-preview-hover-fan")
 }
 
+fn carry_id() -> egui::Id {
+    egui::Id::unique("mini-preview-pile-carry")
+}
+
+/// The collapsed pile being carried: shipping holds the fanned pose until the
+/// fan has gathered (`thumbnailStackFanCollapseMs`), then leans the rear cards
+/// with [`captures_app::preview_motion::DragSway`]; dropping lets the lean
+/// ease back over the fan's staggered transition.
+#[derive(Clone, Copy, Debug, Default)]
+struct PileCarry {
+    /// When the press became a drag (`input.time`-based ms), until release.
+    since: Option<f64>,
+    /// The lean is live.
+    ready: bool,
+    sway: captures_app::preview_motion::DragSway,
+    /// The last desktop pointer sample and when.
+    last: Option<(egui::Pos2, f64)>,
+    /// The lean at the drop, and when it began easing back.
+    released: Option<((f64, f64), f64)>,
+}
+
+impl PileCarry {
+    fn start(&mut self, now_ms: f64) {
+        if self.since.is_none() {
+            *self = Self {
+                since: Some(now_ms),
+                ..Self::default()
+            };
+        }
+    }
+
+    /// Advance one frame and return each depth's lean now.
+    fn frame(
+        &mut self,
+        now_ms: f64,
+        pressed: bool,
+        pointer: Option<egui::Pos2>,
+        gather_ms: f64,
+        reduced: bool,
+    ) -> impl Fn(usize, &captures_app::motion::Tween) -> (f64, f64) + use<> {
+        if let Some(since) = self.since {
+            if !pressed {
+                let lean = self.sway.offset();
+                *self = Self {
+                    released: (lean != (0., 0.)).then_some((lean, now_ms)),
+                    ..Self::default()
+                };
+            } else {
+                if !self.ready && (reduced || now_ms - since >= gather_ms) {
+                    self.ready = true;
+                    self.sway = Default::default();
+                    self.last = pointer.map(|point| (point, now_ms));
+                }
+                if self.ready
+                    && let Some(point) = pointer
+                {
+                    let (step, dt) = self.last.map_or(
+                        (
+                            egui::Vec2::ZERO,
+                            captures_app::preview_motion::DRAG_SWAY_DEFAULT_DT_MS,
+                        ),
+                        |(last, at)| (point - last, now_ms - at),
+                    );
+                    self.sway
+                        .tick(f64::from(step.x), f64::from(step.y), dt, reduced);
+                    self.last = Some((point, now_ms));
+                }
+            }
+        }
+        let (ready, sway, released) = (self.ready, self.sway.offset(), self.released);
+        move |depth, tween| {
+            if ready {
+                return sway;
+            }
+            let Some(((x, y), at)) = released else {
+                return (0., 0.);
+            };
+            let delay = captures_app::preview_motion::fan_delay_ms(depth);
+            let left = 1. - tween.progress(now_ms - at - delay, reduced);
+            (x * left, y * left)
+        }
+    }
+
+    /// Whether the lean still moves (the root keeps painting until it rests).
+    fn moving(
+        &mut self,
+        now_ms: f64,
+        deepest: usize,
+        tween: &captures_app::motion::Tween,
+        reduced: bool,
+    ) -> bool {
+        if let Some((_, at)) = self.released {
+            let delay = captures_app::preview_motion::fan_delay_ms(deepest);
+            if tween.running(now_ms - at - delay, reduced) {
+                return true;
+            }
+            self.released = None;
+        }
+        // Before the lean starts, the carry only waits for its gather.
+        (self.since.is_some() && !self.ready) || (self.ready && !self.sway.settled())
+    }
+}
+
 pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(
         egui::ViewportId::ROOT,
@@ -6224,6 +6327,21 @@ impl Live {
                     if fan.running(deepest, frame_ms, &fan_tween, reduced_motion) {
                         ui.ctx().request_repaint();
                     }
+                    // Shipping drag sway: once a carry has held the fan open
+                    // for its gather, the rear cards lean with the pointer's
+                    // velocity; dropping eases the lean back with the fan.
+                    let mut carry: PileCarry =
+                        ui.data(|data| data.get_temp(carry_id())).unwrap_or_default();
+                    let lean = carry.frame(
+                        frame_ms,
+                        ui.input(|input| input.pointer.primary_down()),
+                        desktop_pointer,
+                        captures_app::preview_motion::StackFan::settle_ms(deepest, &fan_tween),
+                        reduced_motion,
+                    );
+                    if carry.moving(frame_ms, deepest, &fan_tween, reduced_motion) {
+                        ui.ctx().request_repaint();
+                    }
                     for card in &cards {
                         let (pose, media) = fan.progress(
                             &card.artifact_id,
@@ -6232,9 +6350,19 @@ impl Live {
                             &fan_tween,
                             reduced_motion,
                         );
+                        let sway = lean(card.pile_depth, &fan_tween);
+                        let swayed = (sway != (0., 0.)).then(|| {
+                            captures_app::preview::collapsed_card_sway_pose(
+                                &card.artifact_id,
+                                card.pile_depth,
+                                pile_gravity,
+                                top_anchor,
+                                sway,
+                            )
+                        });
                         let (offset, pile) = crate::mini_preview::pile_pose_between_staggered(
                             &card.pile_rest,
-                            &card.pile_hover,
+                            swayed.as_ref().unwrap_or(&card.pile_hover),
                             pose as f32,
                             media as f32,
                         );
@@ -6255,6 +6383,10 @@ impl Live {
                             show_card(ui, card, true, true, 1., pile);
                         });
                     }
+                    if matches!(message, Some(PreviewMessage::MoveStack { .. })) {
+                        carry.start(frame_ms);
+                    }
+                    ui.data_mut(|data| data.insert_temp(carry_id(), carry));
                     // Shipping sparkles drift over the hovered pile until the
                     // pointer leaves.
                     let sparkle_id = egui::Id::unique("mini-preview-sparkle");
@@ -10184,6 +10316,46 @@ mod tests {
         assert!(first.image_path.exists());
         assert!(second.image_path.exists());
         assert!(later.image_path.exists());
+    }
+
+    #[test]
+    fn a_carried_pile_leans_after_its_gather_and_eases_back_on_drop() {
+        let tween = captures_app::motion::Tween {
+            duration_ms: 200.,
+            easing: captures_app::motion::CubicBezier::LINEAR,
+        };
+        let gather = captures_app::preview_motion::StackFan::settle_ms(2, &tween);
+        let mut carry = PileCarry::default();
+        carry.start(1_000.);
+        let at = |carry: &mut PileCarry, ms: f64, x: f32, pressed: bool| {
+            let lean = carry.frame(ms, pressed, Some(egui::pos2(x, 300.)), gather, false);
+            lean(2, &tween)
+        };
+        // The fanned pose holds while the fan gathers.
+        assert_eq!(at(&mut carry, 1_016., 110., true), (0., 0.));
+        assert!(carry.moving(1_016., 2, &tween, false));
+        let mut x = 110.;
+        let mut ms = 1_000. + gather;
+        for _ in 0..8 {
+            x += 30.;
+            ms += 16.;
+            at(&mut carry, ms, x, true);
+        }
+        let (lean, _) = at(&mut carry, ms + 16., x + 30., true);
+        assert!(lean < -0.5, "a rightward carry leans the pile left: {lean}");
+        // Dropping eases the lean back over the fan transition.
+        let (dropped, _) = at(&mut carry, ms + 32., x + 30., false);
+        assert!(dropped < 0., "{dropped}");
+        assert!(carry.moving(ms + 40., 2, &tween, false));
+        assert_eq!(at(&mut carry, ms + 32. + 400., x + 30., false), (0., 0.));
+        assert!(!carry.moving(ms + 32. + 400., 2, &tween, false));
+        // Reduced motion never leans.
+        let mut reduced = PileCarry::default();
+        reduced.start(0.);
+        let lean = reduced.frame(16., true, Some(egui::pos2(0., 0.)), gather, true);
+        assert_eq!(lean(2, &tween), (0., 0.));
+        let lean = reduced.frame(32., true, Some(egui::pos2(90., 0.)), gather, true);
+        assert_eq!(lean(2, &tween), (0., 0.));
     }
 
     #[test]

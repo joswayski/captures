@@ -153,6 +153,35 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertTrue(panel.becomesKeyOnlyIfNeeded)
     }
 
+    func testCarriedPileLeansAfterItsGatherAndDropsTheLean() throws {
+        _ = NSApplication.shared
+        let ids = ["oldest", "middle", "newest"]
+        let images = Dictionary(uniqueKeysWithValues: ids.map { ($0, solidImage(.systemBlue)) })
+        let panel = fixturePanel(ids: ids, images: images, collapsed: true)
+        defer { panel.close() }
+        let view = panel.previewView
+        let rear = try XCTUnwrap(view.card(for: "oldest"))
+        view.carryPile(at: NSPoint(x: 100, y: 100))
+        let start = CACurrentMediaTime()
+        view.stepCarry(now: start + 0.01)
+        XCTAssertEqual(view.pileLean.x, 0, "the fanned pose holds while the fan gathers")
+        view.stepCarry(now: start + 1)
+        let still = rear.frame.origin
+        for step in 1...8 {
+            view.carryPile(at: NSPoint(x: 100 + 30 * CGFloat(step), y: 100))
+            view.stepCarry(now: start + 1 + 0.016 * Double(step))
+        }
+        if NativeMotion.reduceMotion {
+            XCTAssertEqual(view.pileLean.x, 0, "reduced motion never leans")
+        } else {
+            XCTAssertLessThan(view.pileLean.x, -1, "a rightward carry leans the rear cards left")
+            XCTAssertLessThan(rear.frame.minX, still.x, "the rear card trails the carry")
+        }
+        view.carryPile(at: nil)
+        XCTAssertEqual(view.pileLean.x, 0)
+        XCTAssertEqual(view.pileLean.y, 0)
+    }
+
     func testCollapsedPileAppliesTheSharedDepthPose() throws {
         _ = NSApplication.shared
         let ids = ["oldest", "middle", "newest"]

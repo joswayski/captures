@@ -149,6 +149,20 @@ final class NativeMotionTests: XCTestCase {
         XCTAssertEqual(view.subviews.map(\.frame), labels.map(\.frame))
     }
 
+    func testSegmentLabelTransitionLandsFirstThenEasesOverTheShippingTiming() {
+        let view = NSView(frame: .zero)
+        let lit = NativeBoolTransition("segment_label", tokens: tokens, view: view)
+        let duration = NativeMotion.transition("segment_label", tokens: tokens, reduced: false).duration
+        XCTAssertEqual(duration, Double(tokens.number("dur-3")) / 1000, accuracy: 1e-9)
+        XCTAssertEqual(lit.progress(toward: true, now: 10, reduced: false), 1, "the first target lands at once")
+        XCTAssertEqual(lit.progress(toward: false, now: 10, reduced: false), 1, accuracy: 1e-9)
+        let mid = lit.progress(toward: false, now: 10 + duration / 2, reduced: false)
+        XCTAssertTrue(mid > 0 && mid < 1, "\(mid)")
+        XCTAssertEqual(lit.progress(toward: false, now: 10 + duration, reduced: false), 0, accuracy: 1e-9)
+        XCTAssertFalse(lit.isRunning, "a view outside a window schedules no redraws")
+        XCTAssertEqual(lit.progress(toward: true, now: 11, reduced: true), 1, "reduced motion lands at once")
+    }
+
     func testCaptureMenuIndicatorsFollowTheSelectedSegments() throws {
         let view = CaptureControlsView(frame: NSRect(x: 0, y: 0, width: 900, height: 154), tokens: tokens,
             autoStart: false, displayTitles: ["Main display"], selectedDisplay: 0)
