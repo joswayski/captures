@@ -329,7 +329,9 @@ exercise real Text controls; `--text-draft-only` retains the synthetic-font regr
 Use `--text-defaults-only` for pre-placement style/size/color, centered boxes,
 unchanged drafts while configuring, undo/redo and default reset after reopening.
 Use `--output-presets-only` to exercise native compression presets and their
-descriptions, the automatic before/after comparison with Hide/Show, exact Highest pixels, unchanged drafts/originals and minimum-size controls.
+descriptions, the automatic before/after comparison with a dragged split handle,
+Page Up/Home keys and Hide/Show, folder reveals after each Save, exact Highest
+pixels, unchanged drafts/originals and minimum-size controls.
 Use `--output-size-only` to exercise percentage/custom dimensions, aspect locking,
 saved-file/History consistency, unchanged drafts and full-resolution clipboard copy.
 Use `--polygon-only` to exercise Triangle/Diamond/Star transient and committed pixels,
@@ -337,7 +339,8 @@ concave star notches, cancelled/degenerate gestures, undo/redo and saved-draft r
 Use `--rotation-snap-only` to exercise the per-editor custom increment, Shift preview
 and cancellation, committed angle/pixels, undo/redo and restored drafts.
 Use `--overwrite-only` for explicit confirmation/Cancel/Escape, exact replaced pixels,
-stable History identity/date, retained draft and undo/redo, and minimum-size controls.
+stable History identity/date, the saved-file reveal after every Save (a stub
+FileManager1 records it), retained draft and undo/redo, and minimum-size controls.
 Use `--external-image-only` for multi-file startup, canonical aliases, retained
 errors, exact imported pixels, source preservation, saved-draft refusal/restoration
 and same-ID source reload after explicit discard.

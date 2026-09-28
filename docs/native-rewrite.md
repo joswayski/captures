@@ -1019,9 +1019,9 @@ retried until Hide/Show or a new accepted identity. A paused transient playback
 frame never selects the comparison frame. Generation, cancellation,
 accepted revision, position and preview export guard delivery. Staging, playback,
 crop, seek, new item and close discard comparison without changing accepted edits,
-dirty state or History. The wgpu split also supports pointer dragging and keyboard
-adjustment. Maximum displays the budget-free first attempt and warns that final
-capped-save pixels can differ. Requested/fallback seek positions are not decoded
+dirty state or History. Both hosts' splits take pointer dragging and the shipping
+range keys, and Preserve recentres them. Maximum displays the budget-free first
+attempt and warns that final capped-save pixels can differ. Requested/fallback seek positions are not decoded
 PTS; output cadence can select neighboring frames. Physical macOS, Windows and
 Wayland input, accessibility and mixed-DPI acceptance remain open.
 Both hosts now render the shipping editor's page: an **Edit recording** (or **Edit
@@ -2308,14 +2308,23 @@ confirmation because shared Rust re-checks the History entry, saved path and for
 at write time and publishes through a sibling temp file; the previous confirmation
 dialog is removed. New files that collide with an existing file are refused with a
 filename error. A saved file with a History entry is adopted as the next overwrite
-target. Unlike Tauri, the folder is not revealed automatically; **Show in Folder**
-reveals it on request. Copy still uses full-resolution edited PNG pixels. Both
-actions retain the serialized worker and accepted-work lifecycle. Native fixtures
+target. As in Tauri, every successful Save (overwrite or new file, with no preference
+gating it) then shows the saved file in its folder through the same reveal as the
+preview card: Finder on AppKit, FileManager1 `ShowItems` or the folder fallback on
+wgpu, where a failed handoff changes the notice to "Saved … — its folder could not
+be opened"; **Show in Folder** reveals it again on request. CI records the reveal
+requests (a stub FileManager1 on X11); physical file-manager selection remains
+open. Copy still uses full-resolution edited PNG pixels. Both actions retain the serialized worker and accepted-work lifecycle. Native fixtures
 exercise section/resize visibility, pending-work gates, overwrite/new-file/adoption
 and estimate states; X11 export tests save from every section. Windows/Wayland
 presentation and physical AppKit acceptance remain open, rather than being inferred
 from shared code or rendered CI fixtures. The inspector layout still differs from
-Tauri (see the editor chrome slice), and the CompressionPreview split slider is not connected.
+Tauri (see the editor chrome slice). The comparison's split follows shipping
+`CompressionPreview`: the round handle drags on both hosts even with a drawing tool,
+the bottom strip and the focused split's range keys (arrows 0.1 %, Page Up/Down a
+tenth of the 6–94 % span, Home/End) are off while drawing or processing, and
+Preserve recentres it. Private X11 drags the handle and steps the keys; AppKit XCTests
+drive the same handle and keys.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
