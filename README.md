@@ -572,7 +572,8 @@ entry. Turning on **Save as new file**, editing the filename or choosing another
 folder saves a new file instead, and a format that differs from the original always
 does; new files never replace an existing file and add a distinct History entry.
 A capture without a saved file writes its first Save to the output folder. The saved
-file then becomes what Save overwrites, and **Show in Folder** appears. If History
+file then becomes what Save overwrites. As in the shipping app, every Save then
+shows the saved file in its folder, and **Show in Folder** appears. If History
 cannot be updated, the saved file's path remains available for recovery. The status
 line under the filename explains what Save will do and warns when JPEG will fill in
 transparent areas. The editable document, draft, undo and output preview are

@@ -1485,6 +1485,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let didSaveCopy: () -> Void
     private let didReplaceOriginal: (String) -> Void
     private let revealFiles: ([URL]) -> Void
+    /// Finder reveal for editors created without their own `revealFiles`.
+    /// Save uses it after every save, so tests swap it for a recorder.
+    static var defaultRevealFiles: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     /// Shipping debounce before Est. size re-encodes, and confirmation duration.
     static let estimateDelay: TimeInterval = 0.22
     static let exportConfirmationDuration: TimeInterval = 4
@@ -1509,7 +1512,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)? = nil,
          didSaveCopy: @escaping () -> Void = {},
          didReplaceOriginal: @escaping (String) -> Void = { _ in },
-         revealFiles: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) },
+         revealFiles: (([URL]) -> Void)? = nil,
          imagePicker: ((NSWindow, @escaping ([URL]) -> Void) -> Void)? = nil,
          imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode,
          writeClipboard: @escaping (Data) -> Bool = { png in
@@ -1520,7 +1523,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.directoryPicker = directoryPicker; self.didSaveCopy = didSaveCopy
         self.didReplaceOriginal = didReplaceOriginal
-        self.revealFiles = revealFiles
+        self.revealFiles = revealFiles ?? ScreenshotEditorController.defaultRevealFiles
         self.imagePicker = imagePicker; self.imageDecoder = imageDecoder
         self.writeClipboard = writeClipboard
         editorNumberFormatter = NumberFormatter()
@@ -3747,9 +3750,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func outputOptionsChanged() {
         if outputQuality.indexOfSelectedItem != lastQualityIndex {
-            // Shipping `applyQualityMode`: a new mode shows the comparison again.
+            // Shipping `applyQualityMode`: a new mode shows the comparison
+            // again; Preserve also recentres its split.
             lastQualityIndex = outputQuality.indexOfSelectedItem
             comparisonDismissed = false
+            if lastQualityIndex == 0 { compareView?.split = 0.5 }
         }
         normalizeOutputQuality()
         synchronizeOutputCompressionPreset()
@@ -4262,6 +4267,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.lastSavedPath = saved.path
                 self.showExportNotice(saved.notice)
                 self.status.stringValue = saved.notice
+                // Shipping `saveEditedImage` reveals the saved file after every
+                // Save, overwrite or new file (Finder has no failure to report).
+                self.revealFiles([URL(fileURLWithPath: saved.path)])
                 if let warning = saved.warning {
                     self.reportError("Saved \(saved.path), but couldn’t update History: \(warning)")
                 }

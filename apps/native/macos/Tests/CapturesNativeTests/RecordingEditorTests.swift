@@ -308,6 +308,13 @@ final class RecordingEditorTests: XCTestCase {
         compare.split = 0.5
         compare.stepSplit(0.23)
         XCTAssertEqual(compare.split, 0.73, accuracy: 0.001)
+        // Shipping's range keys, shared with the screenshot editor.
+        XCTAssertTrue(compare.pressSplitKey(.pageDown))
+        XCTAssertEqual(compare.split, 0.642, accuracy: 1e-6)
+        XCTAssertTrue(compare.pressSplitKey(.increase))
+        XCTAssertEqual(compare.split, 0.643, accuracy: 1e-6)
+        XCTAssertTrue(compare.pressSplitKey(.end))
+        XCTAssertEqual(compare.split, 0.94, accuracy: 1e-6)
         XCTAssertFalse(controller.dirty)
 
         // Staged edits hide it; undoing them encodes the same identity again.
@@ -2899,7 +2906,9 @@ final class RecordingEditorTests: XCTestCase {
 
         choose(mode, "Maximum file size")
         XCTAssertTrue(delta.isHidden, "Maximum shows only its cap")
+        controller.compareView.split = 0.3
         choose(mode, "Preserve quality")
+        XCTAssertEqual(controller.compareView.split, 0.5, "Preserve recentres the comparison split")
         worker.estimateResult = .failure(AppBridgeError.backend("estimate failed"))
         estimate.performClick(nil)
         XCTAssertTrue(delta.isHidden, "estimate errors publish no delta")
