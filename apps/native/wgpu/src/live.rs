@@ -1394,6 +1394,9 @@ pub struct Live {
     card_restoring: Option<PreviewGuard>,
     /// Shipping "✓ Restored" feedback, shown for `ACTION_FEEDBACK_MS`.
     card_restored: Option<(String, Instant)>,
+    /// Shipping `HistoryCard` errors (`.history-card-error`) from a failed
+    /// Restore or Edit restore, by artifact, until that card acts again.
+    card_errors: HashMap<String, String>,
     /// The latest progress message, for tests and diagnostics. Shipping
     /// History has no status line; failures show in `error` (`.history-error`).
     status: String,
@@ -1747,6 +1750,7 @@ impl Live {
             card_busy: None,
             card_restoring: None,
             card_restored: None,
+            card_errors: HashMap::new(),
             status: "Loading capture workspace…".into(),
             error: None,
             pending: 0,
@@ -5162,9 +5166,13 @@ impl Live {
                         ctx.request_repaint();
                     }
                     Err(error) => {
-                        self.finish_restore(&artifact_id, generation, false);
+                        let message = format!("Could not load mini preview: {error}");
+                        if self.finish_restore(&artifact_id, generation, false) {
+                            self.card_errors.insert(artifact_id.clone(), message);
+                        } else {
+                            self.error = Some(message);
+                        }
                         self.previews.dismiss(&artifact_id, generation);
-                        self.error = Some(format!("Could not load mini preview: {error}"));
                     }
                 },
                 // A card dismissed before it decoded ends its Restore quietly.
@@ -5172,7 +5180,9 @@ impl Live {
                     generation,
                     artifact_id,
                     ..
-                } => self.finish_restore(&artifact_id, generation, false),
+                } => {
+                    self.finish_restore(&artifact_id, generation, false);
+                }
             }
         }
         self.start_next_media();
@@ -7724,6 +7734,7 @@ impl Live {
                                     }),
                                 done: (restored.as_deref() == Some(id))
                                     .then_some(captures_app::history_view::CardAction::Restore),
+                                error: self.card_errors.get(id).map(String::as_str),
                             }
                         })
                         .collect();
@@ -7935,6 +7946,8 @@ impl Live {
             return;
         };
         let recording = entry.kind.is_recording();
+        // Shipping clears a card's error when it starts another action.
+        self.card_errors.remove(id);
         match action {
             CardAction::Copy => self.copy(id),
             CardAction::ShowInFolder => {
@@ -7957,7 +7970,8 @@ impl Live {
                     // (`restore_history_artifact`) before opening the editor;
                     // a failed restore opens nothing.
                     let target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                    if !self.restore_for_edit(ctx, id, &settings, target) {
+                    if let Err(error) = self.restore_for_edit(ctx, id, &settings, target) {
+                        self.card_errors.insert(id.to_owned(), error);
                         return;
                     }
                     let mode = entry.mode.unwrap_or(captures_capture::CaptureMode::Region);
@@ -7968,6 +7982,9 @@ impl Live {
                         mode,
                     );
                 }
+                Err(error) if !recording => {
+                    self.card_errors.insert(id.to_owned(), error);
+                }
                 Err(error) => self.error = Some(error),
             },
             CardAction::Restore => match settings {
@@ -7975,7 +7992,9 @@ impl Live {
                     let target = capture_target(frame, &self.displays, self.display_id.as_deref());
                     self.restore(ctx, &entry.id, &settings, target);
                 }
-                Err(error) => self.error = Some(error),
+                Err(error) => {
+                    self.card_errors.insert(id.to_owned(), error);
+                }
             },
             CardAction::SaveImage | CardAction::SaveFile => match settings {
                 Ok(settings) => {
@@ -8016,7 +8035,7 @@ impl Live {
         if artifact.entry.kind.is_recording() {
             return;
         }
-        self.error = None;
+        self.card_errors.remove(id);
         self.card_restored = None;
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
         match self
@@ -8034,14 +8053,16 @@ impl Live {
                 });
                 self.card_restoring = Some(guard);
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                self.card_errors.insert(id.to_owned(), error);
+            }
         }
         request_hidden_root_paint(ctx);
         ctx.request_repaint();
     }
 
     /// History Edit's restore: the same stack insertion as Restore, without
-    /// its busy state or "Restored" feedback. Returns whether the editor may
+    /// its busy state or "Restored" feedback. Succeeds when the editor may
     /// open (the card is showing, decoding, or already in the stack).
     fn restore_for_edit(
         &mut self,
@@ -8049,9 +8070,9 @@ impl Live {
         id: &str,
         settings: &AppSettings,
         target: Option<CaptureTarget>,
-    ) -> bool {
+    ) -> Result<(), String> {
         let Some(index) = self.artifact_index(id) else {
-            return false;
+            return Err("The screenshot is no longer in Capture History.".into());
         };
         let artifact = &self.artifacts[index];
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
@@ -8068,27 +8089,25 @@ impl Live {
                 });
                 request_hidden_root_paint(ctx);
                 ctx.request_repaint();
-                true
+                Ok(())
             }
-            Err(error) => {
-                self.error = Some(error);
-                false
-            }
+            Err(error) => Err(error),
         }
     }
 
-    /// A preview decode finished; end the matching Restore.
-    fn finish_restore(&mut self, artifact_id: &str, generation: u64, shown: bool) {
-        if self
-            .card_restoring
-            .as_ref()
-            .is_some_and(|guard| guard.artifact_id == artifact_id && guard.generation == generation)
-        {
+    /// A preview decode finished; end the matching Restore. Returns whether
+    /// it belonged to a card's Restore.
+    fn finish_restore(&mut self, artifact_id: &str, generation: u64, shown: bool) -> bool {
+        let restoring = self.card_restoring.as_ref().is_some_and(|guard| {
+            guard.artifact_id == artifact_id && guard.generation == generation
+        });
+        if restoring {
             self.card_restoring = None;
             if shown {
                 self.card_restored = Some((artifact_id.to_owned(), Instant::now()));
             }
         }
+        restoring
     }
 
     fn copy(&mut self, id: &str) {
@@ -10958,14 +10977,15 @@ mod tests {
         // Recordings are never restored (shipping rejects them).
         live.restore(&ctx, "recording", &settings, Some(preview_target()));
         assert!(live.previews.stack.ids().is_empty());
-        // An empty stack needs a display to open on.
+        // An empty stack needs a display to open on. Like shipping, the error
+        // shows on the card (`.history-card-error`), not the status line.
         live.restore(&ctx, &id, &settings, None);
         assert!(live.previews.stack.ids().is_empty());
-        assert!(live.error.is_some());
+        assert!(live.card_errors.contains_key(&id) && live.error.is_none());
         assert!(requests.try_recv().is_err());
 
         live.restore(&ctx, &id, &settings, Some(preview_target()));
-        assert!(live.error.is_none());
+        assert!(live.card_errors.is_empty(), "the next restore clears it");
         assert_eq!(live.previews.stack.ids(), std::slice::from_ref(&id));
         let (generation, artifact_id) = decode_job();
         assert_eq!(artifact_id, id);
@@ -11020,10 +11040,11 @@ mod tests {
         assert!(live.card_restoring.is_none() && live.card_restored.is_none());
         assert!(live.previews.stack.ids().is_empty());
         assert!(
-            live.error
-                .as_deref()
+            live.card_errors
+                .get(&id)
                 .is_some_and(|error| error.contains("unreadable"))
         );
+        assert!(live.error.is_none());
         live.flush();
     }
 
@@ -11062,12 +11083,12 @@ mod tests {
             Ok(settings.clone()),
             &frame,
         );
-        assert!(live.editors.is_empty() && live.error.is_some());
+        assert!(live.editors.is_empty() && live.card_errors.contains_key(&edited_id));
+        assert!(live.error.is_none());
         assert!(live.previews.stack.ids().is_empty());
 
         // With a pile on screen, Edit brings the capture back as the front
         // card, then opens its editor, without Restore's busy state.
-        live.error = None;
         assert!(matches!(
             live.previews.restore_artifact(
                 &live.artifacts[0],
@@ -11091,6 +11112,10 @@ mod tests {
         ));
         assert!(live.editors.contains_key(&edited_id));
         assert!(live.card_restoring.is_none() && live.card_restored.is_none());
+        assert!(
+            live.card_errors.is_empty(),
+            "acting on the card clears its error"
+        );
 
         // Editing again neither duplicates nor reorders the card.
         live.card_action(&ctx, &edited_id, CardAction::Edit, Ok(settings), &frame);

@@ -313,6 +313,9 @@ final class LiveCaptureController: NSObject {
     /// Shipping "✓ Restored" on one card for `HistoryCopy.feedbackDuration`.
     private var restoredCardID: String?
     private var restoredCardReset: DispatchWorkItem?
+    /// Shipping `HistoryCard` errors (`.history-card-error`) from a failed
+    /// Restore or Edit restore, by artifact, until that card acts again.
+    private var cardErrors: [String: String] = [:]
     private var recoveryPanel: Surface!
     private var recoveryScroll: NSScrollView!
     private var recoveryStatus: NSTextField!
@@ -1176,7 +1179,8 @@ final class LiveCaptureController: NSObject {
                                    image: thumbnailKeys[artifact.id] == key ? thumbnails[artifact.id] : nil,
                                    confirmingDelete: confirmDeleteID == artifact.id,
                                    busy: cardBusy?.id == artifact.id ? cardBusy?.action : nil,
-                                   done: restoredCardID == artifact.id ? .restore : nil)
+                                   done: restoredCardID == artifact.id ? .restore : nil,
+                                   error: cardErrors[artifact.id])
         })
         grid.setSelectedRow(selectedIndex.flatMap { historyRows.firstIndex(of: $0) } ?? -1, notify: false)
         let copy = historyCopy
@@ -1254,6 +1258,8 @@ final class LiveCaptureController: NSObject {
     private func performCard(row: Int, action: HistoryCardAction) {
         guard historyRows.indices.contains(row), !historyBusy, cardBusy == nil else { return }
         let artifact = artifacts[historyRows[row]]
+        // Shipping clears a card's error when it starts another action.
+        cardErrors[artifact.id] = nil
         switch action {
         case .edit:
             guard !historyRoot.isEmpty, cards[artifact.id]?.missing != true else { return }
@@ -1271,7 +1277,7 @@ final class LiveCaptureController: NSObject {
                 case .shown, .alreadyShowing, .cancelled:
                     self.presentEditor(artifact, requiresCurrentSelection: false)
                 case .failed(let error):
-                    self.showError("Couldn’t restore screenshot", error)
+                    self.cardErrors[artifact.id] = error.localizedDescription
                 }
                 self.updateActions()
             }
@@ -1317,7 +1323,7 @@ final class LiveCaptureController: NSObject {
         switch outcome {
         case .shown, .alreadyShowing: setRestoredCard(id)
         case .cancelled: break
-        case .failed(let error): showError("Couldn’t restore screenshot", error)
+        case .failed(let error): cardErrors[id] = error.localizedDescription
         }
         updateActions()
     }

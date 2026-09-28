@@ -168,6 +168,39 @@ struct HistoryGridLayout: Equatable {
         let last = min(rows, max(first, Int(floor(rect.maxY / rowStride)) + 1))
         return min(count, first * columns)..<min(count, last * columns)
     }
+
+    // A `.history-card-error` grows its row: `extras` maps a row to the extra
+    // height of its tallest card (`history_view::RowExtras`), and every card
+    // in the row stretches, as shipping's CSS grid rows do.
+    func rowTop(_ row: Int, extras: [Int: CGFloat]) -> CGFloat {
+        CGFloat(row) * rowStride + extras.filter { $0.key < row }.values.reduce(0, +)
+    }
+    func contentHeight(_ count: Int, extras: [Int: CGFloat]) -> CGFloat {
+        let rows = rows(count)
+        return contentHeight(count) + extras.filter { $0.key < rows }.values.reduce(0, +)
+    }
+    func frame(_ index: Int, extras: [Int: CGFloat]) -> NSRect {
+        let row = index / columns
+        return NSRect(x: CGFloat(index % columns) * (cardWidth + gap), y: rowTop(row, extras: extras),
+                      width: cardWidth, height: cardHeight + (extras[row] ?? 0))
+    }
+    func visibleItems(_ count: Int, in rect: NSRect, extras: [Int: CGFloat]) -> Range<Int> {
+        guard !extras.isEmpty else { return visibleItems(count, in: rect) }
+        let rows = rows(count)
+        guard rows > 0, rect.height > 0 else { return 0..<0 }
+        // The last row starting at or above `y`; row tops only increase.
+        func row(at y: CGFloat) -> Int {
+            var low = 0, high = rows
+            while high - low > 1 {
+                let middle = (low + high) / 2
+                if rowTop(middle, extras: extras) <= y { low = middle } else { high = middle }
+            }
+            return low
+        }
+        let first = row(at: max(0, rect.minY))
+        let last = min(rows, row(at: max(0, rect.maxY)) + 1)
+        return min(count, first * columns)..<min(count, last * columns)
+    }
     /// Keyboard navigation target, clamped to the collection.
     func step(_ index: Int, count: Int, columns deltaColumns: Int, rows deltaRows: Int) -> Int {
         guard count > 0 else { return 0 }
@@ -326,6 +359,8 @@ struct HistoryGridItem {
     let busy: HistoryCardAction?
     /// An action showing its shipping success label ("✓ Restored").
     var done: HistoryCardAction? = nil
+    /// Shipping `.history-card-error` under the actions (a failed Restore).
+    var error: String? = nil
 }
 
 /// The thumbnail: `object-fit: contain` inside the card's sunken image area,
@@ -413,6 +448,11 @@ final class HistoryCardView: NSView {
     let detailsLabel = NSTextField(labelWithString: "")
     let warningLabel = NSTextField(labelWithString: "")
     let missingLabel = NSTextField(labelWithString: "")
+    /// Shipping `.history-card-error`: danger text on a danger surface.
+    let errorBox = NSView()
+    let errorLabel = NSTextField(wrappingLabelWithString: "")
+    /// The unstretched card height; actions stay at its bottom in a grown row.
+    var baseHeight: CGFloat = 289 { didSet { needsLayout = true } }
     private(set) var actionButtons: [HistoryButton] = []
     private(set) var deleteButton: HistoryButton!
     var selected = false { didSet { needsDisplay = true } }
@@ -450,6 +490,16 @@ final class HistoryCardView: NSView {
         missingLabel.layer?.borderColor = tokens.color("border").cgColor
         missingLabel.isHidden = true
         thumbnail.addSubview(missingLabel)
+        errorBox.wantsLayer = true
+        errorBox.layer?.backgroundColor = tokens.color("danger-surface").cgColor
+        errorBox.layer?.cornerRadius = tokens.number("r-sm")
+        errorBox.isHidden = true
+        errorBox.setAccessibilityElement(false)
+        errorLabel.font = Self.errorFont(tokens)
+        errorLabel.textColor = tokens.color("danger-text")
+        errorLabel.setAccessibilityRole(.staticText)
+        errorBox.addSubview(errorLabel)
+        addSubview(errorBox)
         for slot in 0..<2 {
             let button = HistoryButton("", frame: .zero, tokens: tokens, style: .secondary) { [weak self] in
                 guard let self, let card = self.card, card.actions.indices.contains(slot) else { return }
@@ -498,6 +548,9 @@ final class HistoryCardView: NSView {
             }
             button.isEnabled = idle
         }
+        errorLabel.stringValue = item.error ?? ""
+        errorBox.isHidden = item.error == nil
+        errorLabel.setAccessibilityLabel(item.error)
         let deleteLabel = item.confirmingDelete ? item.card?.deleteConfirmLabel : item.card?.deleteLabel
         deleteButton.style = item.confirmingDelete ? .confirmOverlay : .overlay
         deleteButton.setAccessibilityLabel(deleteLabel)
@@ -535,11 +588,40 @@ final class HistoryCardView: NSView {
         warningLabel.frame = NSRect(x: pad, y: y, width: inner, height: 16)
         let gap = tokens.number("s-3"), height = tokens.number("h-md")
         let width = (inner - gap) / 2
+        let actionsTop = min(bounds.height, baseHeight) - pad - height
         for (slot, button) in actionButtons.enumerated() {
-            button.frame = NSRect(x: pad + CGFloat(slot) * (width + gap), y: bounds.height - pad - height,
+            button.frame = NSRect(x: pad + CGFloat(slot) * (width + gap), y: actionsTop,
                                   width: width, height: height)
         }
         deleteButton.frame = NSRect(x: bounds.width - gap - height, y: gap, width: height, height: height)
+        if !errorBox.isHidden {
+            let textHeight = Self.errorTextHeight(errorLabel.stringValue, cardWidth: bounds.width,
+                                                  tokens: tokens)
+            let inset = NSSize(width: tokens.number("s-4"), height: tokens.number("s-3"))
+            errorBox.frame = NSRect(x: pad, y: actionsTop + height + tokens.number("s-3"),
+                                    width: inner, height: textHeight + 2 * inset.height)
+            errorLabel.frame = NSRect(x: inset.width, y: inset.height,
+                                      width: inner - 2 * inset.width, height: textHeight)
+        }
+    }
+
+    static func errorFont(_ tokens: Tokens) -> NSFont {
+        .systemFont(ofSize: tokens.number("text-xs"))
+    }
+
+    /// Wrapped height of `.history-card-error` text in a card `cardWidth` wide.
+    static func errorTextHeight(_ text: String, cardWidth: CGFloat, tokens: Tokens) -> CGFloat {
+        let width = max(1, cardWidth - 2 * (tokens.number("s-5") + tokens.number("s-4")))
+        let bounds = (text as NSString).boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: errorFont(tokens)])
+        return ceil(bounds.height)
+    }
+
+    /// Height a card error adds to its row (`history_view::card_error_extra`).
+    static func errorExtra(_ text: String, cardWidth: CGFloat, tokens: Tokens) -> CGFloat {
+        tokens.number("s-3") * 3 + errorTextHeight(text, cardWidth: cardWidth, tokens: tokens)
     }
 
     override func updateTrackingAreas() {
@@ -686,7 +768,18 @@ final class HistoryGridView: NSView {
 
     func scrollRowToVisible(_ row: Int) {
         guard let layout = currentLayout(), items.indices.contains(row) else { return }
-        scrollToVisible(layout.frame(row))
+        scrollToVisible(layout.frame(row, extras: rowExtras(layout)))
+    }
+
+    /// Rows grown by a card error, keeping each row's tallest card.
+    func rowExtras(_ layout: HistoryGridLayout) -> [Int: CGFloat] {
+        var extras: [Int: CGFloat] = [:]
+        for (index, item) in items.enumerated() {
+            guard let error = item.error else { continue }
+            let extra = HistoryCardView.errorExtra(error, cardWidth: layout.cardWidth, tokens: tokens)
+            extras[index / layout.columns] = max(extras[index / layout.columns] ?? 0, extra)
+        }
+        return extras
     }
 
     private func currentLayout() -> HistoryGridLayout? {
@@ -714,10 +807,12 @@ final class HistoryGridView: NSView {
     /// Size the document to its rows and lay out only the visible cards.
     func tile(force: Bool) {
         guard let scroll = enclosingScrollView, let layout = currentLayout() else { return }
+        let extras = rowExtras(layout)
         let size = NSSize(width: scroll.contentSize.width,
-                          height: max(scroll.contentSize.height, layout.contentHeight(items.count)))
+                          height: max(scroll.contentSize.height,
+                                      layout.contentHeight(items.count, extras: extras)))
         if frame.size != size { setFrameSize(size) }
-        let visible = layout.visibleItems(items.count, in: visibleRect)
+        let visible = layout.visibleItems(items.count, in: visibleRect, extras: extras)
         var retained = Set<String>()
         let copy = HistoryCopy.current
         for index in visible {
@@ -731,7 +826,8 @@ final class HistoryGridView: NSView {
                 if item.image == nil { onNeedsThumbnail(index) }
             }
             view.isHidden = false
-            view.frame = layout.frame(index)
+            view.baseHeight = layout.cardHeight
+            view.frame = layout.frame(index, extras: extras)
             view.configure(item, selected: index == selectedRow, enabled: enabled, copy: copy)
             let id = item.id
             view.onSelect = { [weak self] in self?.userSelect(id) }

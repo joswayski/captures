@@ -308,15 +308,20 @@ mini-preview stack as the front card, without a capture generation, auto-copy or
 History change. A card already in the stack is neither duplicated nor moved but still
 confirms Restored; an empty stack opens on the workspace's selected display (AppKit
 falls back to the workspace window's screen), while a non-empty pile keeps its
-display and position. Decode failures show a workspace error; a card dismissed before
-it decodes ends the restore quietly. History **Edit** on a screenshot now restores
+display and position. A card dismissed before it decodes ends the restore quietly. History **Edit** on a screenshot now restores
 its preview through the same path before opening the editor, as shipping's
 `restore_history_artifact` call does, without Restore's busy state or feedback; a
-failed restore opens no editor. Errors use the workspace status line rather than a
-per-card message. The private-X11 history smoke restores a card, checks that a
-second Restore opens no extra window and that Delete all removes the preview; wgpu
-unit tests and AppKit XCTests (not run here) cover success, already-showing,
-dismissal and failure. Physical macOS/Windows and Wayland acceptance remain open.
+failed restore opens no editor. A failed Restore or Edit restore (no display for an
+empty stack, unreadable settings, an undecodable image) shows shipping's
+`.history-card-error` under that card's actions, not in the status line; the card's
+next action clears it. Like shipping's CSS grid, the error grows its row and the
+row's other cards stretch while keeping their actions in place
+(`history_view::RowExtras`, `card_error_extra`); both hosts measure the wrapped text.
+Other card actions still report through the status line. The private-X11 history
+smoke restores a card, checks that a second Restore opens no extra window and that
+Delete all removes the preview; wgpu unit tests and AppKit XCTests (not run here)
+cover success, already-showing, dismissal, the card error and its row growth.
+Physical macOS/Windows and Wayland acceptance remain open.
 
 Preview stack motion now plays on both hosts from shared data
 (`captures-app::motion` keyframes and transitions, `captures-app::preview_motion`
