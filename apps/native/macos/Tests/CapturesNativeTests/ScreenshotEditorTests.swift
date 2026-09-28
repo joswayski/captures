@@ -6698,14 +6698,14 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        func run(_ worker: EditorWorker, _ object: [String: Any]) throws -> EditorPresentation {
+        func send(_ worker: EditorWorker, _ object: [String: Any]) throws -> EditorPresentation {
             let done = expectation(description: "sans-only draft request")
             var response: Result<EditorPresentation, Error>?
             worker.request(object) { response = $0; done.fulfill() }
             wait(for: [done], timeout: 5)
             return try XCTUnwrap(response).get()
         }
-        func open(_ worker: EditorWorker) throws -> EditorPresentation {
+        func openDraft(_ worker: EditorWorker) throws -> EditorPresentation {
             let opened = expectation(description: "open sans-only draft")
             var response: Result<EditorPresentation, Error>?
             worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
@@ -6714,12 +6714,12 @@ final class ScreenshotEditorTests: XCTestCase {
             return try XCTUnwrap(response).get()
         }
         let author = EditorWorker()
-        _ = try open(author)
-        _ = try run(author, ["operation": "resize_canvas", "width": 480, "height": 240])
-        let sans = try run(author, ["operation": "create_text", "point": ["x": 40, "y": 60],
+        _ = try openDraft(author)
+        _ = try send(author, ["operation": "resize_canvas", "width": 480, "height": 240])
+        let sans = try send(author, ["operation": "create_text", "point": ["x": 40, "y": 60],
                                     "text": "Native Ωé", "fontFamily": "sans", "fontSize": 48,
                                     "color": "#111111"])
-        _ = try run(author, ["operation": "save_draft", "updated_at_ms": 9_801])
+        _ = try send(author, ["operation": "save_draft", "updated_at_ms": 9_801])
         author.close(); EditorWorker.flush()
 
         // Rewrite the saved draft as an older build's Sans-only font set.
@@ -6740,7 +6740,7 @@ final class ScreenshotEditorTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
 
         let worker = EditorWorker(); defer { worker.close(); EditorWorker.flush() }
-        let reopened = try open(worker)
+        let reopened = try openDraft(worker)
         // Shipping offers every family on every document.
         XCTAssertEqual(reopened.snapshot.fontFamilies,
             ["sans": "Liberation Sans", "serif": "Liberation Serif", "mono": "Liberation Mono",
@@ -6749,12 +6749,12 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(reopened.image.dataProvider?.data) as Data,
                        try XCTUnwrap(sans.image.dataProvider?.data) as Data)
         let id = try XCTUnwrap(reopened.snapshot.layers.first?.id)
-        let rounded = try run(worker, ["operation": "edit_text", "id": id,
+        let rounded = try send(worker, ["operation": "edit_text", "id": id,
                                        "patch": ["fontFamily": "rounded"]])
         XCTAssertEqual(rounded.snapshot.layers.first?.textStyle?.fontFamily, "rounded")
         XCTAssertNotEqual(try XCTUnwrap(rounded.image.dataProvider?.data) as Data,
                           try XCTUnwrap(sans.image.dataProvider?.data) as Data)
-        _ = try run(worker, ["operation": "save_draft", "updated_at_ms": 9_802])
+        _ = try send(worker, ["operation": "save_draft", "updated_at_ms": 9_802])
         let saved = try XCTUnwrap(JSONSerialization.jsonObject(
             with: Data(contentsOf: manifestURL)) as? [String: Any])
         let savedFonts = try XCTUnwrap(saved["fonts"] as? [String: Any])
