@@ -612,9 +612,12 @@ func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
         recording.string("window_shortcut"), recording.string("display_shortcut")]
 }
 
+/// A running recording keeps shortcuts enabled so the shared routes can pass
+/// the display shortcut to a screenshot beside it; they block the rest.
 func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil,
-                             recordingControlsHidden: Bool = false) -> Bool {
-    !captureBusy || selectorGeneration != nil || recordingControlsHidden
+                             recordingControlsHidden: Bool = false,
+                             recordingScreenshot: Bool = false) -> Bool {
+    !captureBusy || selectorGeneration != nil || recordingControlsHidden || recordingScreenshot
 }
 
 func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
@@ -637,13 +640,42 @@ enum StillCaptureRoute: Equatable {
     case capture(StillCaptureKind)
     /// The capture menu in Screenshot mode on this target.
     case menu(UnifiedCaptureTarget)
+    /// A display screenshot beside the running or paused recording.
+    case recordingScreenshot
+    /// Refused silently, like shipping's `CaptureInProgress`.
+    case ignore
+}
+
+/// Where the display shortcut and tray "Screenshot Display" go for the
+/// recording's state (`captures_app::capture_error::display_route`).
+enum DisplayCaptureRoute: String, Equatable {
+    case captureMenu = "capture_menu"
+    case captureDisplay = "capture_display"
+    case ignore
+
+    /// `recordingState` is the shipping recording state name ("recording",
+    /// "paused", "countdown", "finalizing", "failed"), or nil without a session.
+    init(recordingState: String?, transport: SettingsTransport = SettingsBridge()) throws {
+        var request: [String: Any] = ["operation": "display_capture_route"]
+        if let recordingState { request["recording"] = recordingState }
+        let response = try transport.request(request)
+        guard let raw = response["route"] as? String, let route = DisplayCaptureRoute(rawValue: raw)
+        else { throw SettingsStoreError.invalidResponse }
+        self = route
+    }
 }
 
 /// Shipping display shortcut and tray "Screenshot Display" open the capture
-/// menu on Full screen with its display picker. Only while a recording session
-/// is active do they capture the display under the pointer directly.
-func stillCaptureRoute(for kind: StillCaptureKind, recordingActive: Bool) -> StillCaptureRoute {
-    kind == .display && !recordingActive ? .menu(.display) : .capture(kind)
+/// menu on Full screen with its display picker. A running or paused recording
+/// takes a display screenshot beside it instead; a take that is counting down
+/// or finalizing refuses it silently. Region and window keep their routes.
+func stillCaptureRoute(for kind: StillCaptureKind, displayRoute: DisplayCaptureRoute) -> StillCaptureRoute {
+    guard kind == .display else { return .capture(kind) }
+    switch displayRoute {
+    case .captureMenu: return .menu(.display)
+    case .captureDisplay: return .recordingScreenshot
+    case .ignore: return .ignore
+    }
 }
 
 func configureStatusItemButton(_ button: NSStatusBarButton) {
@@ -1606,10 +1638,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return
         }
         let controlsHidden = liveController?.recordingControlsHidden == true
+        let recordingScreenshot = liveController?.recordingDisplayScreenshotAvailable == true
         captureShortcuts.setRestoreOnly(controlsHidden)
+        captureShortcuts.setRecordingScreenshot(recordingScreenshot)
         let enabled = captureShortcutsEnabled(captureBusy: captureBusy,
             selectorGeneration: shortcutSelectorGeneration,
-            recordingControlsHidden: controlsHidden)
+            recordingControlsHidden: controlsHidden,
+            recordingScreenshot: recordingScreenshot)
         if enabled != shortcutEnabled {
             captureShortcuts.setEnabled(enabled)
             shortcutEnabled = enabled
@@ -1620,12 +1655,16 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard onboardingReady, !terminating, !preferencesFocused,
               captureShortcutsEnabled(captureBusy: captureBusy,
                   selectorGeneration: shortcutSelectorGeneration,
-                  recordingControlsHidden: liveController?.recordingControlsHidden == true),
+                  recordingControlsHidden: liveController?.recordingControlsHidden == true,
+                  recordingScreenshot: liveController?.recordingDisplayScreenshotAvailable == true),
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
                 if liveController?.recordingControlsHidden == true {
+                    // Shipping screenshots the display beside the take and
+                    // leaves its controls hidden; New Capture restores them.
                     if action == .newCapture { _ = liveController?.showRecordingControls() }
+                    else if action == .display { launchCapture(.display) }
                 } else if shortcutSelectorGeneration != nil {
                     _ = liveController?.selectUnifiedTargetFromShortcut(action)
                 } else if action.mode == .record, let target = action.target {
@@ -1665,10 +1704,21 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func launchCapture(_ kind: StillCaptureKind) {
         guard onboardingReady else { showOnboarding(); return }
         guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
+        let route = stillCaptureRoute(for: kind,
+            displayRoute: liveController?.displayCaptureRoute ?? .captureMenu)
+        switch route {
+        case .recordingScreenshot:
+            // Shipping `start_capture_inner(Display)` beside the take: hidden
+            // controls stay hidden, and a busy take refuses it silently.
+            _ = liveController?.captureDisplayWhileRecording()
+            return
+        case .ignore:
+            return
+        case .capture, .menu:
+            break
+        }
         // Tray capture items bring hidden recording controls back, like New Capture.
         if liveController?.showRecordingControls() == true { return }
-        let route = stillCaptureRoute(for: kind,
-            recordingActive: liveController?.recordingSessionActive == true)
         if case .menu(let target) = route {
             launchNewCapture(screenshotTarget: target)
             return

@@ -130,6 +130,12 @@ final class NativeCaptureShortcuts {
         _ = try? Self.request(["operation": "restore_only", "restore_only": restoreOnly])
     }
 
+    /// Route the display shortcut past a running recording's capture flow.
+    func setRecordingScreenshot(_ allowed: Bool) {
+        guard !closed else { return }
+        _ = try? Self.request(["operation": "recording_screenshot", "allowed": allowed])
+    }
+
     func setSuspended(_ suspended: Bool) throws {
         guard !closed else { return }
         _ = try Self.request(["operation": "suspended", "suspended": suspended])

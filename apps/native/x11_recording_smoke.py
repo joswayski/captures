@@ -38,6 +38,8 @@ def main():
                         help="exercise real-SNI Hide/restore, tray loss and finalized media")
     parser.add_argument("--screenshot-only", action="store_true",
                         help="exercise running/paused region screenshots without replacing the take")
+    parser.add_argument("--display-screenshot-only", action="store_true",
+                        help="take Screenshot Display from the shortcut and real tray beside a running take")
     parser.add_argument("--ready-notice-only", action="store_true",
                         help="exercise recording-ready save/retry/reveal, expiry and dismissal")
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
@@ -249,7 +251,7 @@ def main():
         threading.Thread(target=loop.run, daemon=True).start()
         spawn("openbox", ["openbox", "--sm-disable"])
         spawn("picom", ["picom", "--config", "/dev/null", "--backend", "xrender"])
-        if args.hide_controls_only or args.ready_notice_only:
+        if args.hide_controls_only or args.ready_notice_only or args.display_screenshot_only:
             config = output / "config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
             config.parent.mkdir(parents=True)
             config.write_text('''<?xml version="1.0" encoding="UTF-8"?>
@@ -311,7 +313,8 @@ pcm.!pulse {
 }
 ''')
         time.sleep(1)
-        if args.screenshot_only:
+        asymmetric = args.screenshot_only or args.display_screenshot_only
+        if asymmetric:
             wallpaper = output / "asymmetric-wallpaper.png"
             run("convert", "-size", "1280x900", "xc:#c02040", "-fill", "#20a050",
                 "-draw", "rectangle 140,180 294,349", "-fill", "#2070c0",
@@ -327,9 +330,11 @@ pcm.!pulse {
             "new_capture_shortcut": "Ctrl+Shift+F10", "region_shortcut": "Ctrl+Shift+F7",
             "window_shortcut": "Ctrl+Shift+F8", "display_shortcut": "Ctrl+Shift+F9",
             "launch_at_login": False,
-            "auto_copy_to_clipboard": False, "auto_start_on_selection": False,
+            "auto_copy_to_clipboard": bool(args.display_screenshot_only),
+            "auto_start_on_selection": False,
             "freeze_screen": True,
-            "screenshot_countdown_seconds": 2 if args.screenshot_only else 0,
+            "screenshot_countdown_seconds": 2 if args.screenshot_only
+                else 1 if args.display_screenshot_only else 0,
             "recording": {"video_fps": 15, "countdown_seconds": 3, "show_cursor": False,
                           "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
                           "display_shortcut": "Ctrl+Alt+D",
@@ -356,7 +361,7 @@ pcm.!pulse {
         root = wait(lambda: windows("Capture History"), "capture workspace")[0]
         time.sleep(1)
         run("xdotool", "key", "ctrl+alt+w")
-        select_recording("recording-selector", shortcuts=not args.screenshot_only)
+        select_recording("recording-selector", shortcuts=not asymmetric)
         countdown = wait(lambda: windows("Captures Recording Countdown"), "recording countdown")[0]
         guide = wait(lambda: windows("Captures Recording Region"), "countdown region guide")[0]
         shot(countdown, "recording-countdown")
@@ -550,7 +555,7 @@ pcm.!pulse {
             pixel = run("import", "-window", "root", "-crop", f"1x1+{x}+{y}",
                         "-depth", "8", "rgb:-")
             expected = ((32, 160, 80) if x < 295 else (32, 112, 192)) \
-                if args.screenshot_only else (192, 32, 64)
+                if asymmetric else (192, 32, 64)
             assert tuple(pixel[:3]) == expected, (x, y, pixel)
         border = run("import", "-window", "root", "-crop", "1x1+139+220", "-depth", "8", "rgb:-")
         assert tuple(border[:3]) == (255, 202, 40), border
@@ -669,6 +674,130 @@ pcm.!pulse {
                 json.dumps(acceptance, indent=2))
             print("PASS native recording Screenshot: running publish/preview, selection and paused "
                   "countdown Escape, asymmetric pixels, same take, decode and cleanup")
+            return
+        if args.display_screenshot_only:
+            session_id = manifest()["session_id"]
+            geometry = window_geometry(hud)
+            # The HUD card's centre, bottom centre of the display; red wallpaper
+            # when the controls are kept out of the screenshot.
+            hud_point = (int(geometry["X"]) + 270, int(geometry["Y"]) + 54)
+            watcher = dbus.Interface(
+                bus.get_object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher"),
+                "org.freedesktop.DBus.Properties")
+            wait(lambda: watcher.Get("org.kde.StatusNotifierWatcher",
+                                     "RegisteredStatusNotifierItems"),
+                 "Captures registered in real SNI tray")
+
+            def screenshots():
+                return sorted((path for path in history()
+                               if json.loads(path.read_text())["kind"] == "screenshot"),
+                              key=lambda path: json.loads(path.read_text())["created_at"])
+
+            def pixel(image, x, y):
+                return tuple(run("convert", str(image), "-crop", f"1x1+{x}+{y}",
+                                 "-depth", "8", "rgb:-")[:3])
+
+            def display_screenshot(count, name):
+                metadata = wait(lambda: len(screenshots()) == count and screenshots()[-1],
+                                f"{name} publication")
+                entry = json.loads(metadata.read_text())
+                assert (entry["mode"], entry["width"], entry["height"]) == ("display", 1280, 900), entry
+                image = metadata.parent / "capture.png"
+                # Actual desktop pixels, without the controls or the region guide
+                # and its veil, which stay out of the screenshot like shipping.
+                assert pixel(image, 200, 260) == (32, 160, 80)
+                assert pixel(image, 400, 260) == (32, 112, 192)
+                assert pixel(image, *hud_point) == (192, 32, 64), "controls kept out"
+                assert pixel(image, 139, 220) == (192, 32, 64), "region guide kept out"
+                assert pixel(image, 100, 220) == (192, 32, 64), "region veil kept out"
+                return image
+
+            # The display shortcut screenshots the pointer's display with the
+            # screenshot countdown instead of opening the capture menu.
+            run("xdotool", "mousemove", "--sync", "900", "120")
+            run("xdotool", "key", "ctrl+shift+F9")
+            countdown = wait(lambda: windows("Captures Screenshot Countdown"),
+                             "display screenshot countdown")[0]
+            assert not windows("Captures Recording Controls"), "controls leave before the countdown"
+            assert not windows("Captures Capture Controls"), "no capture menu during a recording"
+            shot(countdown, "display-screenshot-countdown-running")
+            assert manifest()["state"] == "recording" and manifest()["session_id"] == session_id
+            image = display_screenshot(1, "running display screenshot")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "controls restored after the display screenshot")[0]
+            preview = wait(lambda: windows("Captures Mini Preview"), "display screenshot preview")[0]
+            shot("root", "display-screenshot-preview")
+            clipboard = subprocess.run(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
+                                       env=env, capture_output=True, text=True, timeout=5)
+            assert "image/png" in clipboard.stdout, clipboard
+            value = manifest()
+            assert (value["state"] == "recording" and value["session_id"] == session_id
+                    and len(value["segments"]) == 1 and not value["segments"][0]["complete"]), \
+                "the screenshot must not pause, restart or split the take"
+            assert windows("Captures Recording Region") == [guide]
+            assert not any(json.loads(path.read_text())["kind"] == "video" for path in history())
+
+            # A second recording cannot start beside it: the recording and
+            # capture-menu shortcuts stay blocked.
+            run("xdotool", "key", "ctrl+alt+r", "sleep", ".2", "key", "ctrl+shift+F10", "sleep", ".4")
+            assert not windows("Captures Capture Controls")
+            assert manifest()["session_id"] == session_id and len(screenshots()) == 1
+
+            # Paused takes accept the tray's "Screenshot Display" too.
+            click(hud, 178, 54)
+            wait(lambda: manifest()["state"] == "paused", "pause beside the display screenshot")
+            preview_geometry = window_geometry(preview)
+            preview_point = (int(preview_geometry["X"]) + int(preview_geometry["WIDTH"]) // 2,
+                             int(preview_geometry["Y"]) + int(preview_geometry["HEIGHT"]) // 2)
+            menu_action("Screenshot Display")
+            wait(lambda: windows("Captures Screenshot Countdown"), "tray display screenshot countdown")
+            assert not windows("Captures Capture Controls")
+            second = display_screenshot(2, "paused tray display screenshot")
+            assert pixel(second, *preview_point) in ((192, 32, 64), (32, 160, 80), (32, 112, 192)), \
+                "mini previews stay out of the screenshot"
+            hud = wait(lambda: windows("Captures Recording Controls"), "paused controls restored")[0]
+            assert manifest()["state"] == "paused" and manifest()["session_id"] == session_id
+
+            # Escape during the countdown cancels only the screenshot.
+            run("xdotool", "key", "ctrl+shift+F9")
+            wait(lambda: windows("Captures Screenshot Countdown"), "cancellable countdown")
+            run("xdotool", "key", "Escape")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "controls restored after countdown cancellation")[0]
+            time.sleep(1.5)
+            assert len(screenshots()) == 2
+            assert manifest()["state"] == "paused" and manifest()["session_id"] == session_id
+
+            click(hud, 178, 54)
+            wait(lambda: manifest()["state"] == "recording", "resume after display screenshots")
+            time.sleep(1)
+            hud = wait(lambda: windows("Captures Recording Controls"), "resumed controls")[0]
+            click(hud, 142, 54)
+            finished(3)
+            videos = [path for path in history() if json.loads(path.read_text())["kind"] == "video"]
+            assert len(videos) == 1
+            entry = json.loads(videos[0].read_text())
+            assert entry["target"]["rect"] == {"x": 140, "y": 180, "width": 310, "height": 170}
+            assert (entry["width"], entry["height"]) == (310, 170), entry
+            media = videos[0].parent / "media.mp4"
+            run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
+            frames = run("ffmpeg", "-v", "error", "-i", str(media), "-vf", "crop=2:2:40:40",
+                         "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+            assert len(frames) >= 24
+            for actual in (frames[:3], frames[-3:]):
+                assert all(abs(a - e) <= 6 for a, e in zip(actual, (32, 160, 80))), actual
+            assert all(path.parent.exists() for path in screenshots())
+            (output / "acceptance-recording-display-screenshot.json").write_text(json.dumps({
+                "shortcut_while_running": True, "tray_while_paused": True,
+                "countdown_escape": True, "no_capture_menu": True,
+                "controls_region_guide_and_previews_excluded": True, "clipboard_png": True,
+                "mini_preview": True, "same_recording_session": True, "single_segment": True,
+                "second_recording_blocked": True, "recording_decoded": True,
+                "screenshot_size": [1280, 900], "duration_ms": entry["duration_ms"],
+            }, indent=2))
+            print("PASS native recording Screenshot Display: shortcut and tray beside a running "
+                  "and paused take, countdown Escape, controls/guide/previews excluded, clipboard, "
+                  "same take, decode and cleanup")
             return
         if args.ready_notice_only:
             def notice_click(window, x, y):
@@ -799,13 +928,17 @@ pcm.!pulse {
             before = manifest()
             assert (before["state"] == "recording" and len(before["segments"]) == 1
                     and not before["segments"][0]["complete"])
+            # Shipping screenshots the display beside the take and leaves
+            # its controls hidden; the recording shortcut stays blocked.
             run("xdotool", "key", "ctrl+shift+F9", "ctrl+alt+r", "sleep", ".3")
             assert (not windows("Captures Capture Controls")
                     and manifest()["session_id"] == before["session_id"])
+            wait(lambda: len(history()) == 1, "hidden-controls display screenshot")
+            assert not windows("Captures Recording Controls"), "the screenshot keeps controls hidden"
             run("xdotool", "key", "ctrl+shift+F10")
             hud = wait(lambda: windows("Captures Recording Controls"),
                        "New Capture shortcut restores HUD")[0]
-            assert manifest()["session_id"] == before["session_id"] and not history()
+            assert manifest()["session_id"] == before["session_id"] and len(history()) == 1
 
             click(hud, 178, 54)
             wait(lambda: (value := manifest()) and value["state"] == "paused", "pause completed")
@@ -848,7 +981,8 @@ pcm.!pulse {
                     and manifest()["session_id"] == before["session_id"])
 
             click(hud, 142, 54)
-            metadata = wait(lambda: list(history()),
+            metadata = wait(lambda: [path for path in history()
+                                     if json.loads(path.read_text())["kind"] == "video"],
                             "hidden/restored recording publication")
             assert len(metadata) == 1
             media = metadata[0].parent / "media.mp4"
@@ -865,14 +999,15 @@ pcm.!pulse {
                 actual = pixels[offset:offset + 3]
                 assert len(actual) == 3 and all(abs(a - e) <= 20 for a, e in
                     zip(actual, (192, 32, 64))), (x, y, actual)
-            finished(1)
+            finished(2)  # the recording and the hidden-controls display screenshot
             assert manifest() is None and not bundle.exists()
             acceptance = {
                 "running_hide": True, "paused_hide": True,
                 "new_capture_shortcut_restore": True, "real_sni_restore": True,
                 "single_instance_relaunch_restore": True,
                 "tray_host_loss_restore": True, "same_session": True,
-                "busy_shortcuts_suppressed": True, "history_publication": True,
+                "busy_shortcuts_suppressed": True, "hidden_display_screenshot": True,
+                "history_publication": True,
                 "decoded_output": True, "source_cleanup": True,
                 "region_guide_preserved": True, "region_guide_click_through": True,
                 "region_guide_clean_inner_edges": True, "region_guide_cleanup": True,
@@ -882,7 +1017,9 @@ pcm.!pulse {
             print("PASS native recording Hide: running/paused preservation, New Capture and real "
                   "SNI restore, tray-host-loss recovery, finalized decode and cleanup")
             return
-        run("xdotool", "key", "ctrl+alt+r", "ctrl+shift+F9")
+        # The display shortcut screenshots beside a running take
+        # (--display-screenshot-only); every other capture shortcut stays blocked.
+        run("xdotool", "key", "ctrl+alt+r", "ctrl+shift+F7")
         assert not windows("Captures Capture Controls")
         # Escape only cancels before engine handoff, not an accepted recording.
         run("xdotool", "key", "Escape")

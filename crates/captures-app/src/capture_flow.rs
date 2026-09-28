@@ -553,6 +553,49 @@ mod tests {
     }
 
     #[test]
+    fn a_screenshot_during_a_recording_never_starts_or_replaces_a_second_recording() {
+        let gate = Gate::default();
+        let recording = gate.begin().unwrap();
+        // Shipping `screenshot_capture_is_blocked`: no screenshot while the
+        // take is still counting down (Escape still owns the take).
+        assert!(gate.begin_child(recording).is_err());
+        assert!(gate.disarm_escape(recording));
+
+        let screenshot = gate.begin_child(recording).unwrap();
+        assert!(gate.is_current(recording) && gate.is_current(screenshot));
+        assert!(
+            gate.begin().is_err(),
+            "a second recording or capture cannot start beside the screenshot"
+        );
+        assert!(
+            gate.begin_child(recording).is_err(),
+            "one screenshot at a time"
+        );
+        assert!(!gate.shortcuts_allowed(None));
+        assert!(gate.commit(screenshot));
+        gate.finish(screenshot);
+        assert!(
+            gate.is_current(recording),
+            "the finished screenshot leaves the recording owning the flow"
+        );
+        assert!(
+            gate.begin().is_err(),
+            "a second recording still waits for the first"
+        );
+
+        // Ending the recording cancels an unfinished screenshot's parent, and
+        // only then can a new recording begin.
+        let orphan = gate.begin_child(recording).unwrap();
+        gate.finish(recording);
+        assert!(gate.begin_child(recording).is_err());
+        assert!(gate.begin().is_err(), "the child still owns the flow");
+        gate.finish(orphan);
+        let next = gate.begin().unwrap();
+        assert!(!gate.is_current(orphan) && !gate.is_current(recording));
+        gate.finish(next);
+    }
+
+    #[test]
     fn stale_parent_or_child_cleanup_cannot_touch_a_new_generation() {
         let gate = Gate::default();
         let recording = gate.begin().unwrap();

@@ -402,10 +402,18 @@ impl Workbench {
             self.show_root(ctx);
             return;
         }
-        let restored_controls = self
-            .live
-            .as_mut()
-            .is_some_and(|live| live.show_recording_controls(ctx));
+        // Shipping `start_capture_from_tray(Display)` screenshots beside a
+        // recording without bringing its hidden controls back.
+        let recording_display = action == TrayAction::CaptureDisplay
+            && self
+                .live
+                .as_ref()
+                .is_some_and(|live| live.display_request() != Some(CaptureRequest::DisplayMenu));
+        let restored_controls = !recording_display
+            && self
+                .live
+                .as_mut()
+                .is_some_and(|live| live.show_recording_controls(ctx));
         match action {
             TrayAction::NewCapture => {
                 if restored_controls {
@@ -419,9 +427,11 @@ impl Workbench {
                 if restored_controls {
                     return;
                 }
-                if let Some(live) = &mut self.live {
-                    // Shipping opens the capture menu on Full screen.
-                    let request = live.display_request();
+                // Shipping opens the capture menu on Full screen, or captures
+                // the display directly beside a running recording.
+                if let Some(live) = &mut self.live
+                    && let Some(request) = live.display_request()
+                {
                     live.request_capture(request);
                 }
             }
@@ -787,17 +797,23 @@ impl Workbench {
             }
             return;
         }
+        let recording_screenshot = self
+            .live
+            .as_ref()
+            .is_some_and(Live::recording_display_screenshot_available);
         let (enabled, selector_generation, restore_only) =
             self.live.as_ref().map_or((false, None, false), |live| {
                 shortcut_routing_state(
                     live.can_launch_capture(),
                     live.selector_generation(),
                     live.recording_controls_hidden(),
+                    recording_screenshot,
                 )
             });
         if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
             shortcuts.set_selector_generation(selector_generation);
             shortcuts.set_restore_only(restore_only);
+            shortcuts.set_recording_screenshot(recording_screenshot);
             shortcuts.set_enabled(enabled);
         }
     }
@@ -1537,21 +1553,24 @@ impl eframe::App for Workbench {
             if action == CaptureShortcut::NewCapture && live.show_recording_controls(ctx) {
                 return;
             }
-            live.request_capture(match action {
-                CaptureShortcut::NewCapture => CaptureRequest::NewCapture,
-                CaptureShortcut::Region => CaptureRequest::Region,
-                CaptureShortcut::Window => CaptureRequest::Window,
+            let request = match action {
+                CaptureShortcut::NewCapture => Some(CaptureRequest::NewCapture),
+                CaptureShortcut::Region => Some(CaptureRequest::Region),
+                CaptureShortcut::Window => Some(CaptureRequest::Window),
                 CaptureShortcut::Display => live.display_request(),
-                CaptureShortcut::RecordRegion => {
-                    CaptureRequest::Recording(crate::capture_controls::TargetMode::Region)
-                }
-                CaptureShortcut::RecordWindow => {
-                    CaptureRequest::Recording(crate::capture_controls::TargetMode::Window)
-                }
-                CaptureShortcut::RecordDisplay => {
-                    CaptureRequest::Recording(crate::capture_controls::TargetMode::Display)
-                }
-            });
+                CaptureShortcut::RecordRegion => Some(CaptureRequest::Recording(
+                    crate::capture_controls::TargetMode::Region,
+                )),
+                CaptureShortcut::RecordWindow => Some(CaptureRequest::Recording(
+                    crate::capture_controls::TargetMode::Window,
+                )),
+                CaptureShortcut::RecordDisplay => Some(CaptureRequest::Recording(
+                    crate::capture_controls::TargetMode::Display,
+                )),
+            };
+            if let Some(request) = request {
+                live.request_capture(request);
+            }
         }
         let persisted = self.preferences_state.persisted_generation();
         if let Some(tray) = &mut self.tray
@@ -2258,13 +2277,19 @@ fn shortcuts_should_be_suspended(preferences_presented: bool, preferences_focuse
     preferences_presented && preferences_focused
 }
 
+/// Shortcuts stay enabled while a running recording can take a display
+/// screenshot; the shared routes then pass only the display shortcut.
 fn shortcut_routing_state(
     can_launch_capture: bool,
     selector_generation: Option<u64>,
     recording_controls_hidden: bool,
+    recording_screenshot: bool,
 ) -> (bool, Option<u64>, bool) {
     (
-        can_launch_capture || selector_generation.is_some() || recording_controls_hidden,
+        can_launch_capture
+            || selector_generation.is_some()
+            || recording_controls_hidden
+            || recording_screenshot,
         selector_generation,
         recording_controls_hidden,
     )
@@ -2365,20 +2390,25 @@ mod tests {
     #[test]
     fn shortcuts_enable_idle_launch_or_the_current_selector_only() {
         assert_eq!(
-            shortcut_routing_state(true, None, false),
+            shortcut_routing_state(true, None, false, false),
             (true, None, false)
         );
         assert_eq!(
-            shortcut_routing_state(false, Some(42), false),
+            shortcut_routing_state(false, Some(42), false, false),
             (true, Some(42), false)
         );
         assert_eq!(
-            shortcut_routing_state(false, None, false),
+            shortcut_routing_state(false, None, false, false),
             (false, None, false)
         );
         assert_eq!(
-            shortcut_routing_state(false, None, true),
+            shortcut_routing_state(false, None, true, false),
             (true, None, true)
+        );
+        // A running recording keeps the display shortcut routable.
+        assert_eq!(
+            shortcut_routing_state(false, None, false, true),
+            (true, None, false)
         );
     }
     #[test]

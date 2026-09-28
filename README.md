@@ -250,9 +250,13 @@ region/window/display shortcuts switch mode and target in the same session; keyb
 Full screen does not auto-start capture. As in the shipping app, the display
 screenshot shortcut and tray Screenshot Display open these controls on Full screen
 with its display picker, and a failed capture shows a "Captures" error dialog
-instead of a History error. Focused Preferences and capture
-preparation/countdown and active recording suppress those shortcuts. While recording controls are hidden, only the
-configured New Capture shortcut remains active so it can restore the same take. Native Preferences can edit all seven capture
+instead of a History error. During a running or paused recording they instead
+screenshot the display under the pointer beside the take, with the screenshot
+countdown and without the recording controls unless they are included in captures.
+Focused Preferences and capture preparation/countdown suppress those shortcuts, and
+an active recording suppresses all but the display screenshot shortcut. While
+recording controls are hidden, the configured New Capture shortcut restores the same
+take and the display shortcut still takes a screenshot. Native Preferences can edit all seven capture
 and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
