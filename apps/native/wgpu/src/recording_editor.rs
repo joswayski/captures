@@ -4855,7 +4855,9 @@ mod tests {
             let (tx, jobs) = mpsc::channel();
             let (events, _) = mpsc::channel();
             view.request_comparison(&ctx, &tx);
-            let Job::Compare(generation, _) = jobs.recv().unwrap() else {
+            let Some(Job::Compare(generation, _)) =
+                jobs.iter().find(|job| !matches!(job, Job::Estimate(_)))
+            else {
                 panic!("comparison")
             };
             let result = comparison(&view);
@@ -4952,7 +4954,10 @@ mod tests {
                 view.comparison_split.0 > before_key,
                 "the focused split accepts arrow input"
             );
-            assert!(!view.dirty() && !view.history_changed && jobs.try_recv().is_err());
+            // The automatic estimate may come due on a slow runner; split input
+            // itself must dispatch nothing else.
+            assert!(!view.dirty() && !view.history_changed);
+            assert!(jobs.try_iter().all(|job| matches!(job, Job::Estimate(_))));
             view.gif = true;
             render(&mut view, vec![]);
             assert!(
@@ -4967,7 +4972,9 @@ mod tests {
             );
             // Hide dismisses it, and the Save quality card offers it back.
             view.request_comparison(&ctx, &tx);
-            let Job::Compare(generation, _) = jobs.recv().unwrap() else {
+            let Some(Job::Compare(generation, _)) =
+                jobs.iter().find(|job| !matches!(job, Job::Estimate(_)))
+            else {
                 panic!("comparison")
             };
             view.receive(&ctx, Event::Compared(generation, Ok(comparison(&view))));
