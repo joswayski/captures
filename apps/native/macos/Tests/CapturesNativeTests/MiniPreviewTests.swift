@@ -646,9 +646,12 @@ final class MiniPreviewTests: XCTestCase {
         actions.bind(previews: controller); actions.configure(historyRoot: "/History")
         actions.trash(captured); LiveCaptureController.flush()
         try waitUntil { controller.statusText(for: captured.id) == "Trash failed" }
-        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-            .first { $0.previewView.artifactIDs == [captured.id] })
-        let status = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? NSTextField }
+        // The failed card returns in the rebuilt stack's panel; an earlier
+        // panel can linger in NSApp.windows, so read the one on screen now.
+        let view = try XCTUnwrap(controller.previewView)
+        XCTAssertEqual(view.artifactIDs, [captured.id])
+        let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
+        let status = try XCTUnwrap(view.subviewsRecursive.compactMap { $0 as? NSTextField }
             .first { $0.stringValue == "Trash failed" })
         XCTAssertFalse(try XCTUnwrap(status.toolTip).isEmpty)
         XCTAssertTrue(panel.isVisible)
