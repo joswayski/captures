@@ -1554,16 +1554,20 @@ final class LiveCaptureController: NSObject {
     private func prepareUnified(display: DisplayItem, preferences: CapturePreferences,
                                 generation: UInt64) {
         selectorShortcutGeneration = nil
-        guard let screen = screen(for: display) else {
-            finishCapture()
-            showCaptureError("Couldn’t prepare capture controls",
-                AppBridgeError.backend("The selected display is no longer available."))
-            return
-        }
         // A display switch keeps the current menu up showing "Switching…"
         // until the new display is ready, as shipping's `switchDisplay` does.
         let outgoing = unifiedPanel
         let replacingDisplay = outgoing != nil
+        let previousDisplay = unifiedDisplay, previousScreen = unifiedScreen
+        guard let screen = screen(for: display) else {
+            let error = AppBridgeError.backend("The selected display is no longer available.")
+            if !keepUnifiedMenuOpen(outgoing, error: error, generation: generation,
+                                    restoring: previousDisplay, on: previousScreen) {
+                finishCapture()
+                showCaptureError("Couldn’t prepare capture controls", error)
+            }
+            return
+        }
         outgoing?.selector.controls.setInFlight(.switching)
         unifiedTarget = nil
         unifiedDisplay = display; unifiedScreen = screen
@@ -1662,11 +1666,41 @@ final class LiveCaptureController: NSObject {
                     NSApp.activate(ignoringOtherApps: true)
                     panel.selector.updatePointerLocation()
                 } catch {
-                    self.finishCapture()
-                    self.showCaptureError("Couldn’t prepare capture controls", error)
+                    // Shipping `select_capture_display` restores the previous
+                    // display and the menu shows the error inline.
+                    if !self.keepUnifiedMenuOpen(outgoing, error: error, generation: generation,
+                                                 restoring: previousDisplay, on: previousScreen) {
+                        self.finishCapture()
+                        self.showCaptureError("Couldn’t prepare capture controls", error)
+                    }
                 }
             }
         }
+    }
+
+    /// Shipping `RecordingSelector` stays open when `start_recording` or
+    /// `select_capture_display` fails: the in-flight label ends, the mode,
+    /// target, region and options stay, and the error shows inline under the
+    /// note so the user can retry or pick something else. A display switch
+    /// returns to the display it was on. False when that menu is gone, so the
+    /// caller ends the capture with the host's dialog as before.
+    private func keepUnifiedMenuOpen(_ panel: UnifiedCapturePanel?, error: Error,
+                                     generation: UInt64, restoring previousDisplay: DisplayItem? = nil,
+                                     on previousScreen: NSScreen? = nil) -> Bool {
+        guard flowGeneration == generation, let panel, unifiedPanel === panel else { return false }
+        if let previousDisplay, let previousScreen {
+            unifiedDisplay = previousDisplay; unifiedScreen = previousScreen
+            unifiedPreparation.invalidate()
+            if let index = displays.firstIndex(where: { $0.id == previousDisplay.id }) {
+                panel.selector.controls.selectDisplay(index)
+            }
+        }
+        preparingUnified = false; preparingRecording = false
+        unifiedTarget = nil
+        panel.selector.controls.showInlineError(error.localizedDescription)
+        selectorShortcutGeneration = generation
+        status.stringValue = "\(error.localizedDescription) Retry or choose again. Press Escape to cancel."
+        return true
     }
 
     private func confirmUnified(_ target: WindowSelectionChoice,
@@ -1709,11 +1743,13 @@ final class LiveCaptureController: NSObject {
                                   screen: NSScreen, preferences: CapturePreferences,
                                   generation: UInt64) {
         guard let capabilities = recordingCapabilities else {
-            finishCapture()
-            showCaptureError("Couldn’t start recording",
-                AppBridgeError.backend("Recording capabilities are unavailable."))
+            let error = AppBridgeError.backend("Recording capabilities are unavailable.")
+            if !keepUnifiedMenuOpen(unifiedPanel, error: error, generation: generation) {
+                finishCapture(); showCaptureError("Couldn’t start recording", error)
+            }
             return
         }
+        let menu = unifiedPanel
         do {
             let targetValue = try nativeRecordingTarget(target, displayID: display.id)
             let options = nativeRecordingOptions(preferences: preferences.recording,
@@ -1771,11 +1807,18 @@ final class LiveCaptureController: NSObject {
                         generation: generation)
                 } catch {
                     self.preparingRecording = false
-                    self.finishCapture(); self.showCaptureError("Couldn’t prepare recording", error)
+                    // Shipping `start_recording` restores the selection before
+                    // its HUD is up; the menu shows the error inline.
+                    if !self.keepUnifiedMenuOpen(menu, error: error, generation: generation) {
+                        self.finishCapture()
+                        self.showCaptureError("Couldn’t prepare recording", error)
+                    }
                 }
             }
         } catch {
-            finishCapture(); showCaptureError("Couldn’t prepare recording", error)
+            if !keepUnifiedMenuOpen(menu, error: error, generation: generation) {
+                finishCapture(); showCaptureError("Couldn’t prepare recording", error)
+            }
         }
     }
 

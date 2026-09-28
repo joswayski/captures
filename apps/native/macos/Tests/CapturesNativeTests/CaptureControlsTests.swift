@@ -312,6 +312,89 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertTrue(automatic.controls.primaryHidden)
     }
 
+    func testFailedStartOrSwitchKeepsTheMenuWithTheShippingInlineError() throws {
+        _ = NSApplication.shared
+        var confirmed: [WindowSelectionChoice] = []
+        let tokens = Tokens.variants["dark-mustard"]!
+        let view = makeView(appearance: "dark", confirm: { confirmed.append($0) })
+        view.setMode(.record)
+        view.setTarget(.display)
+        let controls = view.controls
+        let settled = controls.frame
+        XCTAssertTrue(controls.errorBand.isHidden)
+
+        // Shipping `start_recording` failed: the menu stays open with its
+        // selections, the in-flight label ends and the error shows inline.
+        controls.setInFlight(.starting)
+        XCTAssertEqual(controls.primaryTitle, "Starting…")
+        let message = "Could not create the recording draft."
+        controls.showInlineError(message)
+        XCTAssertNil(controls.inFlight)
+        XCTAssertEqual(controls.inlineError, message)
+        XCTAssertEqual(controls.primaryTitle, "Start recording")
+        XCTAssertTrue(controls.primaryEnabled)
+        XCTAssertEqual(view.mode, .record)
+        XCTAssertEqual(view.target, .display)
+
+        // `.recording-selector-error`: the panel's last row, full width and
+        // flush with its bottom; the panel grows upward from where it was.
+        let band = controls.errorBand
+        XCTAssertFalse(band.isHidden)
+        XCTAssertEqual(band.message, message)
+        XCTAssertEqual(band.accessibilityLabel(), message)
+        XCTAssertEqual(band.frame.minX, 0)
+        XCTAssertEqual(band.frame.width, controls.bounds.width)
+        XCTAssertEqual(band.frame.maxY, controls.bounds.height, accuracy: 0.5)
+        XCTAssertEqual(band.frame.minY, 154, "under the Record row and note")
+        XCTAssertEqual(controls.frame.maxY, settled.maxY, accuracy: 0.5)
+        XCTAssertEqual(controls.frame.height, settled.height + band.frame.height, accuracy: 0.5)
+        XCTAssertEqual(band.label.frame.minX, tokens.number("s-5"))
+        XCTAssertEqual(band.label.frame.minY, tokens.number("s-4"))
+        XCTAssertEqual(band.frame.height, band.label.frame.height + 2 * tokens.number("s-4"),
+            accuracy: 0.5)
+        XCTAssertEqual(band.label.font?.pointSize, tokens.number("text-sm"))
+        for note in controls.noteLinks {
+            XCTAssertLessThanOrEqual(note.frame.maxY, band.frame.minY, "the note stays above")
+        }
+
+        // Retry, or pick something else: starts are accepted again.
+        view.confirmSelection()
+        XCTAssertEqual(confirmed, [.display])
+        view.setTarget(.region)
+        XCTAssertEqual(view.target, .region)
+
+        // Like shipping, the next start or switch clears the error.
+        controls.setInFlight(.switching)
+        XCTAssertNil(controls.inlineError)
+        XCTAssertTrue(band.isHidden)
+        XCTAssertEqual(controls.frame.maxY, settled.maxY, accuracy: 0.5)
+        XCTAssertEqual(controls.frame.height, settled.height, accuracy: 0.5)
+        // A failed display switch reports the same way and keeps the display.
+        controls.showInlineError("The selected display is no longer available.")
+        XCTAssertNil(controls.inFlight)
+        XCTAssertEqual(controls.primaryTitle, "Start recording")
+
+        // Under auto-start the hidden primary returns as Retry.
+        let automatic = makeView(autoStart: true)
+        XCTAssertTrue(automatic.controls.primaryHidden)
+        automatic.controls.setInFlight(.starting)
+        automatic.controls.showInlineError("Display changed")
+        XCTAssertFalse(automatic.controls.primaryHidden)
+        XCTAssertEqual(automatic.controls.primaryTitle, "Retry capture")
+        XCTAssertTrue(automatic.controls.primaryEnabled)
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = makeView(appearance: "dark", viewFrame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        window.contentView = host
+        host.controls.showInlineError(message)
+        XCTAssertLessThanOrEqual(host.controls.frame.maxX, 600)
+        XCTAssertGreaterThanOrEqual(host.controls.frame.minY, 0)
+        try render(host, window: window, name: "capture-menu-inline-error")
+    }
+
     func testMicrophonesLoadOnceWhenTheMenuFirstShowsRecord() throws {
         _ = NSApplication.shared
         let view = UnifiedCaptureSelectionView(frame: frame, image: nil, targets: targets,

@@ -137,6 +137,24 @@ impl WindowSession {
         })
     }
 
+    /// A session on `display` with no windows and no snapshot, for host tests
+    /// that need one without a live desktop. Capturing from it fails closed
+    /// (generation 0 is never an active flow).
+    #[doc(hidden)]
+    pub fn fixture(display: DisplayDescriptor) -> Self {
+        let targets = classify_windows_for_display(Vec::new(), &display);
+        Self {
+            generation: 0,
+            display,
+            frozen: None,
+            cursor: None,
+            include_cursor: false,
+            targets,
+            stack: Vec::new(),
+            fallback_corner_radius: 0.,
+        }
+    }
+
     pub fn display(&self) -> &DisplayDescriptor {
         &self.display
     }

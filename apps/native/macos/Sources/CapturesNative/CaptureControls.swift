@@ -672,6 +672,65 @@ final class CaptureNoteLink: NSButton {
     }
 }
 
+/// Shipping `.recording-selector-error` (`role="alert"`): the capture menu's
+/// last row after a failed start or display switch. A full-width band under
+/// the note with a `--danger-border` top rule, the signal tint at 16%,
+/// `--theme-signal-text` at `--text-sm`, `--s-4 --s-5` padding and the
+/// panel's `--r-2xl` bottom corners.
+final class CaptureMenuErrorBand: NSView {
+    private let tokens: Tokens
+    let label = NSTextField(wrappingLabelWithString: "")
+    override var isFlipped: Bool { true }
+
+    init(tokens: Tokens) {
+        self.tokens = tokens
+        super.init(frame: .zero)
+        label.font = .systemFont(ofSize: tokens.number("text-sm"))
+        label.textColor = tokens.color("theme-signal-text")
+        label.drawsBackground = false; label.isBordered = false
+        label.setAccessibilityElement(false)
+        addSubview(label)
+        setAccessibilityElement(true); setAccessibilityRole(.staticText)
+        isHidden = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var message: String { label.stringValue }
+
+    /// Sets the copy for a band `width` wide and returns its height.
+    func setMessage(_ message: String, width: CGFloat) -> CGFloat {
+        let padX = tokens.number("s-5"), padY = tokens.number("s-4")
+        label.stringValue = message
+        setAccessibilityLabel(message)
+        let textWidth = max(1, width - 2 * padX)
+        let textHeight = ceil(label.sizeThatFits(NSSize(width: textWidth,
+            height: .greatestFiniteMagnitude)).height)
+        label.frame = NSRect(x: padX, y: padY, width: textWidth, height: textHeight)
+        needsDisplay = true
+        return textHeight + 2 * padY
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let w = bounds.width, h = bounds.height
+        let r = min(tokens.number("r-2xl"), h / 2, w / 2)
+        // Flipped: the top edge is square, the bottom corners follow the panel.
+        let band = NSBezierPath()
+        band.move(to: NSPoint(x: 0, y: 0))
+        band.line(to: NSPoint(x: w, y: 0))
+        band.line(to: NSPoint(x: w, y: h - r))
+        band.appendArc(withCenter: NSPoint(x: w - r, y: h - r), radius: r,
+            startAngle: 0, endAngle: 90, clockwise: false)
+        band.line(to: NSPoint(x: r, y: h))
+        band.appendArc(withCenter: NSPoint(x: r, y: h - r), radius: r,
+            startAngle: 90, endAngle: 180, clockwise: false)
+        band.close()
+        tokens.color("theme-signal").withAlphaComponent(0.16).setFill()
+        band.fill()
+        tokens.color("danger-border").setFill()
+        NSRect(x: 0, y: 0, width: w, height: 1).fill()
+    }
+}
+
 final class CaptureControlsView: NSView {
     /// A start or display switch the owner has sent and the menu still shows
     /// (shipping `starting` / `switchingDisplay`).
@@ -704,6 +763,10 @@ final class CaptureControlsView: NSView {
     /// `loadAudioDevices`); the owner answers with `setMicrophones`.
     var loadMicrophones: (() -> Void)?
     private(set) var inFlight: InFlight?
+    /// Shipping's inline menu error after a failed start or display switch;
+    /// cleared when the next one begins.
+    private(set) var inlineError: String?
+    let errorBand: CaptureMenuErrorBand
     private var panelDragOffset: NSPoint?
     /// Shipping `.capture-segmented-indicator`s for the mode and target switches.
     let modeIndicator = NSView()
@@ -757,6 +820,7 @@ final class CaptureControlsView: NSView {
         captureButton = CaptureButton("Capture", frame: .zero, tokens: tokens, glass: true) {}
         screenshotButton = CaptureButton("Screenshot", frame: .zero, tokens: tokens, glass: true) {}
         recordButton = CaptureButton("Record", frame: .zero, tokens: tokens, glass: true) {}
+        errorBand = CaptureMenuErrorBand(tokens: tokens)
         super.init(frame: frame)
         for menu in [aspectMenu, displayMenu, fpsMenu, resolutionMenu, microphoneMenu] {
             menu.selectStyle = .glass
@@ -858,6 +922,7 @@ final class CaptureControlsView: NSView {
         }
         for button in [screenshot, record] + Array(targetButtons.values) { button.slidingSegment = true }
         configureRecordingRow()
+        addSubview(errorBand)
         selectTarget(.region, notify: false)
         selectMode(.screenshot, notify: false)
     }
@@ -996,15 +1061,35 @@ final class CaptureControlsView: NSView {
     private func refreshMenu() {
         menuState = try? CaptureMenuPolicy.menu(mode: mode, autoStart: autoStart,
             canExcludeControls: visibility.canExclude, controlsExcluded: visibility.excluded,
-            inFlight: inFlight, state: recordingState, availability: recordingAvailability)
+            error: inlineError != nil, inFlight: inFlight, state: recordingState,
+            availability: recordingAvailability)
     }
 
     /// Shows "Capturing…"/"Starting…" or "Switching…" (nil ends it) while the
     /// owner's start or display switch runs. Starting disables the primary.
+    /// Like shipping, a new start or switch clears the inline error.
     func setInFlight(_ value: InFlight?) {
         guard inFlight != value else { return }
         inFlight = value
+        if value != nil, inlineError != nil {
+            inlineError = nil
+            layoutPanel(keepingBottom: true)
+        }
         refreshMenu(); updatePrimary()
+    }
+
+    /// Shipping `RecordingSelector`'s failed `start_recording` or
+    /// `select_capture_display`: the menu stays open with its selections, the
+    /// in-flight label ends, and the error shows inline under the note until
+    /// the next start or switch. Under auto-start the primary returns as
+    /// Retry capture / Retry recording.
+    func showInlineError(_ message: String) {
+        inFlight = nil
+        inlineError = message
+        layoutPanel(keepingBottom: true)
+        refreshMenu(); updatePrimary()
+        NSAccessibility.post(element: errorBand, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     /// Devices for the microphone select, ending "Loading microphones…".
@@ -1068,7 +1153,7 @@ final class CaptureControlsView: NSView {
         let gap = tokens.number("s-2")
         let total = noteViews.reduce(CGFloat(0)) { $0 + $1.frame.width } + gap * CGFloat(noteViews.count - 1)
         var x = max(16, (bounds.width - total) / 2)
-        let midY = bounds.height - 15
+        let midY = baseHeight - 15
         for view in noteViews {
             view.frame.origin = NSPoint(x: x, y: (midY - view.frame.height / 2).rounded())
             x += view.frame.width + gap
@@ -1098,18 +1183,7 @@ final class CaptureControlsView: NSView {
 
     func selectMode(_ mode: UnifiedCaptureMode, notify: Bool) {
         self.mode = mode
-        if let superview {
-            let height: CGFloat = mode == .record ? 154 : 86
-            let width = min(superview.bounds.width - 32, mode == .record ? 902 : 854)
-            let x = min(max(16, frame.midX - width / 2), superview.bounds.width - width - 16)
-            frame = NSRect(x: x, y: superview.bounds.height - height - 26,
-                width: width, height: height)
-            captureButton.frame = mode == .record
-                ? NSRect(x: width - 162, y: 10, width: 152, height: 40)
-                : NSRect(x: width - 122, y: 10, width: 112, height: 40)
-            microphoneMenu.frame.size.width = max(116, width - microphoneMenu.frame.minX - 16)
-            if let label = fieldLabels.last { label.frame.size.width = microphoneMenu.frame.width }
-        }
+        layoutPanel(keepingBottom: false)
         let arriving = mode == .record && !recordButton.selected
         screenshotButton.selected = mode == .screenshot
         recordButton.selected = mode == .record
@@ -1120,6 +1194,37 @@ final class CaptureControlsView: NSView {
         if arriving { playRecordingRowEntrance() }
         requestMicrophonesIfNeeded()
         if notify { switchMode(mode) }
+    }
+
+    /// The panel's height without the error band.
+    private var baseHeight: CGFloat { mode == .record ? 154 : 86 }
+
+    /// Sizes the panel for the mode and the inline error band. A mode change
+    /// re-anchors it 26 points above the bottom; the error band grows it
+    /// upward from where it is, so a dragged panel stays put.
+    private func layoutPanel(keepingBottom: Bool) {
+        var bandHeight: CGFloat = 0
+        if let superview {
+            let width = min(superview.bounds.width - 32, mode == .record ? 902 : 854)
+            if let inlineError { bandHeight = errorBand.setMessage(inlineError, width: width) }
+            let height = baseHeight + bandHeight
+            let x = min(max(16, frame.midX - width / 2), superview.bounds.width - width - 16)
+            let y = keepingBottom
+                ? max(8, frame.maxY - height)
+                : superview.bounds.height - height - 26
+            frame = NSRect(x: x, y: y, width: width, height: height)
+            captureButton.frame = mode == .record
+                ? NSRect(x: width - 162, y: 10, width: 152, height: 40)
+                : NSRect(x: width - 122, y: 10, width: 112, height: 40)
+            microphoneMenu.frame.size.width = max(116, width - microphoneMenu.frame.minX - 16)
+            if let label = fieldLabels.last { label.frame.size.width = microphoneMenu.frame.width }
+        } else if let inlineError {
+            bandHeight = errorBand.setMessage(inlineError, width: bounds.width)
+            frame.size.height = baseHeight + bandHeight
+        }
+        errorBand.frame = NSRect(x: 0, y: baseHeight, width: bounds.width, height: bandHeight)
+        errorBand.isHidden = inlineError == nil
+        layoutNote()
     }
 
     /// Moves a switch's indicator under the selected segment. The first
