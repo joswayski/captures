@@ -824,6 +824,8 @@ mod tests {
                         font_family: "sans".into(),
                         color: "#2367ab".into(),
                         style_preset: None,
+                        drop_shadow: None,
+                        drop_shadow_style: None,
                     },
                 },
             );

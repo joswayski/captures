@@ -4798,3 +4798,61 @@ fn autosave_writes_only_new_images_and_drops_a_draft_back_at_the_capture() {
         .unwrap();
     assert!(restored.snapshot().has_draft && folder.exists());
 }
+
+#[test]
+fn new_text_takes_the_drawing_defaults_shadow_like_shipping() {
+    use captures_app::editor_session::{TextCreate, new_text_element};
+    let create = |extra: serde_json::Value| -> TextCreate {
+        let mut value = json!({
+            "point":{"x":100,"y":20}, "text":"", "fontSize":50,
+            "fontFamily":"sans", "color":"#ff0000", "stylePreset":"box"
+        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(value).unwrap()
+    };
+    // Untouched defaults leave the shadow unset.
+    let plain = new_text_element("a".into(), &create(json!({}))).unwrap();
+    assert_eq!((plain.drop_shadow, plain.drop_shadow_style), (None, None));
+    // An enabled default shadow scales from type size until customized.
+    let enabled = new_text_element("b".into(), &create(json!({"dropShadow":true}))).unwrap();
+    assert_eq!(enabled.drop_shadow, Some(true));
+    assert_eq!(enabled.drop_shadow_style, None);
+    let shadow = captures_app::editor_text::shadow_style(&enabled, enabled.font_size)
+        .resolved_drop_shadow_style();
+    assert_eq!((shadow.blur, shadow.offset_y), (9.35, 4.));
+    // A custom style survives (clamped by the shared resolver), even while off.
+    let custom = new_text_element(
+        "c".into(),
+        &create(json!({"dropShadow":false, "dropShadowStyle":{
+            "color":"#123456", "opacity":250, "blur":12, "offsetX":-3, "offsetY":5
+        }})),
+    )
+    .unwrap();
+    assert_eq!(custom.drop_shadow, Some(false));
+    let style = custom.drop_shadow_style.unwrap();
+    assert_eq!(
+        (
+            style.color.as_str(),
+            style.opacity,
+            style.blur,
+            style.offset_x,
+            style.offset_y
+        ),
+        ("#123456", 100., 12., -3., 5.)
+    );
+    // The inspector shows the text-scaled defaults for the shared drawing style.
+    let defaults = captures_app::editor::ElementStyle {
+        drop_shadow: Some(true),
+        ..Default::default()
+    };
+    let text = captures_app::editor_text::new_text_shadow_style(&defaults, 50.);
+    assert_eq!(text.stroke_width, 11.);
+    assert_eq!(text.resolved_drop_shadow_style().blur, 9.35);
+    assert_eq!(
+        captures_app::editor_text::drop_shadow_reference_size(8.),
+        4.
+    );
+}

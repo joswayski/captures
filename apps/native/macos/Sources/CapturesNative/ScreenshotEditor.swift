@@ -2607,6 +2607,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// Height of a full-width shipping `ColorField` swatch grid in Properties.
     private var panelSwatchHeight: CGFloat { ColorSwatchRow.height(width: 252, compact: false, tokens: tokens) }
+    /// Where the new-text Style, Size and Color rows end.
+    private var createTextBottom: CGFloat { 290 + panelSwatchHeight + 8 }
 
     /// A shipping `ColorField` in Properties: the legend, then the swatch row.
     private func panelColorField(_ legend: String, y: CGFloat, parent: NSView,
@@ -2704,13 +2706,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if let color = drawingFillColor.flatMap({ NSColor(hex: $0.selectedHex) }) { drawOverlay.fillColor = color }
         if let width = number(drawingStrokeWidth), (2...40).contains(width) {
             drawOverlay.annotationStrokeWidth = CGFloat(width)
-            if !drawingShadowCustomized, let shadow = try? NativeDrawingStyle.defaultShadow(strokeWidth: width) {
-                drawingShadowFields["color"]?.stringValue = shadow.color
-                for (key, path) in textShadowNumbers {
-                    drawingShadowFields[key]?.stringValue = format(shadow[keyPath: path])
-                }
-            }
         }
+        refreshDefaultShadowFields()
         if let opacity = number(drawingOpacity), (0...100).contains(opacity) {
             drawOverlay.annotationOpacity = CGFloat(opacity / 100)
         }
@@ -2718,6 +2715,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.annotationFillEnabled = drawingFill.state == .on
         drawOverlay.needsDisplay = true
         refreshDrawToolPreview()
+    }
+
+    /// Untouched shadow fields show the renderer defaults for the stroke width,
+    /// or for new text its size; shipping shares one shadow between the
+    /// drawing defaults and new text, so a customized style applies to both.
+    private func refreshDefaultShadowFields() {
+        guard !drawingShadowCustomized else { return }
+        let shadow: NativeTextShadowStyle?
+        if drawShape == .text {
+            shadow = number(createTextSize).flatMap { (8...512).contains($0) ? NativeDrawingStyle.textDefaultShadow(fontSize: $0) : nil }
+        } else {
+            shadow = number(drawingStrokeWidth).flatMap { (2...40).contains($0) ? try? NativeDrawingStyle.defaultShadow(strokeWidth: $0) : nil }
+        }
+        guard let shadow else { return }
+        drawingShadowFields["color"]?.stringValue = shadow.color
+        for (key, path) in textShadowNumbers {
+            drawingShadowFields[key]?.stringValue = format(shadow[keyPath: path])
+        }
     }
 
     private func buildCreateTextControls(in content: NSView) {
@@ -2730,6 +2745,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         configure(createTextSize, frame: NSRect(x: 0, y: 230, width: 118, height: 30),
                   label: "New text size", parent: content)
         createTextSize.stringValue = format(24)
+        createTextSize.delegate = self
         // Shipping `ColorField label="Color"` for new text.
         let (colorLabel, colorSwatches) = panelColorField(EditorColors.text("color"), y: 268,
                                                           parent: content) { _ in }
@@ -3676,7 +3692,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
         drawingStroke.isHidden = !creatingDrawing || !closed
         drawingFillControls.forEach { $0.isHidden = !creatingDrawing || !closed }
-        let drawingShadowVisible = creatingDrawing && drawingDropShadow.state == .on
+        // Shipping's new-text section shares the drawing defaults' Drop shadow.
+        drawingDropShadow.isHidden = !(creatingDrawing || creatingText)
+        let drawingShadowVisible = (creatingDrawing || creatingText) && drawingDropShadow.state == .on
         drawingShadowControls.forEach { $0.isHidden = !drawingShadowVisible }
         // Shipping names the stroke color "Color" for open tools.
         let strokeLegend = EditorColors.text(closed ? "stroke_color" : "color")
@@ -3684,7 +3702,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawingStrokeColor?.relabel(strokeLegend)
         // Open tools have no Fill row: Drop shadow and its fields move up.
         let fillHeight = closed ? 0 : 22 + panelSwatchHeight + 8
-        let shadowBase = drawingFillBottom - fillHeight
+        // New text: the shadow follows Style, Size and Color.
+        let shadowBase = creatingText ? createTextBottom : drawingFillBottom - fillHeight
         drawControlBaseY[ObjectIdentifier(drawingDropShadow)] = shadowBase
         for (index, key) in ["color", "opacity", "blur", "offsetX", "offsetY"].enumerated() {
             guard let field = drawingShadowFields[key] else { continue }
@@ -3716,8 +3735,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             helperY = 216 + 24 + 8
         } else if brush {
             helperY = 218 + EditorMarkedSlider.height + 8
-        } else if creatingText {
-            helperY = 290 + panelSwatchHeight + 8
         } else if drawingShadowVisible {
             helperY = shadowBase + 34 + 3 * 62
         } else {
@@ -3725,6 +3742,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         drawHelper.frame.origin.y = helperY + shift
         drawHelper.superview?.frame.size.height = drawHelper.frame.maxY + 8
+        refreshDefaultShadowFields()
     }
 
     /// Shipping `DrawToolPreview`: the new stroke/shape with its colour, fill
@@ -3890,6 +3908,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         if drawingShadowFields.values.contains(where: { $0 === field }) {
             drawingShadowCustomized = true
+            return
+        }
+        if field === createTextSize {
+            refreshDefaultShadowFields()
             return
         }
         if [drawingStrokeWidth, drawingOpacity].contains(where: { $0 === field }) {
@@ -4601,24 +4623,26 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             "strokeWidth": width, "strokeEnabled": drawingStroke.state == .on,
             "dropShadow": drawingDropShadow.state == .on]
         if drawingShadowCustomized {
-            var shadow: [String: Any] = [:]
-            var valid = true
-            if let color = drawingShadowFields["color"].flatMap({ PreferencesController.normalizeHex($0.stringValue) }) {
-                shadow["color"] = color
-            } else { valid = false }
-            for (key, _) in textShadowNumbers {
-                let range: ClosedRange<Double> = key.hasPrefix("offset") ? -500...500 : 0...100
-                if let field = drawingShadowFields[key], let value = number(field), range.contains(value) {
-                    shadow[key] = value
-                } else { valid = false }
-            }
-            if valid { style["dropShadowStyle"] = shadow }
+            if let shadow = customDrawingShadow() { style["dropShadowStyle"] = shadow }
             else if drawingDropShadow.state == .on {
                 if reportErrors { showError("Enter a shadow color, opacity/blur from 0 to 100, and offsets from −500 to 500.") }
                 return nil
             }
         }
         return style
+    }
+
+    /// The customized drawing-defaults shadow, or nil when a field is invalid.
+    private func customDrawingShadow() -> [String: Any]? {
+        guard let color = drawingShadowFields["color"].flatMap({ PreferencesController.normalizeHex($0.stringValue) })
+        else { return nil }
+        var shadow: [String: Any] = ["color": color]
+        for (key, _) in textShadowNumbers {
+            let range: ClosedRange<Double> = key.hasPrefix("offset") ? -500...500 : 0...100
+            guard let field = drawingShadowFields[key], let value = number(field), range.contains(value) else { return nil }
+            shadow[key] = value
+        }
+        return shadow
     }
 
     private func beginTextInput(at point: NSPoint) {
@@ -4637,6 +4661,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         ]
         if let preset = createTextPreset.selectedItem?.representedObject as? String {
             create["stylePreset"] = preset
+        }
+        // Shipping `createPlacedTextElement` takes the drawing defaults' shadow.
+        create["dropShadow"] = drawingDropShadow.state == .on
+        if drawingShadowCustomized {
+            if let shadow = customDrawingShadow() { create["dropShadowStyle"] = shadow }
+            else if drawingDropShadow.state == .on {
+                showError("Enter a shadow color, opacity/blur from 0 to 100, and offsets from −500 to 500.")
+                return
+            }
         }
         beginTextInput(target: ["kind": "new", "create": create], initialText: "",
                        anchor: point, fontSize: size)

@@ -44,6 +44,10 @@ enum ChromeRequest {
         cursor: [f64; 2],
         viewport: [f64; 2],
     },
+    /// Untouched new-text shadow defaults, scaled from the new text size.
+    TextDefaultShadow {
+        font_size: f64,
+    },
     TextFace {
         family: String,
         /// The draft's font name for `family`; a draft's own font is not bundled.
@@ -310,6 +314,18 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
             }
             json!(chrome::draw_preview::brush(size, softness))
         }
+        ChromeRequest::TextDefaultShadow { font_size } => {
+            if !font_size.is_finite() || !(8. ..=512.).contains(&font_size) {
+                return Err("Text size must be from 8 to 512.".into());
+            }
+            json!(
+                captures_app::editor_text::new_text_shadow_style(
+                    &captures_app::editor::ElementStyle::default(),
+                    font_size
+                )
+                .resolved_drop_shadow_style()
+            )
+        }
         ChromeRequest::InlineTextLayout { element, create } => {
             let element = match (element, create) {
                 (Some(element), None) => *element,
@@ -360,7 +376,8 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
 /// `canvas_offscreen {viewport:[x,y,w,h], canvas:[x,y,w,h]}`,
 /// `draw_tool_preview {tool, stroke_width, stroke_enabled}`,
 /// `brush_preview {size, softness}`,
-/// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}` or
+/// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}`,
+/// `text_default_shadow {font_size}` (the untouched new-text shadow) or
 /// `text_face {family, name?, bold, italic}` (base64 font bytes, or null for a
 /// family this build does not bundle) or `inline_text_layout {element | create}`
 /// (`{element, layout}` for the inline text editor). Returns the owned
@@ -489,6 +506,13 @@ mod tests {
         assert_eq!(stroke["result"]["label"], "Stroke preview");
         assert_eq!(stroke["result"]["shapes"][0]["kind"], "rounded_rect");
         assert_eq!(stroke["result"]["shapes"][0]["radius"], 6.);
+        let shadow = call(json!({"operation": "text_default_shadow", "font_size": 50.}));
+        assert_eq!(shadow["result"]["blur"], 9.35);
+        assert_eq!(shadow["result"]["offsetY"], 4.);
+        assert_eq!(
+            call(json!({"operation": "text_default_shadow", "font_size": 4.}))["ok"],
+            false
+        );
         let brush = call(json!({"operation": "brush_preview", "size": 120., "softness": 0.}));
         assert_eq!(brush["result"]["brush"]["radius"], 30.);
         assert_eq!(brush["result"]["label"], "Brush preview");

@@ -4863,6 +4863,39 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try swatchRow("Color", in: fresh.root).selectedHex, "#ff3b5c")
     }
 
+    func testNewTextSharesTheDrawingDefaultsDropShadowLikeShipping() throws {
+        _ = NSApplication.shared
+        let fonts = ["sans": "Liberation Sans"]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", initialTextSize: 50, fonts: fonts))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = DrawToolChoice(controller)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
+        let shadow = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing drop shadow" })
+        XCTAssertFalse(shadow.isHidden, "shipping's new-text section offers Drop shadow")
+        shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
+        let blur = try field("New drawing shadow blur", in: controller.root)
+        XCTAssertFalse(blur.isHidden)
+        // Untouched defaults scale from the 50 pt text: max(6, max(4, 50 × 0.22) × 0.85).
+        XCTAssertEqual(Double(blur.stringValue)!, 9.35, accuracy: 0.001)
+        XCTAssertTrue(worker.requests.isEmpty, "shadow defaults are not a document command")
+        // A customized shadow is the drawing defaults' shadow too.
+        let offset = try field("New drawing shadow offsetY", in: controller.root)
+        offset.stringValue = "17"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: offset))
+        let click = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        worker.failOperation = "begin_text_input"
+        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        let create = try XCTUnwrap((worker.requests.last?["target"] as? [String: Any])?["create"] as? [String: Any])
+        XCTAssertEqual(create["dropShadow"] as? Bool, true)
+        let style = try XCTUnwrap(create["dropShadowStyle"] as? [String: Any])
+        XCTAssertEqual(style["offsetY"] as? Double, 17)
+        XCTAssertEqual(try XCTUnwrap(style["blur"] as? Double), 9.35, accuracy: 0.001)
+    }
+
     func testRoundedBoxCreationDefaultRequiresOfferedFontAndRetainsUserChoice() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

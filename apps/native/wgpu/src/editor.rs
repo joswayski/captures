@@ -2384,6 +2384,25 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             );
         });
         swatch_color(ui, tokens, colors::COLOR, &mut view.new_text_color);
+        // Shipping shares the drawing defaults' shadow with new text, showing
+        // defaults scaled from the new text size until customized.
+        let reference = captures_app::editor_text::new_text_shadow_style(
+            &view.new_annotation_style,
+            view.new_text_size,
+        );
+        let style = &mut view.new_annotation_style;
+        let mut enabled = style.has_drop_shadow();
+        if ui.checkbox(&mut enabled, "Drop shadow").changed() {
+            style.drop_shadow = Some(enabled);
+        }
+        if enabled {
+            let mut shadow = reference.resolved_drop_shadow_style();
+            let before = shadow.clone();
+            shadow_fields(ui, None, &mut shadow);
+            if shadow != before {
+                style.drop_shadow_style = Some(shadow);
+            }
+        }
         ui.label("Click to type on the canvas, or click existing text to edit it.");
         ui.small(
             "These defaults apply only to new text in this editor. Box styles center on the click.",
@@ -3692,6 +3711,8 @@ fn show_shape(
                             .unwrap_or_else(|| "sans".into()),
                         color: view.new_text_color.clone(),
                         style_preset: view.new_text_preset.clone(),
+                        drop_shadow: view.new_annotation_style.drop_shadow,
+                        drop_shadow_style: view.new_annotation_style.drop_shadow_style.clone(),
                     },
                 }
             };
@@ -8485,6 +8506,17 @@ mod tests {
         view.new_text_preset = Some("mono-box".into());
         view.new_text_size = 37.5;
         view.new_text_color = "#2367ab".into();
+        // Shipping places text with the drawing defaults' shadow.
+        let custom = DropShadowStyle {
+            color: "#123456".into(),
+            opacity: 30.,
+            blur: 4.,
+            offset_x: 1.,
+            offset_y: 2.,
+            extra: Default::default(),
+        };
+        view.new_annotation_style.drop_shadow = Some(true);
+        view.new_annotation_style.drop_shadow_style = Some(custom.clone());
         let (tx, rx) = mpsc::channel();
         let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(140., 60.));
         let click = egui::pos2(70., 30.);
@@ -8540,6 +8572,8 @@ mod tests {
         assert_eq!(create.style_preset.as_deref(), Some("mono-box"));
         assert_eq!(create.font_size, 37.5);
         assert_eq!(create.color, "#2367ab");
+        assert_eq!(create.drop_shadow, Some(true));
+        assert_eq!(create.drop_shadow_style, Some(custom));
         assert!(rx.try_recv().is_err(), "multipass click creates one layer");
     }
 
