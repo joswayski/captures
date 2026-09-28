@@ -909,6 +909,7 @@ def main():
             loop_monitor = spawn("sound-loop", ["ffmpeg", "-v", "error", "-f", "pulse", "-i",
                 "captures_preview.monitor", "-t", "15", "-ar", "48000", "-ac", "2",
                 "-f", "f32le", str(loop_pcm)])
+            wait(lambda: run("pactl", "list", "short", "source-outputs").strip(), "loop capture records")
             time.sleep(.5)
             motion_click()
             wait(playing, "audible loop starts")
@@ -932,7 +933,8 @@ def main():
             loop_left = array("f", loop_pcm.read_bytes())[::2]
             active = [max(abs(v) for v in loop_left[i:i + 48]) > .01
                 for i in range(0, len(loop_left) - 47, 48)]
-            onsets = [i for i in range(200, len(active)) if active[i] and not any(active[i - 200:i])]
+            onsets = [i for i in range(1, len(active))
+                if active[i] and not any(active[max(0, i - 200):i])]
             assert len(onsets) >= 2, onsets
             loop_audio_gap_ms = onsets[1] - onsets[0] - 6000
             print(f"Sound loop: consecutive lap onsets {onsets[:2]} ms, gap {loop_audio_gap_ms} ms")
@@ -1551,9 +1553,11 @@ def main():
             top = int(re.search(r"Absolute upper-left Y:\s+(-?\d+)", geometry).group(1)) - 60
             px, py = image_point(editor, .75, .75)
             pixels = run("ffmpeg", "-v", "error", "-i", str(output / "playback-loop-motion.mp4"),
-                "-vf", f"crop=1:1:{left + px}:{top + py}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+                # Chroma-subsampled video crops on even 2x2 blocks.
+                "-vf", f"crop=2:2:{(left + px) & ~1}:{(top + py) & ~1}", "-f", "rawvideo",
+                "-pix_fmt", "rgb24", "-")
             colors = []
-            for offset in range(0, len(pixels) - 2, 3):
+            for offset in range(0, len(pixels) - 11, 12):
                 pixel = pixels[offset:offset + 3]
                 color = next((channel for channel in range(3) if pixel[channel] > 90 and all(
                     pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel)), None)
