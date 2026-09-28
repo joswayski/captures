@@ -1505,9 +1505,11 @@ final class UnifiedCaptureSelectionView: NSView {
     func setTarget(_ target: UnifiedCaptureTarget) {
         self.target = target; controls.selectTarget(target, notify: false)
         hoveringDisplay = false
-        // Shipping auto-start applies to both Screenshot and Record.
-        if target == .display && autoStart { confirmSelection(); return }
+        // Refresh first: if the auto-started capture fails, the menu stays
+        // open and its Retry primary must be enabled for Full screen.
         update()
+        // Shipping auto-start applies to both Screenshot and Record.
+        if target == .display && autoStart { confirmSelection() }
     }
 
     func setMode(_ mode: UnifiedCaptureMode) {
