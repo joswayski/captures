@@ -4079,15 +4079,15 @@ final class RecordingEditorTests: XCTestCase {
         wait(for: [finishLoop], timeout: 10)
         XCTAssertEqual(try XCTUnwrap(firstResult).get(), .eof)
         XCTAssertEqual(firstStartedCount, 1,
-                       "loop laps reuse one playback operation without queued metadata callbacks")
+                       "loop laps share one playback stream without queued metadata callbacks")
         XCTAssertEqual(firstAudioEnabled, false,
-                       "each Sound-selected no-track lap reopens v2 without a device")
+                       "a Sound-selected no-track loop plays without a device")
         XCTAssertTrue(firstPositions.allSatisfy { (233..<977).contains($0) },
                       "all presented positions remain inside the accepted half-open trim")
         XCTAssertTrue(zip(firstPositions, firstPositions.dropFirst()).contains { pair in
             pair.0 > pair.1
         },
-                      "a nonempty EOF reopens at the asymmetric source-relative trim start")
+                      "the gapless loop wraps to the asymmetric source-relative trim start")
         XCTAssertFalse(loopCancel.isCancelled)
 
         let cancelLoop = expectation(description: "loop cancellation finishes")

@@ -2,6 +2,7 @@
 
 mod export;
 mod playback_audio;
+mod playback_loop;
 mod range;
 mod toolchain;
 

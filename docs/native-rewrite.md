@@ -953,17 +953,27 @@ start, and failures restore the accepted still. Focus loss/minimize requests Pau
 close cancels and waits for teardown before the normal unsaved-edit confirmation.
 Seek/edit/save/estimate remain gated while decoding. Loop preview defaults off;
 it can change while playing without changing accepted edits, estimates or History.
-Enabled looping restarts at the accepted trim start only after a nonempty clean
-EOF and completed decoder teardown. Turning it off finishes the current lap;
-Pause, close and failure never restart. Each new editor defaults to one pass.
-AppKit implements its Loop control in the separate host slice described below.
+Looping is gapless like shipping's `<video loop>`: one shared playback stream
+(`looping_playback`, FFI `playback_open_v3`) serves every lap. While a lap plays it
+pre-rolls the next lap's decoders at the accepted trim start, then continues on one
+presentation timeline, so the wrap costs one frame interval (about 33 ms at 30 fps,
+measured by the shared FFmpeg unit test) instead of a decoder reopen. Video and audio
+agree on one continue/stop decision per lap: the flag is read at the lap's video EOF,
+or up to about 80 ms (plus device latency) earlier when audio must commit the next
+lap to avoid an underrun. Turning Loop off finishes the current lap; a lap that
+presented no frame never restarts; Pause, close and failure never restart. Each new
+editor defaults to one pass. AppKit's Loop control uses the same stream (see below).
 Both hosts implement Sound, which defaults off per editor and can change only when
 the worker is idle, not during playback or Pause teardown. Opt-in Sound uses the
 shared accepted-mix audio API; silent v1 remains unchanged. One metadata event per
 operation reports whether audio is actually enabled. GIF/no-track/muted/zero-gain mixes use silent playback
 without a device. Audible MP4 uses the default output device; device failures remain
-visible and require an explicit Sound-off retry to play silently. Loop reopens both
-decoders each lap and is not gapless. Sound survives edits/Seek/Pause/errors but
+visible and require an explicit Sound-off retry to play silently. Looped Sound keeps
+one output device, ring buffer and audio clock across laps; the next lap's PCM follows
+with 4 ms fade-out/fade-in edges at the loop point, so neither an underrun gap nor a
+waveform step clicks, and lap lengths (and A/V sync) are unchanged. The private-X11
+`--sound` smoke measures consecutive lap onsets on the virtual sink (lap plus gap) and
+`--playback` measures the recorded trim-end run before the wrap. Sound survives edits/Seek/Pause/errors but
 does not change edits, estimates, dirty identity, exports or History. Private-X11
 checks capture real CPAL output through an isolated PulseAudio sink, not physical
 speakers. AppKit host tests exercise the same v2 metadata and lifecycle contract;
@@ -1230,8 +1240,9 @@ strip or turn thumbnail clicks into a new seek gesture. AppKit also provides
 Play/Pause of the accepted trim and spatial edits, with accepted-mix Sound on by
 default like the shipping unmuted `<video>`; the Sound and ↻ Loop preview pills can turn
 them off or on. A transient Loop control can
-repeat nonempty completed trims without changing accepted edits, exports or dirty
-identity; each lap reopens the decoder, so playback does not claim to be gapless.
+repeat nonempty trims without changing accepted edits, exports or dirty identity. It
+passes a shared Rust Loop flag to the gapless `playback_open_v3` stream, so laps keep
+their decoders pre-rolled and one audio device; no Swift toolchain verified this slice.
 Persistent bounded FFmpeg playback delivers retained latest frames and a source-relative playhead without
 mutating the accepted frame/position, dirty state, History or source. Pause, focus loss,
 minimize, close, item switching and quit retain cancellation through decoder teardown;

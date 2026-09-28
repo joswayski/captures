@@ -1510,49 +1510,38 @@ impl Editor {
                         let result = (|| {
                             let session =
                                 session.as_ref().ok_or("Recording editor is unavailable.")?;
-                            let mut position = position;
-                            let mut started = false;
-                            loop {
-                                let mut playback = if sound {
-                                    session.playback_with_audio(position, &cancel)?
-                                } else {
-                                    session.playback(position, &cancel)?
-                                };
-                                if !started {
-                                    let _ = out.send(Event::PlaybackStarted {
-                                        audio_enabled: playback.audio_enabled(),
-                                    });
-                                    wake(&wake_ctx, viewport);
-                                    started = true;
-                                }
-                                let mut decoded_frame = false;
-                                while let Some(frame) = playback.next_frame()? {
-                                    if cancel.is_cancelled() {
-                                        break;
-                                    }
-                                    decoded_frame = true;
-                                    let needs_wake = {
-                                        let mut latest = latest_frame.lock().unwrap();
-                                        let empty = latest.is_none();
-                                        *latest = Some(PlaybackFrame {
-                                            position_ms: frame.position_ms,
-                                            pixels: frame.pixels(),
-                                        });
-                                        empty
-                                    };
-                                    if needs_wake {
-                                        wake(&wake_ctx, viewport);
-                                    }
-                                }
-                                // Never restart an empty stream or a cancelled/failed
-                                // decoder. Drop finishes teardown before the next lap.
-                                if cancel.is_cancelled()
-                                    || !decoded_frame
-                                    || !loop_enabled.load(Ordering::Relaxed)
-                                {
+                            // One stream plays every Loop preview lap: the next
+                            // lap's decoders are pre-rolled and the audio device
+                            // keeps running, so the wrap to the accepted trim
+                            // start is gapless. The stream ends after the lap in
+                            // which Loop is turned off and never restarts an
+                            // empty lap; cancellation (Pause/close) never loops.
+                            let mut playback = session.looping_playback(
+                                position,
+                                sound,
+                                loop_enabled.clone(),
+                                &cancel,
+                            )?;
+                            let _ = out.send(Event::PlaybackStarted {
+                                audio_enabled: playback.audio_enabled(),
+                            });
+                            wake(&wake_ctx, viewport);
+                            while let Some(frame) = playback.next_frame()? {
+                                if cancel.is_cancelled() {
                                     break;
                                 }
-                                position = session.snapshot().edit.trim_start_ms;
+                                let needs_wake = {
+                                    let mut latest = latest_frame.lock().unwrap();
+                                    let empty = latest.is_none();
+                                    *latest = Some(PlaybackFrame {
+                                        position_ms: frame.position_ms,
+                                        pixels: frame.pixels(),
+                                    });
+                                    empty
+                                };
+                                if needs_wake {
+                                    wake(&wake_ctx, viewport);
+                                }
                             }
                             Ok(PlaybackEnd::Ended)
                         })();

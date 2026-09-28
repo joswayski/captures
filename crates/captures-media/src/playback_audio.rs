@@ -17,7 +17,10 @@ use ringbuf::{
     traits::{Consumer, Observer, Producer, Split},
 };
 
-use crate::{CancelToken, MediaToolError};
+use crate::{
+    CancelToken, MediaToolError,
+    playback_loop::{DecoderProcess, LapGate, error_message},
+};
 
 const BUFFER_MILLISECONDS: u64 = 250;
 const PREROLL_MILLISECONDS: u64 = 100;
@@ -28,6 +31,11 @@ const OUTPUT_ERROR_BACKEND: u8 = 2;
 const OUTPUT_ERROR_UNDERRUN: u8 = 3;
 const CLOCK_SEGMENT_CAPACITY: usize = 256;
 const MAXIMUM_UNDERRUN_MILLISECONDS: u64 = 2_000;
+/// Length of the fade-out/fade-in pair at each Loop preview boundary.
+const LAP_FADE_MILLISECONDS: u64 = 4;
+/// Audio waits for the video lap's EOF decision until only this much PCM
+/// remains queued, so a lap boundary never underruns the output.
+const LOOP_DECISION_MILLISECONDS: u64 = 80;
 
 struct AudioClockSegment {
     source_frame: AtomicU64,
@@ -178,6 +186,8 @@ struct AudioShared {
     clock: AudioPlaybackClock,
     queued_samples: AtomicUsize,
     producer_eof: AtomicBool,
+    /// The decoder finished a lap and waits for the loop decision.
+    producer_waiting: AtomicBool,
     producer_error: Mutex<Option<String>>,
     output_error: AtomicU8,
     stop: AtomicBool,
@@ -189,6 +199,7 @@ impl AudioShared {
             clock: AudioPlaybackClock::new(sample_rate),
             queued_samples: AtomicUsize::new(0),
             producer_eof: AtomicBool::new(false),
+            producer_waiting: AtomicBool::new(false),
             producer_error: Mutex::new(None),
             output_error: AtomicU8::new(OUTPUT_ERROR_NONE),
             stop: AtomicBool::new(false),
@@ -290,7 +301,8 @@ impl PreparedAudioOutput {
             first_video_frame_ready,
             self.shared.queued_samples.load(Ordering::Acquire),
             self.preroll_samples,
-            self.shared.producer_eof.load(Ordering::Acquire),
+            self.shared.producer_eof.load(Ordering::Acquire)
+                || self.shared.producer_waiting.load(Ordering::Acquire),
         );
         if !ready {
             return Ok(false);
@@ -347,9 +359,9 @@ fn playback_preroll_ready(
     first_video_frame_ready: bool,
     queued_samples: usize,
     preroll_samples: usize,
-    producer_eof: bool,
+    producer_finished_lap: bool,
 ) -> bool {
-    first_video_frame_ready && (queued_samples >= preroll_samples || producer_eof)
+    first_video_frame_ready && (queued_samples >= preroll_samples || producer_finished_lap)
 }
 
 #[derive(Clone)]
@@ -385,13 +397,30 @@ impl AudioProducerControl {
     }
 }
 
+/// Per-lap shaping of decoded PCM. Later loop laps fade in over their first
+/// frames, and every lap holds back its final frames so the boundary can fade
+/// them out once the next lap is committed. Both edges together keep the loop
+/// point free of an audible step without changing the lap length.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct LapShape {
+    pub(crate) fade_in_frames: usize,
+    pub(crate) hold_frames: usize,
+}
+
+/// Read one decoder's raw interleaved `f32le` PCM into the persistent ring.
+/// Returns `Ok(true)` at a clean EOF with at most `hold_frames` complete
+/// frames left in `held`, or `Ok(false)` when cancelled or stopped.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn read_audio_samples(
     mut reader: impl Read,
-    mut producer: ringbuf::HeapProd<f32>,
+    producer: &mut ringbuf::HeapProd<f32>,
     control: &AudioProducerControl,
     cancel: &CancelToken,
     channels: u16,
-) -> io::Result<()> {
+    shape: LapShape,
+    held: &mut Vec<f32>,
+    on_chunk: &mut dyn FnMut(),
+) -> io::Result<bool> {
     let channel_count = usize::from(channels);
     if channel_count == 0 {
         return Err(io::Error::new(
@@ -399,18 +428,21 @@ pub(crate) fn read_audio_samples(
             "audio output must have at least one channel",
         ));
     }
+    let fade_in_samples = shape.fade_in_frames.saturating_mul(channel_count);
+    let hold_samples = shape.hold_frames.saturating_mul(channel_count);
+    let mut lap_samples = 0_usize;
     let mut bytes = [0_u8; 16 * 1024];
     let mut carry = Vec::with_capacity(3);
-    let mut pending_samples = Vec::with_capacity(channel_count);
+    held.clear();
     loop {
         if cancel.is_cancelled() || control.stopped() {
-            return Ok(());
+            return Ok(false);
         }
+        on_chunk();
         let count = reader.read(&mut bytes)?;
         if count == 0 {
-            if carry.is_empty() && pending_samples.is_empty() {
-                control.eof();
-                return Ok(());
+            if carry.is_empty() && held.len().is_multiple_of(channel_count) {
+                return Ok(true);
             }
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -422,26 +454,161 @@ pub(crate) fn read_audio_samples(
         input.extend_from_slice(&bytes[..count]);
         let complete = input.len() / 4 * 4;
         carry.extend_from_slice(&input[complete..]);
-        pending_samples.extend(
-            input[..complete]
-                .chunks_exact(4)
-                .map(|sample| f32::from_le_bytes(sample.try_into().expect("four-byte sample"))),
-        );
-        let complete_samples = pending_samples.len() / channel_count * channel_count;
-        let mut written = 0;
-        while written < complete_samples {
-            if cancel.is_cancelled() || control.stopped() {
-                return Ok(());
+        for sample in input[..complete].chunks_exact(4) {
+            let mut value = f32::from_le_bytes(sample.try_into().expect("four-byte sample"));
+            if lap_samples < fade_in_samples {
+                value *= fade_in_gain(lap_samples / channel_count, shape.fade_in_frames);
             }
-            control.pushed(1);
-            if producer.try_push(pending_samples[written]).is_ok() {
-                written += 1;
-            } else {
-                control.0.queued_samples.fetch_sub(1, Ordering::Release);
-                thread::sleep(PRODUCER_POLL_INTERVAL);
+            lap_samples = lap_samples.saturating_add(1);
+            held.push(value);
+        }
+        let complete_samples = held.len() / channel_count * channel_count;
+        let ready = complete_samples.saturating_sub(hold_samples);
+        if !push_samples(producer, &held[..ready], control, cancel) {
+            return Ok(false);
+        }
+        held.drain(..ready);
+    }
+}
+
+/// Push complete frames into the bounded ring, waiting while it is full.
+/// Returns false when cancelled or stopped.
+pub(crate) fn push_samples(
+    producer: &mut ringbuf::HeapProd<f32>,
+    samples: &[f32],
+    control: &AudioProducerControl,
+    cancel: &CancelToken,
+) -> bool {
+    let mut written = 0;
+    while written < samples.len() {
+        if cancel.is_cancelled() || control.stopped() {
+            return false;
+        }
+        control.pushed(1);
+        if producer.try_push(samples[written]).is_ok() {
+            written += 1;
+        } else {
+            control.0.queued_samples.fetch_sub(1, Ordering::Release);
+            thread::sleep(PRODUCER_POLL_INTERVAL);
+        }
+    }
+    true
+}
+
+fn fade_in_gain(frame: usize, frames: usize) -> f32 {
+    (frame.saturating_add(1) as f32 / frames.saturating_add(1) as f32).min(1.0)
+}
+
+/// Fade the held tail of a lap down to silence before the next lap's fade-in.
+pub(crate) fn fade_out(samples: &mut [f32], channels: u16) {
+    let channel_count = usize::from(channels).max(1);
+    let frames = samples.len() / channel_count;
+    for (frame, values) in samples.chunks_exact_mut(channel_count).enumerate() {
+        let gain = frames.saturating_sub(frame) as f32 / frames.saturating_add(1) as f32;
+        for value in values {
+            *value *= gain;
+        }
+    }
+}
+
+/// Decode every audio lap of one playback stream into the one persistent
+/// output ring. The device keeps running across lap boundaries: the next lap's
+/// decoder is pre-spawned while the current lap plays and its PCM follows the
+/// held, faded tail with no gap, so the audio clock stays continuous.
+pub(crate) fn read_audio_laps(
+    first: DecoderProcess,
+    spawn_lap: &dyn Fn(u64) -> Result<DecoderProcess, MediaToolError>,
+    gate: &LapGate,
+    mut producer: ringbuf::HeapProd<f32>,
+    control: &AudioProducerControl,
+    cancel: &CancelToken,
+    format: AudioOutputFormat,
+) {
+    let edge_frames =
+        usize::try_from(u64::from(format.sample_rate) * LAP_FADE_MILLISECONDS / 1_000).unwrap_or(0);
+    let decision_samples = usize::try_from(
+        u64::from(format.sample_rate) * u64::from(format.channels) * LOOP_DECISION_MILLISECONDS
+            / 1_000,
+    )
+    .unwrap_or(0);
+    let mut lap = 0_u64;
+    let mut process = first;
+    let mut next: Option<Result<DecoderProcess, MediaToolError>> = None;
+    let mut held = Vec::new();
+    loop {
+        let Some(stdout) = process.take_stdout() else {
+            control.fail("failed to read decoded playback audio".to_owned());
+            return;
+        };
+        let shape = LapShape {
+            fade_in_frames: if lap == 0 { 0 } else { edge_frames },
+            hold_frames: edge_frames,
+        };
+        let read = read_audio_samples(
+            stdout,
+            &mut producer,
+            control,
+            cancel,
+            format.channels,
+            shape,
+            &mut held,
+            &mut || {
+                if next.is_none() && gate.looping() {
+                    next = Some(spawn_lap(lap + 1));
+                }
+            },
+        );
+        match read {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                control.fail(format!("failed to decode playback audio: {error}"));
+                return;
             }
         }
-        pending_samples.drain(..complete_samples);
+        match process.finish(cancel, &|| control.stopped()) {
+            Ok(()) => {}
+            Err(MediaToolError::Cancelled) => return,
+            Err(error) => {
+                control.fail(error_message(error));
+                return;
+            }
+        }
+        let continue_playback = loop {
+            if cancel.is_cancelled() || control.stopped() {
+                return;
+            }
+            let due = control.0.queued_samples.load(Ordering::Acquire) <= decision_samples;
+            if let Some(decision) = gate.audio_finished(lap, due) {
+                break decision;
+            }
+            control.0.producer_waiting.store(true, Ordering::Release);
+            gate.wait(PRODUCER_POLL_INTERVAL);
+        };
+        control.0.producer_waiting.store(false, Ordering::Release);
+        if !continue_playback {
+            drop(next.take());
+            if push_samples(&mut producer, &held, control, cancel) {
+                control.eof();
+            }
+            return;
+        }
+        fade_out(&mut held, format.channels);
+        if !push_samples(&mut producer, &held, control, cancel) {
+            return;
+        }
+        process = match next.take().unwrap_or_else(|| spawn_lap(lap + 1)) {
+            Ok(process) => process,
+            Err(MediaToolError::Cancelled) => return,
+            Err(error) => {
+                control.fail(format!(
+                    "failed to restart looped playback audio: {}",
+                    error_message(error)
+                ));
+                return;
+            }
+        };
+        lap += 1;
     }
 }
 
@@ -643,15 +810,18 @@ mod tests {
 
     #[test]
     fn raw_audio_reader_rejects_partial_samples() {
-        let (producer, _consumer) = HeapRb::<f32>::new(8).split();
+        let (mut producer, _consumer) = HeapRb::<f32>::new(8).split();
         let shared = Arc::new(AudioShared::new(48_000));
         let control = AudioProducerControl(shared);
         let error = read_audio_samples(
             &b"12345"[..],
-            producer,
+            &mut producer,
             &control,
             &CancelToken::default(),
             2,
+            LapShape::default(),
+            &mut Vec::new(),
+            &mut || {},
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
@@ -659,7 +829,7 @@ mod tests {
 
     #[test]
     fn raw_audio_reader_rejects_a_channel_incomplete_stereo_eof() {
-        let (producer, mut consumer) = HeapRb::<f32>::new(8).split();
+        let (mut producer, mut consumer) = HeapRb::<f32>::new(8).split();
         let shared = Arc::new(AudioShared::new(48_000));
         let control = AudioProducerControl(shared.clone());
         let samples = [0.25_f32, -0.25, 0.75];
@@ -669,10 +839,13 @@ mod tests {
             .collect::<Vec<_>>();
         let error = read_audio_samples(
             bytes.as_slice(),
-            producer,
+            &mut producer,
             &control,
             &CancelToken::default(),
             2,
+            LapShape::default(),
+            &mut Vec::new(),
+            &mut || {},
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
@@ -689,7 +862,7 @@ mod tests {
 
     #[test]
     fn raw_audio_reader_cancels_while_the_bounded_ring_is_full() {
-        let (producer, _consumer) = HeapRb::<f32>::new(2).split();
+        let (mut producer, _consumer) = HeapRb::<f32>::new(2).split();
         let shared = Arc::new(AudioShared::new(48_000));
         let control = AudioProducerControl(shared);
         let cancel = CancelToken::default();
@@ -698,17 +871,62 @@ mod tests {
         let reader = thread::spawn(move || {
             read_audio_samples(
                 &vec![0_u8; 4 * 1_024][..],
-                producer,
+                &mut producer,
                 &reader_control,
                 &reader_cancel,
                 1,
+                LapShape::default(),
+                &mut Vec::new(),
+                &mut || {},
             )
         });
         thread::sleep(Duration::from_millis(20));
         cancel.cancel();
         let started = Instant::now();
-        reader.join().unwrap().unwrap();
+        assert!(!reader.join().unwrap().unwrap(), "cancellation is not EOF");
         assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn loop_laps_fade_in_and_hold_a_tail_that_fades_out_without_changing_length() {
+        let (mut producer, mut consumer) = HeapRb::<f32>::new(64).split();
+        let shared = Arc::new(AudioShared::new(48_000));
+        let control = AudioProducerControl(shared.clone());
+        // Eight stereo frames of full-scale DC.
+        let bytes = [1.0_f32; 16]
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        let mut chunks = 0;
+        let mut held = Vec::new();
+        let eof = read_audio_samples(
+            bytes.as_slice(),
+            &mut producer,
+            &control,
+            &CancelToken::default(),
+            2,
+            LapShape {
+                fade_in_frames: 3,
+                hold_frames: 2,
+            },
+            &mut held,
+            &mut || chunks += 1,
+        )
+        .unwrap();
+        assert!(eof);
+        assert!(chunks >= 1, "the reader offers a pre-spawn point per chunk");
+        assert!(
+            !shared.producer_eof.load(Ordering::Acquire),
+            "laps defer EOF"
+        );
+        let mut pushed = [0.0_f32; 12];
+        assert_eq!(consumer.pop_slice(&mut pushed), 12, "six frames pushed");
+        assert_eq!(&pushed[..6], &[0.25, 0.25, 0.5, 0.5, 0.75, 0.75]);
+        assert!(pushed[6..].iter().all(|value| *value == 1.0));
+        assert_eq!(held, vec![1.0; 4], "two frames held for the boundary");
+        fade_out(&mut held, 2);
+        assert_eq!(held, vec![2.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]);
+        assert_eq!(fade_in_gain(0, 0), 1.0, "no fade leaves samples unchanged");
     }
 
     #[test]
