@@ -11291,7 +11291,7 @@ mod tests {
     }
 
     #[test]
-    fn import_rejects_unusable_color_metadata_instead_of_relabeling_pixels() {
+    fn import_rejects_unusable_profiles_instead_of_relabeling_pixels() {
         use image::ImageEncoder;
         let data = tempfile::tempdir().unwrap();
         let path = data.path().join("profile.png");
@@ -11317,11 +11317,11 @@ mod tests {
             .write_image_data(&[64, 128, 192, 73])
             .unwrap();
         fs::write(&path, encoded).unwrap();
-        assert!(
-            decode_import(&path)
-                .unwrap_err()
-                .contains("color metadata is not supported")
-        );
+        // Gamma-only PNGs convert through their transfer, like the webview.
+        let decoded = decode_import(&path).unwrap();
+        for (actual, expected) in decoded.as_raw().iter().zip([137u8, 188, 225, 73]) {
+            assert!(actual.abs_diff(expected) <= 1, "{actual} != {expected}");
+        }
     }
 
     #[test]
@@ -11357,7 +11357,7 @@ mod tests {
         fs::write(&path, b"GIF89a").unwrap();
         assert_eq!(
             decode_import(&path).unwrap_err(),
-            "Choose a PNG, JPEG, WebP or TIFF image."
+            "image.data could not be loaded."
         );
         fs::write(&path, b"not an image").unwrap();
         assert!(decode_import(&path).is_err());

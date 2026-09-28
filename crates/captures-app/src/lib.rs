@@ -75,6 +75,9 @@ pub enum Error {
     Image(String),
     #[error("media could not be opened: {0}")]
     Media(String),
+    /// A path shipping's open_media does not accept, with shipping's copy.
+    #[error("{0}")]
+    Unsupported(String),
     #[error("Could not move export to Trash: {0}")]
     Trash(String),
     #[error("capture is no longer available")]
@@ -364,7 +367,13 @@ fn open_image(root: &Path, path: &Path, open_artifact_ids: &[String]) -> Result<
             already_open: true,
         });
     }
-    let pixels = editor_image_decode::decode_opened_image(&source).map_err(Error::Image)?;
+    let pixels = editor_image_decode::decode_opened_image(&source).map_err(|error| {
+        if error == editor_image_decode::UNSUPPORTED_OPEN_MESSAGE {
+            Error::Unsupported(error)
+        } else {
+            Error::Image(error)
+        }
+    })?;
     let png = captures_history::encode_png(&pixels)?;
     let preview = captures_history::encode_thumbnail_png(&pixels)?;
     if let Some(entry) = previous.as_ref() {
