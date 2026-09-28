@@ -489,12 +489,11 @@ impl CaptureShortcuts {
 
     /// While a running or paused recording owns the flow, route the display
     /// shortcut to a screenshot beside it (`capture_error::display_route`).
+    /// This flips as each screenshot starts and ends, so it keeps held and
+    /// queued chords: a New Capture restore must survive it, and a display
+    /// chord is checked against the route again when it is taken.
     pub fn set_recording_screenshot(&self, allowed: bool) {
-        let mut routes = self.dispatcher.routes.lock().unwrap();
-        if routes.recording_screenshot != allowed {
-            routes.clear();
-            routes.recording_screenshot = allowed;
-        }
+        self.dispatcher.routes.lock().unwrap().recording_screenshot = allowed;
     }
 
     /// Route target shortcuts to an already-open New Capture selector, never

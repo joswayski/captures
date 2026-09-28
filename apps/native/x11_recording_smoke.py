@@ -999,14 +999,15 @@ pcm.!pulse {
                 actual = pixels[offset:offset + 3]
                 assert len(actual) == 3 and all(abs(a - e) <= 20 for a, e in
                     zip(actual, (192, 32, 64))), (x, y, actual)
-            finished(1)
+            finished(2)  # the recording and the hidden-controls display screenshot
             assert manifest() is None and not bundle.exists()
             acceptance = {
                 "running_hide": True, "paused_hide": True,
                 "new_capture_shortcut_restore": True, "real_sni_restore": True,
                 "single_instance_relaunch_restore": True,
                 "tray_host_loss_restore": True, "same_session": True,
-                "busy_shortcuts_suppressed": True, "history_publication": True,
+                "busy_shortcuts_suppressed": True, "hidden_display_screenshot": True,
+                "history_publication": True,
                 "decoded_output": True, "source_cleanup": True,
                 "region_guide_preserved": True, "region_guide_click_through": True,
                 "region_guide_clean_inner_edges": True, "region_guide_cleanup": True,
@@ -1016,7 +1017,9 @@ pcm.!pulse {
             print("PASS native recording Hide: running/paused preservation, New Capture and real "
                   "SNI restore, tray-host-loss recovery, finalized decode and cleanup")
             return
-        run("xdotool", "key", "ctrl+alt+r", "ctrl+shift+F9")
+        # The display shortcut screenshots beside a running take
+        # (--display-screenshot-only); every other capture shortcut stays blocked.
+        run("xdotool", "key", "ctrl+alt+r", "ctrl+shift+F7")
         assert not windows("Captures Capture Controls")
         # Escape only cancels before engine handoff, not an accepted recording.
         run("xdotool", "key", "Escape")
