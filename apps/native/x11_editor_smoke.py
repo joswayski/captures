@@ -875,7 +875,7 @@ def main():
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
-        app_command = [str(binary), "--live", "--history-root", str(history),
+        app_command = [str(binary), "--live", "--open-history", "--history-root", str(history),
                        "--settings-file", str(settings), "--quit-after", "600"]
         open_arguments = []
         if args.external_image_only:
@@ -1097,13 +1097,16 @@ def main():
             assert draft_bytes() == preserved_draft
             assert len(layers()) == 2
 
+            # Shipping reopen priority: an open editor before History.
             run("xdotool", "windowminimize", root)
+            run("xdotool", "windowminimize", editor)
             relaunched = subprocess.run(app_command, cwd=output, env=env,
                                         capture_output=True, text=True, timeout=10)
             assert relaunched.returncode == 0, relaunched.stderr
             assert '"event":"forwarded"' in relaunched.stdout
-            wait(lambda: active_window() == root,
-                 "empty relaunch restores and focuses the open History window")
+            wait(lambda: active_window() in windows("Captures Screenshot Editor"),
+                 "empty relaunch restores and focuses an open editor window")
+            assert root not in windows("Capture History"), "empty relaunch restored History over an editor"
             assert app.poll() is None
             close(root)
             wait(lambda: app.poll() is not None, "external image batch quits")
@@ -1165,7 +1168,7 @@ def main():
                            "reload-preserves-history-identity", "reloaded-source-pixels",
                            "secondary-exits-before-renderer-and-settings",
                            "forwarded-relative-alias-preserves-edits",
-                           "empty-relaunch-restores-preferences"],
+                           "empty-relaunch-focuses-open-editor"],
             }, indent=2) + "\n")
             print("PASS native external images: batch, aliases, errors, pixels, autosaved drafts and source reload")
             return
@@ -2648,6 +2651,21 @@ def main():
                       f"1x1+{inspector_x(115)}+{properties_top() + ERASER_MODE_ROW + 16 + 12 + 44}",
                       "-depth", "8", "rgb:-")
             assert (min(dab) >= 200) if args.appearance == "dark" else (max(dab) <= 60), dab
+            # Shipping `.screenshot-brush-cursor`: over the image the system
+            # cursor hides behind a white ring of the brush's displayed size,
+            # with a dark halo just outside it.
+            ring_x, ring_y = fixture_point((108, 189))
+            run("xdotool", "mousemove", "--window", editor, str(ring_x), str(ring_y), "sleep", ".3")
+            shot(editor, "brush-ring")
+            radius = 28 * fit_geometry(document_size(), window_size())[2] / 2
+            def ring_rgb(offset):
+                return run("convert", str(output / "brush-ring.png"), "-crop",
+                           f"1x1+{round(ring_x + offset)}+{ring_y}", "-depth", "8", "rgb:-")
+            border = max((ring_rgb(radius - inset) for inset in (0.5, 1, 1.5)), key=min)
+            # The fixture is (229, 179, 68): only the white border lifts blue this far.
+            assert min(border) >= 190, ("brush ring border", border)
+            halo = min((ring_rgb(radius + outset) for outset in (0.5, 1)), key=max)
+            assert halo[0] <= 190, ("brush ring halo darkens the fixture", halo)
             before = draft_bytes()
             brush_start = fixture_point((108, 189))
             brush_end = fixture_point((208, 229))
@@ -2722,7 +2740,7 @@ def main():
             close(root)
             wait(lambda: app.poll() is not None, "brush suite quits")
             assert app.returncode == 0
-            checks = ["brush-draw-tool-preview", "restore-missing-original-retry",
+            checks = ["brush-draw-tool-preview", "brush-hover-ring", "restore-missing-original-retry",
                       "brush-preview-no-write-and-cancel",
                       "erase-locked-image-interpolated-pixels", "brush-feathered-alpha",
                       "brush-single-undo-redo", "restore-retained-original", "brush-minimum-draft-reopen",

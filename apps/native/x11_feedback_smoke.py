@@ -70,7 +70,7 @@ def main():
                     write_completed_settings(output / f"{appearance}.json")
                     layout_path = output / f"{appearance}-app.jsonl"
                     with layout_path.open("w") as layout_out:
-                        app = subprocess.Popen([str(binary), "--live", "--open-preferences",
+                        app = subprocess.Popen([str(binary), "--live", "--open-history", "--open-preferences",
                             "--history-root", str(output / "history"),
                             "--settings-file", str(output / f"{appearance}.json"), "--appearance", appearance],
                             env={**env, "CAPTURES_NATIVE_LAYOUT_PROBE": "1"}, stdout=layout_out, stderr=log)

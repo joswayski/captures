@@ -108,22 +108,74 @@ impl AppWindow {
     }
 }
 
+/// What a visible, interactive launch shows, as in shipping
+/// `interactive_launch_action`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InteractiveLaunch {
+    /// First-run setup is unfinished.
+    Setup,
+    /// A quiet (autostart or post-update) launch stays in the tray and shows
+    /// the launch notice.
+    StartupNotice,
+    Preferences,
+}
+
+/// Shipping `interactive_launch_action`: a launch that opens files goes
+/// straight to their editors and shows none of these windows.
+pub fn interactive_launch(
+    onboarding_complete: bool,
+    launched_quietly: bool,
+    opening_files: bool,
+) -> Option<InteractiveLaunch> {
+    if opening_files {
+        None
+    } else if !onboarding_complete {
+        Some(InteractiveLaunch::Setup)
+    } else if launched_quietly {
+        Some(InteractiveLaunch::StartupNotice)
+    } else {
+        Some(InteractiveLaunch::Preferences)
+    }
+}
+
+/// Shipping `primary_app_window_priority` for an open screenshot or recording
+/// editor window.
+pub const EDITOR_REACTIVATION_PRIORITY: u8 = 1;
+
+/// A window reopening may focus: a document window, or an open editor
+/// identified by the host's own handle `E`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrimaryWindow<E> {
+    App(AppWindow),
+    Editor(E),
+}
+
+impl<E> PrimaryWindow<E> {
+    pub const fn reactivation_priority(&self) -> u8 {
+        match self {
+            Self::App(window) => window.reactivation_priority(),
+            Self::Editor(_) => EDITOR_REACTIVATION_PRIORITY,
+        }
+    }
+}
+
 /// What reopening the app (Dock click, empty relaunch) does, as in shipping
 /// `app_reactivation`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Reactivation {
+pub enum Reactivation<E> {
     ShowSetup,
     RestoreRecordingControls,
-    Focus(AppWindow),
+    Focus(PrimaryWindow<E>),
     ShowPreferences,
 }
 
-/// `visible` lists the document windows currently shown (in any order).
-pub fn reactivation(
+/// `visible` lists the document and editor windows currently shown (in any
+/// order); the first of equal priority wins.
+pub fn reactivation<E: Copy>(
     onboarding_complete: bool,
     restore_recording_controls: bool,
-    visible: &[AppWindow],
-) -> Reactivation {
+    visible: &[PrimaryWindow<E>],
+) -> Reactivation<E> {
     if !onboarding_complete {
         return Reactivation::ShowSetup;
     }
@@ -133,7 +185,7 @@ pub fn reactivation(
     visible
         .iter()
         .copied()
-        .min_by_key(|window| window.reactivation_priority())
+        .min_by_key(PrimaryWindow::reactivation_priority)
         .map_or(Reactivation::ShowPreferences, Reactivation::Focus)
 }
 
@@ -192,25 +244,76 @@ mod tests {
     #[test]
     fn reactivation_follows_shipping_priority() {
         use AppWindow::*;
+        use PrimaryWindow::App;
+        let lib = include_str!("../../../apps/desktop/src-tauri/src/lib.rs");
+        assert!(lib.contains("fn primary_app_window_priority(label: &str) -> Option<u8>"));
         assert_eq!(
-            reactivation(false, true, &[History]),
+            reactivation::<u8>(false, true, &[App(History)]),
             Reactivation::ShowSetup
         );
         assert_eq!(
-            reactivation(true, true, &[History]),
+            reactivation::<u8>(true, true, &[App(History)]),
             Reactivation::RestoreRecordingControls
         );
         assert_eq!(
-            reactivation(true, false, &[Preferences, History]),
-            Reactivation::Focus(History)
+            reactivation::<u8>(true, false, &[App(Preferences), App(History)]),
+            Reactivation::Focus(App(History))
         );
         assert_eq!(
-            reactivation(true, false, &[Preferences]),
-            Reactivation::Focus(Preferences)
+            reactivation::<u8>(true, false, &[App(Preferences)]),
+            Reactivation::Focus(App(Preferences))
         );
         assert_eq!(
-            reactivation(true, false, &[]),
+            reactivation::<u8>(true, false, &[]),
             Reactivation::ShowPreferences
         );
+    }
+
+    #[test]
+    fn reactivation_focuses_an_open_editor_before_history_and_preferences() {
+        use AppWindow::*;
+        use PrimaryWindow::{App, Editor};
+        assert_eq!(
+            reactivation(true, false, &[App(Preferences), App(History), Editor(7)]),
+            Reactivation::Focus(Editor(7))
+        );
+        assert_eq!(
+            reactivation(true, false, &[Editor(7), Editor(9)]),
+            Reactivation::Focus(Editor(7))
+        );
+        // Setup outranks an editor; unfinished setup always shows setup.
+        assert_eq!(
+            reactivation(true, false, &[Editor(7), App(Setup)]),
+            Reactivation::Focus(App(Setup))
+        );
+        assert_eq!(
+            reactivation(false, false, &[Editor(7)]),
+            Reactivation::ShowSetup
+        );
+        assert_eq!(
+            reactivation(true, true, &[Editor(7)]),
+            Reactivation::RestoreRecordingControls
+        );
+        let ranked: [PrimaryWindow<u8>; 4] =
+            [App(Setup), Editor(0), App(History), App(Preferences)];
+        let priorities = ranked.map(|window| window.reactivation_priority());
+        assert_eq!(priorities, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn interactive_launch_matches_shipping() {
+        use InteractiveLaunch::*;
+        let lib = include_str!("../../../apps/desktop/src-tauri/src/lib.rs");
+        assert!(lib.contains("fn interactive_launch_action("));
+        // (onboarding complete, quiet, opening files)
+        assert_eq!(interactive_launch(false, false, false), Some(Setup));
+        assert_eq!(interactive_launch(false, true, false), Some(Setup));
+        assert_eq!(interactive_launch(true, true, false), Some(StartupNotice));
+        assert_eq!(interactive_launch(true, false, false), Some(Preferences));
+        for complete in [false, true] {
+            for quiet in [false, true] {
+                assert_eq!(interactive_launch(complete, quiet, true), None);
+            }
+        }
     }
 }

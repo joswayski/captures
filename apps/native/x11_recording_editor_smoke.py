@@ -458,7 +458,7 @@ def main():
                 f"os.execv({ffmpeg!r}, [{ffmpeg!r}, *sys.argv[1:]])\n")
             wrapper.chmod(0o755)
             env["PATH"] = str(tools) + os.pathsep + env["PATH"]
-        app_command = [str(binary), "--live", "--history-root", str(history),
+        app_command = [str(binary), "--live", "--open-history", "--history-root", str(history),
                        "--settings-file", str(settings), "--quit-after", "900"]
         open_arguments = []
         if args.external_media:

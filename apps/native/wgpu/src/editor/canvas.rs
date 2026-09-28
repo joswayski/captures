@@ -1070,6 +1070,67 @@ pub(super) fn loupe_image(loupe: &WandLoupe, pixels_per_point: f32) -> egui::Col
     image
 }
 
+/// Shipping `.screenshot-brush-cursor` (`editor_chrome::brush_cursor`): a
+/// white ring with a dark halo outside and a faint dark line inside over a 4 %
+/// white fill; Restore dashes the ring over an 8 % accent fill.
+pub(super) fn paint_brush_cursor(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    diameter: f32,
+    restore: bool,
+    accent: Color32,
+) {
+    use captures_app::editor_chrome::brush_cursor as b;
+    let rgba = |[r, g, b, a]: [f64; 4]| {
+        let channel = |value: f64| (value * 255.).round().clamp(0., 255.) as u8;
+        Color32::from_rgba_unmultiplied(channel(r), channel(g), channel(b), channel(a))
+    };
+    let radius = diameter / 2.;
+    let ring = b::RING_WIDTH as f32;
+    let fill = if restore {
+        accent.gamma_multiply(b::RESTORE_FILL_ACCENT_ALPHA as f32)
+    } else {
+        rgba(b::ERASE_FILL_RGBA)
+    };
+    painter.circle_filled(center, radius, fill);
+    let halo = b::HALO_WIDTH as f32;
+    painter.circle_stroke(
+        center,
+        radius + halo / 2.,
+        Stroke::new(halo, rgba(b::HALO_RGBA)),
+    );
+    let inset = b::INSET_WIDTH as f32;
+    let inset_radius = radius - ring - inset / 2.;
+    if inset_radius > 0. {
+        painter.circle_stroke(
+            center,
+            inset_radius,
+            Stroke::new(inset, rgba(b::INSET_RGBA)),
+        );
+    }
+    // CSS draws the border inside the box: centre the stroke half a width in.
+    let border_radius = (radius - ring / 2.).max(ring / 2.);
+    let stroke = Stroke::new(ring, rgba(b::RING_RGBA));
+    if restore {
+        let segments =
+            ((border_radius * std::f32::consts::TAU / 2.).ceil() as usize).clamp(16, 512);
+        let points = (0..=segments)
+            .map(|index| {
+                let angle = index as f32 / segments as f32 * std::f32::consts::TAU;
+                center + border_radius * vec2(angle.cos(), angle.sin())
+            })
+            .collect::<Vec<_>>();
+        painter.extend(egui::Shape::dashed_line(
+            &points,
+            stroke,
+            b::RESTORE_DASH[0] as f32,
+            b::RESTORE_DASH[1] as f32,
+        ));
+    } else {
+        painter.circle_stroke(center, border_radius, stroke);
+    }
+}
+
 /// Shipping `WandColorLoupe`: while the Wand hovers an image, a magnified
 /// circle of natural pixels beside the crosshair plus a swatch and hex pill.
 /// Returns false (and hides the loupe) when the pointer is off every image.

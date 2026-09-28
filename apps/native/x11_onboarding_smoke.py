@@ -119,8 +119,19 @@ def main():
                 run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
                     "sleep", ".4", "key", "ctrl+q")
                 assert app.wait(timeout=20) == 0
+                # Shipping `interactive_launch_action`: a visible launch of a
+                # completed profile opens Preferences alone.
+                again = spawn(common)
+                preferences = wait(lambda: windows(again.pid, "^Captures Preferences$"),
+                                   "visible launch opens Preferences")[0]
+                time.sleep(1)
+                assert not windows(again.pid, "^Capture History$"), "visible launch showed History"
+                assert not windows(again.pid, "^Captures is running$"), "visible launch showed the launch notice"
+                run("xdotool", "windowactivate", "--sync", preferences, "windowfocus", "--sync", preferences,
+                    "sleep", ".4", "key", "ctrl+q")
+                assert again.wait(timeout=20) == 0
                 # Open Preferences beside History, as its own window.
-                again = spawn(common + ["--open-preferences"])
+                again = spawn(common + ["--open-history", "--open-preferences"])
                 window = wait(lambda: windows(again.pid, "^Capture History$"), "completed profile History")[0]
                 preferences = wait(lambda: windows(again.pid, "^Captures Preferences$"), "Preferences window")[0]
                 time.sleep(1)
@@ -132,7 +143,7 @@ def main():
                 # Shipping History has no permissions button: a denied capture
                 # opens recovery. The workbench hook opens it the same way,
                 # without an OS prompt.
-                again = spawn(common + ["--open-preferences", "--permission-dialog", "ready"])
+                again = spawn(common + ["--open-history", "--open-preferences", "--permission-dialog", "ready"])
                 window = wait(lambda: windows(again.pid, "^Capture History$"), "History under recovery")[0]
                 preferences = wait(lambda: windows(again.pid, "^Captures Preferences$"), "Preferences window")[0]
                 time.sleep(1)

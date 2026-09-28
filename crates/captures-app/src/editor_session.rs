@@ -116,6 +116,12 @@ pub struct TextCreate {
     pub color: String,
     #[serde(default)]
     pub style_preset: Option<String>,
+    /// Shipping places new text with the drawing defaults' shadow toggle and
+    /// any customized shadow (`createPlacedTextElement`).
+    #[serde(default)]
+    pub drop_shadow: Option<bool>,
+    #[serde(default)]
+    pub drop_shadow_style: Option<crate::editor::DropShadowStyle>,
 }
 
 /// The text layer edited by a transient inline-input transaction.
@@ -1750,8 +1756,15 @@ pub fn new_text_element(id: String, create: &TextCreate) -> Result<TextElement, 
         background: preset.and_then(|preset| preset.background.map(str::to_owned)),
         outlined: preset.is_some_and(|preset| preset.outlined),
         rounded_background: preset.is_some_and(|preset| preset.rounded_background),
-        drop_shadow: None,
-        drop_shadow_style: None,
+        drop_shadow: create.drop_shadow,
+        // Clamp a customized shadow through the shared resolver, as edits do.
+        drop_shadow_style: create.drop_shadow_style.as_ref().map(|shadow| {
+            ElementStyle {
+                drop_shadow_style: Some(shadow.clone()),
+                ..ElementStyle::default()
+            }
+            .resolved_drop_shadow_style()
+        }),
         extra: Default::default(),
     })
 }

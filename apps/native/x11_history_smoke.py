@@ -74,7 +74,7 @@ def main():
                     entry["saved_path"] = str(export)
                     metadata.write_text(json.dumps(entry))
                     write_completed_settings(root / "settings.json")
-                    app = spawn([str(binary), "--live", "--history-root", str(history),
+                    app = spawn([str(binary), "--live", "--open-history", "--history-root", str(history),
                         "--settings-file", str(root / "settings.json"), "--appearance", appearance])
                     window = run("xdotool", "search", "--all", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Capture History$").decode().splitlines()[0]
                     time.sleep(1)  # Font upload and asynchronous fixture decode.
