@@ -229,6 +229,11 @@ enum Request {
     Motion,
     /// Shipping `report_capture_error` dialog copy for a failed capture.
     CaptureErrorCopy,
+    /// Where Screenshot Display goes for the recording's state, if any
+    /// (`captures_app::capture_error::display_route`).
+    DisplayCaptureRoute {
+        recording: Option<captures_recording::RecordingState>,
+    },
     /// Shipping Screen Recording recovery dialog for a denied capture.
     PermissionRecoveryPrompt,
     PermissionRecoveryClassify {
@@ -344,6 +349,15 @@ fn response(request: *const c_char) -> Value {
                 "button":captures_app::capture_error::OK,
             },
         }),
+        Ok(Request::DisplayCaptureRoute { recording }) => {
+            use captures_app::capture_error::{DisplayRoute, display_route};
+            let route = match display_route(recording) {
+                DisplayRoute::CaptureMenu => "capture_menu",
+                DisplayRoute::CaptureDisplay => "capture_display",
+                DisplayRoute::Ignore => "ignore",
+            };
+            json!({"ok":true,"route":route})
+        }
         Ok(Request::PermissionRecoveryPrompt) => ONBOARDING
             .lock()
             .map_err(|_| "The onboarding service is unavailable. Restart Captures.".to_owned())
@@ -575,6 +589,27 @@ mod tests {
         assert_eq!(copy["ok"], true);
         assert_eq!(copy["copy"]["title"], "Captures");
         assert_eq!(copy["copy"]["button"], "OK");
+    }
+
+    #[test]
+    fn display_capture_route_abi_shares_the_recording_rule() {
+        for (recording, route) in [
+            (Value::Null, "capture_menu"),
+            (json!("failed"), "capture_menu"),
+            (json!("recording"), "capture_display"),
+            (json!("paused"), "capture_display"),
+            (json!("countdown"), "ignore"),
+            (json!("finalizing"), "ignore"),
+        ] {
+            let response = settings_request(
+                json!({"operation":"display_capture_route","recording":recording}),
+            );
+            assert_eq!(response["ok"], true);
+            assert_eq!(response["route"], route, "{recording}");
+        }
+        // AppKit omits the key when no recording session exists.
+        let idle = settings_request(json!({"operation":"display_capture_route"}));
+        assert_eq!(idle["route"], "capture_menu");
     }
 
     #[test]
