@@ -383,10 +383,11 @@ def main():
         layer_click(index, "more")
         layer_menu_click(index, item, image)
 
-    # Crop properties rows were authored at former inspector y's (Draw crop /
-    # Cancel at 335); the section now starts at properties_top().
-    def crop_click(x, y):
-        prop_click(x, y - 47)
+    # Shipping Crop properties: the Aspect ratio select, then (with a
+    # selection) read-only Width/Height and the Clear / Apply crop pair.
+    CROP = {"aspect": 104, "clear": (60, 212), "apply": (170, 212)}
+    CROP_ASPECT_ROWS = {name: 145 + 28 * index for index, name in
+                        enumerate(["free", "1:1", "4:3", "3:2", "16:9"])}
 
     def prop_click(x, offset):
         click(editor, inspector_x(x), properties_top() + offset)
@@ -397,8 +398,66 @@ def main():
         type_text(value, 60)
         run("xdotool", "key", "Return", "sleep", ".2")
 
-    # Image Width/Height/X/Y inputs below the Properties heading.
-    IMAGE_FIELDS = {"width": (50, 110), "height": (160, 110), "x": (50, 181), "y": (160, 181)}
+    # Shipping Properties sections (`.screenshot-property-section`): offsets
+    # from properties_top() of each control's centre. The 48 px heading, its
+    # 8 px margin and the section's 12 px padding put the first label's top
+    # at 68; a label and its control are 20 px apart and items 12 px apart.
+    TEXT_DEFAULTS = {"style": 106, "standard": 191, "mono-box": 391, "size": 174, "shadow": 216}
+    # Grouped shapes open with the 88 px shape picker and the 88 px preview.
+    # A ColorField adds 138 px, a labelled RangeSlider 69 px.
+    CLOSED_DRAW_ROWS = {"stroke": 278, "color": 348, "size": 487, "opacity": 556,
+                        "fill": 664, "shadow": 770}
+    OPEN_DRAW_ROWS = {"color": 308, "size": 448, "opacity": 516, "shadow": 554,
+                      "shadow-color": 624, "shadow-opacity": 763, "shadow-blur": 832,
+                      "shadow-offset": 892}
+    # DropShadowFields align with the "Drop shadow" label: 15 px box + 8 px gap.
+    SHADOW_INDENT = 23
+
+    def prop_swatch(first_row, color, indent=0):
+        # ColorField swatches in Properties: four columns across the column,
+        # 24 px tiles on a 32 px row pitch, then the custom tile. first_row is
+        # the offset of the first tile row's centres from properties_top().
+        index = SWATCHES.index(color) if color in SWATCHES else len(SWATCHES)
+        pitch = (214 - indent) / 4
+        prop_click(round(8 + indent + (index % 4 + .5) * pitch), first_row + index // 4 * 32)
+
+    def properties_end():
+        # Wheel Properties until it clamps at the end of its content.
+        properties_move("click", "--repeat", "14", "--delay", "60", "5", "sleep", ".6")
+
+    def properties_start():
+        # Wheel Properties back to its top.
+        properties_move("click", "--repeat", "14", "--delay", "60", "4", "sleep", ".6")
+
+    def end_click(x, above):
+        # A control `above` px over the bottom of Properties scrolled to its end.
+        click(editor, inspector_x(x), window_size()[1] - export_bar_height() - above)
+
+    def end_slider(above, *keys, x=100):
+        end_click(x, above)
+        for key in keys:
+            run("xdotool", "key", key, "sleep", ".12")
+        run("xdotool", "sleep", ".3")
+
+    def end_field(above, value, x):
+        end_click(x, above)
+        run("xdotool", "key", "ctrl+a")
+        type_text(value, 60)
+        run("xdotool", "key", "Return", "sleep", ".2")
+
+    def prop_slider(offset, *keys, x=100):
+        # A shipping RangeSlider takes focus when pressed; Home/End, Page and
+        # arrow keys then set its value exactly.
+        # Paced keys keep every press under software-GL frame times.
+        prop_click(x, offset)
+        for key in keys:
+            run("xdotool", "key", key, "sleep", ".12")
+        run("xdotool", "sleep", ".3")
+
+    # A selected layer opens with the Shift rotation snap section; image
+    # Width/Height/X/Y follow in the next section as two number pairs.
+    ROTATION_SNAP = 104
+    IMAGE_FIELDS = {"width": (50, 234), "height": (160, 234), "x": (50, 294), "y": (160, 294)}
 
     def image_field(name, value):
         x, offset = IMAGE_FIELDS[name]
@@ -573,19 +632,13 @@ def main():
     # row centres and toggles, for fill-only, stroke+fill and shadow layouts.
     # Styles apply live (no Apply row at the end); shipping's Opacity slider
     # sits between the stroke width and the fill toggle.
-    ANNOTATION_OPACITY_ROWS = 48  # One 36 px slider row plus the 12 px item gap.
-    ANNOTATION_FILL_ROW = 393
-    ANNOTATION_STROKE_TOGGLE = 278 - ANNOTATION_OPACITY_ROWS
-    ANNOTATION_STROKE_ROW = 168 - ANNOTATION_OPACITY_ROWS
-    ANNOTATION_STROKE_WIDTH = 278 - ANNOTATION_OPACITY_ROWS
-    ANNOTATION_FILL_TOGGLE = 322
-    ANNOTATION_SHADOW_ROW = 262
-    ANNOTATION_SHADOW_TOGGLE = 190
-    # Outline layout (stroke on, fill and shadow off): the two toggles.
-    ANNOTATION_OUTLINE_FILL_TOGGLE = 459
-    ANNOTATION_OUTLINE_SHADOW_TOGGLE = 503
-    # Shadow layout: the opacity, blur, X and Y offset fields.
-    ANNOTATION_SHADOW_FIELDS = (371, 415, 459, 503)
+    # Shipping annotation Properties below the Shift rotation snap section
+    # (offsets from properties_top()): with Stroke off, Fill on and no
+    # shadow. Stroke adds its color swatches and width slider; Drop shadow
+    # its indented fields; `end` is where each state's content ends.
+    ANNOTATION = {"stroke": 212, "stroke-row": 282, "stroke-width": 421, "shadow": 320,
+                  "filled": 360, "fill-row": 430, "end": 524, "stroke-rows": 207,
+                  "shadow-rows": 340, "check-end": 27}
 
     def header_controls(width):
         compact = width <= 1040
@@ -1578,7 +1631,7 @@ def main():
             save_layers(lambda values: not values[0]["locked"], "unlocked original")
             shot(editor, "rotation-snap-controls")
             before = draft_bytes()
-            prop_field(304, 37, x=50)
+            prop_field(ROTATION_SNAP, 37, x=50)
             shot(editor, "rotation-snap-custom")
             assert draft_bytes() == before, "snap preference must not edit or save a draft"
             # Full-canvas image uses the inset top grip at (558,117), pivot (558,269).
@@ -1631,19 +1684,20 @@ def main():
             return
 
         if args.drawing_defaults_only:
-            # Taller than the historical 1001 so every shadow row stays visible
-            # below the DrawToolPreview card and the Color swatch row.
-            resize_editor(942, 1001 + DRAW_PREVIEW_ROWS + 100)
+            # Tall enough that every shadow row stays visible below the shape
+            # picker, the DrawToolPreview card and the Color swatch rows.
+            resize_editor(942, 1580)
             save(640, 360, 0, 0)
             before = draft_bytes()
             toolbar_click("draw")
-            inspector_click(16, shape_row(308))  # Enable the initially disabled closed-shape stroke.
+            prop_click(16, CLOSED_DRAW_ROWS["stroke"])  # Enable the initially disabled closed-shape stroke.
             shot(editor, "drawing-default-controls")
-            # Stroke color and Fill color are shipping swatch rows.
-            swatch_at(shape_row(388), "#111318")
-            field(shape_row(499), "13", 77)
-            field(shape_row(543), "37", 87)
-            swatch_at(shape_row(659), "#36c96b")
+            # Stroke color and Fill color are shipping swatch rows; Size and
+            # Opacity are shipping RangeSliders set from the keyboard.
+            prop_swatch(CLOSED_DRAW_ROWS["color"], "#111318")
+            prop_slider(CLOSED_DRAW_ROWS["size"], "Home", "Prior", "Right")  # 2 + 10 + 1 = 13.
+            prop_slider(CLOSED_DRAW_ROWS["opacity"], "Home", *["Prior"] * 3, *["Right"] * 7)  # 37.
+            prop_swatch(CLOSED_DRAW_ROWS["fill"], "#36c96b")
             shot(editor, "drawing-custom-controls")
             assert draft_bytes() == before, "default controls alone wrote a draft"
 
@@ -1667,7 +1721,7 @@ def main():
 
             # A line must stroke despite the retained closed-shape toggle being off.
             toolbar_click("draw")
-            inspector_click(16, shape_row(308))
+            prop_click(16, CLOSED_DRAW_ROWS["stroke"])
             draw_tool("line")
             shot(editor, "drawing-line-controls")
             start, end = document_point((250, 70)), document_point((370, 70))
@@ -1687,7 +1741,7 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo line")
             toolbar_click("draw")
-            field(shape_row(499), "0", 87)  # Open-tool controls have no closed Stroke toggle.
+            prop_slider(OPEN_DRAW_ROWS["opacity"], "Home")  # Open tools have no closed Stroke toggle.
             start, end = document_point((250, 70)), document_point((370, 70))
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
@@ -1701,14 +1755,15 @@ def main():
             save_layers(lambda values: len(values) == 1, "undo invisible line")
             toolbar_click("draw")
             before = draft_bytes()
-            field(shape_row(499), "100", 87)
-            inspector_click(16, shape_row(543))  # Line's pre-placement Drop shadow.
+            prop_slider(OPEN_DRAW_ROWS["opacity"], "End")
+            prop_click(16, OPEN_DRAW_ROWS["shadow"])  # Line's pre-placement Drop shadow.
             shot(editor, "drawing-shadow-controls")
-            field(shape_row(614), "#f0c040", 145)
-            field(shape_row(658), "100", 145)
-            field(shape_row(702), "0", 70)
-            field(shape_row(746), "-23", 100)
-            field(shape_row(790), "31", 100)
+            # Shipping DropShadowFields, indented under the check row.
+            prop_swatch(OPEN_DRAW_ROWS["shadow-color"], "#ffd22e", indent=SHADOW_INDENT)
+            prop_slider(OPEN_DRAW_ROWS["shadow-opacity"], "End")
+            prop_slider(OPEN_DRAW_ROWS["shadow-blur"], "Home")
+            prop_field(OPEN_DRAW_ROWS["shadow-offset"], "-23", x=70)
+            prop_field(OPEN_DRAW_ROWS["shadow-offset"], "31", x=175)
             shot(editor, "drawing-shadow-custom-controls")
             assert draft_bytes() == before, "shadow defaults alone wrote a draft"
             start, end = document_point((250, 70)), document_point((370, 70))
@@ -1717,7 +1772,7 @@ def main():
                 *map(str, end), "sleep", ".5")
             shot(editor, "drawing-shadow-transient")
             document_pixel("drawing-shadow-transient", 300, 70, (17, 19, 24), 1)
-            document_pixel("drawing-shadow-transient", 277, 101, (240, 192, 64), 1)
+            document_pixel("drawing-shadow-transient", 277, 101, (255, 210, 46), 1)
             assert draft_bytes() == before, "pixel preview wrote a draft"
             run("xdotool", "key", "Escape", "mouseup", "1", "sleep", ".3")
             shot(editor, "drawing-shadow-cancelled")
@@ -1729,15 +1784,15 @@ def main():
                 *map(str, end), "sleep", ".5", "mouseup", "1", "sleep", ".3")
             shadowed = save_layers(lambda values: len(values) == 2, "shadowed line created")[-1]
             assert shadowed["style"]["dropShadow"] is True, shadowed
-            custom = {"color": "#f0c040", "opacity": 100, "blur": 0, "offsetX": -23, "offsetY": 31}
+            custom = {"color": "#ffd22e", "opacity": 100, "blur": 0, "offsetX": -23, "offsetY": 31}
             assert shadowed["style"]["dropShadowStyle"] == custom, shadowed
             shot(editor, "drawing-shadow-committed")
             document_pixel("drawing-shadow-committed", 300, 70, (17, 19, 24), 1)
-            document_pixel("drawing-shadow-committed", 277, 101, (240, 192, 64), 1)
+            document_pixel("drawing-shadow-committed", 277, 101, (255, 210, 46), 1)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes drawing and shadow")
             toolbar_click("draw")
-            inspector_click(16, shape_row(543))
+            prop_click(16, OPEN_DRAW_ROWS["shadow"])
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
@@ -1747,7 +1802,7 @@ def main():
             shot(editor, "drawing-shadow-disabled")
             document_pixel("drawing-shadow-disabled", 277, 101, (40, 110, 166), 1)
             toolbar_click("draw")
-            inspector_click(16, shape_row(543))
+            prop_click(16, OPEN_DRAW_ROWS["shadow"])
             shot(editor, "drawing-shadow-retained")
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -2314,12 +2369,16 @@ def main():
             before = draft_bytes()
             toolbar_click("draw")
             draw_tool("text")
-            inspector_click(95, draw_row(337))
+            prop_click(95, TEXT_DEFAULTS["style"])
             # The shipping TextStylePicker menu: 38 px chip rows, Plain first.
             shot(editor, "text-defaults-menu")
-            inspector_click(120, draw_row(622))  # Mono Box, before Rounded Box.
-            field(draw_row(385), 37.5, x=59)
-            swatch_at(draw_row(466), "#2d9cff")  # The Color swatch row below Size.
+            prop_click(120, TEXT_DEFAULTS["mono-box"])  # Mono Box, before Rounded Box.
+            prop_field(TEXT_DEFAULTS["size"], 37.5, x=59)
+            # Shipping's Text section has no Color: new text takes the one
+            # drawing Color, chosen here with the Line.
+            draw_tool("line")
+            prop_swatch(OPEN_DRAW_ROWS["color"], "#2d9cff")
+            draw_tool("text")
             shot(editor, "text-defaults-staged")
             assert draft_bytes() == before, "defaults must not write a draft"
             fixture_click((208, 169))  # Document (200,80), at actual-size scale.
@@ -2330,7 +2389,7 @@ def main():
             run("xdotool", "key", "Escape", "sleep", ".3")
             text = save_layers(lambda values: len(values) == 2, "styled Text placed")[-1]
             assert text["kind"] == "text" and text["fontFamily"] == "mono"
-            assert text["fontSize"] == 37.5 and text["color"] == "#2d9cff"
+            assert text["fontSize"] == 37.5 and text["color"] == "#2d9cff", text
             assert text["text"] == "Native" and text["align"] == "center" and text["y"] == 80
             assert math.isclose(text["x"] + text["width"] / 2, 200, abs_tol=1e-6)
             assert text["background"] == "#111318" and text["autoWidth"]
@@ -2376,20 +2435,30 @@ def main():
             return
 
         if args.text_only:
-            def text_menu_click(x, y):
-                # Text properties were authored with "Style…" at y=357 (window
-                # 338). They now open the Properties section below Layers.
-                click(editor, inspector_x(x), y + 1 + INSPECTOR_SHIFT + properties_top() + 84 - 338)
+            # Shipping selected-text Properties, below the Shift rotation snap
+            # section: offsets of control centres from properties_top().
+            TEXT = {"style": 236, "text": 320, "font": 400, "size": 400, "format": 444,
+                    "color": 516, "background": 624, "shadow": 664}
+            # The style menu lists the seven shipping styles (no Plain) on a
+            # 40 px pitch below the trigger.
+            TEXT_STYLE_ROWS = {name: TEXT["style"] + 45 + 40 * index for index, name in enumerate(
+                ["standard", "rounded", "outlined", "mono", "box", "mono-box", "rounded-box"])}
+            # A plate adds its Background color swatches above Drop shadow.
+            PLATE_ROWS = 138
+            # With the shadow open and Properties scrolled to its end, rows
+            # measured up from the bottom of the Properties area.
+            TEXT_SHADOW_END = {"blur": 85, "offset": 27}
 
-            def text_click(x, y):
-                # The 32 px Size field now has its own row above Bold/Italic.
-                text_menu_click(x, y + 46 if y >= 573 else y)
+            def shadow_rows(plated):
+                check = TEXT["shadow"] + (PLATE_ROWS if plated else 0)
+                return {"check": check, "color": check + 70, "opacity": check + 209,
+                        "blur": check + 278, "offset": check + 338}
 
             resize_editor(1000, 1501)
             toolbar_click("draw")  # Draw.
             draw_tool("text")
-            inspector_click(95, draw_row(337))
-            inspector_click(60, draw_row(419))  # Standard: test plain glyphs before adding a plate.
+            prop_click(95, TEXT_DEFAULTS["style"])
+            prop_click(60, TEXT_DEFAULTS["standard"])  # Standard: plain glyphs before a plate.
             fixture_click((200, 250))
             type_text("Text")
             shot(editor, "text-composing")
@@ -2400,36 +2469,41 @@ def main():
             assert created["text"] == "Text" and created["fontFamily"] == "sans"
             assert created["align"] == "left" and created.get("autoWidth") is True
             shot(editor, f"text-created-{args.appearance}")
-            text_click(44, 357)
+            prop_click(95, TEXT["style"])
             shot(editor, f"text-style-menu-{args.appearance}")
             run("xdotool", "key", "Escape")
             # Shipping applies every text property as it changes: a typing burst
             # in one field is one undo step, each toggle or menu choice another.
-            text_click(100, 431)
+            prop_click(60, TEXT["font"])
             shot(editor, f"text-font-menu-{args.appearance}")
-            text_click(100, 515)  # Serif: shipping order Sans serif, Serif, Monospace, Rounded.
+            # The token Font listbox opens below: Sans serif, Serif, Monospace,
+            # Rounded on a 28 px pitch.
+            prop_click(40, TEXT["font"] + 69)  # Serif.
             save_layers(lambda values: values[-1]["fontFamily"] == "serif", "font family applied live")
-            text_click(105, 505)
+            prop_click(105, TEXT["text"])
             run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35",
                 "--", "Readable native text")
             time.sleep(.2)
             save_layers(lambda values: values[-1]["text"] == "Readable native text"
                         and values[-1]["fontFamily"] == "serif", "plain text applied")
-            text_click(26, 573)   # Bold: the first of five format buttons below Size.
-            text_click(71, 573)   # Italic.
+            prop_click(28, TEXT["format"])   # Bold: the first of five format buttons.
+            prop_click(73, TEXT["format"])   # Italic.
             save_layers(lambda values: values[-1]["bold"] and values[-1]["italic"], "traits applied")
             shot(editor, "text-without-shadow")
-            # Rows below the format buttons and Text color swatches.
-            text_click(92, 798)   # Drop shadow, leaving the plate off.
+            rows = shadow_rows(False)
+            prop_click(92, rows["check"])   # Drop shadow, leaving the plate off.
             save_layers(lambda values: values[-1].get("dropShadow") is True
                         and values[-1]["background"] is None, "glyph shadow applied")
-            for x, y, value in [(95, 869, "#3b82f6"), (128, 913, "65"),
-                                (60, 957, "3"), (80, 1001, "17.5"), (80, 1045, "-8")]:
-                text_click(x, y)
-                run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--", value)
-                run("xdotool", "key", "Return")
-            custom_shadow = {"color": "#3b82f6", "opacity": 65, "blur": 3,
-                             "offsetX": 17.5, "offsetY": -8}
+            prop_swatch(rows["color"], "#2d9cff", indent=SHADOW_INDENT)
+            prop_slider(rows["opacity"], "Home", *["Prior"] * 6, *["Right"] * 5)  # 65%.
+            # The Blur slider and offsets sit below the window: scroll to the end.
+            properties_end()
+            shot(editor, "text-shadow-scrolled")
+            end_slider(TEXT_SHADOW_END["blur"], "Home", *["Right"] * 3)  # 3 px.
+            end_field(TEXT_SHADOW_END["offset"], "17", x=70)
+            end_field(TEXT_SHADOW_END["offset"], "-8", x=175)
+            custom_shadow = {"color": "#2d9cff", "opacity": 65, "blur": 3,
+                             "offsetX": 17, "offsetY": -8}
             save_layers(lambda values: values[-1].get("dropShadowStyle") == custom_shadow,
                         "custom shadow applied")
             shot(editor, "text-glyph-shadow")
@@ -2441,16 +2515,14 @@ def main():
                 return run("convert", str(output / f"{name}.png"), "-crop", crop,
                            "-depth", "8", "rgba:-")
             assert text_pixels("text-glyph-shadow") != text_pixels("text-without-shadow")
-            text_click(170, 798)  # Outline shares the shadow row.
-            save_layers(lambda values: values[-1]["outlined"], "text outline applied")
-            shot(editor, "text-outline")
-            assert text_pixels("text-outline") != text_pixels("text-glyph-shadow")
-            text_click(92, 754)   # Background plate; the plate owns the shadow now.
+            properties_start()
+            # Shipping "Text background": a #111318 plate that owns the shadow now.
+            prop_click(92, TEXT["background"])
             edited = save_layers(
                 lambda values: values[-1]["text"] == "Readable native text"
                 and values[-1]["bold"] and values[-1]["italic"]
-                and values[-1]["background"] is not None and values[-1]["fontFamily"] == "serif"
-                and values[-1].get("dropShadow") is True,
+                and values[-1]["background"] == "#111318" and values[-1]["fontFamily"] == "serif"
+                and values[-1].get("dropShadow") is True and not values[-1]["outlined"],
                 "readable styled text applied")[-1]
             assert edited["id"] == created["id"]
             shot(editor, f"text-edited-{args.appearance}")
@@ -2458,20 +2530,25 @@ def main():
             save_layers(lambda values: values[-1]["background"] is None
                         and values[-1].get("dropShadow") is True, "undo shadowed plate")
             toolbar_click("undo")
-            save_layers(lambda values: not values[-1]["outlined"]
-                        and values[-1].get("dropShadow") is True, "undo text outline")
-            toolbar_click("undo")
             save_layers(lambda values: values[-1]["dropShadowStyle"]["offsetY"] != -8,
                         "one typed shadow field is one undo step")
             toolbar_click("redo")
             save_layers(lambda values: values[-1]["dropShadowStyle"] == custom_shadow, "redo shadow field")
             toolbar_click("redo")
-            save_layers(lambda values: values[-1]["outlined"], "redo text outline")
-            toolbar_click("redo")
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
-            text_click(44, 357)
+            # Like shipping, outline is a style (Outlined), not its own control.
+            prop_click(95, TEXT["style"])
+            prop_click(60, TEXT_STYLE_ROWS["outlined"])
+            save_layers(lambda values: values[-1]["outlined"] and values[-1]["background"] is None
+                        and values[-1]["fontFamily"] == "sans", "outlined style applied live")
+            shot(editor, "text-outline")
+            assert text_pixels("text-outline") != text_pixels("text-glyph-shadow")
+            toolbar_click("undo")
+            save_layers(lambda values: not values[-1]["outlined"]
+                        and values[-1]["background"] is not None, "undo outlined style")
+            prop_click(95, TEXT["style"])
             shot(editor, "text-style-menu-edited")
-            text_menu_click(-60, 598)  # Mono Box chip row, preserving the accepted plate color.
+            prop_click(60, TEXT_STYLE_ROWS["mono-box"])  # Mono Box, preserving the accepted plate color.
             save_layers(lambda values: values[-1]["fontFamily"] == "mono"
                         and values[-1]["background"] == edited["background"], "named style applied live")
             shot(editor, "text-preset-applied-live")
@@ -2494,21 +2571,19 @@ def main():
             save_layers(lambda values: len(values) == 2, "future label is one undo step")
             toolbar_click("layers")
             layer_click(0)  # Restore the original label's selected-text inspector.
-            text_click(44, 357)
-            text_menu_click(-60, 598)  # Mono Box again, over the accepted outline.
-            preset = save_layers(lambda values: values[-1]["fontFamily"] == "mono"
-                                 and not values[-1]["outlined"], "named style applied")[-1]
+            prop_click(95, TEXT["style"])
+            prop_click(60, TEXT_STYLE_ROWS["mono-box"])  # Mono Box again.
+            preset = save_layers(lambda values: values[-1]["fontFamily"] == "mono",
+                                 "named style applied")[-1]
             for key in ["text", "fontSize", "bold", "italic", "align", "color", "background", "dropShadowStyle"]:
                 assert preset[key] == edited[key], f"preset must preserve {key}"
             shot(editor, f"text-preset-applied-{args.appearance}")
             toolbar_click("undo")
-            save_layers(lambda values: values[-1]["fontFamily"] == "serif" and values[-1]["outlined"],
-                        "named style undo")
+            save_layers(lambda values: values[-1]["fontFamily"] == "serif", "named style undo")
             toolbar_click("redo")
-            save_layers(lambda values: values[-1]["fontFamily"] == "mono" and not values[-1]["outlined"],
-                        "named style redo")
+            save_layers(lambda values: values[-1]["fontFamily"] == "mono", "named style redo")
             toolbar_click("undo")
-            save_layers(lambda values: values[-1]["fontFamily"] == "serif" and values[-1]["outlined"],
+            save_layers(lambda values: values[-1]["fontFamily"] == "serif",
                         "restore accepted style for reopen")
             close(editor)
             wait(lambda: not windows("Captures Screenshot Editor"), "text editor closes")
@@ -2534,7 +2609,7 @@ def main():
             assert reopened["bold"] and reopened["italic"] and reopened["background"] is not None
             assert reopened.get("dropShadow") is True
             assert reopened["dropShadowStyle"] == custom_shadow
-            assert reopened["outlined"]
+            assert not reopened["outlined"]
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "text suite quits")
@@ -2548,7 +2623,7 @@ def main():
                            "text-named-style-live", "text-named-style-preserve-undo-redo",
                            "text-preset-future-after-undo", "text-preset-future-independent-traits",
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
-                           "text-outline-pixels", "text-outline-stage-cancel", "text-outline-undo-redo-reopen",
+                           "text-outlined-style-pixels", "text-outlined-style-undo",
                            "text-undo-redo", "text-draft-reopen",
                            "text-minimum-appearance", "original-unchanged"],
             }, indent=2) + "\n")
@@ -3297,19 +3372,43 @@ def main():
         properties_move("click", "--repeat", "20", "5")
         shot(editor, "annotation-fields")
 
-        # Stroke, fill and shadow colors use the shipping swatch row: four 53.5 px
-        # columns across the inspector, 24 px tiles, 32 px row pitch, then the
-        # custom tile. Rows are bottom-clamped like the other annotation controls.
-        def swatch_click(first_row, color):
+        # Shipping annotation Properties: Stroke, Stroke color, Stroke width,
+        # Opacity, Drop shadow (its fields indented), Filled shape, Fill color.
+        # Offsets are from properties_top(); `end` is where the content ends in
+        # that state, so a Properties area scrolled to its end shifts every row
+        # up by the overflow.
+        def annotation_point(x, offset, end):
+            visible = window_size()[1] - export_bar_height() - properties_top()
+            return inspector_x(x), properties_top() + offset - max(0, end - visible)
+
+        def annotation_click(x, offset, end):
+            click(editor, *annotation_point(x, offset, end))
+
+        def annotation_swatch(first_row, color, end, indent=0):
             index = SWATCHES.index(color) if color in SWATCHES else len(SWATCHES)
-            inspector_click(round(8 + (index % 4 + .5) * 53.5), bottom(first_row + index // 4 * 32))
+            pitch = (214 - indent) / 4
+            annotation_click(round(8 + indent + (index % 4 + .5) * pitch),
+                             first_row + index // 4 * 32, end)
+
+        def annotation_slider(offset, end, *keys):
+            annotation_click(100, offset, end)
+            for key in keys:
+                run("xdotool", "key", key, "sleep", ".12")
+            run("xdotool", "sleep", ".3")
+
+        def annotation_field(offset, end, value, x):
+            annotation_click(x, offset, end)
+            run("xdotool", "key", "ctrl+a")
+            type_text(value, 60)
+            run("xdotool", "key", "Return", "sleep", ".2")
 
         def scroll_inspector_end():
-            properties_move("click", "--repeat", "25", "5")
+            properties_move("click", "--repeat", "25", "5", "sleep", ".6")
 
+        A = ANNOTATION
         # Shipping applies each style change as it is made: no Apply or Reset.
         unchanged = draft_bytes()
-        swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
+        annotation_swatch(A["fill-row"], "#36c96b", A["end"])
         save_layers(lambda values: values[-1]["style"]["fill"] == "#36c96b", "annotation fill applies live")
         assert draft_bytes() != unchanged
         shot(editor, "annotation-fill")
@@ -3318,44 +3417,49 @@ def main():
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
         toolbar_click("redo")
         save_layers(lambda values: values[-1]["style"]["fill"] == "#36c96b", "style redo")
-        inspector_click(15, bottom(ANNOTATION_STROKE_TOGGLE))  # Enable stroke.
+        annotation_click(15, A["stroke"], A["end"])  # Enable stroke.
         scroll_inspector_end()
         shot(editor, "annotation-stroke-fields")
-        swatch_click(ANNOTATION_STROKE_ROW, "#8b5cf6")
-        field(bottom(ANNOTATION_STROKE_WIDTH), 12, 130)
-        inspector_click(15, bottom(ANNOTATION_FILL_TOGGLE))  # Clear fill.
+        stroked = A["end"] + A["stroke-rows"]
+        annotation_swatch(A["stroke-row"], "#8b5cf6", stroked)
+        annotation_slider(A["stroke-width"], stroked, "Home", "Prior")  # 2 + 10 = 12 px.
+        annotation_click(15, A["filled"] + A["stroke-rows"], stroked)  # Clear fill.
         save_layers(lambda values: values[-1]["style"]["fill"] is None and values[-1]["style"]["strokeWidth"] == 12, "annotation outline")
         scroll_inspector_end()
         shot(editor, "annotation-outline")
         fixture_pixel("annotation-outline", 170, 310, (40, 110, 166))
         fixture_pixel("annotation-outline", 93, 310, (139, 92, 246))
-        inspector_click(15, bottom(ANNOTATION_OUTLINE_FILL_TOGGLE))  # Restore fill; choose a color other than the stroke.
+        outline = A["filled"] + A["stroke-rows"] + A["check-end"]
+        # Restore fill; choose a color other than the stroke.
+        annotation_click(15, A["filled"] + A["stroke-rows"], outline)
         scroll_inspector_end()
-        swatch_click(ANNOTATION_FILL_ROW, "#36c96b")
-        inspector_click(15, bottom(ANNOTATION_OUTLINE_SHADOW_TOGGLE))  # Enable custom shadow controls.
+        annotation_swatch(A["fill-row"] + A["stroke-rows"], "#36c96b", stroked)
+        annotation_click(15, A["shadow"] + A["stroke-rows"], stroked)  # Enable custom shadow controls.
         scroll_inspector_end()
         shot(editor, "annotation-shadow-fields")
-        swatch_click(ANNOTATION_SHADOW_ROW, "#ff8a22")
-        opacity_y, blur_y, x_y, y_y = ANNOTATION_SHADOW_FIELDS
-        field(bottom(opacity_y), 80, 125)
-        field(bottom(blur_y), 0)
-        field(bottom(x_y), 25, 90)
-        field(bottom(y_y), -12, 90)
+        shadowed = stroked + A["shadow-rows"]
+        shadow = A["shadow"] + A["stroke-rows"]
+        annotation_swatch(shadow + 70, "#ff8a22", shadowed, indent=SHADOW_INDENT)
+        annotation_slider(shadow + 209, shadowed, "End", "Next", "Next")  # 80%.
+        annotation_slider(shadow + 278, shadowed, "Home")  # 0 px blur.
+        annotation_field(shadow + 338, shadowed, "25", 70)
+        annotation_field(shadow + 338, shadowed, "-12", 175)
         styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}) == {"color": "#ff8a22", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}, "custom annotation shadow")[-1]
         assert styled["id"] == annotation["id"] and styled["locked"]
         assert styled["style"]["fill"] == "#36c96b" and styled["style"]["strokeWidth"] == 12
         shot(editor, "annotation-shadow")
         fixture_pixel("annotation-shadow", 279, 310, (212, 132, 60), tolerance=1)
-        swatch_click(ANNOTATION_SHADOW_ROW, "custom")  # The custom tile opens the picker inline.
+        # The custom tile opens the picker inline, and closes it without an edit.
+        annotation_swatch(shadow + 70, "custom", shadowed, indent=SHADOW_INDENT)
         shot(editor, "annotation-color-picker")
-        swatch_click(ANNOTATION_SHADOW_ROW, "custom")  # And closes it without an edit.
-        inspector_click(15, bottom(ANNOTATION_SHADOW_TOGGLE))  # Disable shadow without losing custom knobs.
+        annotation_swatch(shadow + 70, "custom", shadowed, indent=SHADOW_INDENT)
+        annotation_click(15, shadow, shadowed)  # Disable shadow without losing custom knobs.
         disabled = save_layers(lambda values: values[-1]["style"]["dropShadow"] is False, "shadow off")[-1]
         assert disabled["style"]["dropShadowStyle"] == styled["style"]["dropShadowStyle"]
         scroll_inspector_end()
         shot(editor, "annotation-shadow-off")
         fixture_pixel("annotation-shadow-off", 279, 310, (40, 110, 166))
-        inspector_click(15, bottom(ANNOTATION_OUTLINE_SHADOW_TOGGLE))
+        annotation_click(15, shadow, stroked)
         save_layers(lambda values: values[-1]["style"] == styled["style"], "shadow settings restored")
         run("xdotool", "windowsize", "--sync", editor, "760", "540")
         properties_move("click", "--repeat", "25", "5")
@@ -3838,14 +3942,15 @@ def main():
         before_selection = draft_bytes()
         # Shipping's `cta-pulse` on Apply crop: an accent halo swells just
         # outside the button only while a crop is staged.
-        halo = (inspector_x(50), properties_top() + 335 - 47 - 16 - 3)
+        halo = (inspector_x(CROP["apply"][0]), properties_top() + CROP["apply"][1] - 16 - 3)
 
         def halo_rgb(name):
             return run("convert", str(output / f"{name}.png"), "-crop",
                        f"1x1+{halo[0]}+{halo[1]}", "-depth", "8", "rgb:-")
 
         resting = halo_rgb("crop-cancelled")
-        crop_click(159, 335)
+        # Like shipping, the Crop tool stays ready for a new selection after
+        # Escape, Clear or Apply crop; there is no Draw crop button.
         drag((278, 119), (438, 219), shift=True)
         shot(editor, "crop-shift-square")
         assert draft_bytes() == before_selection
@@ -3855,40 +3960,36 @@ def main():
             return max(abs(a - b) for a, b in zip(halo_rgb("crop-apply-pulse"), resting)) >= 12
 
         wait(pulsing, "Apply crop pulses while a crop is staged")
-        crop_click(50, 335)
+        prop_click(*CROP["apply"])
         save(160, 160, -40, -30)
         toolbar_click("undo")
         save(640, 360, 0, 0)
-        crop_click(159, 335)
         drag((638, 500), (278, 119))  # Starts below the image; clamps to y=360.
         shot(editor, "crop-outside-start")
-        crop_click(50, 335)
+        prop_click(*CROP["apply"])
         save(360, 330, -40, -30)
         toolbar_click("undo")
         save(640, 360, 0, 0)
-        crop_click(159, 335)
-        crop_click(125, 379)
+        prop_click(95, CROP["aspect"])
         shot(editor, "crop-aspect-menu")
         run("xdotool", "key", "Escape", "sleep", ".2")
-        crop_click(125, 379)
-        # The aspect popup opens above its box; 4:3 takes precedence over Shift's square.
-        prop_click(106, 213)
+        prop_click(95, CROP["aspect"])
+        # The token Aspect ratio listbox; 4:3 takes precedence over Shift's square.
+        prop_click(60, CROP_ASPECT_ROWS["4:3"])
         drag((278, 119), (438, 219), shift=True)
         shot(editor, "crop-preset-four-three")
-        crop_click(50, 335)
+        prop_click(*CROP["apply"])
         save(160, 120, -40, -30)
         toolbar_click("undo")
         save(640, 360, 0, 0)
-        crop_click(159, 335)
-        crop_click(125, 379)
-        prop_click(106, 125)  # Free for the following asymmetric crop.
+        prop_click(95, CROP["aspect"])
+        prop_click(60, CROP_ASPECT_ROWS["free"])  # Free for the following asymmetric crop.
         drag((638, 359), (278, 119))
-        crop_click(159, 335)  # Cancel restores numeric fields as well as pixels.
-        crop_click(50, 335)
+        prop_click(*CROP["clear"])  # Clear restores the full canvas as well as pixels.
+        prop_click(*CROP["apply"])  # Apply is gone with the selection: nothing crops.
         save(640, 360, 0, 0)
-        crop_click(159, 335)
         drag((638, 359), (278, 119))
-        crop_click(50, 335)
+        prop_click(*CROP["apply"])
         resize_editor(1000, 701)
         save(360, 240, -40, -30)
         shot(editor, "editor-cropped")

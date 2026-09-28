@@ -461,6 +461,9 @@ struct View {
     drawing_preview: Option<drawing_preview::State>,
     crop: [f64; 4],
     crop_previous: Option<[f64; 4]>,
+    /// The rail's Crop tool is active: like shipping, a new selection can be
+    /// dragged again after Apply crop, Clear or Escape.
+    crop_tool: bool,
     crop_drag: Option<CropDrag>,
     crop_aspect: usize,
     draw_shape: DrawShape,
@@ -595,6 +598,7 @@ impl Default for View {
             drawing_preview: None,
             crop: [0., 0., 1., 1.],
             crop_previous: None,
+            crop_tool: false,
             crop_drag: None,
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
@@ -714,6 +718,7 @@ impl View {
         self.cancel_crop();
         self.viewport_pan = None;
         self.section = section;
+        self.crop_tool = section == Section::Geometry && shape.is_none();
         if let Some(shape) = shape {
             self.draw_shape = shape;
             if shape.is_grouped() {
@@ -2576,8 +2581,8 @@ fn draw_section(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
 /// Shipping Crop properties: the Aspect ratio select, then the staged
 /// selection's size with Clear and Apply crop, or the drag hint.
 fn show_crop_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
-    // Like shipping's Crop tool, a new selection can always be dragged.
-    if view.crop_previous.is_none() && !view.pending {
+    // Like shipping's Crop tool, a new selection can be dragged again.
+    if view.crop_tool && view.crop_previous.is_none() && !view.pending {
         view.crop_previous = Some(view.crop);
     }
     inspector::section(ui, tokens, |ui| {
@@ -4331,8 +4336,13 @@ fn show_crop(
     );
     let aspect = CROP_ASPECTS[view.crop_aspect].1;
     let shift = ui.input(|input| input.modifiers.shift);
+    // A selection starts once the press is decidedly a drag, so a click (on
+    // the comparison's Hide, say) never leaves a 1 px crop behind while the
+    // Crop tool stays ready for the next selection.
     if !viewport_intercepted
-        && response.drag_started_by(egui::PointerButton::Primary)
+        && view.crop_drag.is_none()
+        && response.dragged_by(egui::PointerButton::Primary)
+        && ui.input(|input| input.pointer.is_decidedly_dragging())
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
     {
         view.crop_drag = Some(CropDrag::new(
@@ -10802,6 +10812,16 @@ mod tests {
         let start = egui::pos2(500., 300.);
         let end = egui::pos2(200., 150.);
         frame(&mut view, vec![], false);
+        // A click (on the comparison's Hide, say) is not a selection.
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(start), button(start, true, false)],
+            false,
+        );
+        frame(&mut view, vec![button(start, false, false)], false);
+        frame(&mut view, vec![], false);
+        assert!(view.crop_drag.is_none());
+        assert_eq!(view.crop, [0., 0., 1280., 640.]);
         frame(
             &mut view,
             vec![egui::Event::PointerMoved(start), button(start, true, false)],

@@ -158,7 +158,13 @@ and a token listbox with option descriptions, placed and driven by shared
 Preferences, the capture menu, the region aspect picker and the recording editor. AppKit's token `ClosurePopUpButton` trigger replaces the
 capture menu's glass popups and the recording editor's stock popups; its native
 menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
-line. Screenshot editor selects remain stock on both hosts.
+line. The screenshot editor's selects use the same primitives: Crop's Aspect ratio,
+the selected text's Font, the export bar's Output size (with shipping's option
+descriptions) and format suffix on both hosts, plus AppKit's Save quality, Compress
+and file-size unit, which already did. The text style pickers draw shipping's
+`TextStylePicker` trigger (preview chip, label, chevron) over chip rows; AppKit's
+`ClosurePopUpButton` draws the selected item's chip. The header zoom preset keeps a
+token trigger over a plain menu on both hosts, matching shipping's native `<select>`.
 Recording editor number fields (crop, output size, trim; wgpu also Position) follow
 `NumberInput`: wgpu `primitives::NumberInput` and AppKit `TokenNumberField` draw the
 token field with Increase/Decrease steppers ("Increase {label}", hidden while
@@ -556,8 +562,35 @@ Merge visible, Flatten image, Duplicate and Delete. Image Width/Height/X/Y
 live; `Request::Live` folds each field's burst into one undo step, and edits made
 while a job runs queue on the host. Annotation stroke color and width, opacity,
 fill and shadow also apply live (Apply style and Reset fields are gone): a burst in
-one field folds into one undo step and each toggle is its own. Native controls keep
-their own styling.
+one field folds into one undo step and each toggle is its own.
+The inspector sections slice then lays Properties out like shipping's
+`.screenshot-properties`. Under the heading each section has `--s-5` padding, a
+`--s-5` item gap and a rule below; labels sit `--s-3` above their control in
+`--text-sm` muted text, numbers pair in two `--s-4`-apart columns, hints are
+`--text-sm` subtle paragraphs and checkboxes are 15 pt `.screenshot-check-row`
+boxes. Sections follow shipping order: a selected layer opens with Shift rotation
+snap (and its increment hint), then image Width/Height/X/Y, or text (Text style
+picker showing the layer's current treatment, Text, Font beside Size, B/I/alignment,
+Text color, Text background, Background color, Drop shadow), or annotation (Stroke,
+Stroke color, Stroke width, Opacity, Drop shadow, Filled shape, Fill color, Curve).
+Drop shadow is shipping's `DropShadowFields`: the check row, then Shadow color
+swatches, Opacity and Blur sliders and the X/Y offset pair indented to the label.
+Drawing tools show the grouped-shape picker (Shapes), the tool preview, Stroke,
+Color/Stroke color, Size and Opacity sliders, Filled shape, Fill color and Drop
+shadow; Text shows New text style, New text size and Drop shadow; the Eraser keeps
+its intro, mode group, sliders and hints; Crop shows the Aspect ratio select and,
+once a selection is dragged, its read-only Width/Height, Clear and the pulsing
+Apply crop, or shipping's drag hint. Native-only rows and copy are gone: the Outline
+and Rounded plate controls (the Outlined and Rounded Box styles set them, and "Text
+background" adds shipping's `#111318` plate, clearing both) and the per-tool helper
+paragraphs. wgpu draws every row from `editor/inspector.rs` with the shared
+`NumberInput`, `RangeSlider`, `Select` and `ColorField` primitives; its Crop tool
+arms a new selection whenever it is active, as shipping's does. AppKit follows the
+same order, spacing and labels for the selected layer and text, Text defaults, the
+Eraser and the crop Aspect ratio, but still differs: its drawing defaults keep
+Width/Opacity number fields and a two-column shadow grid, its Crop keeps native
+X/Y/Width/Height fields and Draw crop, it has no grouped-shape picker, and the
+inspector remains 272 points wide (wgpu 230) rather than shipping's 320 px column.
 X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
@@ -2356,8 +2389,8 @@ open. Copy still uses full-resolution edited PNG pixels. Both actions retain the
 exercise section/resize visibility, pending-work gates, overwrite/new-file/adoption
 and estimate states; X11 export tests save from every section. Windows/Wayland
 presentation and physical AppKit acceptance remain open, rather than being inferred
-from shared code or rendered CI fixtures. The inspector layout still differs from
-Tauri (see the editor chrome slice). The comparison's split follows shipping
+from shared code or rendered CI fixtures. The inspector follows shipping's
+sections, with the remaining differences listed in the inspector sections slice. The comparison's split follows shipping
 `CompressionPreview`: the round handle drags on both hosts even with a drawing tool,
 the bottom strip and the focused split's range keys (arrows 0.1 %, Page Up/Down a
 tenth of the 6–94 % span, Home/End) are off while drawing or processing, and
