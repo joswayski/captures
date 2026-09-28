@@ -927,10 +927,6 @@ fn media_hover_progress(
     )
 }
 
-/// Shipping `.thumbnail-media img`: cover-cropped media, clipped to the card.
-/// On hover it takes `blur(2px) brightness(.5) scale(1.015)`. egui has no
-/// per-image blur, so a pre-blurred card-sized copy fades in over the sharp
-/// image while both darken and scale.
 /// `--thumbnail-card-shadow` under a card, plus the hovered pile's
 /// `0 0 0 1px rgba(accent, .55), 0 0 22px rgba(accent, .28)` at `pile.glow`,
 /// all through the card's transform (`map`).
@@ -1050,6 +1046,10 @@ fn paint_posed_pile_card(
     );
 }
 
+/// Shipping `.thumbnail-media img`: cover-cropped media, clipped to the card.
+/// On hover it takes `blur(2px) brightness(.5) scale(1.015)`. egui has no
+/// per-image blur, so a pre-blurred card-sized copy fades in over the sharp
+/// image while both darken and scale.
 fn paint_media(
     ui: &egui::Ui,
     card: egui::Rect,
