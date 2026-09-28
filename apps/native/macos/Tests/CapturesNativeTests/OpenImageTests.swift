@@ -16,8 +16,7 @@ final class OpenImageTests: XCTestCase {
         let transport = OpenImageTransport(image: folder.appendingPathComponent("source.png").path)
         let controller = LiveCaptureController(root: root, window: window,
             tokens: try XCTUnwrap(Tokens.variants["light-mustard"]),
-            historyRoot: folder.path, settingsPath: folder.path, transport: transport,
-            showPreferences: {})
+            historyRoot: folder.path, settingsPath: folder.path, transport: transport)
         defer { withExtendedLifetime(controller) {} }
         controller.openImages(["/first.png", "/second.png"])
         try waitUntil { !controller.externalOpenPending && root.subviews.compactMap {
@@ -48,7 +47,7 @@ final class OpenImageTests: XCTestCase {
         let root = Surface(frame: frame); window.contentView = root
         let controller = LiveCaptureController(root: root, window: window,
             tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]),
-            historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
+            historyRoot: history.path, settingsPath: settingsPath)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         controller.openImages([source.path])
@@ -166,7 +165,7 @@ final class OpenImageTests: XCTestCase {
         let root = Surface(frame: frame); window.contentView = root
         let controller = LiveCaptureController(root: root, window: window,
             tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]),
-            historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
+            historyRoot: history.path, settingsPath: settingsPath)
         defer { withExtendedLifetime(controller) {} }
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
             .first?.documentView as? HistoryGridView)
@@ -281,7 +280,7 @@ final class OpenImageTests: XCTestCase {
             window.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
             let controller = LiveCaptureController(root: root, window: window,
                 tokens: tokens,
-                historyRoot: history.path, settingsPath: settingsPath, showPreferences: {})
+                historyRoot: history.path, settingsPath: settingsPath)
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             controller.openImages(container == "gif" ? ["/unsupported.tiff", source.path] : [source.path])
@@ -374,8 +373,7 @@ final class OpenImageTests: XCTestCase {
         let root = Surface(frame: frame); window.contentView = root
         let controller = LiveCaptureController(root: root, window: window,
             tokens: try XCTUnwrap(Tokens.variants["light-mustard"]),
-            historyRoot: history.path, settingsPath: folder.appendingPathComponent("settings.json").path,
-            showPreferences: {})
+            historyRoot: history.path, settingsPath: folder.appendingPathComponent("settings.json").path)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         controller.openImages([first.path, second.path])
@@ -408,7 +406,7 @@ final class OpenImageTests: XCTestCase {
         settings["output_directory"] = folder.path
         _ = try settingsBridge.request(["operation": "save", "path": settingsPath, "settings": settings])
         let transport = OpenImageTransport(image: png.path, withDisplay: true, realHistory: true)
-        let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
         let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
@@ -418,13 +416,11 @@ final class OpenImageTests: XCTestCase {
         window.appearance = NSAppearance(named: .aqua)
         let controller = LiveCaptureController(root: root, window: window,
             tokens: tokens,
-            historyRoot: folder.path, settingsPath: settingsPath, transport: transport,
-            showPreferences: {})
+            historyRoot: folder.path, settingsPath: settingsPath, transport: transport)
         defer { withExtendedLifetime(controller) {} }
         defer { NSApp.windows.filter { $0.title.hasPrefix(EditorWindowTitle.screenshot) }.forEach { $0.orderOut(nil) } }
         window.makeKeyAndOrderFront(nil)
-        try waitUntil { root.subviews.compactMap { $0 as? CaptureButton }
-            .first { $0.title == "Capture display" }?.isEnabled == true }
+        try waitUntil { controller.captureReady }
         controller.setPermissionsVisible(true)
         controller.openImages(["/invalid.tiff", png.path, png.path])
         LiveCaptureController.flush()
@@ -485,8 +481,7 @@ final class OpenImageTests: XCTestCase {
         let root = Surface(frame: frame); window.contentView = root
         let controller = LiveCaptureController(root: root, window: window,
             tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]),
-            historyRoot: folder.path, settingsPath: nil, transport: transport,
-            showPreferences: {})
+            historyRoot: folder.path, settingsPath: nil, transport: transport)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
@@ -518,8 +513,7 @@ final class OpenImageTests: XCTestCase {
         let root = Surface(frame: frame); window.contentView = root
         let controller = LiveCaptureController(root: root, window: window,
             tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]),
-            historyRoot: folder.path, settingsPath: settingsPath, transport: transport,
-            showPreferences: {})
+            historyRoot: folder.path, settingsPath: settingsPath, transport: transport)
         defer { withExtendedLifetime(controller) {} }
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
             .first?.documentView as? HistoryGridView)

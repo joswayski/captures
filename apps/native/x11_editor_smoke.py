@@ -882,7 +882,7 @@ def main():
             shot(root, "history")
         else:
             shot(root, "history")
-            click(root, 107, 554)  # First History card: Edit, below the two-line action row.
+            click(root, 107, 432)  # First History card: Edit, below the header and filters.
             editor = wait(lambda: windows("Captures Screenshot Editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
@@ -954,7 +954,7 @@ def main():
             run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
-        def history_edit_point(edit_y=554):
+        def history_edit_point(edit_y=432):
             # History cards are newest first in a three-column grid (1020 px window,
             # 24 px padding, 16 px gaps). Edit is the left action of the card body.
             entries = sorted((json.loads(path.read_text()) for path in history.glob("*/metadata.json")
@@ -965,7 +965,7 @@ def main():
             card_width = (972 - 2 * 16) / 3
             return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
 
-        def reopen(edit_y=554, keep_banner=False):
+        def reopen(edit_y=432, keep_banner=False):
             export_bar["open"] = False  # Every editor window starts collapsed.
             tool_state["draw"] = "rectangle"  # Each editor starts with Rectangle.
             click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.

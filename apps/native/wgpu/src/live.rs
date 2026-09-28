@@ -1172,6 +1172,8 @@ pub struct Live {
     card_restoring: Option<PreviewGuard>,
     /// Shipping "✓ Restored" feedback, shown for `ACTION_FEEDBACK_MS`.
     card_restored: Option<(String, Instant)>,
+    /// The latest progress message, for tests and diagnostics. Shipping
+    /// History has no status line; failures show in `error` (`.history-error`).
     status: String,
     error: Option<String>,
     pending: usize,
@@ -1265,6 +1267,8 @@ pub struct Live {
     requested_capture: Option<CaptureRequest>,
     restore_root_visible: bool,
     permission_recovery_requested: bool,
+    /// The denied-capture error that last opened permission recovery.
+    permission_error_offered: Option<String>,
     /// A capture-menu note link asked the workbench to open Preferences here.
     preference_target_requested: Option<PreferenceTarget>,
     /// A start or display switch failed while New Capture stayed open.
@@ -1558,6 +1562,7 @@ impl Live {
             requested_capture: None,
             restore_root_visible: true,
             permission_recovery_requested: false,
+            permission_error_offered: None,
             preference_target_requested: None,
             controls_error: None,
             permission_recovery_visible: false,
@@ -1711,7 +1716,18 @@ impl Live {
             && self.requested_capture.is_none()
     }
 
+    /// Shipping answers a denied capture with its permission dialog
+    /// (`report_capture_error`); History has no permissions button. A new
+    /// denied-capture error opens permission recovery once.
     pub fn take_permission_recovery_requested(&mut self) -> bool {
+        let denied = self
+            .error
+            .as_ref()
+            .filter(|error| captures_app::permission_recovery::is_permission_denied(error));
+        if denied != self.permission_error_offered.as_ref() {
+            self.permission_error_offered = denied.cloned();
+            self.permission_recovery_requested |= denied.is_some();
+        }
         std::mem::take(&mut self.permission_recovery_requested)
     }
 
@@ -1846,9 +1862,17 @@ impl Live {
         // (for example Wayland, where the pointer position is unavailable).
         if let Some(id) = captures_capture::pointer_position()
             .and_then(|point| captures_capture::XcapBackend.display_id_at_point(point))
-            .filter(|id| self.displays.iter().any(|display| &display.id == id))
         {
-            self.display_id = Some(id);
+            // History has no display list to refresh: like shipping's capture
+            // menu, list the displays again when the pointer is on a new one.
+            if !self.displays.iter().any(|display| display.id == id)
+                && let Ok(displays) = captures_capture::XcapBackend.displays()
+            {
+                self.displays = displays;
+            }
+            if self.displays.iter().any(|display| display.id == id) {
+                self.display_id = Some(id);
+            }
         }
         let target = capture_target(frame, &self.displays, self.display_id.as_deref());
         self.countdown_target = target;
@@ -6250,7 +6274,8 @@ impl Live {
                         left: margin("s-8"),
                         right: margin("s-8"),
                         top: margin("s-8"),
-                        bottom: margin("s-5"),
+                        // Shipping `.history-shell` gap before the filters.
+                        bottom: margin("s-6"),
                     }),
             )
             .show(ui, |ui| {
@@ -6264,23 +6289,12 @@ impl Live {
                     enabled: !busy,
                 },
             );
-            ui.add_space(t.number("s-5"));
-            let can_start_capture = self.can_start_capture();
-            let (action, _) =
-                capture_actions(ui, t, &self.displays, &mut self.display_id, can_start_capture);
-            match action {
-                Some(CaptureAction::RefreshDisplays) => self.send(Request::Displays),
-                Some(CaptureAction::Capture(request)) => {
-                    self.request_capture(request);
-                    self.launch_requested_capture(ui.ctx(), frame, settings());
-                }
-                Some(CaptureAction::Permissions) => self.permission_recovery_requested = true,
-                None => {}
-            }
+            // Shipping History is only the header, filters and grid: captures
+            // start from the tray, shortcuts and capture menu.
             if self.can_hide == Some(false) {
+                ui.add_space(t.number("s-5"));
                 ui.colored_label(t.color("theme-signal"), "Display, region and window capture unavailable: this Wayland backend cannot hide and verify the root window.");
             }
-            ui.label(RichText::new(&self.status).small().color(t.color("text-muted")));
         });
         match header_event {
             Some(crate::history::HeaderEvent::DeleteAll) => self.delete_all_history(now),
@@ -7245,149 +7259,37 @@ fn clipboard_matches(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CaptureAction {
-    RefreshDisplays,
-    Capture(CaptureRequest),
-    Permissions,
-}
-
-/// The History header's display and capture actions. The row wraps instead of
-/// running past the window edge, as shipping's History header reflows when it
-/// runs out of width: under the token fonts (DejaVu Sans on Linux) it is wider
-/// than the 1000px root window. Returns the clicked action and the row's rect.
-fn capture_actions(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    displays: &[DisplayDescriptor],
-    display_id: &mut Option<String>,
-    can_start_capture: bool,
-) -> (Option<CaptureAction>, egui::Rect) {
-    let mut action = None;
-    let row = ui.horizontal_wrapped(|ui| {
-        let labels: Vec<String> = displays
-            .iter()
-            .map(|display| {
-                format!(
-                    "{} — {}×{}{}",
-                    display.name,
-                    display.width,
-                    display.height,
-                    if display.is_primary { " (Primary)" } else { "" }
-                )
-            })
-            .collect();
-        let choices: Vec<_> = displays
-            .iter()
-            .zip(&labels)
-            .map(|(display, label)| {
-                crate::primitives::SelectOption::new(Some(display.id.clone()), label.as_str())
-            })
-            .collect();
-        let trigger = displays
-            .iter()
-            .find(|d| Some(&d.id) == display_id.as_ref())
-            .map_or("No display", |d| d.name.as_str());
-        if let Some(chosen) =
-            crate::primitives::Select::new("history-display", "Display", ui.spacing().combo_width)
-                .trigger_text(trigger)
-                .show(ui, t, &choices, display_id)
-                .chosen
-        {
-            *display_id = chosen;
-        }
-        ui.label("Display");
-        if ui.button("Refresh displays").clicked() {
-            action = Some(CaptureAction::RefreshDisplays);
-        }
-        for (label, request) in [
-            ("New Capture", CaptureRequest::NewCapture),
-            ("Capture display", CaptureRequest::Display),
-            ("Capture region", CaptureRequest::Region),
-            ("Capture window", CaptureRequest::Window),
-        ] {
-            if ui
-                .add_enabled(can_start_capture, egui::Button::new(label))
-                .clicked()
-            {
-                action = Some(CaptureAction::Capture(request));
-            }
-        }
-        if ui.button("Capture permissions…").clicked() {
-            action = Some(CaptureAction::Permissions);
-        }
-    });
-    (action, row.response.rect)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
 
     #[test]
-    fn history_capture_actions_wrap_inside_the_history_window() {
-        // Token fonts (DejaVu Sans on Linux CI) are wider than egui's default.
-        let ctx = egui::Context::default();
-        crate::ui_fonts::install(&ctx);
-        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
-        tokens.apply(&ctx, true);
-        let displays = [DisplayDescriptor {
-            id: "0".into(),
-            name: "screen".into(),
-            x: 0,
-            y: 0,
-            width: 1280,
-            height: 720,
-            scale_factor: 1.,
-            is_primary: true,
-        }];
-        let side = tokens.number("s-8");
-        let layout = |width: f32| {
-            let mut display_id = Some("0".into());
-            let mut layout = (egui::Rect::NOTHING, egui::Rect::NOTHING);
-            for _ in 0..2 {
-                // The first pass loads the fonts.
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(width, 720.),
-                        )),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        egui::Panel::top("live-header")
-                            .frame(egui::Frame::new().inner_margin(side))
-                            .show(ui, |ui| {
-                                let available = ui.max_rect();
-                                let (_, row) =
-                                    capture_actions(ui, &tokens, &displays, &mut display_id, true);
-                                layout = (available, row);
-                            });
-                    },
-                );
-                output.textures_delta.clear();
-            }
-            layout
-        };
-        // The Capture History window's default size: whether the row wraps
-        // here depends on the platform font, but it never runs past the margin.
-        let history = captures_app::app_windows::HISTORY;
-        let (available, row) = layout(history.width);
-        assert_eq!(available.right(), history.width - side);
-        assert!(
-            row.right() <= available.right(),
-            "row {row:?} runs past {available:?}"
+    fn a_denied_capture_opens_permission_recovery_once() {
+        // Shipping History has no permissions button; a denied capture opens
+        // recovery the way shipping's `report_capture_error` shows its dialog.
+        let root = tempfile::tempdir().unwrap();
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.error = Some("Could not start the capture".into());
+        assert!(!live.take_permission_recovery_requested());
+        let denied = format!(
+            "Could not start the capture: {}",
+            captures_capture::CaptureError::PermissionDenied
         );
-        // The window's minimum width is narrower than the actions in any
-        // font: the row must wrap.
-        let (available, row) = layout(history.min_width);
+        live.error = Some(denied.clone());
+        assert!(live.take_permission_recovery_requested());
         assert!(
-            row.right() <= available.right(),
-            "row {row:?} runs past {available:?}"
+            !live.take_permission_recovery_requested(),
+            "offered once per error"
         );
-        assert!(row.height() > 2. * tokens.number("h-md"));
+        live.error = None;
+        assert!(!live.take_permission_recovery_requested());
+        live.error = Some(denied);
+        assert!(
+            live.take_permission_recovery_requested(),
+            "a new denial offers again"
+        );
+        live.flush();
     }
 
     #[test]

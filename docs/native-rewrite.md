@@ -45,8 +45,20 @@ faces: Segoe UI Variable Text / Segoe UI on Windows, and on Linux the first
 fontconfig match for Inter, Roboto, Helvetica Neue, Arial, then `sans-serif` (as
 WebKitGTK resolves it). A named `semibold` family backs `--weight-semibold`; egui's
 faces remain glyph fallbacks. Under these wider faces the screenshot editor's header
-Canvas toolbar compacts before its zoom controls at the 760px minimum, and the History
-capture actions wrap inside the History window instead of running past its edge.
+Canvas toolbar compacts before its zoom controls at the 760px minimum.
+
+Both native History windows now match shipping `CaptureHistory` (header, counted
+filters, `.history-error`, interrupted recordings, grid). The native capture row is
+gone: captures start from the tray, shortcuts and the New Capture menu (which owns
+display switching), Preferences opens from the tray and app reactivation, and the
+filter counts replace the "N of M captures" line. History reloads after every change
+it makes, as shipping does on `capture-history-changed`, so Refresh is gone too;
+AppKit relists displays on screen-parameter changes and wgpu relists them when the
+pointer is on an unknown display. Permission recovery moved to the denied capture,
+where shipping shows its dialog: AppKit keeps Restart & Retry and opens the
+permission cards only when that prompt is unavailable; wgpu opens its recovery
+dialog. X11 smokes drive captures through the shortcuts and open recovery with
+`--live --permission-dialog ready`. The AppKit side is XCTest-only.
 
 Both hosts now follow the shipping window model. **Capture History** (1020 × 720,
 minimum 640 × 440), **Captures Preferences** (880 × 660, minimum 560 × 440) and the
@@ -137,8 +149,7 @@ Selects share one primitive per host. wgpu draws the `CustomSelect` field trigge
 (media palette in the capture menu, borderless for the recording filename format)
 and a token listbox with option descriptions, placed and driven by shared
 `captures_app::controls::select` (ArrowUp/Down, Home/End, Enter/Space, Escape), in
-Preferences, the capture menu, the region aspect picker, the recording editor and
-the History display picker. AppKit's token `ClosurePopUpButton` trigger replaces the
+Preferences, the capture menu, the region aspect picker and the recording editor. AppKit's token `ClosurePopUpButton` trigger replaces the
 capture menu's glass popups and the recording editor's stock popups; its native
 menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
 line. Screenshot editor selects remain stock on both hosts.
@@ -179,8 +190,7 @@ Rendering was checked on X11. AppKit is covered by XCTest only.
 
 Shortcut, tray and New Capture flows now start on the display under the pointer,
 like the shipping `capture_display_at_point`: wgpu resolves it through the shared
-`XcapBackend::display_id_at_point` and AppKit through `NSEvent.mouseLocation`, and
-the workspace display picker follows. When the pointer position is unavailable
+`XcapBackend::display_id_at_point` and AppKit through `NSEvent.mouseLocation`. When the pointer position is unavailable
 (Wayland) the current display is kept. Multi-monitor and mixed-DPI physical
 acceptance remains open.
 
@@ -213,8 +223,8 @@ checks are diagnostics; physical TCC/signature changes, OS microphone prompts,
 Windows presentation, accessibility and capture-time permission revocation/retry
 remain open. This slice does not close the onboarding acceptance gate.
 
-Completed native profiles now have an explicit permission-recovery dialog from
-the capture workspace. It shares prompt-free checks and explicit macOS screen/mic
+Completed native profiles now have a permission-recovery dialog, opened by a
+denied capture (see the History parity note above). It shares prompt-free checks and explicit macOS screen/mic
 requests with setup, but never calls completion or exposes first-run restart.
 Done remains available after denial/check errors, retaining the workspace and
 editors; queued external media waits until dismissal. Capture and shortcut actions

@@ -21,7 +21,7 @@ final class RecordingRecoveryTests: XCTestCase {
         let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
             historyRoot: folder.path, settingsPath: nil, transport: transport,
-            recoveryWorker: worker, showPreferences: {})
+            recoveryWorker: worker)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let panel = try recoveryPanel(root)
@@ -84,7 +84,7 @@ final class RecordingRecoveryTests: XCTestCase {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: folder) }
-            let frame = NSRect(x: 0, y: 0, width: 1000, height: 720)
+            let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
             let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close() }
@@ -100,13 +100,18 @@ final class RecordingRecoveryTests: XCTestCase {
             ])
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
                 historyRoot: folder.path, settingsPath: nil, transport: EmptyHistoryTransport(),
-                recoveryWorker: worker, showPreferences: {})
+                recoveryWorker: worker)
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let panel = try recoveryPanel(root)
             try waitUntil { worker.listCount > 0 && !panel.isHidden }
-            // The shipping card spans the History column; its origin follows the header.
-            XCTAssertEqual(panel.frame, NSRect(x: 28, y: 192, width: 944, height: 176))
+            // The shipping card spans the History column; with no captures (no
+            // filters) it follows the header by the `.history-shell` gap.
+            let lede = try XCTUnwrap(root.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue.contains("appear here for 30 days") })
+            XCTAssertEqual(panel.frame.minY, lede.frame.maxY + tokens.number("s-6"), accuracy: 0.5)
+            XCTAssertEqual(panel.frame.minX, 28)
+            XCTAssertEqual(panel.frame.size, NSSize(width: 944, height: 176))
             XCTAssertTrue(root.bounds.contains(panel.frame))
             let row = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
             let reason = try XCTUnwrap(row.subviews.compactMap { $0 as? NSTextField }
@@ -137,7 +142,7 @@ final class RecordingRecoveryTests: XCTestCase {
             let longError = "Recovery root is temporarily unavailable. "
                 + String(repeating: "The bundle must remain on disk for manual inspection. ", count: 5)
             worker.listError = AppBridgeError.backend(longError)
-            try XCTUnwrap(buttons(root, title: "Refresh").first).performClick(nil)
+            controller.refreshHistory()
             try waitUntil { tryRecoveryError(panel).contains("Recovery root is temporarily unavailable.") }
             let errorContent = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)
             let errorField = try XCTUnwrap(errorContent.subviews.compactMap { $0 as? NSTextField }
@@ -180,7 +185,7 @@ final class RecordingRecoveryTests: XCTestCase {
             let worker = RecoveryFixtureWorker(drafts: [try draft("recoverable", identity: "identity", kind: "gif")])
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
                 historyRoot: folder.path, settingsPath: nil, transport: EmptyHistoryTransport(),
-                recoveryWorker: worker, showPreferences: {})
+                recoveryWorker: worker)
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let panel = try recoveryPanel(root)
@@ -225,7 +230,7 @@ final class RecordingRecoveryTests: XCTestCase {
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
             historyRoot: folder.path, settingsPath: settingsPath,
             transport: EmptyHistoryTransport(initialHistoryGate: initialHistoryGate),
-            recoveryWorker: worker, showPreferences: {})
+            recoveryWorker: worker)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let panel = try recoveryPanel(root)
@@ -295,7 +300,7 @@ final class RecordingRecoveryTests: XCTestCase {
         let controller = LiveCaptureController(root: root, window: window,
             tokens: try XCTUnwrap(Tokens.variants["light-mustard"]), historyRoot: folder.path,
             settingsPath: nil, transport: EmptyHistoryTransport(artifacts: artifacts),
-            recoveryWorker: worker, showPreferences: {})
+            recoveryWorker: worker)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let table = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first?.documentView as? HistoryGridView)

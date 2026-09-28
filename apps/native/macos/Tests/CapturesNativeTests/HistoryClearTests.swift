@@ -66,7 +66,7 @@ final class HistoryClearTests: XCTestCase {
                 failPartway: false, kinds: ["video", "screenshot", "gif", "screenshot", "video"])
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
                 historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
-                recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+                recoveryWorker: EmptyRecoveryWorker())
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let grid = try historyGrid(root)
@@ -100,7 +100,8 @@ final class HistoryClearTests: XCTestCase {
             XCTAssertEqual(grid.selectedRow, 1)
             XCTAssertTrue(try XCTUnwrap(grid.card(at: 1)).selected)
             transport.promote(id: "item-3")
-            try button("Refresh").performClick(nil)
+            // Shipping reloads History on `capture-history-changed`; it has no Refresh button.
+            controller.refreshHistory()
             try waitUntil { grid.selectedRow == 0 && grid.card(at: 0)?.artifactID == "item-3" }
             XCTAssertEqual(try button("Screenshots 2").state, .on)
             // Keyboard: arrows move the explicit selection within the filter.
@@ -119,8 +120,9 @@ final class HistoryClearTests: XCTestCase {
             let gif = try XCTUnwrap(grid.card(at: 0))
             XCTAssertEqual(actions(0), ["Edit", "Save file"])
             gif.actionButtons[1].performClick(nil)
-            try waitUntil { transport.saveCount == 1 && labels().contains { $0.contains("Saved recording to") } }
-            try waitUntil { actions(0) == ["Edit", "Show in Folder"] }
+            try waitUntil { transport.saveCount == 1 && actions(0) == ["Edit", "Show in Folder"] }
+            XCTAssertFalse(labels().contains { $0.contains("Saved recording to") },
+                           "shipping History has no status line")
             XCTAssertEqual(transport.savedDirectory, settings["output_directory"] as? String)
             XCTAssertEqual(grid.selectedRow, 0, "a card action selects its card")
             for title in ["All 5", "Screenshots 2", "Video 2", "GIF 1", "Delete all"] {
@@ -134,9 +136,8 @@ final class HistoryClearTests: XCTestCase {
                 try waitUntil { grid.numberOfRows == 1 }
             }
             transport.remove(kind: "gif")
-            try button("Refresh").performClick(nil)
-            // The filtered-empty copy lives in the grid area: Refresh also reloads
-            // displays, and that status message lands after History's.
+            controller.refreshHistory()
+            // The filtered-empty copy lives in the grid area.
             try waitUntil { grid.numberOfRows == 0 && labels().contains("No captures match this filter.") }
             XCTAssertEqual(grid.selectedRow, -1)
             XCTAssertFalse(try button("GIF 0").isEnabled)
@@ -172,7 +173,7 @@ final class HistoryClearTests: XCTestCase {
             failPartway: false, kinds: ["screenshot", "video"])
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
             historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
-            recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+            recoveryWorker: EmptyRecoveryWorker())
         defer { withExtendedLifetime(controller) {} }
         window.orderFront(nil)
         let grid = try historyGrid(root)
@@ -180,37 +181,53 @@ final class HistoryClearTests: XCTestCase {
         func control(_ title: String) throws -> NSView {
             try XCTUnwrap(root.subviews.first { ($0 as? NSButton)?.title == title })
         }
+        let lede = try XCTUnwrap(root.subviews.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue.contains("appear here for 30 days") })
         func assertInside(_ width: CGFloat) throws {
-            for title in ["New Capture…", "Preferences", "Refresh", "Screen access",
-                          "Capture display", "Capture region", "Capture window"] {
+            for title in ["All 2", "Screenshots 1", "Video 1", "Delete all"] {
                 let frame = try control(title).frame
                 XCTAssertGreaterThanOrEqual(frame.minX, 28, "\(title) at \(width)")
                 XCTAssertLessThanOrEqual(frame.maxX, width - 28 + 0.5, "\(title) at \(width)")
             }
             XCTAssertLessThanOrEqual(grid.visibleCards.map(\.frame.maxX).max() ?? 0, grid.bounds.width + 0.5)
+            // Shipping History is only the header, filters and grid: the
+            // filters follow the header by the `.history-shell` gap.
+            let headerBottom = max(lede.frame.maxY, try control("Delete all").frame.maxY)
+            XCTAssertEqual(try control("All 2").frame.minY, headerBottom + tokens.number("s-6"),
+                           accuracy: 0.5, "filters at \(width)")
         }
+        // Capture, display, permission and Preferences actions live in the
+        // tray, shortcuts and capture menu, as in shipping.
+        for title in ["New Capture…", "Preferences", "Refresh", "Screen access",
+                      "Capture display", "Capture region", "Capture window"] {
+            XCTAssertNil(root.subviews.first { ($0 as? NSButton)?.title == title }, title)
+        }
+        XCTAssertFalse(root.subviews.contains { $0 is NSPopUpButton }, "no display picker")
+        XCTAssertFalse(root.subviews.contains {
+            guard let label = $0 as? NSTextField, !label.isHidden else { return false }
+            return label.stringValue.contains(" captures · ")
+        }, "shipping shows counts on the filters, not a status line")
 
-        // Wide: one capture row, three columns of cards.
+        // Wide: three columns of cards.
         try assertInside(root.bounds.width)
-        XCTAssertEqual(try control("Capture window").frame.minY, try control("Refresh").frame.minY)
         XCTAssertFalse(grid.compact)
         let wideTop = grid.visibleCards[0].frame.minY
         XCTAssertEqual(grid.visibleCards[1].frame.minY, wideTop, "two cards share the first row")
 
-        // Minimum: the capture row wraps and the grid is one compact column.
+        // Minimum: Delete all stacks under the heading and the grid is one compact column.
         window.setContentSize(history.minimumSize)
         try waitUntil { root.bounds.width == history.minimumSize.width }
         try assertInside(root.bounds.width)
-        XCTAssertGreaterThan(try control("Capture window").frame.minY, try control("Refresh").frame.minY)
+        XCTAssertGreaterThan(try control("Delete all").frame.minY, lede.frame.minY)
         XCTAssertTrue(grid.compact)
         try waitUntil { grid.visibleCards.count >= 1 }
         let cards = grid.visibleCards.sorted { $0.frame.minY < $1.frame.minY }
         if cards.count > 1 { XCTAssertGreaterThan(cards[1].frame.minY, cards[0].frame.minY) }
 
-        // And back: the row and grid widen again.
+        // And back: the header and grid widen again.
         window.setContentSize(NSSize(width: history.size.width, height: 600))
         try waitUntil { !grid.compact }
-        XCTAssertEqual(try control("Capture window").frame.minY, try control("Refresh").frame.minY)
+        try assertInside(root.bounds.width)
     }
 
     func testRestoreBringsAScreenshotBackAsAFloatingPreview() throws {
@@ -235,7 +252,7 @@ final class HistoryClearTests: XCTestCase {
         defer { previews.close() }
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
             historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
-            recoveryWorker: EmptyRecoveryWorker(), miniPreviews: previews, showPreferences: {})
+            recoveryWorker: EmptyRecoveryWorker(), miniPreviews: previews)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let grid = try historyGrid(root)
@@ -297,7 +314,7 @@ final class HistoryClearTests: XCTestCase {
         defer { previews.close() }
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
             historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
-            recoveryWorker: EmptyRecoveryWorker(), miniPreviews: previews, showPreferences: {})
+            recoveryWorker: EmptyRecoveryWorker(), miniPreviews: previews)
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let grid = try historyGrid(root)
@@ -335,7 +352,7 @@ final class HistoryClearTests: XCTestCase {
             failPartway: false, kinds: ["screenshot", "video", "screenshot"], missing: ["item-1"])
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
             historyRoot: directory.path, settingsPath: nil, transport: transport,
-            recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+            recoveryWorker: EmptyRecoveryWorker())
         defer { withExtendedLifetime(controller) {} }
         window.makeKeyAndOrderFront(nil)
         let grid = try historyGrid(root)
@@ -389,7 +406,7 @@ final class HistoryClearTests: XCTestCase {
             let controller = LiveCaptureController(root: root, window: window,
                 tokens: tokens, historyRoot: directory.path,
                 settingsPath: nil, transport: transport,
-                recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+                recoveryWorker: EmptyRecoveryWorker())
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let clear = try XCTUnwrap(root.subviews.compactMap { $0 as? HistoryButton }
@@ -434,9 +451,7 @@ final class HistoryClearTests: XCTestCase {
                     && clear.isEnabled == failPartway && clear.isHidden == !failPartway
             }
             if !failPartway {
-                let refresh = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
-                    .first { $0.title == "Refresh" })
-                try waitUntil { refresh.isEnabled }
+                try waitUntil { controller.historyIdle }
                 XCTAssertFalse(empty.isHidden)
                 XCTAssertEqual(empty.titleLabel.stringValue, "No captures yet")
                 XCTAssertEqual(empty.bodyLabel.stringValue, "New screenshots, videos, and GIFs appear here automatically.")
@@ -483,7 +498,7 @@ final class HistoryClearTests: XCTestCase {
             failPartway: false, kinds: ["screenshot", "video"], missing: [])
         let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
             historyRoot: directory.path, settingsPath: nil, transport: transport,
-            recoveryWorker: EmptyRecoveryWorker(), showPreferences: {})
+            recoveryWorker: EmptyRecoveryWorker())
         defer { withExtendedLifetime(controller) {} }
         let grid = try historyGrid(root)
         try waitUntil { grid.numberOfRows == 2 }

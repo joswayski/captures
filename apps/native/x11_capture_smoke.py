@@ -297,9 +297,10 @@ def main():
                 "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
                 "output_directory": str(output / prefix / "exports"),
                 "new_capture_shortcut": "Ctrl+Shift+F10",
-                "region_shortcut": "Ctrl+Shift+F7" if args.target_shortcuts else "Super+Shift+S",
-                "window_shortcut": "Ctrl+Shift+F8" if args.target_shortcuts else "Alt+PrintScreen",
-                "display_shortcut": "Ctrl+Shift+F9" if args.target_shortcuts else "Shift+PrintScreen",
+                # Captures start from shortcuts (History has no capture buttons),
+                # so every chord must register on the private server.
+                "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+                "display_shortcut": "Ctrl+Shift+F9",
                 "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": auto_start,
                 "freeze_screen": freeze, "show_cursor_in_screenshots": False,
@@ -323,8 +324,10 @@ def main():
 
             def begin_selection(full_display=False, select=True, check_guidance=False):
                 nonlocal checked_toolbar_drag
-                # History header buttons under the token fonts: New Capture, Capture region, Capture window.
-                click(root, 380 if args.controls else (636 if mode == "region" else 769), 135)
+                # Shipping entry points (History has no capture buttons): the
+                # New Capture shortcut, or the region/window shortcut.
+                run("xdotool", "key", "ctrl+shift+F10" if args.controls
+                    else "ctrl+shift+F7" if mode == "region" else "ctrl+shift+F8")
                 selector = wait(lambda: windows(title), f"{mode} selector")[0]
                 if windows("Capture History"):
                     raise RuntimeError("capture workspace was not hidden")

@@ -280,7 +280,8 @@ before opening the editor, like shipping; a failed restore opens nothing.
 Launch with `--live [--history-root PATH]` on either native host. This is an
 explicit opt-in to real desktop capture, not a synthetic benchmark. The default
 history is beside the separate Captures Native settings file, never installed
-Preview history. Choose a display, request screen access if needed, and capture.
+Preview history. Capture from the tray, the shortcuts or New Capture, on the display
+under the pointer; History reloads itself and has no capture controls, as in shipping.
 The host hides its History and Preferences windows before capture and restores
 their prior visibility afterward. Capture History, Captures Preferences and first-run
 setup are separate, resizable windows, as in the shipping app; `--live

@@ -717,8 +717,10 @@ Changes apply as you make them; a typing burst in one field is one undo step.
 Custom shadows and pinned-font named styles are connected, including style/size/color
 choices for new text. Font import and physical input/IME/accessibility acceptance
 remain open.
-The native capture workspace includes a **Capture permissions** recovery dialog
-(**Screen access** on macOS) that reuses the setup permission cards. Check or refresh without prompting; request macOS
+Like the shipping app, the native Capture History window shows only its header,
+filters and grid; captures start from the tray, shortcuts and New Capture menu. A
+denied capture opens the native permission recovery: Restart & Retry on macOS, or a
+**Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.

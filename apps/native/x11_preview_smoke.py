@@ -441,8 +441,7 @@ def main():
                 "--settings-file", str(settings), "--quit-after", "300" if args.lifecycle else "180"]
                 + (["--reduced-motion"] if args.reduced_motion else []))
             root = wait(lambda: windows("Capture History"), "root workspace")[0]
-            # Leave the left-hand preview/capture area unobstructed. Both root
-            # capture buttons still fit on this desktop after moving the window.
+            # Leave the left-hand preview/capture area unobstructed.
             def move_root(x, y):
                 # windowmove --sync returns on any location change. After a
                 # remap Openbox may still be placing the workspace, so that
@@ -469,13 +468,13 @@ def main():
                 return {p for p in history.glob("*/metadata.json") if not p.parent.name.startswith(".")}
 
             def begin():
-                # Region is root-local x=575. Keep its desktop x=875 between
-                # the always-on-top preview windows at x=0..340 and 940..1280,
-                # including their transparent margins and expanded stacks.
+                # Shipping History has no capture buttons: start from the
+                # region shortcut. Park the pointer at desktop x=875, between
+                # the always-on-top preview windows at x=0..340 and 940..1280
+                # (including their transparent margins and expanded stacks).
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
                 wait(lambda: windows("Capture History"), "workspace restored before positioning")
-                move_root(300, 280)
-                click(root, 636, 135)  # Capture region in the token-font History header.
+                run("xdotool", "mousemove", "--sync", "875", "415", "sleep", ".2", "key", "ctrl+shift+F7")
                 selector = wait(lambda: windows(SELECTOR), "region selector")[0]
                 wait_guidance(selector, "painted region guidance")
                 return selector

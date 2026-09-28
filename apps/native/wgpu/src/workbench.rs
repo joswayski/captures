@@ -1505,7 +1505,7 @@ impl eframe::App for Workbench {
         }
         if focus_gained
             && self.preferences_state.permission_recovery_open()
-            && self.options.permission_dialog.is_none()
+            && self.options.permission_dialog.as_deref() != Some("error")
         {
             self.preferences_state.open_permission_recovery();
         }
