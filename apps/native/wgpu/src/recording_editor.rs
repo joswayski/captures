@@ -1813,7 +1813,7 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
                     ..
                 } => {
                     view.crop_gesture = None;
-                    if !pressed_here(ui, pos) {
+                    if !crate::primitives::pressed_on_layer(ui, pos) {
                         continue;
                     }
                     let handle = handle_positions(view.crop.unwrap())
@@ -2431,18 +2431,6 @@ fn show_overlay_play(
 ///
 /// `rect` is the whole row. Trim grips sit outside the selected interval so
 /// even a 1 ms selection leaves distinct start/end hit regions inside it.
-/// Whether a raw pointer press belongs to gestures drawn in `ui`: inside its
-/// clip and not on a layer above it. An open select's listbox is its own
-/// foreground area (not an egui `Popup`), so a press on one of its rows over
-/// the timeline or the crop must choose the row, not seek or drag beneath it.
-fn pressed_here(ui: &egui::Ui, pos: egui::Pos2) -> bool {
-    ui.clip_rect().contains(pos)
-        && ui
-            .ctx()
-            .layer_id_at(pos)
-            .is_none_or(|layer| layer == ui.layer_id())
-}
-
 fn show_trim_timeline(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -2541,7 +2529,7 @@ fn show_trim_timeline(
                 } => {
                     view.trim_gesture = None;
                     view.scrub = None;
-                    if !pressed_here(ui, pos) {
+                    if !crate::primitives::pressed_on_layer(ui, pos) {
                         continue;
                     }
                     if let Some(index) = handles(view.start_ms, view.end_ms)
