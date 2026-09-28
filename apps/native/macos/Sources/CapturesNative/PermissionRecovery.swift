@@ -102,3 +102,24 @@ final class CapturePermissionRecovery {
                                    "path": settingsPath, "bundle_id": bundleIdentifier])
     }
 }
+
+/// Shipping `report_capture_error` dialog copy (`captures_app::capture_error`):
+/// a failed tray, shortcut or menu capture shows a "Captures" alert, never the
+/// History error card.
+struct CaptureErrorCopy: Equatable {
+    let title: String
+    let button: String
+
+    static let current: CaptureErrorCopy = {
+        do { return try CaptureErrorCopy(transport: SettingsBridge()) }
+        catch { preconditionFailure("Capture error copy is unavailable: \(error.localizedDescription)") }
+    }()
+
+    init(transport: SettingsTransport) throws {
+        let response = try transport.request(["operation": "capture_error_copy"])
+        guard let copy = response["copy"] as? [String: Any],
+              let title = copy["title"] as? String, let button = copy["button"] as? String
+        else { throw SettingsStoreError.invalidResponse }
+        self.title = title; self.button = button
+    }
+}

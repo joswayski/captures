@@ -227,6 +227,8 @@ enum Request {
     },
     /// Shipping keyframes and transitions (`captures_app::motion`).
     Motion,
+    /// Shipping `report_capture_error` dialog copy for a failed capture.
+    CaptureErrorCopy,
     /// Shipping Screen Recording recovery dialog for a denied capture.
     PermissionRecoveryPrompt,
     PermissionRecoveryClassify {
@@ -335,6 +337,13 @@ fn response(request: *const c_char) -> Value {
         Ok(Request::Motion) => {
             json!({"ok":true,"motion":captures_app::motion::catalog()})
         }
+        Ok(Request::CaptureErrorCopy) => json!({
+            "ok":true,
+            "copy":{
+                "title":captures_app::capture_error::TITLE,
+                "button":captures_app::capture_error::OK,
+            },
+        }),
         Ok(Request::PermissionRecoveryPrompt) => ONBOARDING
             .lock()
             .map_err(|_| "The onboarding service is unavailable. Restart Captures.".to_owned())
@@ -558,6 +567,14 @@ mod tests {
                 "path":path,"bundle_id":"dev.captures.native"}));
             assert_eq!(reset["ok"], false);
         }
+    }
+
+    #[test]
+    fn capture_error_abi_shares_the_shipping_dialog_copy() {
+        let copy = settings_request(json!({"operation":"capture_error_copy"}));
+        assert_eq!(copy["ok"], true);
+        assert_eq!(copy["copy"]["title"], "Captures");
+        assert_eq!(copy["copy"]["button"], "OK");
     }
 
     #[test]

@@ -25,6 +25,31 @@ enum StillCaptureKind: Equatable {
     case window
 }
 
+/// A capture that waits for a fresh display list before it starts.
+enum PendingDisplayCapture: Equatable {
+    case still(StillCaptureKind)
+    case menu(recordingTarget: UnifiedCaptureTarget?, screenshotTarget: UnifiedCaptureTarget?)
+
+    /// The capture a failure would retry after a relaunch. New Capture and
+    /// recordings retry as Region, like shipping `report_capture_error`.
+    var retryKind: StillCaptureKind {
+        switch self {
+        case .still(let kind): return kind
+        case .menu: return .region
+        }
+    }
+}
+
+/// Shipping looks the display up for every capture
+/// (`capture_display_at_point`). List again when the list is empty or lacks
+/// the display under the pointer, so a failed or stale list recovers without
+/// a relaunch.
+func displayListNeedsRefresh(listed: [String], pointer: String?) -> Bool {
+    guard !listed.isEmpty else { return true }
+    guard let pointer else { return false }
+    return !listed.contains(pointer)
+}
+
 enum CaptureWindowRestoreAction: Equatable {
     case none
     case visible
@@ -91,8 +116,8 @@ final class LiveCaptureController: NSObject {
     /// The still capture a failure would retry after a relaunch. New Capture
     /// and recordings retry as Region, like shipping `report_capture_error`.
     private var captureAttemptKind: StillCaptureKind?
-    /// A retry that waits for the display list after a permission relaunch.
-    private var pendingRetryKind: StillCaptureKind?
+    /// A capture (or a permission-relaunch retry) waiting on a display list.
+    private var pendingDisplayCapture: PendingDisplayCapture?
     private weak var miniPreviews: MiniPreviewController?
     private weak var miniPreviewActions: MiniPreviewActions?
     private let initialSelectionID: String?
@@ -280,6 +305,13 @@ final class LiveCaptureController: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(displaysChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
+
+    /// The History error card's message, when it is showing one.
+    var historyError: String? { statusAlert ? status.stringValue : nil }
+
+    /// Shipping `recording_session_is_active`: a recording owns the capture
+    /// flow, so Screenshot Display captures directly instead of opening the menu.
+    var recordingSessionActive: Bool { recordingSession != nil }
 
     @objc private func displaysChanged() {
         guard !capturing, !historyRoot.isEmpty else { return }
@@ -547,7 +579,7 @@ final class LiveCaptureController: NSObject {
                 self.loadHistory(select: self.initialSelectionID, cleanup: { [weak self] in
                     self?.processNextOpenImage()
                 }); self.loadDisplays()
-            case .failure(let error): self.showError("Couldn’t locate native history", error) }
+            case .failure(let error): self.showHistoryError("Couldn’t locate native history", error) }
         }
     }
 
@@ -572,17 +604,22 @@ final class LiveCaptureController: NSObject {
                 self.status.stringValue = values.isEmpty
                     ? "No displays are available. Screen access may be required." : "Displays refreshed."
             case .failure(let error):
-                if let retry = self.pendingRetryKind {
-                    // The relaunched retry fails here, as shipping's retried capture would.
-                    self.pendingRetryKind = nil
-                    self.captureAttemptKind = retry
+                if let pending = self.pendingDisplayCapture {
+                    // The capture waiting on this list fails here, as
+                    // shipping's capture would.
+                    self.pendingDisplayCapture = nil
+                    self.captureAttemptKind = pending.retryKind
+                    self.showCaptureError("Couldn’t list displays", error)
+                } else {
+                    // Listing ahead of a capture is not a capture: the next
+                    // capture lists again and reports its own failure.
+                    self.status.stringValue = "Couldn’t list displays: \(error.localizedDescription)"
                 }
-                self.showError("Couldn’t list displays", error)
             }
             self.updateActions()
-            if case .success = result, let retry = self.pendingRetryKind, !self.displays.isEmpty {
-                self.pendingRetryKind = nil
-                DispatchQueue.main.async { [weak self] in _ = self?.capture(retry) }
+            if case .success = result, let pending = self.pendingDisplayCapture {
+                self.pendingDisplayCapture = nil
+                DispatchQueue.main.async { [weak self] in self?.runPendingDisplayCapture(pending) }
             }
         }
     }
@@ -623,7 +660,7 @@ final class LiveCaptureController: NSObject {
                 self.artifacts = values; self.reloadHistorySelection(previousID)
                 self.miniPreviews?.refreshArtifacts(values)
                 self.miniPreviews?.reconcileHistory(ids: Set(values.map(\.id)))
-            case .failure(let error): self.artifacts = []; self.reloadHistorySelection(nil); self.showError("Couldn’t load capture history", error) }
+            case .failure(let error): self.artifacts = []; self.reloadHistorySelection(nil); self.showHistoryError("Couldn’t load capture history", error) }
             self.updateActions(); completion?()
         }
     }
@@ -1050,15 +1087,53 @@ final class LiveCaptureController: NSObject {
     /// Shipping shortcut, tray and New Capture flows start on the display under
     /// the pointer.
     private func selectDisplayUnderPointer() {
-        let location = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(location, $0.frame, false) }),
-              let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue,
+        guard let id = pointerDisplayID(),
               let index = displays.firstIndex(where: { $0.id == id }) else { return }
         selectedDisplayIndex = index
     }
 
+    private func pointerDisplayID() -> String? {
+        let location = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(location, $0.frame, false) })
+        else { return nil }
+        return (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue
+    }
+
+    /// Lists the displays again before `request` when the list is empty or
+    /// stale. Returns true when `request` now waits on that list.
+    private func refreshDisplaysBeforeCapture(_ request: PendingDisplayCapture) -> Bool {
+        guard !capturing, !recoveryBusy, !recordingRetiring,
+              !externalOpenPending, !permissionsVisible, !historyRoot.isEmpty,
+              pendingDisplayCapture == nil,
+              displayListNeedsRefresh(listed: displays.map { $0.id }, pointer: pointerDisplayID())
+        else { return false }
+        pendingDisplayCapture = request
+        loadDisplays()
+        return true
+    }
+
+    private func runPendingDisplayCapture(_ pending: PendingDisplayCapture) {
+        let started: Bool
+        switch pending {
+        case .still(let kind):
+            started = capture(kind, refreshingDisplays: false)
+        case .menu(let recordingTarget, let screenshotTarget):
+            started = newCapture(recordingTarget: recordingTarget, screenshotTarget: screenshotTarget,
+                                 refreshingDisplays: false)
+        }
+        guard !started, displays.isEmpty else { return }
+        captureAttemptKind = pending.retryKind
+        showCaptureError("Couldn’t start capture",
+            AppBridgeError.backend("No displays are available. Screen access may be required."))
+    }
+
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
+        capture(kind, refreshingDisplays: true)
+    }
+
+    private func capture(_ kind: StillCaptureKind, refreshingDisplays: Bool) -> Bool {
         recordingSavedNotice.dismiss()
+        if refreshingDisplays, refreshDisplaysBeforeCapture(.still(kind)) { return true }
         if !capturing { selectDisplayUnderPointer() }
         let index = selectedDisplayIndex
         guard !capturing, !recoveryBusy, !recordingRetiring,
@@ -1099,14 +1174,25 @@ final class LiveCaptureController: NSObject {
                     self.prepareWindow(display: display, screen: screen, preferences: preferences, generation: generation.uint64Value)
                 }
             } catch {
-                self.finishCapture(); self.showError("Couldn’t start capture", error)
+                self.finishCapture(); self.showCaptureError("Couldn’t start capture", error)
             }
         }
         return true
     }
 
-    @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
+    @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil,
+                                       screenshotTarget: UnifiedCaptureTarget? = nil) -> Bool {
+        newCapture(recordingTarget: recordingTarget, screenshotTarget: screenshotTarget,
+                   refreshingDisplays: true)
+    }
+
+    private func newCapture(recordingTarget: UnifiedCaptureTarget?,
+                            screenshotTarget: UnifiedCaptureTarget?,
+                            refreshingDisplays: Bool) -> Bool {
         recordingSavedNotice.dismiss()
+        if refreshingDisplays,
+           refreshDisplaysBeforeCapture(.menu(recordingTarget: recordingTarget,
+                                              screenshotTarget: screenshotTarget)) { return true }
         if !capturing { selectDisplayUnderPointer() }
         let index = selectedDisplayIndex
         guard !capturing, !recoveryBusy, !recordingRetiring,
@@ -1119,6 +1205,9 @@ final class LiveCaptureController: NSObject {
         if let recordingTarget {
             unifiedControlsState.mode = .record
             unifiedControlsState.target = recordingTarget
+        } else if let screenshotTarget {
+            // Shipping `open_capture_controls_with_target(Screenshot, target)`.
+            unifiedControlsState.target = screenshotTarget
         }
         setBusy(true, message: "Preparing capture controls…")
         let request = unifiedPreparation.begin()
@@ -1166,7 +1255,7 @@ final class LiveCaptureController: NSObject {
                 tick()
             } catch {
                 self.finishCapture()
-                self.showError("Couldn’t start New Capture", error)
+                self.showCaptureError("Couldn’t start New Capture", error)
             }
         }
         return true
@@ -1177,7 +1266,7 @@ final class LiveCaptureController: NSObject {
         selectorShortcutGeneration = nil
         guard let screen = screen(for: display) else {
             finishCapture()
-            showError("Couldn’t prepare capture controls",
+            showCaptureError("Couldn’t prepare capture controls",
                 AppBridgeError.backend("The selected display is no longer available."))
             return
         }
@@ -1269,7 +1358,7 @@ final class LiveCaptureController: NSObject {
                     panel.selector.updatePointerLocation()
                 } catch {
                     self.finishCapture()
-                    self.showError("Couldn’t prepare capture controls", error)
+                    self.showCaptureError("Couldn’t prepare capture controls", error)
                 }
             }
         }
@@ -1299,7 +1388,7 @@ final class LiveCaptureController: NSObject {
             tickCountdown(display: display, preferences: preferences, generation: generation)
         } catch {
             finishCapture()
-            showError("Capture failed", error)
+            showCaptureError("Capture failed", error)
         }
     }
 
@@ -1308,7 +1397,7 @@ final class LiveCaptureController: NSObject {
                                   generation: UInt64) {
         guard let capabilities = recordingCapabilities else {
             finishCapture()
-            showError("Couldn’t start recording",
+            showCaptureError("Couldn’t start recording",
                 AppBridgeError.backend("Recording capabilities are unavailable."))
             return
         }
@@ -1366,11 +1455,11 @@ final class LiveCaptureController: NSObject {
                         generation: generation)
                 } catch {
                     self.preparingRecording = false
-                    self.finishCapture(); self.showError("Couldn’t prepare recording", error)
+                    self.finishCapture(); self.showCaptureError("Couldn’t prepare recording", error)
                 }
             }
         } catch {
-            finishCapture(); showError("Couldn’t prepare recording", error)
+            finishCapture(); showCaptureError("Couldn’t prepare recording", error)
         }
     }
 
@@ -1413,14 +1502,14 @@ final class LiveCaptureController: NSObject {
                                     self.countdownPanel = countdown; countdown.orderFrontRegardless()
                                 }
                                 self.tickCountdown(display: display, preferences: preferences, generation: generation)
-                            } catch { self.finishCapture(); self.showError("Capture failed", error) }
+                            } catch { self.finishCapture(); self.showCaptureError("Capture failed", error) }
                         }, cancel: { [weak self] in
                             guard let self, self.flowGeneration == generation, self.regionPanel != nil else { return }
                             self.finishCapture(); self.status.stringValue = "Capture cancelled."
                         })
                     self.regionPanel = panel; self.preparingRegion = false
                     panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-                } catch { self.finishCapture(); self.showError("Couldn’t prepare region", error) }
+                } catch { self.finishCapture(); self.showCaptureError("Couldn’t prepare region", error) }
             }
         }
     }
@@ -1463,7 +1552,7 @@ final class LiveCaptureController: NSObject {
                                 }
                                 self.tickCountdown(display: display, preferences: preferences,
                                     generation: generation)
-                            } catch { self.finishCapture(); self.showError("Capture failed", error) }
+                            } catch { self.finishCapture(); self.showCaptureError("Capture failed", error) }
                         }, cancel: { [weak self] in
                             guard let self, self.flowGeneration == generation,
                                   self.windowPanel != nil else { return }
@@ -1472,7 +1561,7 @@ final class LiveCaptureController: NSObject {
                     self.windowPanel = panel; self.preparingWindow = false
                     panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
                     panel.updatePointerLocation()
-                } catch { self.finishCapture(); self.showError("Couldn’t prepare window selection", error) }
+                } catch { self.finishCapture(); self.showCaptureError("Couldn’t prepare window selection", error) }
             }
         }
     }
@@ -1530,16 +1619,16 @@ final class LiveCaptureController: NSObject {
                         self.loadHistory(select: artifact.id)
                         if preferences.autoCopy { self.copyImage(at: artifact.imagePath, artifactID: artifact.id) }
                     case .failure(let error):
-                        self.finishCapture(); self.showError("Capture failed", error)
+                        self.finishCapture(); self.showCaptureError("Capture failed", error)
                     }
                 }
             }
-        } catch { finishCapture(); showError("Capture failed", error) }
+        } catch { finishCapture(); showCaptureError("Capture failed", error) }
     }
 
     private func startRecording(on screen: NSScreen?, generation: UInt64) {
         guard let session = recordingSession, let screen else {
-            finishCapture(); showError("Recording failed",
+            finishCapture(); showCaptureError("Recording failed",
                 AppBridgeError.backend("The selected display is no longer available."))
             return
         }
@@ -1563,7 +1652,7 @@ final class LiveCaptureController: NSObject {
                             "generation": generation])
                     } catch {
                         self.discardRecording()
-                        self.showError("Recording start was cancelled", error)
+                        self.showCaptureError("Recording start was cancelled", error)
                         return
                     }
                     self.recordingPendingStart = false
@@ -1607,7 +1696,7 @@ final class LiveCaptureController: NSObject {
                         }
                         self.recordingSession = nil
                         self.retireRecordingSession(session)
-                        self.finishCapture(); self.showError("Recording failed to start", error)
+                        self.finishCapture(); self.showCaptureError("Recording failed to start", error)
                     }
                 }
             }
@@ -1734,7 +1823,7 @@ final class LiveCaptureController: NSObject {
                                         generation: generation.uint64Value)
                                 } catch {
                                     self.finishRecordingScreenshot()
-                                    self.showError("Screenshot failed", error)
+                                    self.showCaptureError("Screenshot failed", error)
                                 }
                             }, cancel: { [weak self] in
                                 guard let self,
@@ -1806,13 +1895,13 @@ final class LiveCaptureController: NSObject {
                         if preferences.autoCopy { self.copyImage(at: artifact.imagePath, artifactID: artifact.id) }
                     case .failure(let error):
                         self.finishRecordingScreenshot()
-                        self.showError("Screenshot failed", error)
+                        self.showCaptureError("Screenshot failed", error)
                     }
                 }
             }
         } catch {
             finishRecordingScreenshot()
-            showError("Screenshot failed", error)
+            showCaptureError("Screenshot failed", error)
         }
     }
 
@@ -2411,10 +2500,9 @@ final class LiveCaptureController: NSObject {
         if busy { status.stringValue = message }
         else { processNextOpenImage() }
     }
-    func showShortcutError(_ error: Error) {
-        showAlert("Capture shortcuts unavailable: \(error.localizedDescription)")
-    }
-    /// Shipping `.history-error` (`role="alert"`) below the filters.
+    /// Shipping `.history-error` (`role="alert"`) below the filters. It only
+    /// shows History load and delete failures; capture and shortcut failures
+    /// are host dialogs.
     private func showAlert(_ message: String, detail: String? = nil) {
         status.stringValue = message
         status.toolTip = detail
@@ -2422,9 +2510,20 @@ final class LiveCaptureController: NSObject {
         statusAlert = true
         layoutHistory()
     }
+    private func showHistoryError(_ context: String, _ error: Error) {
+        showAlert("\(context): \(error.localizedDescription)")
+    }
     private func showError(_ context: String, _ error: Error) {
         let message = "\(context): \(error.localizedDescription)"
         showAlert(message)
+        reportFailure(message)
+    }
+    /// Shipping `report_capture_error`: a failed capture is a modal dialog
+    /// (or Screen Recording recovery), not the History error card.
+    private func showCaptureError(_ context: String, _ error: Error) {
+        reportFailure("\(context): \(error.localizedDescription)")
+    }
+    private func reportFailure(_ message: String) {
         if let kind = captureAttemptKind, screenPermissionDenied(kind, message) {
             captureAttemptKind = nil
             return
@@ -2436,7 +2535,7 @@ final class LiveCaptureController: NSObject {
     /// display list is ready (shipping retries right after setup).
     func retryCaptureAfterRestart(_ kind: StillCaptureKind) {
         guard displays.isEmpty else { _ = capture(kind); return }
-        pendingRetryKind = kind
+        pendingDisplayCapture = .still(kind)
         loadDisplays()
     }
     private func updateActions() {
@@ -2702,7 +2801,7 @@ final class LiveCaptureController: NSObject {
         status.stringValue = "Deleting from history…"
         run({ [transport, historyRoot] in _ = try transport.request(["operation": "delete", "root": historyRoot, "id": artifact.id]) }) { [weak self] result in
             switch result { case .success: self?.loadHistory()
-            case .failure(let error): self?.showError("Couldn’t delete capture", error) }
+            case .failure(let error): self?.showHistoryError("Couldn’t delete capture", error) }
         }
     }
 
@@ -2732,7 +2831,7 @@ final class LiveCaptureController: NSObject {
             self.loadHistory(cleanup: { [weak self] in
                 guard let self else { return }
                 self.clearingHistory = false; self.updateActions()
-                if case .failure(let error) = result { self.showError("Couldn’t delete capture history", error) }
+                if case .failure(let error) = result { self.showHistoryError("Couldn’t delete capture history", error) }
                 self.processNextOpenImage()
             })
         }
