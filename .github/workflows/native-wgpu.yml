@@ -213,7 +213,7 @@ jobs:
       - name: Exercise accepted file-size limits and export retries on private X11
         if: matrix.suite == 'recording'
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --maximum-size --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-maximum-size-$APPEARANCE"
-      - name: Exercise confirmed recording replacement and rebase on private X11
+      - name: Exercise recording replacement without confirmation and rebase on private X11
         if: matrix.suite == 'recording'
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --replace-original --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-replace-$APPEARANCE"
       - name: Exercise recording thumbnails, trim handles and exports on private X11

@@ -40,7 +40,8 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(worker.thumbnailCalls, thumbnailCount + 1)
         XCTAssertFalse(controller.dirty)
         XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 0)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Source thumbnails ready") })
+        XCTAssertTrue(labels(in: controller.root).contains { $0 == "Video saved — 1.0 KB." },
+                      "shipping's save toast outlasts the refreshed thumbnails")
         XCTAssertFalse(replace.isEnabled, "Save stays disabled until anything changes, as in shipping")
         XCTAssertFalse(try button("Show in Folder", in: controller.root).isHidden)
     }
@@ -3010,7 +3011,7 @@ final class RecordingEditorTests: XCTestCase {
                                outputDirectory: "/Exports")
             let label = try field("Recording size estimate", in: controller.root)
             let delta = try field("Recording size estimate change", in: controller.root)
-    
+
             worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 400_000,
                                                                      exact: true))
             controller.estimateSizeNow()

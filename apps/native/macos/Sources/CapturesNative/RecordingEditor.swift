@@ -1060,7 +1060,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             return
         }
-        if artifactID != nil, (busy && !estimating) || pickerOpen
+        if artifactID != nil, operationBlocking || pickerOpen
             || dirty || cropAdjustmentActive {
             showError("Finish, cancel, save, or discard the current recording edits first.")
             window.makeKeyAndOrderFront(nil)
@@ -1167,7 +1167,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             window.makeKeyAndOrderFront(nil); return false
         }
         if estimating, afterEstimate.isEmpty { estimateCancel?.cancel() }
-        if (busy && !estimating) || pickerOpen {
+        if operationBlocking || pickerOpen {
             showError("Cancel or wait for the recording operation before quitting.")
             window.makeKeyAndOrderFront(nil); return false
         }
@@ -2262,7 +2262,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     /// Staged edits could decode now (shipping has no Apply edits button).
     var canApplyEdits: Bool {
-        presentation != nil && !(busy && !estimating) && !pickerOpen && !requiresReopen
+        presentation != nil && !operationBlocking && !pickerOpen && !requiresReopen
             && playbackState == .idle && pendingCropInputValid && stagedEdit != nil
             && stagedExport != nil && (!maximumSizeEnabled || maximumSizeBytes != nil)
             && stagedDiffers
@@ -2287,7 +2287,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         // An explicit flush while typing commits the field editor first; the
         // live timer only runs once editing has ended, so it keeps focus.
-        if editingText { window.makeFirstResponder(nil) }
+        if editingText { window.makeFirstResponder(nil); editingText = false }
         guard !busy, let edit = stagedEdit, let export = stagedExport else {
             showError("Enter valid trim, crop, audio, and output values."); return
         }
@@ -2332,6 +2332,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         DispatchQueue.main.asyncAfter(
             deadline: .now() + .milliseconds(RecordingEditorCopy.liveTiming.applyDelayMilliseconds),
             execute: work)
+    }
+
+    /// A worker operation owns the session. A background estimate does not,
+    /// unless an operation is already waiting for it to stop.
+    private var operationBlocking: Bool {
+        busy && (!estimating || !afterEstimate.isEmpty)
     }
 
     private func resetLiveWork() {
@@ -2403,7 +2409,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc private func playbackLoopChanged() {
-        guard presentation != nil, !busy || estimating, !pickerOpen, playbackState != .pausing else {
+        guard presentation != nil, !operationBlocking, !pickerOpen, playbackState != .pausing else {
             playbackLoop.state = playbackLoopEnabled ? .on : .off
             return
         }
@@ -2413,7 +2419,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc private func playbackSoundChanged() {
-        guard presentation != nil, !busy || estimating, !pickerOpen, playbackState == .idle else {
+        guard presentation != nil, !operationBlocking, !pickerOpen, playbackState == .idle else {
             playbackSound.state = playbackSoundEnabled ? .on : .off
             return
         }
@@ -2902,14 +2908,21 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 let gif = replaced.presentation.snapshot.saveExport["format"] as? String == "gif"
                 let size = (replaced.presentation.snapshot.source["size_bytes"] as? NSNumber)?
                     .uint64Value ?? 0
-                self.status.textColor = self.tokens.color("positive-text")
-                self.status.stringValue = RecordingEditorCopy.saved(gif: gif, sizeBytes: size)
+                let saved = RecordingEditorCopy.saved(gif: gif, sizeBytes: size)
                     ?? "Replaced original: \(path)"
+                self.status.textColor = self.tokens.color("positive-text")
+                self.status.stringValue = saved
                 self.status.toolTip = path
                 self.lastSavedPath = path
                 self.savedFingerprint = self.saveFingerprint
                 self.didReplaceOriginal(snapshot.artifactID)
-                self.generateThumbnails()
+                // Refreshed thumbnails keep shipping's save toast visible.
+                self.generateThumbnails(completion: { [weak self] in
+                    guard let self, self.generation == current,
+                          self.status.stringValue == "Source thumbnails ready." else { return }
+                    self.status.textColor = self.tokens.color("positive-text")
+                    self.status.stringValue = saved
+                })
             case .failure(let error):
                 if (error as? RecordingReplaceError)?.requiresReopen == true {
                     self.markRequiresReopen("Replacement state is uncertain: \(error.localizedDescription). Close and reopen this editor.")
@@ -2986,7 +2999,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func chooseDestination() {
-        guard !busy || estimating else { return }
+        guard !operationBlocking else { return }
         pickerOpen = true; updateControls()
         // Shipping's "Change…" picks the folder; the filename field names the file.
         let panel = NSOpenPanel(); panel.title = "Choose save location"
@@ -3417,7 +3430,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             invalidateComparison()
         }
         // A background estimate never holds edits: they supersede it.
-        let blocked = busy && (!estimating || !afterEstimate.isEmpty)
+        let blocked = operationBlocking
         let available = presentation != nil && !blocked && !pickerOpen
             && !requiresReopen && playbackState == .idle
         let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil
@@ -3680,7 +3693,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         invalidateComparison()
         generation += 1; artifactID = nil; presentation = nil; activeCancel = nil
         originalPath = nil; requiresReopen = false
-        estimateCancel?.cancel(); resetLiveWork()
+        // Quitting may close over a cancelled background estimate.
+        estimateCancel?.cancel(); resetLiveWork(); busy = false
         thumbnailCancel = nil; thumbnailRetryAvailable = false
         playbackCancel = nil; playbackState = .idle
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
