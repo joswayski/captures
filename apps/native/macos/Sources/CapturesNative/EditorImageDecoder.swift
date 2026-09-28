@@ -14,7 +14,8 @@ enum EditorImageDecoder {
         let sourceWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
         let sourceHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
         sourceWidth > 0, sourceHeight > 0 else {
-            throw AppBridgeError.backend("The selected file is not an ImageIO-decodable still image.")
+            // Shipping's webview reports undecodable imports by file name.
+            throw AppBridgeError.backend("\(url.lastPathComponent) could not be loaded.")
         }
         let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
         let swapsAxes = [5, 6, 7, 8].contains(orientation)

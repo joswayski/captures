@@ -2258,12 +2258,29 @@ are described below. Physical input/accessibility acceptance stays open.
 The wgpu Import image action picks PNG/JPEG/WebP/TIFF files independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
 normalizes EXIF orientation and supplies owned RGBA to the shared import command.
-RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
-alpha; untagged files assume sRGB. Unsupported or malformed ICC profiles, CMYK
-profiles, and PNG gamma/chromaticity-only or CICP descriptions fail recoverably
-instead of silently relabeling samples. Those color formats and HDR/wide-gamut
-editing remain open; imports normalize to RGBA8. Analytic linear-to-sRGB fixtures
-exercise profile transport through PNG, JPEG, WebP and TIFF plus grayscale alpha.
+Shipping decodes Add images and dropped layers in the webview, which color-manages
+them into its 8-bit sRGB canvas; native import follows the same rules. RGB/grayscale
+ICC profiles convert to sRGB before publication, preserving straight alpha;
+untagged files assume sRGB. CMYK JPEGs (Adobe CMYK or YCCK) and CMYK TIFFs with a
+CMYK profile convert their original ink samples through that profile; untagged
+CMYK keeps the naive conversion shipping's decoders use. PNGs follow PNG 3
+precedence: a supported cICP chunk (any H.273 primaries with an SDR transfer)
+outranks iCCP, then sRGB, then gAMA/cHRM, which build a power-law source profile.
+HDR PQ and HLG cICP PNGs map BT.2408 reference white (203 nits; HLG on a 1000-nit
+display) to SDR white and clip brighter highlights, as an 8-bit sRGB canvas
+receives them. Narrow-range or unspecified cICP falls back to the other chunks,
+as in browsers; non-RGB cICP is rejected by the png decoder shipping's Open path
+also uses. HDR/wide-gamut editing is not a shipping feature either: both
+normalize to 8-bit sRGB. Malformed ICC profiles, or profiles whose color space
+does not match the samples, still fail recoverably rather than being ignored as
+browsers do. Undecodable imports report shipping's "<name> could not be loaded."
+TIFF import matches the macOS webview (WebView2 and WebKitGTK cannot decode TIFF,
+so native accepts more there); GIF, BMP, AVIF, SVG and HEIC layers, which shipping
+accepts through the webview, remain open. Analytic fixtures in
+`captures-app` cover ICC transport through PNG, JPEG, WebP and TIFF plus
+grayscale alpha, a generated CMYK lut16 profile through Adobe CMYK and YCCK JPEGs
+and a CMYK TIFF, cICP precedence/primaries/fallback, PQ/HLG reference white, and
+gamma/chromaticity-only PNGs.
 The returned stable ID selects the new layer. Cancellation, decode failures and
 late results after close preserve the editor; a completed selection waits for
 already accepted edits before importing. Imports do not write a draft or History
@@ -2332,7 +2349,10 @@ paths through the shared History-backed `open_media` request using repeatable
 callback. Both queue startup inputs and serialize opens against editor focus and
 History refresh; unsupported
 paths do not block later ones. Still images reuse the bounded, color-managed decoder
-above, excluding TIFF. Already-open canonical sources preserve active edits; a
+above. As in shipping's `open_media`, TIFF and other stills are rejected with
+"Captures can open PNG, JPEG, WebP, GIF, MP4, and WebM files." Shipping's Open
+relabels decoded samples as sRGB; native converts ICC, CMYK, cICP/HDR and
+gamma-only sources as described above. Already-open canonical sources preserve active edits; a
 closed source reloads under the same History ID and, as in shipping, drops its
 autosaved draft, but only after the new pixels decode (a bad source keeps the draft).
 AppKit waits for its current editor open to settle before advancing the batch;

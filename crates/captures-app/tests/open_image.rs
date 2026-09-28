@@ -148,16 +148,13 @@ fn unsupported_missing_and_corrupt_sources_do_not_create_history() {
     let root = data.path().join("capture-history");
     let source = data.path().join("source.data");
     assert!(open(&root, &source, vec![]).is_err());
-    for (bytes, expected) in [
-        (b"GIF89a".as_slice(), "PNG, JPEG or WebP"),
-        (b"not an image", "image"),
-    ] {
+    // Shipping's open_media copy for anything but PNG/JPEG/WebP stills.
+    let unsupported = captures_app::editor_image_decode::UNSUPPORTED_OPEN_MESSAGE;
+    for bytes in [b"GIF89a".as_slice(), b"not an image"] {
         fs::write(&source, bytes).unwrap();
-        assert!(
-            open(&root, &source, vec![])
-                .unwrap_err()
-                .to_string()
-                .contains(expected)
+        assert_eq!(
+            open(&root, &source, vec![]).unwrap_err().to_string(),
+            unsupported
         );
         assert!(captures_app::list(&root).unwrap().is_empty());
         assert_eq!(fs::read(&source).unwrap(), bytes);
@@ -165,11 +162,9 @@ fn unsupported_missing_and_corrupt_sources_do_not_create_history() {
     RgbaImage::new(2, 3)
         .save_with_format(&source, ImageFormat::Tiff)
         .unwrap();
-    assert!(
-        open(&root, &source, vec![])
-            .unwrap_err()
-            .to_string()
-            .contains("PNG, JPEG or WebP")
+    assert_eq!(
+        open(&root, &source, vec![]).unwrap_err().to_string(),
+        unsupported
     );
     assert!(captures_app::list(&root).unwrap().is_empty());
 }
