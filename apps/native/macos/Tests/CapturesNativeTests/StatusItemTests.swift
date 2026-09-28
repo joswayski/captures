@@ -117,6 +117,38 @@ final class StatusItemTests: XCTestCase {
                                        visible: []), .showPreferences)
     }
 
+    func testReopenFocusesAnOpenEditorBeforeHistoryAndPreferences() {
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: false,
+                                       visible: [.preferences, .history], editorVisible: true), .focusEditor)
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: false,
+                                       visible: [], editorVisible: true), .focusEditor)
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: false,
+                                       visible: [.setup, .history], editorVisible: true), .focus(.setup))
+        XCTAssertEqual(appReactivation(onboardingComplete: false, restoreRecordingControls: false,
+                                       visible: [], editorVisible: true), .showSetup)
+        XCTAssertEqual(appReactivation(onboardingComplete: true, restoreRecordingControls: true,
+                                       visible: [], editorVisible: true), .restoreRecordingControls)
+        XCTAssertLessThan(AppWindowKind.setup.reactivationPriority, editorReactivationPriority)
+        XCTAssertLessThan(editorReactivationPriority, AppWindowKind.history.reactivationPriority)
+    }
+
+    func testInteractiveLaunchFollowsShipping() {
+        XCTAssertEqual(interactiveLaunch(onboardingComplete: false, launchedQuietly: false,
+                                         openingFiles: false), .setup)
+        XCTAssertEqual(interactiveLaunch(onboardingComplete: false, launchedQuietly: true,
+                                         openingFiles: false), .setup)
+        XCTAssertEqual(interactiveLaunch(onboardingComplete: true, launchedQuietly: true,
+                                         openingFiles: false), .startupNotice)
+        XCTAssertEqual(interactiveLaunch(onboardingComplete: true, launchedQuietly: false,
+                                         openingFiles: false), .preferences)
+        for complete in [false, true] {
+            for quiet in [false, true] {
+                XCTAssertNil(interactiveLaunch(onboardingComplete: complete, launchedQuietly: quiet,
+                                               openingFiles: true))
+            }
+        }
+    }
+
     func testShortcutHostPolicyUsesOnlyCaptureBindingsAndSuppressesBlockedScenes() {
         let settings: [String: Any] = ["new_capture_shortcut": "Command+Shift+Space",
             "region_shortcut": "Command+Shift+4",

@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects (backdrop blur, dust dissolve blur, fan stagger and drag sway), physical setup/login and installed Open With acceptance, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, remaining viewport/output controls and Tauri design parity; remaining recording controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts and shared new-text drop shadow, the shipping Erase/Restore brush ring, copy and save-new-copy | Remaining text/font parity (explicit font migration, OS/imported fonts, IME), remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
 Development package staging now supplies macOS Editor/Alternate document types,
@@ -69,8 +69,13 @@ workbench window and the wgpu "Capture History | Preferences" tab strip are gone
 Opening a window that is already open shows, restores and focuses it; closing one
 leaves the others. Tray/menu-bar items, capture-menu setting links, Preferences'
 **Capture History…** button and empty relaunches route to the matching window;
-reopen follows shipping's priority (setup, then History, then Preferences, else
-open Preferences). Setup completion hides the setup window, as shipping does;
+reopen follows shipping's priority (setup, then an open editor, then History, then
+Preferences, else open Preferences). A visible launch follows shipping's
+`interactive_launch_action` (`captures_app::app_windows::interactive_launch`): setup
+while it is unfinished, the launch notice on a quiet (login) launch, no window
+besides the editors when opening files, and otherwise Preferences alone; wgpu's
+`--open-history` opens History instead for the automated exercises, and a failed
+file open shows History with the error. Setup completion hides the setup window, as shipping does;
 wgpu keeps History open instead when no tray host exists, so Captures stays
 reachable, and without a tray closing the last open window quits. Captures hide
 Preferences along with History. Titles, sizes and breakpoints live in
@@ -83,10 +88,10 @@ History stacks Delete all under its heading and uses one card column, Preference
 hides its section nav, stacks inline rows and uses two-column grids, and the
 560px-tall setup window drops its lede (`max-height: 600px`). wgpu keeps setup and
 History in the one root window (setup is retitled and resized into History when it
-completes; the two never coexist) and opens Preferences as a child window. The wgpu
-visible launch still opens History rather than shipping's Preferences, and reopen
-does not yet focus an open editor window. Private X11 exercises cover the wgpu
-windows; the AppKit windows, reflow and focus are verified only by XCTest.
+completes; the two never coexist) and opens Preferences as a child window. Private
+X11 exercises cover the wgpu windows, the Preferences-only visible launch and reopen
+focusing an open editor; the AppKit windows, launch, reflow and focus are verified
+only by XCTest.
 
 Preferences now offer the shipping Default microphone select (Off plus enumerated
 inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),
@@ -443,7 +448,7 @@ Images retain D4 orientation; arrows scale controls and stroke, while paths reta
 their stroke width. Preview outlines and guides do not modify pixels or drafts.
 A release after three view points submits one worker transaction; cancellation,
 clicks and failures preserve the document, and fully outside content expands the
-canvas. Text resize still requires native font layout and is unsupported.
+canvas. Text layers use the text resize rules described with the text slices below.
 Canvas movement also retains immutable original geometry and snaps painted world
 bounds to canvas and visible-layer edges, including locked and zero-opacity layers
 but excluding hidden layers. Shared Rust matches Tauri's strict ten-view-point
@@ -625,7 +630,18 @@ cancel without editing. Pan and clipped/off-image initial presses never paint.
 X11 tests cover cancellation, actual feathered alpha, erase/restore, undo/redo, drafts
 and clipboard; AppKit has input/bridge tests and minimum light/dark/error fixtures.
 Windows/Wayland presentation and physical AppKit input remain unverified; sampling
-cadence and the Tauri brush cursor/layout remain parity work.
+cadence remains parity work (the brush ring is described below).
+Both hosts now draw shipping's `.screenshot-brush-cursor` from
+`editor_chrome::brush_cursor`: over a visible image (and for a whole stroke once one
+starts) the system cursor hides behind a ring sized `max(1, size × display scale)`,
+a 1.5 pt white border with a dark halo outside and a faint dark line inside over a
+4% white fill; Restore dashes the border over an 8% accent fill. Elsewhere on the
+canvas the cursor is `not-allowed`; pan-ready (Cmd/Ctrl) or panning hides the ring,
+and the ring is not clipped to the image. AppKit tests image cover with snapshot
+selection outlines, as shipping's `hitTestImageElement`. wgpu has unit coverage and
+the private-X11 brush smoke checks the ring's border and halo pixels; AppKit is covered
+by XCTest only (macOS CI is its first compile). The dash pattern approximates CSS
+`dashed`; physical cursor behaviour on macOS, Windows and Wayland is unverified.
 Both hosts connect Geometry → Trim edges through a shared `trim_canvas` command.
 It fits visible layer geometry, including locked/zero-opacity and off-canvas layers,
 rounds bounds outward, and translates every layer including hidden siblings. Empty,
@@ -796,6 +812,13 @@ The basic Text tool is implemented in AppKit and wgpu; host verification is reco
 per slice, not inferred from shared tests. Additional font import and OS acquisition,
 inline input and physical input/IME/accessibility remain open.
 Both hosts now offer new-text style, size (8–512) and color before placement.
+Like shipping, the Text section also shows the drawing defaults' Drop shadow:
+one shared toggle and custom style, whose untouched fields scale from the new text
+size (`editor_text::new_text_shadow_style`, `text_default_shadow` on the AppKit
+chrome ABI). `TextCreate` carries `dropShadow`/`dropShadowStyle`, clamped by the
+shared resolver, so each placement copies them as `createPlacedTextElement` does.
+Shipping takes new-text color from the drawing Color; the native new-text Color
+remains a separate per-editor choice.
 Choices are per-editor UI state, not document/draft/undo; accepted responses and
 failed creation retain them. Both hosts' new editors start at Rounded Box when the
 snapshot offers it, otherwise Standard, then Plain. Both start at annotation red. Shared Rust
@@ -1020,9 +1043,9 @@ retried until Hide/Show or a new accepted identity. A paused transient playback
 frame never selects the comparison frame. Generation, cancellation,
 accepted revision, position and preview export guard delivery. Staging, playback,
 crop, seek, new item and close discard comparison without changing accepted edits,
-dirty state or History. The wgpu split also supports pointer dragging and keyboard
-adjustment. Maximum displays the budget-free first attempt and warns that final
-capped-save pixels can differ. Requested/fallback seek positions are not decoded
+dirty state or History. Both hosts' splits take pointer dragging and the shipping
+range keys, and Preserve recentres them. Maximum displays the budget-free first
+attempt and warns that final capped-save pixels can differ. Requested/fallback seek positions are not decoded
 PTS; output cadence can select neighboring frames. Physical macOS, Windows and
 Wayland input, accessibility and mixed-DPI acceptance remain open.
 Both hosts now render the shipping editor's page: an **Edit recording** (or **Edit
@@ -2366,14 +2389,23 @@ confirmation because shared Rust re-checks the History entry, saved path and for
 at write time and publishes through a sibling temp file; the previous confirmation
 dialog is removed. New files that collide with an existing file are refused with a
 filename error. A saved file with a History entry is adopted as the next overwrite
-target. Unlike Tauri, the folder is not revealed automatically; **Show in Folder**
-reveals it on request. Copy still uses full-resolution edited PNG pixels. Both
-actions retain the serialized worker and accepted-work lifecycle. Native fixtures
+target. As in Tauri, every successful Save (overwrite or new file, with no preference
+gating it) then shows the saved file in its folder through the same reveal as the
+preview card: Finder on AppKit, FileManager1 `ShowItems` or the folder fallback on
+wgpu, where a failed handoff changes the notice to "Saved … — its folder could not
+be opened"; **Show in Folder** reveals it again on request. CI records the reveal
+requests (a stub FileManager1 on X11); physical file-manager selection remains
+open. Copy still uses full-resolution edited PNG pixels. Both actions retain the serialized worker and accepted-work lifecycle. Native fixtures
 exercise section/resize visibility, pending-work gates, overwrite/new-file/adoption
 and estimate states; X11 export tests save from every section. Windows/Wayland
 presentation and physical AppKit acceptance remain open, rather than being inferred
 from shared code or rendered CI fixtures. The inspector layout still differs from
-Tauri (see the editor chrome slice), and the CompressionPreview split slider is not connected.
+Tauri (see the editor chrome slice). The comparison's split follows shipping
+`CompressionPreview`: the round handle drags on both hosts even with a drawing tool,
+the bottom strip and the focused split's range keys (arrows 0.1 %, Page Up/Down a
+tenth of the 6–94 % span, Home/End) are off while drawing or processing, and
+Preserve recentres it. Private X11 drags the handle and steps the keys; AppKit XCTests
+drive the same handle and keys.
 Remaining viewport controls and other drawing tools are not connected.
 Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.

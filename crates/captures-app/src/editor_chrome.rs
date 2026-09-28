@@ -520,6 +520,64 @@ pub mod eraser {
     }
 }
 
+/// Shipping `.screenshot-brush-cursor`: the Erase/Restore ring that replaces
+/// the system cursor over an image, since system cursors cannot grow past
+/// about 128 px. The ring is not clipped to the image or canvas.
+pub mod brush_cursor {
+    /// `border: 1.5px solid rgba(255, 255, 255, 0.92)`.
+    pub const RING_WIDTH: f64 = 1.5;
+    pub const RING_RGBA: [f64; 4] = [1., 1., 1., 0.92];
+    /// Erase: `background: rgba(255, 255, 255, 0.04)`.
+    pub const ERASE_FILL_RGBA: [f64; 4] = [1., 1., 1., 0.04];
+    /// Restore: a dashed ring over `rgba(var(--theme-accent-rgb), 0.08)`.
+    pub const RESTORE_FILL_ACCENT_ALPHA: f64 = 0.08;
+    /// CSS `dashed` for a 1.5 px border: three-width dashes, two-width gaps.
+    pub const RESTORE_DASH: [f64; 2] = [4.5, 3.];
+    /// `box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55)` just outside the border.
+    pub const HALO_WIDTH: f64 = 1.;
+    pub const HALO_RGBA: [f64; 4] = [0., 0., 0., 0.55];
+    /// `inset 0 0 0 1px rgba(0, 0, 0, 0.28)` just inside the border.
+    pub const INSET_WIDTH: f64 = 1.;
+    pub const INSET_RGBA: [f64; 4] = [0., 0., 0., 0.28];
+
+    /// Shipping `removeBgBrushScreenDiameter`: the document brush size at the
+    /// current display scale, never below one view point.
+    #[must_use]
+    pub fn screen_diameter(size: f64, display_scale: f64) -> f64 {
+        let diameter = size * display_scale.max(0.01);
+        if diameter.is_finite() {
+            diameter.max(1.)
+        } else {
+            1.
+        }
+    }
+
+    /// What the canvas shows under the pointer while Erase or Restore is the tool.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum Hover {
+        /// Hide the system cursor and draw the ring at the pointer.
+        Ring,
+        /// Shipping `not-allowed`: the pointer is off every visible image.
+        NotAllowed,
+        /// Pan-ready or panning: the host's pan cursor, no ring.
+        Pan,
+    }
+
+    /// Shipping `syncRemoveBgHoverCursor`: the ring follows the pointer over a
+    /// visible image and for the whole stroke once one starts, even off the
+    /// image; panning hides it.
+    #[must_use]
+    pub fn hover(over_image: bool, stroking: bool, panning: bool) -> Hover {
+        if panning {
+            Hover::Pan
+        } else if stroking || over_image {
+            Hover::Ring
+        } else {
+            Hover::NotAllowed
+        }
+    }
+}
+
 /// Shipping text format buttons (`.screenshot-format-buttons`): B, I, then
 /// the three alignment icons, in one five-column row.
 pub mod text_format {
@@ -730,6 +788,28 @@ pub mod draw_preview {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn brush_cursor_matches_shipping_ring_rules() {
+        use super::brush_cursor::{self as b, Hover};
+        // `removeBgBrushScreenDiameter`: size × max(0.01, scale), at least 1.
+        assert_eq!(b::screen_diameter(28., 1.), 28.);
+        assert_eq!(b::screen_diameter(28., 0.5), 14.);
+        assert_eq!(b::screen_diameter(4., 0.1), 1.);
+        assert_eq!(b::screen_diameter(120., 0.), 1.2);
+        assert_eq!(b::screen_diameter(28., -3.), 1.);
+        assert_eq!(b::screen_diameter(f64::NAN, 1.), 1.);
+        assert_eq!(b::hover(true, false, false), Hover::Ring);
+        assert_eq!(b::hover(false, false, false), Hover::NotAllowed);
+        assert_eq!(b::hover(false, true, false), Hover::Ring);
+        assert_eq!(b::hover(true, true, true), Hover::Pan);
+        assert_eq!((b::RING_WIDTH, b::RING_RGBA[3]), (1.5, 0.92));
+        assert_eq!((b::HALO_RGBA[3], b::INSET_RGBA[3]), (0.55, 0.28));
+        assert_eq!(
+            (b::ERASE_FILL_RGBA[3], b::RESTORE_FILL_ACCENT_ALPHA),
+            (0.04, 0.08)
+        );
+    }
+
     #[test]
     fn draw_tool_preview_matches_shipping_geometry() {
         use super::draw_preview::{self as preview, Shape};

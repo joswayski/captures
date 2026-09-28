@@ -3037,6 +3037,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         switch qualityMode.selectedItem?.representedObject as? String {
         case "preserve":
             maximumSizeEnabled = false; preserveQuality = true; qualityPreference = "preserve"
+            compareView.split = 0.5 // Shipping recentres the split for Preserve.
         case "compress":
             maximumSizeEnabled = false; preserveQuality = false
             selectQualityPreset(compressQuality); qualityPreference = compressQuality

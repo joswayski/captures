@@ -57,6 +57,9 @@ mod pickers;
 mod text_input;
 
 type CompareReply = (u64, Result<(RgbaImage, u64), String>);
+/// Shows a saved file in the file manager (`crate::reveal::reveal` in
+/// editor windows; tests record the request instead).
+type RevealFile = Arc<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>;
 
 enum Job {
     Apply(Request),
@@ -522,6 +525,11 @@ struct View {
     pixels_revision: u64,
     original_bytes: Option<u64>,
     last_saved: Option<PathBuf>,
+    /// Save reveals the saved file's folder, as shipping does after every
+    /// Save; a detached view (unit tests) without one never opens anything.
+    reveal_file: Option<RevealFile>,
+    /// The after-Save reveal in flight: the saved path and whether it opened.
+    reveal_rx: Option<Receiver<(PathBuf, bool)>>,
     notice_until: Option<Instant>,
     copied_until: Option<Instant>,
     export_error: Option<String>,
@@ -647,6 +655,8 @@ impl Default for View {
             pixels_revision: 0,
             original_bytes: None,
             last_saved: None,
+            reveal_file: None,
+            reveal_rx: None,
             notice_until: None,
             copied_until: None,
             export_error: None,
@@ -926,6 +936,7 @@ impl View {
                     let (SavedExport::Saved { path, .. }
                     | SavedExport::SavedWithoutHistory { path, .. }) = &saved;
                     self.last_saved = Some(path.clone());
+                    self.reveal_after_save(ctx, path.clone());
                     if let SavedExport::Saved { artifact, .. } = &saved {
                         self.history_changed = true;
                         // The saved file becomes the original, as in the shipping app.
@@ -1163,6 +1174,43 @@ impl View {
                 eprintln!("Couldn’t show the saved file: {error}");
             }
         });
+    }
+
+    /// Shipping `saveEditedImage` reveals the saved file after every Save
+    /// (overwrite or new file); the file manager handoff stays off the UI
+    /// thread like Show in Folder.
+    fn reveal_after_save(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let Some(reveal) = self.reveal_file.clone() else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.reveal_rx = Some(rx);
+        let ctx = ctx.clone();
+        let viewport = ctx.viewport_id();
+        thread::spawn(move || {
+            let revealed = reveal(&path).is_ok();
+            let _ = tx.send((path, revealed));
+            ctx.request_repaint_of(viewport);
+        });
+    }
+
+    /// The file is on disk either way; only a failed handoff changes the
+    /// notice, and only while it still describes that save.
+    fn drive_reveal(&mut self) {
+        let Some(rx) = &self.reveal_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((path, revealed)) => {
+                self.reveal_rx = None;
+                if !revealed && self.last_saved.as_ref() == Some(&path) {
+                    self.output_notice = Some(export::reveal_failed_notice(&path));
+                    self.notice_until = Some(Instant::now() + EXPORT_CONFIRMATION);
+                }
+            }
+            Err(mpsc::TryRecvError::Disconnected) => self.reveal_rx = None,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
     }
 
     /// Re-encode the export in the background after edits or option changes
@@ -1869,6 +1917,10 @@ impl Editor {
                 original_bytes,
                 drawing_preview: Some(drawing_preview::State::new(ctx.clone(), viewport)),
                 autosaves: true,
+                // Unit tests open real editors; they never hand files to a
+                // file manager unless a test installs its own recorder.
+                reveal_file: (!cfg!(test))
+                    .then(|| Arc::new(|path: &Path| crate::reveal::reveal(path)) as RevealFile),
                 ..View::default()
             })),
             tx,
@@ -2054,6 +2106,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     {
         view.cancel_layer_gesture();
     }
+    view.drive_reveal();
     view.drive_estimate(ui.ctx());
     view.drive_compare(ui.ctx());
     show_export_bar(ui, tokens, view, tx);
@@ -2384,6 +2437,25 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             );
         });
         swatch_color(ui, tokens, colors::COLOR, &mut view.new_text_color);
+        // Shipping shares the drawing defaults' shadow with new text, showing
+        // defaults scaled from the new text size until customized.
+        let reference = captures_app::editor_text::new_text_shadow_style(
+            &view.new_annotation_style,
+            view.new_text_size,
+        );
+        let style = &mut view.new_annotation_style;
+        let mut enabled = style.has_drop_shadow();
+        if ui.checkbox(&mut enabled, "Drop shadow").changed() {
+            style.drop_shadow = Some(enabled);
+        }
+        if enabled {
+            let mut shadow = reference.resolved_drop_shadow_style();
+            let before = shadow.clone();
+            shadow_fields(ui, None, &mut shadow);
+            if shadow != before {
+                style.drop_shadow_style = Some(shadow);
+            }
+        }
         ui.label("Click to type on the canvas, or click existing text to edit it.");
         ui.small(
             "These defaults apply only to new text in this editor. Box styles center on the click.",
@@ -3692,6 +3764,8 @@ fn show_shape(
                             .unwrap_or_else(|| "sans".into()),
                         color: view.new_text_color.clone(),
                         style_preset: view.new_text_preset.clone(),
+                        drop_shadow: view.new_annotation_style.drop_shadow,
+                        drop_shadow_style: view.new_annotation_style.drop_shadow_style.clone(),
                     },
                 }
             };
@@ -3743,6 +3817,7 @@ fn show_shape(
         return;
     }
     if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
+        use captures_app::editor_chrome::brush_cursor as brush_ring;
         let clipped_image = preview.intersect(available).intersect(ui.clip_rect());
         let previous_samples = view.brush_points.len();
         let mode = if view.draw_shape == DrawShape::Erase {
@@ -3755,22 +3830,22 @@ fn show_shape(
         let can_start =
             response.drag_started_by(egui::PointerButton::Primary) || response.contains_pointer();
         let mut released = None;
+        let image_at = |point| {
+            presented
+                .document
+                .elements
+                .iter()
+                .rev()
+                .find_map(|element| match element {
+                    Element::Image(image)
+                        if image.base.visible && image.natural_pixel_at(point).is_some() =>
+                    {
+                        Some(image)
+                    }
+                    _ => None,
+                })
+        };
         if first_pass && !view.pending && !viewport_intercepted {
-            let image_at = |point| {
-                presented
-                    .document
-                    .elements
-                    .iter()
-                    .rev()
-                    .find_map(|element| match element {
-                        Element::Image(image)
-                            if image.base.visible && image.natural_pixel_at(point).is_some() =>
-                        {
-                            Some(image)
-                        }
-                        _ => None,
-                    })
-            };
             let mut target = view.brush_points.first().copied().and_then(image_at);
             let mut last_move = None;
             ui.input(|input| {
@@ -3843,9 +3918,28 @@ fn show_shape(
                 );
             }
         }
-        if response.hovered() || !view.brush_points.is_empty() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        }
+        // Shipping `syncRemoveBgHoverCursor`: over a visible image (or for the
+        // whole stroke) the system cursor hides behind the size ring;
+        // elsewhere on the canvas it is `not-allowed`; panning hides the ring.
+        let stroking = !view.brush_points.is_empty();
+        let pointer = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|pointer| stroking || (response.hovered() && available.contains(*pointer)));
+        let ring = pointer.and_then(|pointer| {
+            let panning = view.viewport_pan.is_some() || ui.input(|input| input.modifiers.command);
+            let over_image = image_at(image_point(pointer, preview, bounds)).is_some();
+            match brush_ring::hover(over_image, stroking, panning) {
+                brush_ring::Hover::Ring => {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                    Some(pointer)
+                }
+                brush_ring::Hover::NotAllowed => {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+                    None
+                }
+                brush_ring::Hover::Pan => None,
+            }
+        });
         let position = |point: Point| {
             egui::pos2(
                 preview.left() + (point.x / bounds.width) as f32 * preview.width(),
@@ -3865,15 +3959,22 @@ fn show_shape(
                 feedback,
             ));
         }
-        let cursor = view
-            .brush_points
-            .last()
-            .copied()
-            .map(position)
-            .or_else(|| ui.input(|input| input.pointer.hover_pos()));
-        if let Some(cursor) = cursor.filter(|point| clipped_image.contains(*point)) {
-            let radius = (view.brush_size / bounds.width) as f32 * preview.width() / 2.;
-            painter.circle_stroke(cursor, radius.max(2.), feedback);
+        if let Some(center) = ring {
+            // `position: fixed`: the ring is not clipped to the image or canvas.
+            let diameter = brush_ring::screen_diameter(
+                view.brush_size,
+                f64::from(preview.width()) / bounds.width,
+            );
+            canvas::paint_brush_cursor(
+                &ui.ctx().layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    ui.scope_id().with("brush-cursor"),
+                )),
+                center,
+                diameter as f32,
+                mode == BrushMode::Restore,
+                tokens.color("theme-accent"),
+            );
         }
         if first_pass && released.is_some() {
             let points = std::mem::take(&mut view.brush_points);
@@ -8458,6 +8559,17 @@ mod tests {
         view.new_text_preset = Some("mono-box".into());
         view.new_text_size = 37.5;
         view.new_text_color = "#2367ab".into();
+        // Shipping places text with the drawing defaults' shadow.
+        let custom = DropShadowStyle {
+            color: "#123456".into(),
+            opacity: 30.,
+            blur: 4.,
+            offset_x: 1.,
+            offset_y: 2.,
+            extra: Default::default(),
+        };
+        view.new_annotation_style.drop_shadow = Some(true);
+        view.new_annotation_style.drop_shadow_style = Some(custom.clone());
         let (tx, rx) = mpsc::channel();
         let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(140., 60.));
         let click = egui::pos2(70., 30.);
@@ -8513,6 +8625,8 @@ mod tests {
         assert_eq!(create.style_preset.as_deref(), Some("mono-box"));
         assert_eq!(create.font_size, 37.5);
         assert_eq!(create.color, "#2367ab");
+        assert_eq!(create.drop_shadow, Some(true));
+        assert_eq!(create.drop_shadow_style, Some(custom));
         assert!(rx.try_recv().is_err(), "multipass click creates one layer");
     }
 
@@ -10006,6 +10120,75 @@ mod tests {
         view.cancel_drawing();
         frame(&mut view, vec![button(250., 170., false)], false);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn brush_ring_replaces_the_cursor_over_images_like_shipping() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(1200, 600));
+        value.document = Arc::new(Document::new_capture("fixture", 1200., 600., None));
+        view.receive(&ctx, Ok(value));
+        view.draw_shape = DrawShape::Erase;
+        view.brush_size = 28.;
+        let (tx, _rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
+        let preview = egui::Rect::from_min_size(egui::pos2(220., 140.), egui::vec2(600., 300.));
+        let frame = |view: &mut View, x: f32, y: f32, modifiers: egui::Modifiers| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::PointerMoved(egui::pos2(x, y)),
+                    ],
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("brush-ring-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    show_shape(&mut ui, test_tokens(), view, &tx, screen, preview, false);
+                },
+            );
+            output.textures_delta.clear();
+            // Filled disc radius: 28 document px at 0.5× is a 14 pt ring.
+            let rings = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::epaint::Shape::Circle(circle)
+                        if circle.center == egui::pos2(x, y) && circle.radius == 7.)
+                })
+                .count();
+            (
+                output.platform_output.cursor_icon,
+                rings,
+                output.shapes.len(),
+            )
+        };
+        // egui hovers a widget from the previous pass's layout.
+        frame(&mut view, 250., 170., Default::default());
+        // Over the capture image: no system cursor, the ring at the pointer
+        // (fill, halo, inset and border for Erase).
+        let (cursor, rings, _) = frame(&mut view, 250., 170., Default::default());
+        assert_eq!((cursor, rings), (egui::CursorIcon::None, 1));
+        // Off the image, still on the canvas: `not-allowed`, no ring.
+        let (cursor, rings, _) = frame(&mut view, 100., 100., Default::default());
+        assert_eq!((cursor, rings), (egui::CursorIcon::NotAllowed, 0));
+        // Pan-ready (Cmd/Ctrl) hides the ring.
+        let (cursor, rings, _) = frame(&mut view, 250., 170., egui::Modifiers::COMMAND);
+        assert_ne!(cursor, egui::CursorIcon::None);
+        assert_eq!(rings, 0);
+        // Restore dashes the border into many segments over the accent fill.
+        let (_, erase_rings, erase_shapes) = frame(&mut view, 250., 170., Default::default());
+        view.draw_shape = DrawShape::Restore;
+        let (cursor, rings, restore_shapes) = frame(&mut view, 250., 170., Default::default());
+        assert_eq!((cursor, rings, erase_rings), (egui::CursorIcon::None, 1, 1));
+        assert!(restore_shapes > erase_shapes + 4);
     }
 
     #[test]
@@ -12035,6 +12218,86 @@ mod tests {
             view.original_bytes,
             Some(fs::metadata(&destination).unwrap().len())
         );
+    }
+
+    #[test]
+    fn every_save_reveals_the_saved_file_and_a_failed_handoff_names_it() {
+        let (data, id) = fixture();
+        let ctx = egui::Context::default();
+        let root = data.path().join("history");
+        let editor = Editor::open(
+            &ctx,
+            root,
+            id,
+            data.path().join("exports"),
+            CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
+        );
+        receive(&editor, &ctx);
+        let revealed = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
+        let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let (revealed, fail) = (revealed.clone(), fail.clone());
+            editor.view.lock().unwrap().reveal_file = Some(Arc::new(move |path: &Path| {
+                revealed.lock().unwrap().push(path.to_owned());
+                if fail.load(std::sync::atomic::Ordering::SeqCst) {
+                    Err(std::io::Error::other("no file manager"))
+                } else {
+                    Ok(())
+                }
+            }));
+        }
+        let settle = |editor: &Editor| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut view = editor.view.lock().unwrap();
+                view.drive_reveal();
+                if view.reveal_rx.is_none() {
+                    break;
+                }
+                drop(view);
+                assert!(Instant::now() < deadline, "reveal never finished");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        editor.view.lock().unwrap().submit(&editor.tx, crop());
+        receive(&editor, &ctx);
+        let destination = data.path().join("exports").join("edited.png");
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.update_export_target(|target, _| target.set_stem("edited"));
+            assert!(view.reveal_rx.is_none(), "editing never reveals anything");
+            view.save(&editor.tx);
+        }
+        receive(&editor, &ctx);
+        settle(&editor);
+        // A new file: its folder opens and the notice stays as saved.
+        assert_eq!(
+            revealed.lock().unwrap().as_slice(),
+            std::slice::from_ref(&destination)
+        );
+        assert_eq!(
+            editor.view.lock().unwrap().output_notice.as_deref(),
+            Some(format!("Saved {}", destination.display()).as_str())
+        );
+        // The adopted file is overwritten next; a failed handoff keeps the
+        // file and says the folder could not be opened.
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        editor.view.lock().unwrap().save(&editor.tx);
+        receive(&editor, &ctx);
+        settle(&editor);
+        assert_eq!(
+            *revealed.lock().unwrap(),
+            [destination.clone(), destination.clone()]
+        );
+        assert!(destination.is_file());
+        let view = editor.view.lock().unwrap();
+        assert_eq!(
+            view.output_notice.as_deref(),
+            Some(export::reveal_failed_notice(&destination).as_str())
+        );
+        assert!(view.export_error.is_none());
+        assert_eq!(view.last_saved.as_deref(), Some(destination.as_path()));
     }
 
     #[test]

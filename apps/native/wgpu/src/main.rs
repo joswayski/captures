@@ -450,8 +450,11 @@ fn main() -> eframe::Result {
             .with_inner_size(size)
             .with_min_inner_size(minimum_size)
             .with_resizable(true)
-            .with_visible(!idle)
-            .with_active(!idle)
+            // A live launch decides which window to show once settings load
+            // (`app_windows::interactive_launch`); History stays hidden
+            // unless setup or --open-history needs it.
+            .with_visible(!idle && !options.live)
+            .with_active(!idle && !options.live)
             // eframe's wgpu painter takes its alpha capability from the root,
             // including for the transparent countdown child viewport.
             .with_transparent(floating || options.live)

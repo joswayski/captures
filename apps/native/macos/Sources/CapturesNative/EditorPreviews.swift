@@ -84,6 +84,87 @@ enum NativeEditorPreviewPaint {
     }
 }
 
+/// Shipping `.screenshot-brush-cursor` (`editor_chrome::brush_cursor`): the
+/// Erase/Restore ring that replaces the system cursor over an image.
+enum NativeBrushRing {
+    enum Hover: Equatable { case ring, notAllowed, pan }
+
+    private static var paint: [String: Any] { EditorChrome.copy["brush_cursor"] as? [String: Any] ?? [:] }
+
+    private static func number(_ key: String, _ fallback: CGFloat) -> CGFloat {
+        previewNumber(paint[key]) ?? fallback
+    }
+
+    private static func rgba(_ key: String, _ fallback: [CGFloat]) -> NSColor {
+        let parsed = (paint[key] as? [NSNumber])?.map { CGFloat($0.doubleValue) } ?? []
+        let value = parsed.count == 4 ? parsed : fallback
+        return NSColor(srgbRed: value[0], green: value[1], blue: value[2], alpha: value[3])
+    }
+
+    /// Shipping `removeBgBrushScreenDiameter`: never below one point.
+    static func diameter(size: CGFloat, scale: CGFloat) -> CGFloat {
+        let diameter = size * max(0.01, scale)
+        return diameter.isFinite ? max(1, diameter) : 1
+    }
+
+    /// Shipping `syncRemoveBgHoverCursor`: the ring over a visible image and
+    /// for a whole stroke, `not-allowed` elsewhere, nothing while panning.
+    static func hover(overImage: Bool, stroking: Bool, panning: Bool) -> Hover {
+        if panning { return .pan }
+        return stroking || overImage ? .ring : .notAllowed
+    }
+
+    /// Shipping `hitTestImageElement`: any visible image layer's rotated box
+    /// (its selection outline) contains the document point.
+    static func overImage(_ layers: [NativeEditorLayer], at point: CGPoint) -> Bool {
+        layers.contains { layer in
+            guard layer.kind == .image, layer.visible, let quad = layer.selectionOutline,
+                  quad.count == 4 else { return false }
+            var sign: CGFloat = 0
+            for index in 0..<4 {
+                let a = quad[index], b = quad[(index + 1) % 4]
+                let cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)
+                if cross == 0 { continue }
+                if sign == 0 { sign = cross } else if (sign > 0) != (cross > 0) { return false }
+            }
+            return true
+        }
+    }
+
+    /// Hidden system cursor while the ring is shown.
+    static let blankCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
+
+    /// White border over a faint white fill, a dark halo outside and a faint
+    /// dark line inside; Restore dashes the border over an accent fill.
+    static func draw(center: NSPoint, diameter: CGFloat, restore: Bool, accent: NSColor) {
+        let radius = diameter / 2
+        func circle(_ radius: CGFloat) -> NSBezierPath {
+            NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius,
+                                        width: radius * 2, height: radius * 2))
+        }
+        let ringWidth = number("ring_width", 1.5)
+        (restore ? accent.withAlphaComponent(number("restore_fill_accent_alpha", 0.08))
+            : rgba("erase_fill_rgba", [1, 1, 1, 0.04])).setFill()
+        circle(radius).fill()
+        let haloWidth = number("halo_width", 1)
+        let halo = circle(radius + haloWidth / 2); halo.lineWidth = haloWidth
+        rgba("halo_rgba", [0, 0, 0, 0.55]).setStroke(); halo.stroke()
+        let insetWidth = number("inset_width", 1)
+        let insetRadius = radius - ringWidth - insetWidth / 2
+        if insetRadius > 0 {
+            let inset = circle(insetRadius); inset.lineWidth = insetWidth
+            rgba("inset_rgba", [0, 0, 0, 0.28]).setStroke(); inset.stroke()
+        }
+        // CSS borders sit inside the box: centre the stroke half a width in.
+        let border = circle(max(ringWidth / 2, radius - ringWidth / 2)); border.lineWidth = ringWidth
+        if restore {
+            let dash = (paint["restore_dash"] as? [NSNumber])?.map { CGFloat($0.doubleValue) } ?? [4.5, 3]
+            border.setLineDash(dash, count: dash.count, phase: 0)
+        }
+        rgba("ring_rgba", [1, 1, 1, 0.92]).setStroke(); border.stroke()
+    }
+}
+
 /// Snapshot `trim_preview`: what Trim edges would cut, in document coordinates.
 struct NativeTrimPreview: Equatable {
     let keep: CGRect

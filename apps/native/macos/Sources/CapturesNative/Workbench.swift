@@ -969,10 +969,17 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard options.live else { return true }
         // Shipping `focus_primary_app_window`.
         if onboardingReady, liveController?.showRecordingControls() == true { return true }
+        let reopenEditor = liveController?.visibleEditorWindow
         switch appReactivation(onboardingComplete: onboardingReady, restoreRecordingControls: false,
-                               visible: appWindows.visibleKinds) {
+                               visible: appWindows.visibleKinds, editorVisible: reopenEditor != nil) {
         case .showSetup, .focus(.setup):
             showOnboarding()
+        case .focusEditor:
+            if let reopenEditor {
+                if reopenEditor.isMiniaturized { reopenEditor.deminiaturize(nil) }
+                reopenEditor.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
         case .focus(.history):
             showHistory()
         case .focus(.preferences), .showPreferences:
@@ -1101,14 +1108,18 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             showStartupNotice(trigger)
         }
         // Shipping hides the setup window when setup completes and shows only
-        // the launch notice. A visible launch of a finished profile opens History;
-        // a scheduled Restart & Retry capture runs without showing it.
+        // the launch notice. A visible launch of a finished profile opens
+        // Preferences (`interactive_launch_action`); opening files shows only
+        // their editors, and a scheduled Restart & Retry capture runs without
+        // showing either.
         appWindows.close(.setup)
-        if retry == nil, !onboardingWasPresented && (startup.showsWindow || !pendingOpenImages.isEmpty) {
-            window.makeKeyAndOrderFront(nil)
+        window.orderOut(nil)
+        let launchAction = interactiveLaunch(onboardingComplete: true,
+                                             launchedQuietly: !startup.showsWindow,
+                                             openingFiles: !pendingOpenImages.isEmpty)
+        if retry == nil, !onboardingWasPresented, launchAction == .preferences {
+            showPreferences()
             NSApp.activate(ignoringOtherApps: true)
-        } else {
-            window.orderOut(nil)
         }
         drainOpenImages()
         if let retry { liveController?.retryCaptureAfterRestart(retry) }

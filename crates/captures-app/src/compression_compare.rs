@@ -49,6 +49,37 @@ pub const SCREENSHOT_REFRESH_DELAY_MS: u64 = 280;
 pub const REFRESH_DELAY_MS: u64 = 350;
 /// The divider handle's diameter in points.
 pub const HANDLE_SIZE: f64 = 36.;
+/// The range input's `step` (0.1 %): one arrow key press.
+pub const KEY_STEP: f64 = 0.001;
+/// The range input's big step, a tenth of its span: Page Up / Page Down.
+pub const PAGE_STEP: f64 = (MAX_SPLIT - MIN_SPLIT) / 10.;
+
+/// Keys the shipping range input (`.compression-preview-range`) handles while
+/// focused and enabled, as WebKit's range input maps them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SplitKey {
+    /// Arrow Left or Arrow Down.
+    Decrease,
+    /// Arrow Right or Arrow Up.
+    Increase,
+    PageDown,
+    PageUp,
+    Home,
+    End,
+}
+
+/// The split after one press of `key` on the focused range.
+pub fn keyboard_split(split: f64, key: SplitKey) -> f64 {
+    let split = clamp_split(split);
+    clamp_split(match key {
+        SplitKey::Decrease => split - KEY_STEP,
+        SplitKey::Increase => split + KEY_STEP,
+        SplitKey::PageDown => split - PAGE_STEP,
+        SplitKey::PageUp => split + PAGE_STEP,
+        SplitKey::Home => MIN_SPLIT,
+        SplitKey::End => MAX_SPLIT,
+    })
+}
 
 /// A split fraction kept inside the shipping bounds; NaN falls back to centre.
 pub fn clamp_split(split: f64) -> f64 {
@@ -211,6 +242,20 @@ mod tests {
         assert_eq!(split_at(50., 200.), 0.25);
         assert_eq!(split_at(-10., 200.), MIN_SPLIT);
         assert_eq!(split_at(10., 0.), MAX_SPLIT);
+    }
+
+    #[test]
+    fn keyboard_steps_like_the_shipping_range_input() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(keyboard_split(0.5, SplitKey::Increase), 0.501));
+        assert!(close(keyboard_split(0.5, SplitKey::Decrease), 0.499));
+        assert!(close(keyboard_split(0.5, SplitKey::PageUp), 0.588));
+        assert!(close(keyboard_split(0.5, SplitKey::PageDown), 0.412));
+        assert_eq!(keyboard_split(0.5, SplitKey::Home), MIN_SPLIT);
+        assert_eq!(keyboard_split(0.5, SplitKey::End), MAX_SPLIT);
+        assert_eq!(keyboard_split(MAX_SPLIT, SplitKey::PageUp), MAX_SPLIT);
+        assert_eq!(keyboard_split(MIN_SPLIT, SplitKey::Decrease), MIN_SPLIT);
+        assert!(close(keyboard_split(f64::NAN, SplitKey::Increase), 0.501));
     }
 
     #[test]

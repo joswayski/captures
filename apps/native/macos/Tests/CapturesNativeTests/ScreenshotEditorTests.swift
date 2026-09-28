@@ -3,6 +3,24 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    /// Files Save revealed through editors that use the default Finder reveal.
+    private var defaultRevealed: [URL] = []
+    private var finderReveal: (([URL]) -> Void)?
+
+    override func setUp() {
+        super.setUp()
+        // Save reveals every saved file, as shipping does; never open Finder here.
+        finderReveal = ScreenshotEditorController.defaultRevealFiles
+        ScreenshotEditorController.defaultRevealFiles = { [weak self] urls in
+            self?.defaultRevealed.append(contentsOf: urls)
+        }
+    }
+
+    override func tearDown() {
+        if let finderReveal { ScreenshotEditorController.defaultRevealFiles = finderReveal }
+        super.tearDown()
+    }
+
     func testDrawingPixelsCoalesceAndRejectResultsAfterCancellationCommitAndClose() throws {
         _ = NSApplication.shared
         let original = snapshot(id: "shot")
@@ -417,9 +435,11 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.exportSaveResult = .success(EditorExportSaved(path: original.path, artifactID: "shot",
                 sizeBytes: 321, warning: nil, notice: "Saved changes to the original"))
             var replaced: [String] = [], copies = 0
+            var revealed: [URL] = []
             let controller = ScreenshotEditorController(
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
-                didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) })
+                didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) },
+                revealFiles: { revealed.append(contentsOf: $0) })
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot", mode: "window"), historyRoot: "/native/History",
                                outputDirectory: "/exports")
@@ -444,6 +464,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual((request["options"] as? [String: Any])?["format"] as? String, "png")
             XCTAssertEqual(replaced, ["shot"]); XCTAssertEqual(copies, 0)
             XCTAssertTrue(labels(in: controller.root).contains("Saved changes to the original"))
+            XCTAssertEqual(revealed.map(\.path), [original.path],
+                           "like shipping, Save reveals the overwritten file in its folder")
             let reveal = try button("Show in Folder", in: controller.root)
             XCTAssertFalse(reveal.isHidden)
             XCTAssertEqual(controller.lastSavedPath, original.path)
@@ -466,7 +488,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(
             tokens: Tokens.variants["light-mustard"]!, worker: worker,
             didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) },
-            revealFiles: { revealed = $0 })
+            revealFiles: { revealed.append(contentsOf: $0) })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         let filename = try field("Saved filename", in: controller.root)
@@ -486,8 +508,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(copies, 1); XCTAssertTrue(replaced.isEmpty)
         XCTAssertEqual(newFile.state, .off, "the saved copy becomes the file Save overwrites")
         XCTAssertEqual(filename.stringValue, "Shot-edited")
+        XCTAssertEqual(revealed.map(\.path), [copyURL.path], "Save reveals the new file")
         try button("Show in Folder", in: controller.root).performClick(nil)
-        XCTAssertEqual(revealed.map(\.path), [copyURL.path])
+        XCTAssertEqual(revealed.map(\.path), [copyURL.path, copyURL.path])
         worker.exportSaveResult = .success(EditorExportSaved(path: copyURL.path, artifactID: "copy-id",
             sizeBytes: 9, warning: nil, notice: "Saved changes to the original"))
         try button("Save", in: controller.root).performClick(nil)
@@ -495,6 +518,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(plan["kind"] as? String, "overwrite")
         XCTAssertEqual(plan["artifact_id"] as? String, "copy-id")
         XCTAssertEqual(replaced, ["copy-id"])
+        XCTAssertEqual(revealed.map(\.path), [copyURL.path, copyURL.path, copyURL.path],
+                       "overwriting the adopted copy reveals it too")
 
         filename.stringValue = "Renamed"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
@@ -534,6 +559,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History entry changed") })
             XCTAssertTrue(replaced.isEmpty, "failed publication must not notify")
             XCTAssertTrue(try button("Show in Folder", in: controller.root).isHidden)
+            XCTAssertTrue(defaultRevealed.isEmpty, "a failed Save reveals nothing")
             try render(controller.root, name: "screenshot-editor-save-error-\(appearance)")
 
             worker.exportSaveResult = .success(EditorExportSaved(path: original.path, artifactID: nil,
@@ -541,6 +567,9 @@ final class ScreenshotEditorTests: XCTestCase {
                 notice: "Saved \(original.path). History was not updated: database locked"))
             try button("Save", in: controller.root).performClick(nil)
             XCTAssertEqual(replaced, ["shot"], "partial publication still notifies the replaced artifact")
+            XCTAssertEqual(defaultRevealed.map(\.path), [original.path],
+                           "the file is on disk, so Save still reveals it")
+            defaultRevealed.removeAll()
             XCTAssertTrue(errors.last?.contains("couldn’t update History: database locked") == true)
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History was not updated") })
             XCTAssertFalse(try button("Show in Folder", in: controller.root).isHidden)
@@ -1543,6 +1572,89 @@ final class ScreenshotEditorTests: XCTestCase {
         quality.selectItem(withTitle: "Preserve quality"); _ = quality.sendAction(quality.action, to: quality.target)
         XCTAssertFalse(controller.comparisonVisible)
         XCTAssertTrue(controller.compareView.isHidden)
+    }
+
+    func testComparisonSplitHandleDragsFromTheCanvasAndTakesShippingRangeKeys() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        controller.window.setContentSize(NSSize(width: 1000, height: 560))
+        controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+        try showComparison(controller, worker)
+        let compare: CompressionCompareView = controller.compareView
+        let host = try XCTUnwrap(compare.superview)
+        waitUntil(timeout: 3) {
+            compare.mediaRect.width > 1
+                && compare.mediaRect == compare.convert(controller.presentedImageRect, from: host)
+                && compare.visibleRect.contains(compare.handleRect)
+        }
+        XCTAssertEqual(compare.split, 0.5)
+        let media = compare.mediaRect
+        let centre = NSPoint(x: compare.handleRect.midX, y: compare.handleRect.midY)
+        // The canvas routes a press on the round handle to the split, not to drawing.
+        let parent = try XCTUnwrap(host.superview)
+        XCTAssertTrue(host.hitTest(parent.convert(centre, from: compare)) === compare)
+        func mouse(_ type: NSEvent.EventType, _ x: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: compare.convert(NSPoint(x: x, y: centre.y), to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: controller.window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        var reported: [CGFloat] = []
+        compare.onSplitChanged = { reported.append($0) }
+        let snapshotBeforeDrag = controller.state.snapshot
+        let comparesBeforeDrag = worker.compares.count
+        compare.mouseDown(with: try mouse(.leftMouseDown, centre.x))
+        compare.mouseDragged(with: try mouse(.leftMouseDragged, media.minX + media.width * 0.4))
+        XCTAssertEqual(compare.split, 0.4, accuracy: 0.001)
+        compare.mouseUp(with: try mouse(.leftMouseUp, media.minX + media.width * 0.25))
+        XCTAssertEqual(compare.split, 0.25, accuracy: 0.001)
+        XCTAssertEqual(compare.handleRect.midX, media.minX + media.width * 0.25, accuracy: 0.5)
+        XCTAssertFalse(reported.isEmpty)
+        XCTAssertTrue(controller.window.firstResponder === compare, "dragging focuses the split")
+        XCTAssertEqual(controller.state.snapshot, snapshotBeforeDrag, "moving the split never edits the image")
+        XCTAssertEqual(worker.compares.count, comparesBeforeDrag, "moving the split never re-encodes")
+
+        // Shipping's range keys: 0.1 % arrows, a tenth of the span for Page Up/Down, Home/End.
+        func key(_ code: UInt16) throws -> NSEvent {
+            let functionKeys: [UInt16: String] = [123: "\u{F702}", 124: "\u{F703}", 125: "\u{F701}",
+                                                   115: "\u{F729}", 119: "\u{F72B}", 116: "\u{F72C}",
+                                                   121: "\u{F72D}"]
+            let characters = functionKeys[code] ?? ""
+            return try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.function],
+                timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters, isARepeat: false,
+                keyCode: code))
+        }
+        compare.keyDown(with: try key(124)); XCTAssertEqual(compare.split, 0.251, accuracy: 1e-6)
+        compare.keyDown(with: try key(125)); XCTAssertEqual(compare.split, 0.25, accuracy: 1e-6)
+        compare.keyDown(with: try key(116)); XCTAssertEqual(compare.split, 0.338, accuracy: 1e-6)
+        compare.keyDown(with: try key(121)); XCTAssertEqual(compare.split, 0.25, accuracy: 1e-6)
+        compare.keyDown(with: try key(119)); XCTAssertEqual(compare.split, 0.94, accuracy: 1e-6)
+        compare.keyDown(with: try key(115)); XCTAssertEqual(compare.split, 0.06, accuracy: 1e-6)
+        XCTAssertTrue(compare.accessibilityPerformIncrement())
+        XCTAssertEqual(compare.split, 0.061, accuracy: 1e-6)
+        // Dragging past either end stops at the shipping 6-94 % bounds.
+        compare.mouseDown(with: try mouse(.leftMouseDown, compare.handleRect.midX))
+        compare.mouseUp(with: try mouse(.leftMouseUp, media.maxX + 40))
+        XCTAssertEqual(compare.split, 0.94, accuracy: 1e-6)
+
+        // A drawing tool disables the range and its keys; the handle still drags.
+        compare.stripEnabled = false
+        XCTAssertFalse(compare.pressSplitKey(.home))
+        XCTAssertEqual(compare.split, 0.94, accuracy: 1e-6)
+        compare.mouseDown(with: try mouse(.leftMouseDown, compare.handleRect.midX))
+        compare.mouseUp(with: try mouse(.leftMouseUp, media.minX + media.width * 0.7))
+        XCTAssertEqual(compare.split, 0.7, accuracy: 0.001)
+        compare.stripEnabled = true
+
+        // Preserve recentres the split, like shipping `applyQualityMode`.
+        let quality = try popup("Save quality", in: controller.root)
+        quality.selectItem(withTitle: "Preserve quality"); _ = quality.sendAction(quality.action, to: quality.target)
+        XCTAssertEqual(compare.split, 0.5)
+        try showComparison(controller, worker)
+        XCTAssertEqual(compare.split, 0.5)
     }
 
     func testOutputSizingControlsSendOptionsLockAspectAndRetainDocument() throws {
@@ -4863,6 +4975,39 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try swatchRow("Color", in: fresh.root).selectedHex, "#ff3b5c")
     }
 
+    func testNewTextSharesTheDrawingDefaultsDropShadowLikeShipping() throws {
+        _ = NSApplication.shared
+        let fonts = ["sans": "Liberation Sans"]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", initialTextSize: 50, fonts: fonts))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = DrawToolChoice(controller)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
+        let shadow = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing drop shadow" })
+        XCTAssertFalse(shadow.isHidden, "shipping's new-text section offers Drop shadow")
+        shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
+        let blur = try field("New drawing shadow blur", in: controller.root)
+        XCTAssertFalse(blur.isHidden)
+        // Untouched defaults scale from the 50 pt text: max(6, max(4, 50 × 0.22) × 0.85).
+        XCTAssertEqual(Double(blur.stringValue)!, 9.35, accuracy: 0.001)
+        XCTAssertTrue(worker.requests.isEmpty, "shadow defaults are not a document command")
+        // A customized shadow is the drawing defaults' shadow too.
+        let offset = try field("New drawing shadow offsetY", in: controller.root)
+        offset.stringValue = "17"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: offset))
+        let click = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        worker.failOperation = "begin_text_input"
+        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        let create = try XCTUnwrap((worker.requests.last?["target"] as? [String: Any])?["create"] as? [String: Any])
+        XCTAssertEqual(create["dropShadow"] as? Bool, true)
+        let style = try XCTUnwrap(create["dropShadowStyle"] as? [String: Any])
+        XCTAssertEqual(style["offsetY"] as? Double, 17)
+        XCTAssertEqual(try XCTUnwrap(style["blur"] as? Double), 9.35, accuracy: 0.001)
+    }
+
     func testRoundedBoxCreationDefaultRequiresOfferedFontAndRetainsUserChoice() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -6015,6 +6160,48 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.begin(at: NSPoint(x: 60, y: 55)); overlay.cancelGesture()
         overlay.end(at: NSPoint(x: 100, y: 55))
         XCTAssertEqual(strokes.count, count, "off-image starts and cancellation never edit")
+    }
+
+    func testBrushRingFollowsShippingHoverRulesAndPaintsPastTheImage() throws {
+        _ = NSApplication.shared
+        XCTAssertEqual(NativeBrushRing.diameter(size: 28, scale: 0.5), 14)
+        XCTAssertEqual(NativeBrushRing.diameter(size: 4, scale: 0.1), 1)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: false, stroking: false, panning: false), .notAllowed)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: false, stroking: true, panning: false), .ring)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: true, stroking: false, panning: true), .pan)
+        let overlay = EditorDrawOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+        overlay.canvasSize = NSSize(width: 640, height: 360); overlay.drawingEnabled = true
+        overlay.imageRect = { NSRect(x: 20, y: 10, width: 160, height: 90) }
+        overlay.shape = .erase
+        var sampled: [NSPoint] = []
+        // Only the left half of the canvas holds a visible image.
+        overlay.brushOverImage = { point in sampled.append(point); return point.x < 320 }
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 60, y: 55)), .ring)
+        XCTAssertEqual(sampled.last, NSPoint(x: 160, y: 180))
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 140, y: 55)), .notAllowed)
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 5, y: 5)), .notAllowed)
+        overlay.begin(at: NSPoint(x: 60, y: 55))
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 5, y: 5)), .ring, "a stroke keeps the ring")
+
+        // A 50 pt ring (200 document px at 0.25×) past the image's right edge:
+        // shipping's fixed ring is not clipped to the image.
+        overlay.brushDiameter = 200
+        overlay.drag(to: NSPoint(x: 175, y: 55))
+        let bitmap = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: bitmap)
+        let factor = CGFloat(bitmap.pixelsWide) / overlay.bounds.width
+        func brightest(_ xs: ClosedRange<CGFloat>, y: CGFloat) -> CGFloat {
+            stride(from: xs.lowerBound, through: xs.upperBound, by: 0.5).map { x -> CGFloat in
+                guard let color = bitmap.colorAt(x: Int(x * factor), y: Int(y * factor))?
+                        .usingColorSpace(.sRGB) else { return 0 }
+                return min(color.redComponent, color.greenComponent, color.blueComponent) * color.alphaComponent
+            }.max() ?? 0
+        }
+        XCTAssertGreaterThan(brightest(197...199.5, y: 55), 0.75, "white border outside the image")
+        XCTAssertGreaterThan(brightest(150...152.5, y: 55), 0.75, "white border on the left")
+        overlay.cancelGesture()
+        overlay.shape = .rectangle
+        XCTAssertNil(overlay.brushHover(at: NSPoint(x: 60, y: 55)))
     }
 
     func testBackgroundBrushOptionsIssueOneRetryableSerializedCommand() throws {

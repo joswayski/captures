@@ -57,22 +57,49 @@ enum AppWindowLayout {
     static func short(height: CGFloat) -> Bool { height <= shortMaximumHeight }
 }
 
+/// What a visible, interactive launch shows. Mirrors
+/// `captures_app::app_windows::InteractiveLaunch`.
+enum InteractiveLaunch: Equatable {
+    case setup
+    /// A quiet (login) launch stays in the menu bar with the launch notice.
+    case startupNotice
+    case preferences
+}
+
+/// Shipping `interactive_launch_action`: a launch that opens files goes
+/// straight to their editors and shows none of these windows.
+func interactiveLaunch(onboardingComplete: Bool, launchedQuietly: Bool,
+                       openingFiles: Bool) -> InteractiveLaunch? {
+    if openingFiles { return nil }
+    if !onboardingComplete { return .setup }
+    return launchedQuietly ? .startupNotice : .preferences
+}
+
 enum AppReactivation: Equatable {
     case showSetup
     case restoreRecordingControls
     case focus(AppWindowKind)
+    /// Focus an open screenshot or recording editor window.
+    case focusEditor
     case showPreferences
 }
 
+/// Shipping `primary_app_window_priority` for an open editor window
+/// (`app_windows::EDITOR_REACTIVATION_PRIORITY`).
+let editorReactivationPriority = 1
+
 /// Shipping `app_reactivation`: setup first, then hidden recording controls,
-/// then the highest-priority visible window, else Preferences.
+/// then the highest-priority visible window (an open editor ranks between
+/// setup and History), else Preferences.
 func appReactivation(onboardingComplete: Bool, restoreRecordingControls: Bool,
-                     visible: [AppWindowKind]) -> AppReactivation {
+                     visible: [AppWindowKind], editorVisible: Bool = false) -> AppReactivation {
     guard onboardingComplete else { return .showSetup }
     if restoreRecordingControls { return .restoreRecordingControls }
-    guard let first = visible.min(by: { $0.reactivationPriority < $1.reactivationPriority }) else {
-        return .showPreferences
+    let topWindow = visible.min(by: { $0.reactivationPriority < $1.reactivationPriority })
+    if editorVisible, editorReactivationPriority < (topWindow?.reactivationPriority ?? Int.max) {
+        return .focusEditor
     }
+    guard let first = topWindow else { return .showPreferences }
     return .focus(first)
 }
 

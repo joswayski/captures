@@ -445,7 +445,9 @@ External recording references cannot replace an original; that requires a privat
 recovery copy and a separate permanent save. **Save as new file** stays locked on.
 Live development hosts now forward subsequent launches to the process using the
 same History directory, preserving file order and sender-relative paths; a launch
-without files restores the native workspace/Preferences or recording controls.
+without files restores hidden recording controls or focuses the open setup, editor,
+History or Preferences window in that order, else opens Preferences. A visible
+native launch opens Preferences (setup on first run), as the shipping app does.
 Native Preferences → About offers explicit **Launch native Captures at login**
 for macOS, Windows and X11 development profiles. It starts that profile hidden;
 relaunch or the tray/menu bar restores it. This uses a separate user-owned login
@@ -572,7 +574,8 @@ entry. Turning on **Save as new file**, editing the filename or choosing another
 folder saves a new file instead, and a format that differs from the original always
 does; new files never replace an existing file and add a distinct History entry.
 A capture without a saved file writes its first Save to the output folder. The saved
-file then becomes what Save overwrites, and **Show in Folder** appears. If History
+file then becomes what Save overwrites. As in the shipping app, every Save then
+shows the saved file in its folder, and **Show in Folder** appears. If History
 cannot be updated, the saved file's path remains available for recovery. The status
 line under the filename explains what Save will do and warns when JPEG will fill in
 transparent areas. The editable document, draft, undo and output preview are
@@ -713,19 +716,21 @@ loupe beside the crosshair magnifies the image pixels and shows the sampled hex.
 the original image pixels, and supports undo/redo and draft restore. The original
 History capture remains unchanged. The Tolerance slider runs from 0 to 120 like
 Tauri's. **Erase** and **Restore** use brush Size and Softness sliders; Restore
-paints from the retained original image. The brush
-ring shows size while shared-renderer pixels preview the stroke during dragging.
+paints from the retained original image. As in the shipping editor, a ring
+the brush's size replaces the pointer over an image (dashed for Restore; elsewhere
+the pointer shows not-allowed) while shared-renderer pixels preview the stroke during dragging.
 Release commits one undo step; Escape, focus loss or changing tools cancels the
 preview without editing. Properties shows a stroke or brush preview for drawing
-tools and Erase/Restore, and Apply crop pulses while a crop is staged. The shipping brush cursor design and physical-platform
-input acceptance remain parity work.
+tools and Erase/Restore, and Apply crop pulses while a crop is staged. Physical-platform
+input acceptance remains parity work.
 Text controls support multiline content, pinned font families (listed as Sans serif,
 Serif, Monospace and Rounded), size, bold/italic and alignment buttons, swatch-row
 text and background colors, square/rounded background plates, outlines and a Drop
 shadow toggle. New-text and drawing default colors use the same swatch rows.
 Changes apply as you make them; a typing burst in one field is one undo step.
 Custom shadows and pinned-font named styles are connected, including style/size/color
-choices for new text. Font import and physical input/IME/accessibility acceptance
+choices for new text; new text also takes the drawing defaults' Drop shadow, as in
+the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
 Like the shipping app, the native Capture History window shows only its header,
 filters and grid; captures start from the tray, shortcuts and New Capture menu. A

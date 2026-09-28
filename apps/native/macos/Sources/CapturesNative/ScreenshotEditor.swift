@@ -402,7 +402,9 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         }
     }
 
-    var shape: Shape = .rectangle { didSet { if shape != oldValue { cancelGesture() } } }
+    var shape: Shape = .rectangle {
+        didSet { if shape != oldValue { cancelGesture(); window?.invalidateCursorRects(for: self) } }
+    }
     var canvasSize = NSSize.zero {
         didSet { if canvasSize != oldValue { cancelGesture() }; needsDisplay = true }
     }
@@ -424,6 +426,13 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     var onBackgroundBrush: ((Shape, [NSPoint]) -> Void)?
     var brushDiameter: CGFloat = 28 { didSet { needsDisplay = true } }
     var brushOutlineColor = NSColor.labelColor
+    /// Restore ring fill (`rgba(var(--theme-accent-rgb), 0.08)`).
+    var brushAccentColor = NSColor.controlAccentColor
+    /// Whether a document point lies on a visible image (shipping
+    /// `hitTestImageElement`); the brush ring shows only there until a stroke starts.
+    var brushOverImage: ((NSPoint) -> Bool)?
+    /// The pointer while Erase/Restore hovers the canvas; nil after exit.
+    private(set) var brushHoverPoint: NSPoint?
     var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
     var strokeColor = NSColor.controlAccentColor
     var annotationOpacity: CGFloat = 1 { didSet { needsDisplay = true } }
@@ -544,6 +553,18 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         onComplete?(shape, start, end, points)
     }
 
+    /// The ring at the pointer (or the stroke's latest point), unclipped by
+    /// the image like shipping's fixed-position ring.
+    private func drawBrushRing() {
+        guard let center = startPoint != nil ? currentPoint : brushHoverPoint,
+              brushHover(at: center) == .ring, canvasSize.width > 0 else { return }
+        let scale = presentedImageRect.width / canvasSize.width
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NativeBrushRing.draw(center: center, diameter: NativeBrushRing.diameter(size: brushDiameter, scale: scale),
+                             restore: shape == .restore, accent: brushAccentColor)
+    }
+
     func cancelGesture() {
         let active = startPoint != nil || pixelPreviewVisible
         startPoint = nil; currentPoint = nil; needsDisplay = true
@@ -565,12 +586,17 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     override func mouseDragged(with event: NSEvent) {
         if continueViewportPan(event) { return }
-        drag(to: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        drag(to: point)
+        if shape.isBackgroundBrush { updateBrushHover(point) }
     }
 
     override func mouseUp(with event: NSEvent) {
         if isViewportPanning { _ = continueViewportPan(event); endViewportPan(); return }
-        end(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        end(at: point)
+        // Stay on the ring after a stroke ends, as shipping does.
+        if shape.isBackgroundBrush { updateBrushHover(point) }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -584,7 +610,32 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     }
 
     override func resetCursorRects() {
-        if drawingEnabled { addCursorRect(bounds, cursor: .crosshair) }
+        // Erase/Restore set their cursor per pointer position instead.
+        if drawingEnabled && !shape.isBackgroundBrush { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    /// Shipping `syncRemoveBgHoverCursor` for Erase/Restore at `point`.
+    func brushHover(at point: NSPoint?) -> NativeBrushRing.Hover? {
+        guard drawingEnabled, shape.isBackgroundBrush, let point else { return nil }
+        let stroking = startPoint != nil
+        let panning = isViewportPanning || NSEvent.modifierFlags.contains(.command)
+        let overImage = presentedImageRect.contains(point)
+            && (brushOverImage?(canvasPoint(for: point)) ?? true)
+        return NativeBrushRing.hover(overImage: overImage, stroking: stroking, panning: panning)
+    }
+
+    private func updateBrushHover(_ point: NSPoint?) {
+        guard shape.isBackgroundBrush else {
+            if brushHoverPoint != nil { brushHoverPoint = nil; needsDisplay = true }
+            return
+        }
+        brushHoverPoint = point
+        needsDisplay = true
+        switch brushHover(at: point) {
+        case .ring?: NativeBrushRing.blankCursor.set()
+        case .notAllowed?: NSCursor.operationNotAllowed.set()
+        case .pan?, nil: if point != nil { NSCursor.arrow.set() }
+        }
     }
 
     override func updateTrackingAreas() {
@@ -598,19 +649,26 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        onHover?(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateBrushHover(point)
+        onHover?(point)
     }
 
     override func mouseEntered(with event: NSEvent) {
-        onHover?(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateBrushHover(point)
+        onHover?(point)
     }
 
     override func mouseExited(with event: NSEvent) {
+        // Leaving the canvas hides the ring unless a stroke is under way.
+        updateBrushHover(startPoint != nil ? currentPoint : nil)
         onHover?(nil)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        defer { drawBrushRing() }
         guard let startPoint, let currentPoint else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
@@ -630,10 +688,6 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             path.lineWidth = 1.5; path.lineCapStyle = .round
             path.lineJoinStyle = .round
             if !pixelPreviewVisible { path.stroke() }
-            let radius = max(2, brushDiameter * scale / 2)
-            let ring = NSBezierPath(ovalIn: NSRect(x: currentPoint.x - radius, y: currentPoint.y - radius,
-                                                  width: radius * 2, height: radius * 2))
-            ring.lineWidth = 1.5; ring.stroke()
             return
         }
         if pixelPreviewVisible { return }
@@ -1485,6 +1539,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let didSaveCopy: () -> Void
     private let didReplaceOriginal: (String) -> Void
     private let revealFiles: ([URL]) -> Void
+    /// Finder reveal for editors created without their own `revealFiles`.
+    /// Save uses it after every save, so tests swap it for a recorder.
+    static var defaultRevealFiles: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     /// Shipping debounce before Est. size re-encodes, and confirmation duration.
     static let estimateDelay: TimeInterval = 0.22
     static let exportConfirmationDuration: TimeInterval = 4
@@ -1509,7 +1566,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          directoryPicker: ((NSWindow, URL?, @escaping (URL?) -> Void) -> Void)? = nil,
          didSaveCopy: @escaping () -> Void = {},
          didReplaceOriginal: @escaping (String) -> Void = { _ in },
-         revealFiles: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) },
+         revealFiles: (([URL]) -> Void)? = nil,
          imagePicker: ((NSWindow, @escaping ([URL]) -> Void) -> Void)? = nil,
          imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode,
          writeClipboard: @escaping (Data) -> Bool = { png in
@@ -1520,7 +1577,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.directoryPicker = directoryPicker; self.didSaveCopy = didSaveCopy
         self.didReplaceOriginal = didReplaceOriginal
-        self.revealFiles = revealFiles
+        self.revealFiles = revealFiles ?? ScreenshotEditorController.defaultRevealFiles
         self.imagePicker = imagePicker; self.imageDecoder = imageDecoder
         self.writeClipboard = writeClipboard
         editorNumberFormatter = NumberFormatter()
@@ -2037,6 +2094,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.onPreviewCancel = { [weak self] in self?.cancelDrawingPreview() }
         drawOverlay.onWand = { [weak self] point in self?.removeImageBackground(at: point) }
         drawOverlay.onHover = { [weak self] point in self?.wandHover(point) }
+        drawOverlay.brushOverImage = { [weak self] point in
+            NativeBrushRing.overImage(self?.state.snapshot?.layers ?? [], at: point)
+        }
         drawOverlay.onBackgroundBrush = { [weak self] mode, points in
             self?.paintImageBackground(mode: mode, points: points)
         }
@@ -2550,6 +2610,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// Height of a full-width shipping `ColorField` swatch grid in Properties.
     private var panelSwatchHeight: CGFloat { ColorSwatchRow.height(width: 252, compact: false, tokens: tokens) }
+    /// Where the new-text Style, Size and Color rows end.
+    private var createTextBottom: CGFloat { 290 + panelSwatchHeight + 8 }
 
     /// A shipping `ColorField` in Properties: the legend, then the swatch row.
     private func panelColorField(_ legend: String, y: CGFloat, parent: NSView,
@@ -2647,13 +2709,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if let color = drawingFillColor.flatMap({ NSColor(hex: $0.selectedHex) }) { drawOverlay.fillColor = color }
         if let width = number(drawingStrokeWidth), (2...40).contains(width) {
             drawOverlay.annotationStrokeWidth = CGFloat(width)
-            if !drawingShadowCustomized, let shadow = try? NativeDrawingStyle.defaultShadow(strokeWidth: width) {
-                drawingShadowFields["color"]?.stringValue = shadow.color
-                for (key, path) in textShadowNumbers {
-                    drawingShadowFields[key]?.stringValue = format(shadow[keyPath: path])
-                }
-            }
         }
+        refreshDefaultShadowFields()
         if let opacity = number(drawingOpacity), (0...100).contains(opacity) {
             drawOverlay.annotationOpacity = CGFloat(opacity / 100)
         }
@@ -2661,6 +2718,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.annotationFillEnabled = drawingFill.state == .on
         drawOverlay.needsDisplay = true
         refreshDrawToolPreview()
+    }
+
+    /// Untouched shadow fields show the renderer defaults for the stroke width,
+    /// or for new text its size; shipping shares one shadow between the
+    /// drawing defaults and new text, so a customized style applies to both.
+    private func refreshDefaultShadowFields() {
+        guard !drawingShadowCustomized else { return }
+        let shadow: NativeTextShadowStyle?
+        if drawShape == .text {
+            shadow = number(createTextSize).flatMap { (8...512).contains($0) ? NativeDrawingStyle.textDefaultShadow(fontSize: $0) : nil }
+        } else {
+            shadow = number(drawingStrokeWidth).flatMap { (2...40).contains($0) ? try? NativeDrawingStyle.defaultShadow(strokeWidth: $0) : nil }
+        }
+        guard let shadow else { return }
+        drawingShadowFields["color"]?.stringValue = shadow.color
+        for (key, path) in textShadowNumbers {
+            drawingShadowFields[key]?.stringValue = format(shadow[keyPath: path])
+        }
     }
 
     private func buildCreateTextControls(in content: NSView) {
@@ -2673,6 +2748,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         configure(createTextSize, frame: NSRect(x: 0, y: 230, width: 118, height: 30),
                   label: "New text size", parent: content)
         createTextSize.stringValue = format(24)
+        createTextSize.delegate = self
         // Shipping `ColorField label="Color"` for new text.
         let (colorLabel, colorSwatches) = panelColorField(EditorColors.text("color"), y: 268,
                                                           parent: content) { _ in }
@@ -3619,7 +3695,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
         drawingStroke.isHidden = !creatingDrawing || !closed
         drawingFillControls.forEach { $0.isHidden = !creatingDrawing || !closed }
-        let drawingShadowVisible = creatingDrawing && drawingDropShadow.state == .on
+        // Shipping's new-text section shares the drawing defaults' Drop shadow.
+        drawingDropShadow.isHidden = !(creatingDrawing || creatingText)
+        let drawingShadowVisible = (creatingDrawing || creatingText) && drawingDropShadow.state == .on
         drawingShadowControls.forEach { $0.isHidden = !drawingShadowVisible }
         // Shipping names the stroke color "Color" for open tools.
         let strokeLegend = EditorColors.text(closed ? "stroke_color" : "color")
@@ -3627,7 +3705,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawingStrokeColor?.relabel(strokeLegend)
         // Open tools have no Fill row: Drop shadow and its fields move up.
         let fillHeight = closed ? 0 : 22 + panelSwatchHeight + 8
-        let shadowBase = drawingFillBottom - fillHeight
+        // New text: the shadow follows Style, Size and Color.
+        let shadowBase = creatingText ? createTextBottom : drawingFillBottom - fillHeight
         drawControlBaseY[ObjectIdentifier(drawingDropShadow)] = shadowBase
         for (index, key) in ["color", "opacity", "blur", "offsetX", "offsetY"].enumerated() {
             guard let field = drawingShadowFields[key] else { continue }
@@ -3659,8 +3738,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             helperY = 216 + 24 + 8
         } else if brush {
             helperY = 218 + EditorMarkedSlider.height + 8
-        } else if creatingText {
-            helperY = 290 + panelSwatchHeight + 8
         } else if drawingShadowVisible {
             helperY = shadowBase + 34 + 3 * 62
         } else {
@@ -3668,6 +3745,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         drawHelper.frame.origin.y = helperY + shift
         drawHelper.superview?.frame.size.height = drawHelper.frame.maxY + 8
+        refreshDefaultShadowFields()
     }
 
     /// Shipping `DrawToolPreview`: the new stroke/shape with its colour, fill
@@ -3747,9 +3825,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func outputOptionsChanged() {
         if outputQuality.indexOfSelectedItem != lastQualityIndex {
-            // Shipping `applyQualityMode`: a new mode shows the comparison again.
+            // Shipping `applyQualityMode`: a new mode shows the comparison
+            // again; Preserve also recentres its split.
             lastQualityIndex = outputQuality.indexOfSelectedItem
             comparisonDismissed = false
+            if lastQualityIndex == 0 { compareView?.split = 0.5 }
         }
         normalizeOutputQuality()
         synchronizeOutputCompressionPreset()
@@ -3833,6 +3913,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         if drawingShadowFields.values.contains(where: { $0 === field }) {
             drawingShadowCustomized = true
+            return
+        }
+        if field === createTextSize {
+            refreshDefaultShadowFields()
             return
         }
         if [drawingStrokeWidth, drawingOpacity].contains(where: { $0 === field }) {
@@ -4262,6 +4346,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.lastSavedPath = saved.path
                 self.showExportNotice(saved.notice)
                 self.status.stringValue = saved.notice
+                // Shipping `saveEditedImage` reveals the saved file after every
+                // Save, overwrite or new file (Finder has no failure to report).
+                self.revealFiles([URL(fileURLWithPath: saved.path)])
                 if let warning = saved.warning {
                     self.reportError("Saved \(saved.path), but couldn’t update History: \(warning)")
                 }
@@ -4544,24 +4631,26 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             "strokeWidth": width, "strokeEnabled": drawingStroke.state == .on,
             "dropShadow": drawingDropShadow.state == .on]
         if drawingShadowCustomized {
-            var shadow: [String: Any] = [:]
-            var valid = true
-            if let color = drawingShadowFields["color"].flatMap({ PreferencesController.normalizeHex($0.stringValue) }) {
-                shadow["color"] = color
-            } else { valid = false }
-            for (key, _) in textShadowNumbers {
-                let range: ClosedRange<Double> = key.hasPrefix("offset") ? -500...500 : 0...100
-                if let field = drawingShadowFields[key], let value = number(field), range.contains(value) {
-                    shadow[key] = value
-                } else { valid = false }
-            }
-            if valid { style["dropShadowStyle"] = shadow }
+            if let shadow = customDrawingShadow() { style["dropShadowStyle"] = shadow }
             else if drawingDropShadow.state == .on {
                 if reportErrors { showError("Enter a shadow color, opacity/blur from 0 to 100, and offsets from −500 to 500.") }
                 return nil
             }
         }
         return style
+    }
+
+    /// The customized drawing-defaults shadow, or nil when a field is invalid.
+    private func customDrawingShadow() -> [String: Any]? {
+        guard let color = drawingShadowFields["color"].flatMap({ PreferencesController.normalizeHex($0.stringValue) })
+        else { return nil }
+        var shadow: [String: Any] = ["color": color]
+        for (key, _) in textShadowNumbers {
+            let range: ClosedRange<Double> = key.hasPrefix("offset") ? -500...500 : 0...100
+            guard let field = drawingShadowFields[key], let value = number(field), range.contains(value) else { return nil }
+            shadow[key] = value
+        }
+        return shadow
     }
 
     private func beginTextInput(at point: NSPoint) {
@@ -4580,6 +4669,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         ]
         if let preset = createTextPreset.selectedItem?.representedObject as? String {
             create["stylePreset"] = preset
+        }
+        // Shipping `createPlacedTextElement` takes the drawing defaults' shadow.
+        create["dropShadow"] = drawingDropShadow.state == .on
+        if drawingShadowCustomized {
+            if let shadow = customDrawingShadow() { create["dropShadowStyle"] = shadow }
+            else if drawingDropShadow.state == .on {
+                showError("Enter a shadow color, opacity/blur from 0 to 100, and offsets from −500 to 500.")
+                return
+            }
         }
         beginTextInput(target: ["kind": "new", "create": create], initialText: "",
                        anchor: point, fontSize: size)
@@ -6383,6 +6481,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.brushOutlineColor = tokens.color("text")
+        drawOverlay.brushAccentColor = tokens.color("theme-accent")
         selectionOverlay.strokeColor = tokens.color("theme-accent")
         selectionOverlay.dotFill = tokens.color("surface-raised")
         selectionOverlay.hintFill = tokens.color("glass-strong")

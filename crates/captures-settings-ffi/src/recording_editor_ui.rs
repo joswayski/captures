@@ -117,6 +117,8 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
                 "copy": compression_compare::COPY,
                 "min_split": compression_compare::MIN_SPLIT,
                 "max_split": compression_compare::MAX_SPLIT,
+                "key_step": compression_compare::KEY_STEP,
+                "page_step": compression_compare::PAGE_STEP,
                 "refresh_delay_ms": compression_compare::REFRESH_DELAY_MS,
             }),
         },
@@ -216,6 +218,8 @@ mod tests {
         assert_eq!(compare["result"]["badges"]["savings"], " · 75% smaller");
         assert_eq!(compare["result"]["copy"]["dismiss"], "Hide");
         assert_eq!(compare["result"]["min_split"], 0.06);
+        assert_eq!(compare["result"]["key_step"], 0.001);
+        assert!((compare["result"]["page_step"].as_f64().unwrap() - 0.088).abs() < 1e-9);
         let processing = call(
             json!({"operation":"compression_compare","before_bytes":null,
             "after_bytes":null,"processing":true}),

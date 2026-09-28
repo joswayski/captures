@@ -17,6 +17,7 @@ import select
 import subprocess
 import threading
 import time
+from urllib.parse import unquote, urlparse
 
 import dbus
 import dbus.service
@@ -65,6 +66,19 @@ class FileChooser(dbus.service.Object):
         })
         self.pending = None
         return False
+
+
+class FileManager(dbus.service.Object):
+    """Record Save's folder reveal without launching a real file manager."""
+
+    def __init__(self, bus):
+        self.name = dbus.service.BusName("org.freedesktop.FileManager1", bus=bus, do_not_queue=True)
+        super().__init__(self.name, "/org/freedesktop/FileManager1")
+        self.revealed = []
+
+    @dbus.service.method("org.freedesktop.FileManager1", in_signature="ass", out_signature="")
+    def ShowItems(self, uris, startup_id):
+        self.revealed.extend(Path(unquote(urlparse(str(uri)).path)) for uri in uris)
 
 
 def main():
@@ -124,6 +138,16 @@ def main():
         path = output / name
         path.mkdir(mode=0o700)
         env[variable] = str(path)
+    # Save reveals its file through FileManager1 (below); a stub xdg-open
+    # records the folder fallback instead of opening anything.
+    opened_folders = output / "opened-folders.jsonl"
+    tools = output / "tools"
+    tools.mkdir()
+    (tools / "xdg-open").write_text("#!/usr/bin/python3\nimport json, sys\n"
+        f"with open({str(opened_folders)!r}, 'a') as stream:\n"
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n")
+    (tools / "xdg-open").chmod(0o755)
+    env["PATH"] = f"{tools}:{env['PATH']}"
     children, logs = [], []
     loop = None
     editor = None
@@ -489,11 +513,11 @@ def main():
     # `--glass-text` on the comparison divider (the fixed media palette).
     GLASS_TEXT = (246, 246, 248)
 
-    def divider_shown(name):
-        """The centred divider paints a glass-text column over the canvas."""
+    def divider_shown(name, split=.5):
+        """The divider paints a glass-text column over the canvas at `split`."""
         window, size = shot_layouts[name]
         left, top, scale = fit_geometry(size, window)
-        x = round(left + size[0] / 2 * scale)
+        x = round(left + size[0] * split * scale)
         for y in (30, 50, 70, 90):  # Clear of the centred handle.
             actual = run("convert", str(output / f"{name}.png"), "-crop",
                          f"1x1+{x}+{round(top + y * scale)}", "-depth", "8", "rgb:-")
@@ -513,6 +537,19 @@ def main():
                 return
             previous = current
         raise AssertionError(f"comparison never settled: {name}")
+
+    def drag_split(split, start_split=.5):
+        """Drag the comparison's round handle from `start_split` to `split`."""
+        size = document_size()
+        left, top, scale = fit_geometry(size)
+        y = round(top + size[1] / 2 * scale)
+        start = round(left + size[0] * start_split * scale)
+        end = round(left + size[0] * split * scale)
+        run("xdotool", "mousemove", "--sync", "--window", editor, str(start), str(y), "sleep", ".2",
+            "mousedown", "1", "sleep", ".2")
+        for x in (start + (end - start) // 2, end):
+            run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
+        run("xdotool", "mouseup", "1", "sleep", ".3")
 
     def export_filename(stem):
         export_click("filename")
@@ -767,6 +804,7 @@ def main():
         saver = ScreenSaver(name, "/org/freedesktop/ScreenSaver")
         imported_path = output / "Imported sample é.png"
         chooser = FileChooser(bus, imported_path)
+        file_manager = FileManager(bus)
         loop = GLib.MainLoop()
         thread = threading.Thread(target=loop.run, daemon=True)
         thread.start()
@@ -837,7 +875,7 @@ def main():
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
-        app_command = [str(binary), "--live", "--history-root", str(history),
+        app_command = [str(binary), "--live", "--open-history", "--history-root", str(history),
                        "--settings-file", str(settings), "--quit-after", "600"]
         open_arguments = []
         if args.external_image_only:
@@ -1059,13 +1097,16 @@ def main():
             assert draft_bytes() == preserved_draft
             assert len(layers()) == 2
 
+            # Shipping reopen priority: an open editor before History.
             run("xdotool", "windowminimize", root)
+            run("xdotool", "windowminimize", editor)
             relaunched = subprocess.run(app_command, cwd=output, env=env,
                                         capture_output=True, text=True, timeout=10)
             assert relaunched.returncode == 0, relaunched.stderr
             assert '"event":"forwarded"' in relaunched.stdout
-            wait(lambda: active_window() == root,
-                 "empty relaunch restores and focuses the open History window")
+            wait(lambda: active_window() in windows("Captures Screenshot Editor"),
+                 "empty relaunch restores and focuses an open editor window")
+            assert root not in windows("Capture History"), "empty relaunch restored History over an editor"
             assert app.poll() is None
             close(root)
             wait(lambda: app.poll() is not None, "external image batch quits")
@@ -1127,7 +1168,7 @@ def main():
                            "reload-preserves-history-identity", "reloaded-source-pixels",
                            "secondary-exits-before-renderer-and-settings",
                            "forwarded-relative-alias-preserves-edits",
-                           "empty-relaunch-restores-preferences"],
+                           "empty-relaunch-focuses-open-editor"],
             }, indent=2) + "\n")
             print("PASS native external images: batch, aliases, errors, pixels, autosaved drafts and source reload")
             return
@@ -1459,6 +1500,8 @@ def main():
             export_click("save")
             wait(lambda: source_export.read_bytes() != original, "original file replaced")
             wait(lambda: (artifact / "capture.png").read_bytes() != original, "same History image replaced")
+            # As in shipping, every Save then shows the saved file in its folder.
+            wait(lambda: file_manager.revealed == [source_export], "overwrite reveals the saved file")
             shot(editor, "overwrite-saved")
             for path in [source_export, artifact / "capture.png"]:
                 assert run("identify", "-format", "%wx%h", str(path)) == b"640x360"
@@ -1482,6 +1525,7 @@ def main():
             export_click("save")
             copy_path = output / "original-edited.png"
             wait(copy_path.exists, "new file beside the original")
+            wait(lambda: file_manager.revealed == [source_export, copy_path], "new file revealed")
             assert source_export.read_bytes() == replaced
             entries = [json.loads(path.read_text()) for path in history.glob("*/metadata.json")]
             assert len(entries) == 2
@@ -1494,6 +1538,9 @@ def main():
             copied_before = copy_path.read_bytes()
             export_click("save")
             wait(lambda: copy_path.read_bytes() != copied_before, "adopted copy overwritten")
+            wait(lambda: file_manager.revealed == [source_export, copy_path, copy_path],
+                 "adopted overwrite revealed")
+            assert not opened_folders.exists(), "ShowItems selected the file; no folder fallback"
             assert run("convert", str(copy_path), "-crop", "1x1+162+221", "-depth", "8", "rgb:-") == bytes((40, 110, 166))
             assert source_export.read_bytes() == replaced
             entries = {json.loads(path.read_text())["id"] for path in history.glob("*/metadata.json")}
@@ -1517,7 +1564,8 @@ def main():
                 "checks": ["source-name-and-folder-default", "save-overwrites-source",
                            "exact-file-pixels", "same-history-id-date", "draft-preserved",
                            "undo-redo-preserved", "save-as-new-file-keeps-source",
-                           "saved-copy-becomes-overwrite-target", "minimum-controls",
+                           "saved-copy-becomes-overwrite-target", "every-save-reveals-file",
+                           "minimum-controls",
                            "editable-draft-reopen"],
             }, indent=2) + "\n")
             print("PASS native overwrite: default overwrite, same History, new-file switch, adopted copy, draft and undo")
@@ -2014,6 +2062,23 @@ def main():
             # before/after comparison covers the canvas on its own.
             compare_settled("output-compare-default")
             assert divider_shown("output-compare-default")
+            # Dragging the round handle moves the split without editing anything.
+            drag_split(.25)
+            compare_settled("output-compare-dragged")
+            assert divider_shown("output-compare-dragged", .25)
+            assert not divider_shown("output-compare-dragged")
+            # The focused split steps like shipping's range: Page Up is a tenth
+            # of its 6-94 % span and Home is its minimum.
+            run("xdotool", "key", "Prior", "sleep", ".3")
+            compare_settled("output-compare-page-up")
+            assert divider_shown("output-compare-page-up", .338)
+            run("xdotool", "key", "Home", "sleep", ".3")
+            compare_settled("output-compare-home")
+            assert divider_shown("output-compare-home", .06)
+            drag_split(.5, .06)
+            compare_settled("output-compare-recentred")
+            assert divider_shown("output-compare-recentred")
+            assert not draft.exists(), "moving the split never saves a draft"
             setting_click(426)
             shot(editor, "output-preset-menu")  # Per-format preset descriptions.
             run("xdotool", "key", "Escape", "sleep", ".2")
@@ -2029,6 +2094,7 @@ def main():
             assert run("xclip", "-selection", "clipboard", "-o").decode() == "tiny"
             export_click("save")
             wait(tiny.exists, "Tiny PNG saved")
+            wait(lambda: file_manager.revealed == [tiny], "Save reveals the new file")
             shot(editor, "output-preset-tiny")
             assert int(run("identify", "-format", "%k", str(artifact / "capture.png"))) > 256
             assert int(run("identify", "-format", "%k", str(tiny))) <= 32
@@ -2045,6 +2111,7 @@ def main():
             export_filename("highest")
             export_click("save")
             wait(highest.exists, "Highest PNG saved")
+            wait(lambda: file_manager.revealed == [tiny, highest], "Save reveals each new file")
             shot(editor, "output-preset-highest")
             assert tiny.exists(), "a new filename never replaces the previous save"
             assert run("convert", str(highest), "-depth", "8", "rgba:-") == run(
@@ -2072,7 +2139,8 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["quality-and-preset-descriptions", "automatic-compare",
-                           "tiny-saved-png-32-colors", "compare-hide-and-show",
+                           "split-handle-drag", "split-keyboard-page-home",
+                           "tiny-saved-png-32-colors", "save-reveals-file", "compare-hide-and-show",
                            "highest-saved-png-exact-pixels", "maximum-size-units",
                            "maximum-size-floor-disables-save", "no-draft-or-original-write",
                            "minimum-controls-and-menu"],
@@ -2583,6 +2651,21 @@ def main():
                       f"1x1+{inspector_x(115)}+{properties_top() + ERASER_MODE_ROW + 16 + 12 + 44}",
                       "-depth", "8", "rgb:-")
             assert (min(dab) >= 200) if args.appearance == "dark" else (max(dab) <= 60), dab
+            # Shipping `.screenshot-brush-cursor`: over the image the system
+            # cursor hides behind a white ring of the brush's displayed size,
+            # with a dark halo just outside it.
+            ring_x, ring_y = fixture_point((108, 189))
+            run("xdotool", "mousemove", "--window", editor, str(ring_x), str(ring_y), "sleep", ".3")
+            shot(editor, "brush-ring")
+            radius = 28 * fit_geometry(document_size(), window_size())[2] / 2
+            def ring_rgb(offset):
+                return run("convert", str(output / "brush-ring.png"), "-crop",
+                           f"1x1+{round(ring_x + offset)}+{ring_y}", "-depth", "8", "rgb:-")
+            border = max((ring_rgb(radius - inset) for inset in (0.5, 1, 1.5)), key=min)
+            # The fixture is (229, 179, 68): only the white border lifts blue this far.
+            assert min(border) >= 190, ("brush ring border", border)
+            halo = min((ring_rgb(radius + outset) for outset in (0.5, 1)), key=max)
+            assert halo[0] <= 190, ("brush ring halo darkens the fixture", halo)
             before = draft_bytes()
             brush_start = fixture_point((108, 189))
             brush_end = fixture_point((208, 229))
@@ -2657,7 +2740,7 @@ def main():
             close(root)
             wait(lambda: app.poll() is not None, "brush suite quits")
             assert app.returncode == 0
-            checks = ["brush-draw-tool-preview", "restore-missing-original-retry",
+            checks = ["brush-draw-tool-preview", "brush-hover-ring", "restore-missing-original-retry",
                       "brush-preview-no-write-and-cancel",
                       "erase-locked-image-interpolated-pixels", "brush-feathered-alpha",
                       "brush-single-undo-redo", "restore-retained-original", "brush-minimum-draft-reopen",

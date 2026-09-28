@@ -677,7 +677,11 @@ describe("CaptureOverlay guidance", () => {
     render(<App />);
     await screen.findByText("Drag to select a region");
 
-    expect(invoke).toHaveBeenCalledWith("show_capture_overlay", { sessionId: "capture-1" });
+    // The wake runs from an effect after the ready session renders; wait for it
+    // so a slow runner cannot leak the call into the next test.
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("show_capture_overlay", { sessionId: "capture-1" });
+    });
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
       command === "reveal_capture_overlay"
     ))).toHaveLength(0);
