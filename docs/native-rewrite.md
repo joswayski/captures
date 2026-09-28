@@ -1772,10 +1772,10 @@ settings ABI: no session opens the region or window selector, or the capture men
 Full screen for display; a running or paused take takes the screenshot beside it; a
 take that is selecting, counting down, finalizing or in its editor refuses silently,
 like `screenshot_capture_is_blocked` (`recording.rs`). The shared shortcut routes pass
-the region, window, display and New Capture chords while a running take owns the
-capture flow, including while its controls are hidden. The recording shortcuts and tray
-items stay blocked and do nothing (`prepare_capture_selector_inner` returns
-`CaptureInProgress`, which they ignore), so a second recording cannot start. New Capture
+every chord to the host while a take owns the capture flow, including while its
+controls are hidden (see the busy capture slice below). The recording shortcuts and tray
+items do nothing there (`prepare_capture_selector_inner` returns `CaptureInProgress`,
+which they ignore), so a second recording cannot start. New Capture
 restores hidden controls; with the controls showing it reports "capture already in
 progress" in the "Captures" error dialog, as shipping's `open_capture_controls` does
 (`capture_error::new_capture_route`). Only New Capture restores hidden controls; the
@@ -1818,14 +1818,22 @@ items take the same path:
 Shipping's brief preparing and capturing gaps race its prefetch and session maps (a
 region shortcut there drops the stale session and starts again); native hosts treat
 them like a countdown. Private-X11 acceptance (`x11_capture_smoke.py --recapture`) presses
-the region shortcut over a live region selector and checks the saved pixels are the
-frozen desktop with the old selector's guidance chip in them and no countdown; replaces
+the region shortcut over a live region selector and checks the new selector stays on the
+frozen desktop after it changes, and the saved pixels are that desktop under the old
+selector's veil, saved without a countdown; replaces
 the selector with the window selector, New Capture and Screenshot Display; and during a
 countdown checks the busy dialog and that other shortcuts start nothing. The
 `--target-shortcuts` smoke checks the busy Screenshot Display dialog during a menu
-countdown. The recapture beside a recording, the menu recapture and the concealed
-controls are covered by unit tests on wgpu and XCTest on AppKit only; real macOS and
-Windows capture, Wayland and multi-monitor acceptance remain open.
+countdown. The shared `busy_route` tests cover every action against every activity and
+recording state; wgpu unit tests cover how its capture states map to those activities
+and what each route requests, and AppKit XCTest covers the route through the settings
+ABI and the recapture preferences. `x11_recording_smoke.py --display-screenshot-only`
+checks, over the take's region selector, that New Capture brings the concealed controls
+back without closing the selector and that Screenshot Display saves the display at once
+without a countdown. The region and window recapture beside a recording and the menu
+recapture's snapshot pixels have no end-to-end smoke. wgpu reuses the selector's
+viewport for a recapture and repaints it when the new snapshot arrives. The AppKit side has not yet been built or run on macOS, and real macOS
+and Windows capture, Wayland and multi-monitor acceptance remain open.
 
 Each screenshot reuses the child generation above. Region and window open their normal
 selector over the take on the display under the pointer with the current screenshot
