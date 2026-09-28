@@ -248,8 +248,8 @@ Screenshot and Record controls for Region, Window and Full screen, retaining sel
 switching targets with the toolbar. While these controls are open, the configured
 region/window/display shortcuts and New Capture switch mode and target in the same session; keyboard
 Full screen does not auto-start capture. As in the shipping app, pressing the shortcut of
-the screenshot target already selected (New Capture for Region) freezes the controls into a
-new capture instead. Any capture shortcut or tray item over an open region or window
+the screenshot target the controls opened on or a shortcut last selected (New Capture for
+Region) freezes the controls into a new capture instead. Any capture shortcut or tray item over an open region or window
 selector does the same, opening its selector or these controls on a snapshot that shows the
 old one; that selection never counts down. Over a screenshot selector beside a recording,
 the region and window shortcuts do this too, and Screenshot Display saves the display with

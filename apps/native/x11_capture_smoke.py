@@ -420,7 +420,8 @@ def main():
                         # unlike explicit toolbar target toggles.
                         previous = entries()
                         run("xdotool", "key", "Return", "sleep", ".3")
-                        assert windows(title) == [selector] and entries() == previous
+                        assert windows(title) == [selector], "Return closed or replaced the menu"
+                        assert entries() == previous, "Return captured a cleared window target"
                         click(selector, 660, 360)
                         # The same target's shortcut would recapture the menu
                         # into a window selector, as in shipping.

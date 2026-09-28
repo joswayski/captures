@@ -1447,6 +1447,11 @@ pub struct Live {
     /// A capture action asked to recapture the open UI; launched with the
     /// next frame's display list.
     requested_recapture: Option<Recapture>,
+    /// The capture menu's Screenshot target as its shortcuts and tray items
+    /// last set it, or `None` in Record mode. Like shipping's selection
+    /// summary (`open_menu_screenshot_target`), toolbar clicks and window
+    /// picks inside the menu leave it unchanged.
+    menu_screenshot_target: Option<captures_app::capture_error::Target>,
     recapture: Option<PendingRecapture>,
     /// New Capture brought the recording controls back during a screenshot
     /// beside the take (shipping `restore_hidden_recording_controls`).
@@ -1773,6 +1778,7 @@ impl Live {
             clearing_history: false,
             requested_capture: None,
             requested_recapture: None,
+            menu_screenshot_target: None,
             recapture: None,
             recording_screenshot_controls_restored: false,
             restore_root_visible: true,
@@ -2109,6 +2115,7 @@ impl Live {
             }
         }
         drop(controls);
+        self.menu_screenshot_target = (!record).then_some(target.target());
         self.recording_toolchain_ready = false;
         self.recording_toolchain_error = None;
         self.recording_has_started = false;
@@ -2130,7 +2137,7 @@ impl Live {
                 .is_some()
                 .then_some(self.recording_screenshot_phase),
             self.capture_phase,
-            || self.controls.lock().unwrap().screenshot_target(),
+            || self.menu_screenshot_target,
             self.flow.is_some() || self.capture_in_flight,
         )
     }
@@ -2210,6 +2217,7 @@ impl Live {
                     .lock()
                     .unwrap()
                     .apply_target_shortcut(shortcut);
+                self.menu_screenshot_target = (!record).then_some(target);
                 ctx.request_repaint_of(egui::ViewportId::from_hash_of("capture-controls"));
             }
             BusyRoute::RecaptureSelector(target) => {
@@ -8830,10 +8838,23 @@ mod tests {
         live.requested_recapture = None;
         live.capture_action(Action::NewCapture, &ctx);
         assert_eq!(live.requested_recapture, None);
-        assert_eq!(
-            live.controls.lock().unwrap().screenshot_target(),
-            Some(Target::Region)
-        );
+        assert_eq!(live.menu_screenshot_target, Some(Target::Region));
+        // Like shipping's selection summary, a target picked inside the menu
+        // (here Full screen) is not the one its shortcuts compare against.
+        live.controls
+            .lock()
+            .unwrap()
+            .apply_target_shortcut(CaptureShortcut::Display);
+        live.capture_action(Action::Screenshot(Target::Display), &ctx);
+        assert_eq!(live.requested_recapture, None);
+        assert_eq!(live.menu_screenshot_target, Some(Target::Display));
+        live.controls
+            .lock()
+            .unwrap()
+            .apply_target_shortcut(CaptureShortcut::Region);
+        live.capture_action(Action::NewCapture, &ctx);
+        assert_eq!(live.requested_recapture, None);
+        assert_eq!(live.menu_screenshot_target, Some(Target::Region));
         live.capture_action(Action::NewCapture, &ctx);
         assert_eq!(
             live.requested_recapture,
@@ -8844,7 +8865,7 @@ mod tests {
         );
         live.requested_recapture = None;
         live.capture_action(Action::Record(Target::Display), &ctx);
-        assert_eq!(live.controls.lock().unwrap().screenshot_target(), None);
+        assert_eq!(live.menu_screenshot_target, None);
         assert_eq!(live.requested_recapture, None);
         live.capture_phase = None;
         live.flush();

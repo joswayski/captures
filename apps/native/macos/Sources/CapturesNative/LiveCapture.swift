@@ -207,6 +207,10 @@ final class LiveCaptureController: NSObject {
     private var unifiedDisplay: DisplayItem?
     private var unifiedScreen: NSScreen?
     private var unifiedControlsState = UnifiedCaptureControlsState.initial
+    /// The menu's Screenshot target as its shortcuts and tray items last set
+    /// it, or nil in Record mode. Like shipping's selection summary
+    /// (`open_menu_screenshot_target`), picks inside the menu leave it as is.
+    private var unifiedRouteTarget: UnifiedCaptureTarget?
     private var recordingCapabilities: NativeRecordingCapabilities?
     private var microphoneDevices: [NativeMicrophoneDevice] = []
     private var recordingControlState = RecordingControlState(framesPerSecond: 60,
@@ -404,10 +408,7 @@ final class LiveCaptureController: NSObject {
                 ? .selector : .busy
         }
         if recordingSession != nil || !capturing { return .idle }
-        if let panel = unifiedPanel {
-            return .menu(screenshotTarget: panel.selector.mode == .screenshot
-                ? panel.selector.target : nil)
-        }
+        if unifiedPanel != nil { return .menu(screenshotTarget: unifiedRouteTarget) }
         if regionPanel != nil || windowPanel != nil { return .selector }
         return .busy
     }
@@ -438,6 +439,7 @@ final class LiveCaptureController: NSObject {
             return .handled
         case .switchMenu(let record, let target):
             unifiedPanel?.selector.setTargetFromShortcut(target, mode: record ? .record : .screenshot)
+            unifiedRouteTarget = record ? nil : target
             return .handled
         case .recaptureSelector(let kind):
             recapture(.selector(kind))
@@ -522,6 +524,7 @@ final class LiveCaptureController: NSObject {
             unifiedControlsState = .initial
             if record { unifiedControlsState.mode = .record }
             unifiedControlsState.target = target
+            unifiedRouteTarget = record ? nil : target
             preparingUnified = true
             run({ [settingsPath] in
                 let loaded = try CapturePreferences.load(path: settingsPath)
@@ -1494,6 +1497,7 @@ final class LiveCaptureController: NSObject {
             // Shipping `open_capture_controls_with_target(Screenshot, target)`.
             unifiedControlsState.target = screenshotTarget
         }
+        unifiedRouteTarget = recordingTarget == nil ? (screenshotTarget ?? .region) : nil
         setBusy(true, message: "Preparing capture controls…")
         let request = unifiedPreparation.begin()
         run({ [settingsPath] in
@@ -3058,13 +3062,6 @@ final class LiveCaptureController: NSObject {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
-    }
-
-    @discardableResult func selectUnifiedTargetFromShortcut(_ shortcut: CaptureShortcut) -> Bool {
-        guard let panel = unifiedPanel, selectorShortcutGeneration == flowGeneration,
-              let target = shortcut.target else { return false }
-        panel.selector.setTargetFromShortcut(target, mode: shortcut.mode)
-        return true
     }
 
     private func setBusy(_ busy: Bool, message: String = "") {

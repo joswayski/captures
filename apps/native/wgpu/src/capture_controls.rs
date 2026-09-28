@@ -151,12 +151,6 @@ impl CaptureControls {
         self.mode
     }
 
-    /// The menu's target in Screenshot mode, or `None` in Record mode
-    /// (shipping `open_menu_screenshot_target`).
-    pub fn screenshot_target(&self) -> Option<captures_app::capture_error::Target> {
-        (self.action_mode == ActionMode::Screenshot).then_some(self.mode.target())
-    }
-
     pub fn configure_recording(
         &mut self,
         settings: &RecordingSettings,

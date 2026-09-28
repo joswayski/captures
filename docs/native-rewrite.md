@@ -1795,7 +1795,9 @@ items take the same path:
   the pointer taken with the old selector still on screen. With the menu open, the
   shortcut of its own screenshot target (New Capture on Region) recaptures the menu the
   same way (`should_recapture_open_capture_menu`); other targets and modes switch it in
-  place. The old UI stays up until the new snapshot is ready, and a recaptured
+  place. That target is the one the menu opened on or its shortcuts and tray items last
+  set, like shipping's selection summary (`open_menu_screenshot_target`); a target picked
+  inside the menu does not change it. The old UI stays up until the new snapshot is ready, and a recaptured
   selection never counts down (`screenshot_countdown_seconds_for_capture_ui`). wgpu
   prepares the new session on the same capture generation and swaps the viewport when
   it arrives; AppKit keeps the old panel on screen with `sharingType = .readOnly` so it
