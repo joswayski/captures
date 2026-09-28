@@ -23,8 +23,8 @@ struct CapturePreferences {
     let includeCursor: Bool
     let directory: String
     let format: String
-    let countdown: Int
-    let freezeScreen: Bool
+    private(set) var countdown: Int
+    private(set) var freezeScreen: Bool
     let autoStart: Bool
     let showMiniPreviews: Bool
     let miniPreviewPlacement: String
@@ -58,6 +58,15 @@ struct CapturePreferences {
         includeRecordingControlsInCaptures = settings["include_recording_controls_in_captures"] as? Bool ?? false
         newCaptureShortcut = settings["new_capture_shortcut"] as? String ?? ""
         recording = try RecordingPreferences(settings["recording"] as? [String: Any] ?? [:])
+    }
+
+    /// Shipping `includes_capture_ui`: a capture UI recaptured into a new
+    /// selector freezes the screen and never counts down.
+    func recapturing() -> CapturePreferences {
+        var copy = self
+        copy.countdown = 0
+        copy.freezeScreen = true
+        return copy
     }
 
     var miniPreviewSettings: MiniPreviewSettings {

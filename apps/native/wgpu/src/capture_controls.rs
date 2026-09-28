@@ -23,6 +23,26 @@ pub enum TargetMode {
     Display,
 }
 
+impl TargetMode {
+    pub fn target(self) -> captures_app::capture_error::Target {
+        use captures_app::capture_error::Target;
+        match self {
+            Self::Region => Target::Region,
+            Self::Window => Target::Window,
+            Self::Display => Target::Display,
+        }
+    }
+
+    pub fn of(target: captures_app::capture_error::Target) -> Self {
+        use captures_app::capture_error::Target;
+        match target {
+            Target::Region => Self::Region,
+            Target::Window => Self::Window,
+            Target::Display => Self::Display,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ActionMode {
     #[default]
@@ -129,6 +149,12 @@ impl CaptureControls {
 
     pub fn mode(&self) -> TargetMode {
         self.mode
+    }
+
+    /// The menu's target in Screenshot mode, or `None` in Record mode
+    /// (shipping `open_menu_screenshot_target`).
+    pub fn screenshot_target(&self) -> Option<captures_app::capture_error::Target> {
+        (self.action_mode == ActionMode::Screenshot).then_some(self.mode.target())
     }
 
     pub fn configure_recording(

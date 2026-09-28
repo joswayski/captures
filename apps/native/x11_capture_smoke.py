@@ -126,6 +126,8 @@ def main():
                         help="Switch New Capture targets using registered global shortcuts")
     parser.add_argument("--failure-dialog", action="store_true",
                         help="Fail a display-shortcut capture and check the shipping error dialog")
+    parser.add_argument("--recapture", action="store_true",
+                        help="Press capture shortcuts over an open selector and during a countdown")
     args = parser.parse_args()
     if args.target_shortcuts and not args.controls:
         parser.error("--target-shortcuts requires --controls")
@@ -271,6 +273,10 @@ def main():
             failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb, screenshot,
                            background)
             return
+        if args.recapture:
+            recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, screenshot,
+                      background)
+            return
 
         cases = [("region", True, 0, False, False), ("region", True, 1, False, False),
                  ("window", True, 0, False, False), ("window", True, 1, False, False),
@@ -370,13 +376,13 @@ def main():
                     run("xdotool", "key", "Return", "sleep", ".3")
                     assert windows(title) and entries() == previous, "toolbar drag created a region"
                     checked_toolbar_drag = True
-                if args.target_shortcuts:
+                if args.target_shortcuts and auto_start:
+                    # New Capture over the open menu recaptures it like shipping;
+                    # `--recapture` covers that. Keyboard Full screen must not
+                    # arm automatic capture.
                     previous = entries()
-                    run("xdotool", "key", "ctrl+shift+F10", "sleep", ".2")
-                    assert windows(title) == [selector] and entries() == previous, "New Capture re-entered"
-                    if auto_start:
-                        select_target(selector, "display")
-                        assert entries() == previous, "keyboard Full screen armed automatic capture"
+                    select_target(selector, "display")
+                    assert entries() == previous, "keyboard Full screen armed automatic capture"
                 if args.controls and full_display:
                     if not display_shortcut:
                         select_target(selector, "display")
@@ -416,7 +422,8 @@ def main():
                         run("xdotool", "key", "Return", "sleep", ".3")
                         assert windows(title) == [selector] and entries() == previous
                         click(selector, 660, 360)
-                        select_target(selector, "window")  # Same-target shortcut retains this choice.
+                        # The same target's shortcut would recapture the menu
+                        # into a window selector, as in shipping.
                     # Release queues the target change; let the compositor
                     # present it before collecting the selection screenshot.
                     time.sleep(.2)
@@ -454,7 +461,13 @@ def main():
                     if args.target_shortcuts:
                         # Once confirmed, target keys cannot change the target
                         # or queue another capture behind the existing flow.
-                        run("xdotool", "key", "ctrl+shift+F9", "ctrl+shift+F8")
+                        # Screenshot Display reports the busy capture like
+                        # shipping; Screenshot Window is refused silently.
+                        run("xdotool", "key", "ctrl+shift+F9")
+                        dialog = wait(lambda: windows("Captures"), "busy Screenshot Display dialog")[0]
+                        run("xdotool", "key", "ctrl+shift+F8")
+                        run("xdotool", "windowactivate", "--sync", dialog, "key", "Return")
+                        wait(lambda: not windows("Captures"), "busy dialog dismissed")
 
                 new_entries = wait(lambda: entries() - captured, "persisted capture")
                 wait(lambda: windows("Capture History"), "workspace restored")
@@ -675,6 +688,128 @@ def failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb,
     (output / "result.json").write_text(json.dumps({
         "passed": True, "failureDialog": True, "appearances": ["dark", "light"],
         "scope": "Real X11 capture failure on private Xvfb with software GL; not Windows or Wayland.",
+    }, indent=2))
+
+
+def recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, screenshot, background):
+    """Shipping capture shortcuts over an open selector recapture it: the new
+    selector (or capture menu) opens on a frozen snapshot that shows the old
+    one, and its selection never counts down. During a countdown New Capture
+    and Screenshot Display report "capture already in progress" and the other
+    shortcuts are refused silently."""
+    prefix = "recapture"
+    history = output / prefix / "history"
+    settings = output / f"{prefix}-settings.json"
+    settings.write_text(json.dumps({
+        "onboarding_completed": True,
+        "settings_schema_version": 5, "appearance": "dark", "theme": "mustard",
+        "output_directory": str(output / prefix / "exports"),
+        "new_capture_shortcut": "Ctrl+Shift+F10",
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9",
+        "launch_at_login": False, "auto_copy_to_clipboard": False,
+        "auto_start_on_selection": False, "freeze_screen": False,
+        "show_cursor_in_screenshots": False, "screenshot_countdown_seconds": 2,
+    }))
+    background(0)
+    app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
+                         "--settings-file", str(settings), "--quit-after", "120"])
+    root = wait(lambda: windows("Capture History"), "capture workspace")[0]
+    time.sleep(2)
+
+    def entries():
+        return {p for p in history.glob("*/metadata.json") if not p.parent.name.startswith(".")}
+
+    def pixel(window, x, y):
+        return tuple(crop_rgb(window, f"1x1+{x}+{y}"))
+
+    def open_selector(key, title):
+        run("xdotool", "key", key)
+        selector = wait(lambda: windows(title), title)[0]
+        run("xdotool", "mousemove", "--window", selector, "640", "600")
+        wait(lambda: int(run("import", "-window", selector, "-crop", GUIDANCE_CROP,
+                             "-format", "%k", "info:")) > 16, f"{title} paints")
+        return selector
+
+    def cancel(title):
+        run("xdotool", "key", "Escape")
+        wait(lambda: not windows(title) and windows("Capture History"), f"{title} cancelled")
+
+    # Region shortcut again over the live (unfrozen) region selector: a new
+    # region selector on a frozen snapshot of the desktop and the old one.
+    selector = open_selector("ctrl+shift+F7", "Captures Region Selection")
+    background(1)
+    time.sleep(.5)
+    screenshot(selector, f"{prefix}-live-selector")
+    run("xdotool", "key", "ctrl+shift+F7")
+    time.sleep(.5)
+    background(0)
+    frozen = [bytes(color) for color in BACKGROUNDS[1]]
+    wait(lambda: pixel(selector, 10, 400) == tuple(frozen[2]),
+         "the recaptured selector shows the frozen desktop")
+    assert windows("Captures Region Selection") == [selector], "the recapture closed the selector"
+    screenshot(selector, f"{prefix}-recaptured-selector")
+    run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
+        "140", "180", "sleep", ".1", "mousedown", "1", "sleep", ".2", "mousemove",
+        "--window", selector, "450", "350", "sleep", ".2", "mouseup", "1")
+    started = time.monotonic()
+    new_entries = wait(lambda: entries(), "recaptured selection persisted")
+    assert time.monotonic() - started < 1.9, "a recaptured selection counted down"
+    wait(lambda: windows("Capture History"), "workspace restored")
+    metadata = next(iter(new_entries))
+    entry = json.loads(metadata.read_text())
+    assert (entry["mode"], entry["width"], entry["height"]) == ("region", 310, 170), entry
+    pixels = run("convert", str(metadata.parent / "capture.png"), "-depth", "8", "RGB:-")
+    rows = [pixels[y * 310 * 3:(y + 1) * 310 * 3] for y in range(170)]
+    # Below the old selector's guidance chip the frozen desktop is exact: the
+    # recapture froze the desktop as it was, not as it is now.
+    expected = [(frozen[2] * 160 + frozen[3] * 150) for _ in range(90, 170)]
+    assert rows[90:] == expected, "the recaptured selection lost the frozen desktop"
+    # The old selector's guidance chip (top edge 16% down, centred) is in it.
+    chip = b"".join(row[210 * 3:] for row in rows[:40])
+    assert chip != (frozen[1] * 100) * 40, "the old selector is missing from the recapture"
+    print(f"PASS {prefix}: region shortcut recaptures the open region selector", flush=True)
+
+    # Another shortcut over the selector opens its UI on the recapture.
+    for key, title in (("ctrl+shift+F8", "Captures Window Selection"),
+                       ("ctrl+shift+F10", "Captures Capture Controls"),
+                       ("ctrl+shift+F9", "Captures Capture Controls")):
+        captured = entries()
+        selector = open_selector("ctrl+shift+F7", "Captures Region Selection")
+        run("xdotool", "key", key)
+        replacement = wait(lambda: windows(title), f"{title} replaces the region selector")[0]
+        wait(lambda: not windows("Captures Region Selection"), "the region selector closes")
+        screenshot(replacement, f"{prefix}-{key}")
+        cancel(title)
+        assert entries() == captured, f"{key} over the selector captured"
+    print(f"PASS {prefix}: window, New Capture and display shortcuts replace the open selector", flush=True)
+
+    # During a countdown: New Capture and Screenshot Display report the busy
+    # capture; region, window and record shortcuts are refused silently.
+    captured = entries()
+    selector = open_selector("ctrl+shift+F7", "Captures Region Selection")
+    run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
+        "140", "180", "sleep", ".1", "mousedown", "1", "sleep", ".2", "mousemove",
+        "--window", selector, "450", "350", "sleep", ".2", "mouseup", "1")
+    wait(lambda: windows("Captures Screenshot Countdown"), "countdown")
+    run("xdotool", "key", "ctrl+shift+F10")
+    dialog = wait(lambda: windows("Captures"), "busy New Capture dialog")[0]
+    settled(dialog, "400x100+20+16", lambda rgb: len(set(rgb)) > 8, "busy dialog message")
+    screenshot(dialog, f"{prefix}-busy-dialog")
+    run("xdotool", "key", "ctrl+shift+F7", "sleep", ".3", "ctrl+shift+F8", "sleep", ".3")
+    assert not windows("Captures Region Selection") and not windows("Captures Window Selection"), \
+        "a shortcut started a capture behind the countdown"
+    run("xdotool", "windowactivate", "--sync", dialog, "key", "Return")
+    wait(lambda: not windows("Captures"), "busy dialog dismissed")
+    wait(lambda: entries() - captured, "the counted-down capture persisted")
+    wait(lambda: windows("Capture History"), "workspace restored")
+    assert len(entries()) == len(captured) + 1
+    print(f"PASS {prefix}: busy New Capture dialog during a countdown, other shortcuts refused", flush=True)
+    run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+    assert app.wait(timeout=10) == 0
+    (output / "result.json").write_text(json.dumps({
+        "passed": True, "recapture": True, "savedCaptures": len(entries()),
+        "scope": "Real X11 capture on private Xvfb with software GL; not Windows or Wayland.",
     }, indent=2))
 
 

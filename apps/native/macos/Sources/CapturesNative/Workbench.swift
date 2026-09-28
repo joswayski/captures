@@ -612,13 +612,13 @@ func captureShortcutSignature(_ settings: [String: Any]) -> [String] {
         recording.string("window_shortcut"), recording.string("display_shortcut")]
 }
 
-/// A running recording keeps shortcuts enabled so the shared routes can pass
-/// the screenshot shortcuts to a screenshot beside it, and New Capture to the
-/// host; they block the recording shortcuts.
+/// A capture or recording in flight keeps shortcuts enabled so the shared
+/// routes deliver every chord to the host, which routes it like shipping
+/// (`captures_app::capture_error::busy_route`).
 func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = nil,
                              recordingControlsHidden: Bool = false,
-                             recordingScreenshot: Bool = false) -> Bool {
-    !captureBusy || selectorGeneration != nil || recordingControlsHidden || recordingScreenshot
+                             captureRoutes: Bool = false) -> Bool {
+    !captureBusy || selectorGeneration != nil || recordingControlsHidden || captureRoutes
 }
 
 func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
@@ -707,6 +707,110 @@ enum NewCaptureRoute: Equatable {
         default: throw SettingsStoreError.invalidResponse
         }
     }
+}
+
+/// A capture shortcut or tray item.
+enum CaptureAction: Equatable {
+    case newCapture
+    case screenshot(StillCaptureKind)
+    case record(UnifiedCaptureTarget)
+}
+
+/// What is open or in flight when a capture action arrives
+/// (`captures_app::capture_error::Activity`).
+enum CaptureActivity: Equatable {
+    case idle
+    /// A region or window selector is on screen.
+    case selector
+    /// The capture menu is on screen, on this target in Screenshot mode, or
+    /// on nil in Record mode.
+    case menu(screenshotTarget: UnifiedCaptureTarget?)
+    /// A screenshot is preparing, counting down or capturing.
+    case busy
+}
+
+/// Where a capture action goes while a capture is open or in flight
+/// (`captures_app::capture_error::busy_route`).
+enum BusyCaptureRoute: Equatable {
+    /// Nothing is open: the idle routes decide.
+    case idle
+    case restoreControls
+    case inProgress(message: String)
+    case ignore
+    /// Freeze the open UI into a new region or window selector.
+    case recaptureSelector(StillCaptureKind)
+    /// Beside a running take: capture the display at once with the selector in it.
+    case recaptureDisplay
+    /// Freeze the open UI into the capture menu.
+    case recaptureMenu(record: Bool, target: UnifiedCaptureTarget)
+    /// Switch the open menu in place.
+    case switchMenu(record: Bool, target: UnifiedCaptureTarget)
+
+    init(action: CaptureAction, activity: CaptureActivity, recordingState: String?,
+         controlsOnScreen: Bool, transport: SettingsTransport = SettingsBridge()) throws {
+        var request: [String: Any] = ["operation": "busy_capture_route",
+                                      "controls_on_screen": controlsOnScreen]
+        switch action {
+        case .newCapture:
+            request["action"] = "new_capture"
+        case .screenshot(let kind):
+            request["action"] = "screenshot"
+            switch kind {
+            case .region: request["target"] = "region"
+            case .window: request["target"] = "window"
+            case .display: request["target"] = "display"
+            }
+        case .record(let target):
+            request["action"] = "record"
+            request["target"] = target.rawValue
+        }
+        switch activity {
+        case .idle: request["activity"] = "idle"
+        case .selector: request["activity"] = "selector"
+        case .busy: request["activity"] = "busy"
+        case .menu(let target):
+            request["activity"] = "menu"
+            if let target { request["menu_target"] = target.rawValue }
+        }
+        if let recordingState { request["recording"] = recordingState }
+        let response = try transport.request(request)
+        let target = (response["target"] as? String).flatMap(UnifiedCaptureTarget.init(rawValue:))
+        let record = response["record"] as? Bool
+        switch response["route"] as? String {
+        case "idle": self = .idle
+        case "restore_controls": self = .restoreControls
+        case "ignore": self = .ignore
+        case "recapture_display": self = .recaptureDisplay
+        case "in_progress":
+            guard let message = response["message"] as? String else {
+                throw SettingsStoreError.invalidResponse
+            }
+            self = .inProgress(message: message)
+        case "recapture_selector":
+            switch target {
+            case .region?: self = .recaptureSelector(.region)
+            case .window?: self = .recaptureSelector(.window)
+            default: throw SettingsStoreError.invalidResponse
+            }
+        case "recapture_menu":
+            guard let target, let record else { throw SettingsStoreError.invalidResponse }
+            self = .recaptureMenu(record: record, target: target)
+        case "switch_menu":
+            guard let target, let record else { throw SettingsStoreError.invalidResponse }
+            self = .switchMenu(record: record, target: target)
+        default: throw SettingsStoreError.invalidResponse
+        }
+    }
+}
+
+/// What the host does after the live controller routed a capture action.
+enum BusyCaptureOutcome: Equatable {
+    /// Nothing is open: start it the idle way.
+    case idle
+    /// Recaptured, switched, restored or refused silently.
+    case handled
+    /// Show the shipping "Captures" error dialog with this message.
+    case inProgress(message: String)
 }
 
 func configureStatusItemButton(_ button: NSStatusBarButton) {
@@ -1584,13 +1688,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func installStatusItem() {
         let actions = LiveStatusActions(newCapture: { [weak self] in
             self?.preferencesController?.flush()
-            self?.launchNewCapture()
+            self?.performCaptureAction(.newCapture)
         }, capture: { [weak self] kind in
             self?.preferencesController?.flush()
-            self?.launchCapture(kind)
+            self?.performCaptureAction(.screenshot(kind))
         }, record: { [weak self] target in
             self?.preferencesController?.flush()
-            self?.launchNewCapture(recordingTarget: target)
+            self?.performCaptureAction(.record(target))
         }, history: { [weak self] in
             self?.showHistory()
         }, preferences: { [weak self] in
@@ -1669,13 +1773,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             return
         }
         let controlsHidden = liveController?.recordingControlsHidden == true
-        let recordingScreenshot = liveController?.recordingDisplayScreenshotAvailable == true
+        let captureRoutes = liveController?.captureInFlight == true
         captureShortcuts.setRestoreOnly(controlsHidden)
-        captureShortcuts.setRecordingScreenshot(recordingScreenshot)
+        captureShortcuts.setCaptureBusy(captureRoutes)
         let enabled = captureShortcutsEnabled(captureBusy: captureBusy,
             selectorGeneration: shortcutSelectorGeneration,
             recordingControlsHidden: controlsHidden,
-            recordingScreenshot: recordingScreenshot)
+            captureRoutes: captureRoutes)
         if enabled != shortcutEnabled {
             captureShortcuts.setEnabled(enabled)
             shortcutEnabled = enabled
@@ -1687,24 +1791,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
               captureShortcutsEnabled(captureBusy: captureBusy,
                   selectorGeneration: shortcutSelectorGeneration,
                   recordingControlsHidden: liveController?.recordingControlsHidden == true,
-                  recordingScreenshot: liveController?.recordingDisplayScreenshotAvailable == true),
+                  captureRoutes: liveController?.captureInFlight == true),
               let captureShortcuts else { return }
         do {
             while let action = try captureShortcuts.nextAction() {
-                if liveController?.recordingControlsHidden == true {
-                    // Shipping screenshots beside the take and leaves its
-                    // controls hidden; New Capture restores them.
-                    if action == .newCapture { _ = liveController?.showRecordingControls() }
-                    else if let kind = stillCaptureKind(for: action) { launchCapture(kind) }
-                } else if shortcutSelectorGeneration != nil {
-                    _ = liveController?.selectUnifiedTargetFromShortcut(action)
-                } else if action.mode == .record, let target = action.target {
-                    launchNewCapture(recordingTarget: target)
-                } else if let kind = stillCaptureKind(for: action) {
-                    launchCapture(kind)
-                } else {
-                    launchNewCapture()
-                }
+                // Shipping routes the shortcuts and the tray items alike.
+                performCaptureAction(action.captureAction)
                 if captureBusy && shortcutSelectorGeneration == nil { break }
             }
         } catch {
@@ -1730,6 +1822,29 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func reportShortcutError(_ error: Error) {
         Metrics.write(["event": "shortcut-error", "detail": error.localizedDescription])
         presentHostError(title: "Capture Shortcuts Unavailable", message: error.localizedDescription)
+    }
+
+    /// A capture shortcut or tray item. While a capture is open or in flight
+    /// the live controller routes it (recapture, switch the menu, restore the
+    /// controls or refuse); otherwise it starts the idle way.
+    private func performCaptureAction(_ action: CaptureAction) {
+        guard onboardingReady else { showOnboarding(); return }
+        guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
+        switch liveController?.routeBusyCaptureAction(action) ?? .idle {
+        case .handled:
+            return
+        case .inProgress(let message):
+            let copy = CaptureErrorCopy.current
+            presentHostError(title: copy.title, message: message, button: copy.button)
+            return
+        case .idle:
+            break
+        }
+        switch action {
+        case .newCapture: launchNewCapture()
+        case .screenshot(let kind): launchCapture(kind)
+        case .record(let target): launchNewCapture(recordingTarget: target)
+        }
     }
 
     private func launchCapture(_ kind: StillCaptureKind) {

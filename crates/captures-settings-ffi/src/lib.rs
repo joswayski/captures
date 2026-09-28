@@ -242,6 +242,22 @@ enum Request {
         #[serde(default)]
         controls_hidden: bool,
     },
+    /// Where a capture action goes while a capture is open or in flight
+    /// (`captures_app::capture_error::busy_route`).
+    BusyCaptureRoute {
+        /// "new_capture", "screenshot" or "record".
+        action: String,
+        #[serde(default)]
+        target: Option<captures_app::capture_error::Target>,
+        /// "idle", "selector", "menu" or "busy".
+        activity: String,
+        /// The open menu's Screenshot target; absent in Record mode.
+        #[serde(default)]
+        menu_target: Option<captures_app::capture_error::Target>,
+        recording: Option<captures_recording::RecordingState>,
+        #[serde(default)]
+        controls_on_screen: bool,
+    },
     /// Shipping Screen Recording recovery dialog for a denied capture.
     PermissionRecoveryPrompt,
     PermissionRecoveryClassify {
@@ -383,6 +399,22 @@ fn response(request: *const c_char) -> Value {
                 }),
             }
         }
+        Ok(Request::BusyCaptureRoute {
+            action,
+            target,
+            activity,
+            menu_target,
+            recording,
+            controls_on_screen,
+        }) => busy_capture_route(
+            &action,
+            target,
+            &activity,
+            menu_target,
+            recording,
+            controls_on_screen,
+        )
+        .unwrap_or_else(|error| json!({"ok":false,"error":error})),
         Ok(Request::PermissionRecoveryPrompt) => ONBOARDING
             .lock()
             .map_err(|_| "The onboarding service is unavailable. Restart Captures.".to_owned())
@@ -517,6 +549,55 @@ pub unsafe extern "C" fn captures_settings_free_v1(response: *mut c_char) {
             drop(CString::from_raw(response));
         }
     }
+}
+
+fn busy_capture_route(
+    action: &str,
+    target: Option<captures_app::capture_error::Target>,
+    activity: &str,
+    menu_target: Option<captures_app::capture_error::Target>,
+    recording: Option<captures_recording::RecordingState>,
+    controls_on_screen: bool,
+) -> Result<Value, String> {
+    use captures_app::capture_error::{
+        Action, Activity, BusyRoute, CAPTURE_IN_PROGRESS, busy_route, message,
+    };
+    let target_of = || target.ok_or_else(|| "A capture target is required.".to_owned());
+    let action = match action {
+        "new_capture" => Action::NewCapture,
+        "screenshot" => Action::Screenshot(target_of()?),
+        "record" => Action::Record(target_of()?),
+        other => return Err(format!("Unknown capture action: {other}")),
+    };
+    let activity = match activity {
+        "idle" => Activity::Idle,
+        "selector" => Activity::Selector,
+        "menu" => Activity::Menu {
+            screenshot_target: menu_target,
+        },
+        "busy" => Activity::Busy,
+        other => return Err(format!("Unknown capture activity: {other}")),
+    };
+    Ok(
+        match busy_route(action, activity, recording, controls_on_screen) {
+            BusyRoute::Idle => json!({"ok":true,"route":"idle"}),
+            BusyRoute::RestoreControls => json!({"ok":true,"route":"restore_controls"}),
+            BusyRoute::InProgress => json!({
+                "ok":true,"route":"in_progress","message":message(CAPTURE_IN_PROGRESS),
+            }),
+            BusyRoute::Ignore => json!({"ok":true,"route":"ignore"}),
+            BusyRoute::RecaptureSelector(target) => {
+                json!({"ok":true,"route":"recapture_selector","target":target})
+            }
+            BusyRoute::RecaptureDisplay => json!({"ok":true,"route":"recapture_display"}),
+            BusyRoute::RecaptureMenu { record, target } => json!({
+                "ok":true,"route":"recapture_menu","record":record,"target":target,
+            }),
+            BusyRoute::SwitchMenu { record, target } => json!({
+                "ok":true,"route":"switch_menu","record":record,"target":target,
+            }),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -654,6 +735,59 @@ mod tests {
             busy["message"],
             "Captures could not start the capture: capture already in progress"
         );
+    }
+
+    #[test]
+    fn busy_capture_route_abi_shares_the_busy_rule() {
+        let route = |request: Value| settings_request(request);
+        let again = route(json!({
+            "operation":"busy_capture_route","action":"screenshot","target":"window",
+            "activity":"selector",
+        }));
+        assert_eq!(again["ok"], true);
+        assert_eq!(again["route"], "recapture_selector");
+        assert_eq!(again["target"], "window");
+        let menu = route(json!({
+            "operation":"busy_capture_route","action":"record","target":"display",
+            "activity":"selector",
+        }));
+        assert_eq!(menu["route"], "recapture_menu");
+        assert_eq!(menu["record"], true);
+        assert_eq!(menu["target"], "display");
+        let switch = route(json!({
+            "operation":"busy_capture_route","action":"new_capture",
+            "activity":"menu","menu_target":"window",
+        }));
+        assert_eq!(switch["route"], "switch_menu");
+        assert_eq!(switch["record"], false);
+        assert_eq!(switch["target"], "region");
+        let display = route(json!({
+            "operation":"busy_capture_route","action":"screenshot","target":"display",
+            "activity":"selector","recording":"paused","controls_on_screen":true,
+        }));
+        assert_eq!(display["route"], "recapture_display");
+        let restore = route(json!({
+            "operation":"busy_capture_route","action":"new_capture",
+            "activity":"busy","recording":"recording",
+        }));
+        assert_eq!(restore["route"], "restore_controls");
+        let busy = route(json!({
+            "operation":"busy_capture_route","action":"new_capture","activity":"busy",
+        }));
+        assert_eq!(busy["route"], "in_progress");
+        assert_eq!(
+            busy["message"],
+            "Captures could not start the capture: capture already in progress"
+        );
+        let idle = route(json!({
+            "operation":"busy_capture_route","action":"screenshot","target":"region",
+            "activity":"idle",
+        }));
+        assert_eq!(idle["route"], "idle");
+        let missing = route(json!({
+            "operation":"busy_capture_route","action":"screenshot","activity":"busy",
+        }));
+        assert_eq!(missing["ok"], false);
     }
 
     #[test]

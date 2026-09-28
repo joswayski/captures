@@ -17,12 +17,12 @@ use serde_json::json;
 
 use captures_app::{
     app_windows::{self, AppWindow},
-    shortcuts::{CaptureShortcut, CaptureShortcuts},
+    shortcuts::CaptureShortcuts,
 };
 
 use crate::{
     emit,
-    live::{CaptureRequest, HistoryFilter, Live},
+    live::{HistoryFilter, Live},
     options::{HudState, Options, Scene},
     preferences::Preferences,
     preferences_window::{PreferencesWindow, Shown},
@@ -402,47 +402,36 @@ impl Workbench {
             self.show_root(ctx);
             return;
         }
-        // Only New Capture brings hidden recording controls back (shipping
-        // `open_capture_controls`). `start_capture_from_tray` screenshots
-        // beside a running take and leaves them hidden, and
-        // `start_recording_from_tray` refuses a second recording silently.
+        // The tray capture items route exactly like their shortcuts
+        // (`open_capture_controls`, `start_capture_from_tray`,
+        // `start_recording_from_tray`): only New Capture brings hidden
+        // recording controls back, screenshots go beside a running take, and a
+        // second recording is refused silently.
+        use captures_app::capture_error::{Action, Target};
+        let capture = match action {
+            TrayAction::NewCapture => Some(Action::NewCapture),
+            TrayAction::CaptureRegion => Some(Action::Screenshot(Target::Region)),
+            TrayAction::CaptureWindow => Some(Action::Screenshot(Target::Window)),
+            TrayAction::CaptureDisplay => Some(Action::Screenshot(Target::Display)),
+            TrayAction::RecordRegion => Some(Action::Record(Target::Region)),
+            TrayAction::RecordWindow => Some(Action::Record(Target::Window)),
+            TrayAction::RecordDisplay => Some(Action::Record(Target::Display)),
+            _ => None,
+        };
+        if let Some(capture) = capture {
+            if let Some(live) = &mut self.live {
+                live.capture_action(capture, ctx);
+            }
+            return;
+        }
         match action {
-            TrayAction::NewCapture => {
-                if let Some(live) = &mut self.live
-                    && !live.show_recording_controls(ctx)
-                {
-                    live.request_capture(CaptureRequest::NewCapture);
-                }
-            }
-            TrayAction::CaptureDisplay => {
-                // Shipping opens the capture menu on Full screen, or captures
-                // the display directly beside a running recording.
-                if let Some(live) = &mut self.live
-                    && let Some(request) = live.display_request()
-                {
-                    live.request_capture(request);
-                }
-            }
-            TrayAction::CaptureRegion => {
-                if let Some(live) = &mut self.live {
-                    live.request_capture(CaptureRequest::Region);
-                }
-            }
-            TrayAction::CaptureWindow => {
-                if let Some(live) = &mut self.live {
-                    live.request_capture(CaptureRequest::Window);
-                }
-            }
-            TrayAction::RecordRegion | TrayAction::RecordWindow | TrayAction::RecordDisplay => {
-                let target = match action {
-                    TrayAction::RecordRegion => crate::capture_controls::TargetMode::Region,
-                    TrayAction::RecordWindow => crate::capture_controls::TargetMode::Window,
-                    _ => crate::capture_controls::TargetMode::Display,
-                };
-                if let Some(live) = &mut self.live {
-                    live.request_capture(CaptureRequest::Recording(target));
-                }
-            }
+            TrayAction::NewCapture
+            | TrayAction::CaptureRegion
+            | TrayAction::CaptureWindow
+            | TrayAction::CaptureDisplay
+            | TrayAction::RecordRegion
+            | TrayAction::RecordWindow
+            | TrayAction::RecordDisplay => {}
             TrayAction::SendFeedback => {
                 // Shipping opens feedback in its own window; the resident
                 // window stays as it is (possibly hidden).
@@ -776,23 +765,20 @@ impl Workbench {
             }
             return;
         }
-        let recording_screenshot = self
-            .live
-            .as_ref()
-            .is_some_and(Live::recording_screenshot_available);
+        let capture_busy = self.live.as_ref().is_some_and(Live::is_capturing);
         let (enabled, selector_generation, restore_only) =
             self.live.as_ref().map_or((false, None, false), |live| {
                 shortcut_routing_state(
                     live.can_launch_capture(),
                     live.selector_generation(),
                     live.recording_controls_hidden(),
-                    recording_screenshot,
+                    capture_busy,
                 )
             });
         if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
             shortcuts.set_selector_generation(selector_generation);
             shortcuts.set_restore_only(restore_only);
-            shortcuts.set_recording_screenshot(recording_screenshot);
+            shortcuts.set_capture_busy(capture_busy);
             shortcuts.set_enabled(enabled);
         }
     }
@@ -1527,29 +1513,10 @@ impl eframe::App for Workbench {
         if onboarding_complete
             && !self.preferences_state.permission_recovery_open()
             && let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
-            && !live.apply_selector_shortcut(action, ctx)
         {
-            if action == CaptureShortcut::NewCapture && live.show_recording_controls(ctx) {
-                return;
-            }
-            let request = match action {
-                CaptureShortcut::NewCapture => Some(CaptureRequest::NewCapture),
-                CaptureShortcut::Region => Some(CaptureRequest::Region),
-                CaptureShortcut::Window => Some(CaptureRequest::Window),
-                CaptureShortcut::Display => live.display_request(),
-                CaptureShortcut::RecordRegion => Some(CaptureRequest::Recording(
-                    crate::capture_controls::TargetMode::Region,
-                )),
-                CaptureShortcut::RecordWindow => Some(CaptureRequest::Recording(
-                    crate::capture_controls::TargetMode::Window,
-                )),
-                CaptureShortcut::RecordDisplay => Some(CaptureRequest::Recording(
-                    crate::capture_controls::TargetMode::Display,
-                )),
-            };
-            if let Some(request) = request {
-                live.request_capture(request);
-            }
+            // Shipping routes the shortcuts and the tray items alike, also
+            // while a capture is open (`capture_error::busy_route`).
+            live.capture_action(action.action(), ctx);
         }
         let persisted = self.preferences_state.persisted_generation();
         if let Some(tray) = &mut self.tray
@@ -2275,13 +2242,13 @@ fn shortcut_routing_state(
     can_launch_capture: bool,
     selector_generation: Option<u64>,
     recording_controls_hidden: bool,
-    recording_screenshot: bool,
+    capture_busy: bool,
 ) -> (bool, Option<u64>, bool) {
     (
         can_launch_capture
             || selector_generation.is_some()
             || recording_controls_hidden
-            || recording_screenshot,
+            || capture_busy,
         selector_generation,
         recording_controls_hidden,
     )
@@ -2435,7 +2402,8 @@ mod tests {
             shortcut_routing_state(false, None, true, false),
             (true, None, true)
         );
-        // A running recording keeps the screenshot shortcuts routable.
+        // A capture or recording in flight keeps every shortcut routable; the
+        // host routes it (`capture_error::busy_route`).
         assert_eq!(
             shortcut_routing_state(false, None, false, true),
             (true, None, false)

@@ -69,11 +69,64 @@ final class RecordingDisplayScreenshotTests: XCTestCase {
         XCTAssertFalse(recordingDisplayScreenshotHidesControls(includeControls: true))
     }
 
-    func testShortcutsStayRoutableForARunningTake() {
+    func testShortcutsStayRoutableWhileACaptureIsInFlight() {
         XCTAssertTrue(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil,
-            recordingScreenshot: true), "the shared routes pass the screenshot shortcuts")
+            captureRoutes: true), "the shared routes deliver every chord to the host")
         XCTAssertFalse(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil,
-            recordingScreenshot: false))
+            captureRoutes: false))
+        XCTAssertEqual(CaptureShortcut.recordWindow.captureAction, .record(.window))
+        XCTAssertEqual(CaptureShortcut.display.captureAction, .screenshot(.display))
+        XCTAssertEqual(CaptureShortcut.newCapture.captureAction, .newCapture)
+    }
+
+    func testBusyCaptureRouteSharesTheShippingRule() throws {
+        // `captures_app::capture_error::busy_route` through the settings ABI.
+        let bridge = SettingsBridge()
+        let busy = BusyCaptureRoute.inProgress(
+            message: "Captures could not start the capture: capture already in progress")
+        XCTAssertEqual(try BusyCaptureRoute(action: .screenshot(.window), activity: .selector,
+            recordingState: nil, controlsOnScreen: false, transport: bridge),
+            .recaptureSelector(.window), "pressing a shortcut again recaptures the selector")
+        XCTAssertEqual(try BusyCaptureRoute(action: .newCapture, activity: .selector,
+            recordingState: nil, controlsOnScreen: false, transport: bridge),
+            .recaptureMenu(record: false, target: .region))
+        XCTAssertEqual(try BusyCaptureRoute(action: .record(.display), activity: .selector,
+            recordingState: nil, controlsOnScreen: false, transport: bridge),
+            .recaptureMenu(record: true, target: .display))
+        XCTAssertEqual(try BusyCaptureRoute(action: .screenshot(.display), activity: .selector,
+            recordingState: "recording", controlsOnScreen: false, transport: bridge),
+            .recaptureDisplay)
+        XCTAssertEqual(try BusyCaptureRoute(action: .screenshot(.region),
+            activity: .menu(screenshotTarget: .region), recordingState: nil,
+            controlsOnScreen: false, transport: bridge), .recaptureSelector(.region))
+        XCTAssertEqual(try BusyCaptureRoute(action: .newCapture,
+            activity: .menu(screenshotTarget: nil), recordingState: nil,
+            controlsOnScreen: false, transport: bridge), .switchMenu(record: false, target: .region))
+        XCTAssertEqual(try BusyCaptureRoute(action: .newCapture, activity: .busy,
+            recordingState: nil, controlsOnScreen: false, transport: bridge), busy)
+        XCTAssertEqual(try BusyCaptureRoute(action: .screenshot(.region), activity: .busy,
+            recordingState: nil, controlsOnScreen: false, transport: bridge), .ignore)
+        XCTAssertEqual(try BusyCaptureRoute(action: .newCapture, activity: .busy,
+            recordingState: "paused", controlsOnScreen: false, transport: bridge),
+            .restoreControls, "concealed controls come back like hidden ones")
+        XCTAssertEqual(try BusyCaptureRoute(action: .newCapture, activity: .selector,
+            recordingState: "recording", controlsOnScreen: true, transport: bridge), busy)
+        XCTAssertEqual(try BusyCaptureRoute(action: .newCapture, activity: .idle,
+            recordingState: nil, controlsOnScreen: false, transport: bridge), .idle)
+    }
+
+    func testRecapturedSelectionsFreezeWithoutCountdown() throws {
+        let preferences = try CapturePreferences(["auto_copy_to_clipboard": false,
+            "show_cursor_in_screenshots": true, "output_directory": "/tmp",
+            "screenshot_format": "png", "freeze_screen": false, "auto_start_on_selection": false,
+            "show_mini_previews": true, "mini_preview_placement": "bottom_left",
+            "include_mini_previews_in_captures": false, "screenshot_countdown_seconds": 3])
+        let recaptured = preferences.recapturing()
+        XCTAssertEqual(recaptured.countdown, 0)
+        XCTAssertTrue(recaptured.freezeScreen)
+        XCTAssertEqual(preferences.countdown, 3)
+        XCTAssertFalse(preferences.freezeScreen)
+        XCTAssertEqual(recaptured.autoCopy, preferences.autoCopy)
     }
 
     func testDirectDisplayScreenshotNeedsARecording() throws {
@@ -117,6 +170,10 @@ final class RecordingDisplayScreenshotTests: XCTestCase {
         XCTAssertFalse(controller.captureWhileRecording(.window))
         XCTAssertFalse(controller.captureWhileRecording(.display))
         XCTAssertEqual(controller.newCaptureRoute, .captureMenu)
+        XCTAssertFalse(controller.captureInFlight)
+        XCTAssertEqual(controller.captureActivity, .idle)
+        XCTAssertEqual(controller.routeBusyCaptureAction(.screenshot(.region)), .idle,
+            "with nothing open a shortcut starts the idle way")
         XCTAssertTrue(reported.isEmpty, "refusing a direct screenshot is silent")
         XCTAssertEqual(transport.captureRequests, 0)
     }

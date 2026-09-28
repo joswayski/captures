@@ -26,8 +26,8 @@ enum Request {
     RestoreOnly {
         restore_only: bool,
     },
-    RecordingScreenshot {
-        allowed: bool,
+    CaptureBusy {
+        busy: bool,
     },
     Suspended {
         suspended: bool,
@@ -81,10 +81,10 @@ fn response(request: Request, wake: Option<extern "C" fn()>) -> Result<Value, St
                     .set_restore_only(restore_only);
                 Ok(json!({}))
             }
-            Request::RecordingScreenshot { allowed } => {
+            Request::CaptureBusy { busy } => {
                 slot.as_ref()
                     .ok_or("Capture shortcuts are not configured")?
-                    .set_recording_screenshot(allowed);
+                    .set_capture_busy(busy);
                 Ok(json!({}))
             }
             Request::Suspended { suspended } => {
