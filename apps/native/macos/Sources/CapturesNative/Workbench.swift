@@ -632,6 +632,20 @@ func stillCaptureKind(for shortcut: CaptureShortcut) -> StillCaptureKind? {
     }
 }
 
+/// Where a still capture from the tray or a shortcut starts.
+enum StillCaptureRoute: Equatable {
+    case capture(StillCaptureKind)
+    /// The capture menu in Screenshot mode on this target.
+    case menu(UnifiedCaptureTarget)
+}
+
+/// Shipping display shortcut and tray "Screenshot Display" open the capture
+/// menu on Full screen with its display picker. Only while a recording session
+/// is active do they capture the display under the pointer directly.
+func stillCaptureRoute(for kind: StillCaptureKind, recordingActive: Bool) -> StillCaptureRoute {
+    kind == .display && !recordingActive ? .menu(.display) : .capture(kind)
+}
+
 func configureStatusItemButton(_ button: NSStatusBarButton) {
     if let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Captures") {
         image.isTemplate = true
@@ -1283,7 +1297,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }, recordingControlsVisibilityChanged: { [weak self] _ in
                     self?.updateShortcutState()
                 }, reportError: { [weak self] message in
-                    self?.presentHostError(title: "Capture Failed", message: message)
+                    // Shipping `report_capture_error`: a "Captures" dialog.
+                    let copy = CaptureErrorCopy.current
+                    self?.presentHostError(title: copy.title, message: message, button: copy.button)
                 }, screenPermissionDenied: { [weak self] kind, message in
                     self?.offerScreenPermissionRecovery(kind: kind, message: message) ?? false
                 }, showPreferenceSetting: { [weak self] setting in
@@ -1643,7 +1659,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func reportShortcutError(_ error: Error) {
         Metrics.write(["event": "shortcut-error", "detail": error.localizedDescription])
-        liveController?.showShortcutError(error)
         presentHostError(title: "Capture Shortcuts Unavailable", message: error.localizedDescription)
     }
 
@@ -1652,6 +1667,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         // Tray capture items bring hidden recording controls back, like New Capture.
         if liveController?.showRecordingControls() == true { return }
+        let route = stillCaptureRoute(for: kind,
+            recordingActive: liveController?.recordingSessionActive == true)
+        if case .menu(let target) = route {
+            launchNewCapture(screenshotTarget: target)
+            return
+        }
         guard liveController?.capture(kind) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
@@ -1659,11 +1680,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
     }
 
-    private func launchNewCapture(recordingTarget: UnifiedCaptureTarget? = nil) {
+    private func launchNewCapture(recordingTarget: UnifiedCaptureTarget? = nil,
+                                  screenshotTarget: UnifiedCaptureTarget? = nil) {
         guard onboardingReady else { showOnboarding(); return }
         guard permissionSheet == nil else { window.makeKeyAndOrderFront(nil); return }
         if liveController?.showRecordingControls() == true { return }
-        guard liveController?.newCapture(recordingTarget: recordingTarget) == true else {
+        guard liveController?.newCapture(recordingTarget: recordingTarget,
+                                         screenshotTarget: screenshotTarget) == true else {
             presentHostError(title: "Capture Unavailable",
                 message: "The capture workspace is still loading or another capture is already active.")
             return
@@ -1759,7 +1782,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         liveController?.refreshHistory()
     }
 
-    private func presentHostError(title: String, message: String) {
+    private func presentHostError(title: String, message: String, button: String = "OK") {
         // Before setup completes the alert belongs to the setup window, not
         // the (still empty) History window.
         let host: NSWindow = options.live && !onboardingReady
@@ -1772,7 +1795,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         alert.alertStyle = .warning
         alert.messageText = title
         alert.informativeText = message
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: button)
         if !host.isVisible {
             host.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
