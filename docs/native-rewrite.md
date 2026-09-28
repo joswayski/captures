@@ -155,7 +155,11 @@ Selects share one primitive per host. wgpu draws the `CustomSelect` field trigge
 (media palette in the capture menu, borderless for the recording filename format)
 and a token listbox with option descriptions, placed and driven by shared
 `captures_app::controls::select` (ArrowUp/Down, Home/End, Enter/Space, Escape), in
-Preferences, the capture menu, the region aspect picker and the recording editor. AppKit's token `ClosurePopUpButton` trigger replaces the
+Preferences, the capture menu, the region aspect picker and the recording editor. An
+open wgpu listbox counts as an egui popup, and raw-pointer gestures (editor canvas and
+viewport, recording timeline and crop) ignore presses on any foreground layer above
+them, so a row or popover over a canvas takes the click and keys instead of the canvas;
+AppKit's native menu tracking already does this. AppKit's token `ClosurePopUpButton` trigger replaces the
 capture menu's glass popups and the recording editor's stock popups; its native
 menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
 line. The screenshot editor's selects use the same primitives: Crop's Aspect ratio,
