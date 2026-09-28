@@ -2125,28 +2125,14 @@ impl Live {
 
     /// What is open or in flight for `capture_error::busy_route`.
     fn capture_activity(&self) -> captures_app::capture_error::Activity {
-        use captures_app::capture_error::Activity;
-        if self.recording_screenshot_flow.is_some() {
-            return if self.recording_screenshot_phase == Some(RecordingScreenshotPhase::Selecting) {
-                Activity::Selector
-            } else {
-                Activity::Busy
-            };
-        }
-        if is_recording_phase(self.capture_phase) {
-            return Activity::Idle;
-        }
-        match self.capture_phase {
-            Some(CapturePhase::RegionSelecting | CapturePhase::WindowSelecting) => {
-                Activity::Selector
-            }
-            Some(CapturePhase::ControlsSelecting) => Activity::Menu {
-                screenshot_target: self.controls.lock().unwrap().screenshot_target(),
-            },
-            Some(_) => Activity::Busy,
-            None if self.flow.is_some() || self.capture_in_flight => Activity::Busy,
-            None => Activity::Idle,
-        }
+        capture_activity(
+            self.recording_screenshot_flow
+                .is_some()
+                .then_some(self.recording_screenshot_phase),
+            self.capture_phase,
+            || self.controls.lock().unwrap().screenshot_target(),
+            self.flow.is_some() || self.capture_in_flight,
+        )
     }
 
     /// The take's controls are showing now: neither hidden by the user nor
@@ -2161,8 +2147,14 @@ impl Live {
     /// open it starts, and while a capture is open or in flight it follows
     /// `capture_error::busy_route` (recapture, switch the menu, restore the
     /// controls, report the busy capture or refuse silently).
-    pub fn capture_action(&mut self, action: captures_app::capture_error::Action, ctx: &egui::Context) {
-        use captures_app::capture_error::{Action, BusyRoute, CAPTURE_IN_PROGRESS, Target, busy_route};
+    pub fn capture_action(
+        &mut self,
+        action: captures_app::capture_error::Action,
+        ctx: &egui::Context,
+    ) {
+        use captures_app::capture_error::{
+            Action, BusyRoute, CAPTURE_IN_PROGRESS, Target, busy_route,
+        };
         if self.recapture.is_some() || self.requested_recapture.is_some() {
             // The open UI is already being recaptured.
             return;
@@ -2372,11 +2364,10 @@ impl Live {
     /// no longer the open one (it was confirmed, cancelled or replaced).
     fn begin_recaptured(&mut self, pending: PendingRecapture) -> bool {
         if pending.child {
-            let showing = self
-                .recording_screenshot_flow
-                .as_ref()
-                .is_some_and(|flow| flow.generation() == pending.generation && flow.is_current())
-                && self.recording_screenshot_phase == Some(RecordingScreenshotPhase::Selecting);
+            let showing =
+                self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
+                    flow.generation() == pending.generation && flow.is_current()
+                }) && self.recording_screenshot_phase == Some(RecordingScreenshotPhase::Selecting);
             let Recapture::Selector(kind) = pending.kind else {
                 return false;
             };
@@ -8301,6 +8292,37 @@ fn recording_hud_state(
 
 /// The shipping coordinator state a recording phase stands for, which decides
 /// where Screenshot Display goes (`capture_error::display_route`).
+/// What is open or in flight for `capture_error::busy_route`. `beside` is the
+/// phase of a screenshot beside the take, when one is in progress; the menu
+/// target is read only while the capture menu is open.
+fn capture_activity(
+    beside: Option<Option<RecordingScreenshotPhase>>,
+    phase: Option<CapturePhase>,
+    menu_target: impl FnOnce() -> Option<captures_app::capture_error::Target>,
+    in_flight: bool,
+) -> captures_app::capture_error::Activity {
+    use captures_app::capture_error::Activity;
+    if let Some(beside) = beside {
+        return if beside == Some(RecordingScreenshotPhase::Selecting) {
+            Activity::Selector
+        } else {
+            Activity::Busy
+        };
+    }
+    if is_recording_phase(phase) {
+        return Activity::Idle;
+    }
+    match phase {
+        Some(CapturePhase::RegionSelecting | CapturePhase::WindowSelecting) => Activity::Selector,
+        Some(CapturePhase::ControlsSelecting) => Activity::Menu {
+            screenshot_target: menu_target(),
+        },
+        Some(_) => Activity::Busy,
+        None if in_flight => Activity::Busy,
+        None => Activity::Idle,
+    }
+}
+
 fn recording_route_state(phase: Option<CapturePhase>, has_started: bool) -> Option<RecordingState> {
     Some(match phase? {
         CapturePhase::RecordingPreparing { .. } => RecordingState::Selecting,
@@ -8727,7 +8749,10 @@ mod tests {
                 Action::Record(Target::Region),
             ] {
                 live.capture_action(action, &ctx);
-                assert!(live.take_capture_failure().is_none(), "{phase:?} {action:?}");
+                assert!(
+                    live.take_capture_failure().is_none(),
+                    "{phase:?} {action:?}"
+                );
                 assert_eq!(live.requested_capture, None);
                 assert_eq!(live.requested_recapture, None);
             }
@@ -8807,6 +8832,65 @@ mod tests {
         assert_eq!(live.requested_recapture, None);
         live.capture_phase = None;
         live.flush();
+    }
+
+    #[test]
+    fn the_busy_activity_follows_the_open_capture_ui() {
+        use captures_app::capture_error::{Activity, Target};
+        let menu = || Some(Target::Window);
+        // A screenshot beside the take: its selector, or busy otherwise.
+        for phase in [
+            Some(CapturePhase::Recording),
+            Some(CapturePhase::RecordingPaused),
+        ] {
+            assert_eq!(
+                capture_activity(
+                    Some(Some(RecordingScreenshotPhase::Selecting)),
+                    phase,
+                    menu,
+                    true
+                ),
+                Activity::Selector
+            );
+            for beside in [
+                None,
+                Some(RecordingScreenshotPhase::WaitingForHud),
+                Some(RecordingScreenshotPhase::Preparing),
+                Some(RecordingScreenshotPhase::DisplayCapturing),
+            ] {
+                assert_eq!(
+                    capture_activity(Some(beside), phase, menu, true),
+                    Activity::Busy,
+                    "{beside:?}"
+                );
+            }
+            // The take alone leaves the recording routes to decide.
+            assert_eq!(capture_activity(None, phase, menu, true), Activity::Idle);
+        }
+        for phase in [CapturePhase::RegionSelecting, CapturePhase::WindowSelecting] {
+            assert_eq!(
+                capture_activity(None, Some(phase), menu, true),
+                Activity::Selector
+            );
+        }
+        assert_eq!(
+            capture_activity(None, Some(CapturePhase::ControlsSelecting), menu, true),
+            Activity::Menu {
+                screenshot_target: Some(Target::Window)
+            }
+        );
+        for phase in [
+            CapturePhase::ControlsPreparing,
+            CapturePhase::RegionPreparing,
+            CapturePhase::DisplayCountdown,
+        ] {
+            assert_eq!(
+                capture_activity(None, Some(phase), menu, true),
+                Activity::Busy
+            );
+        }
+        assert_eq!(capture_activity(None, None, menu, true), Activity::Busy);
+        assert_eq!(capture_activity(None, None, menu, false), Activity::Idle);
     }
 
     #[test]
