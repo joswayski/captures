@@ -1,23 +1,33 @@
 //! Explicit-font, single-line shaping and CPU rasterization for editor labels.
 //!
-//! Hosts supply font bytes; this module never scans installed fonts. Paragraph
-//! wrapping, plates, shadows, document edits and native input belong to the
-//! editor integration, not this primitive. The legacy `Shape::Text` is unchanged.
+//! Hosts supply font bytes. A glyph the requested family lacks falls back to
+//! the other supplied faces (in the caller's family order), then, only when no
+//! supplied face covers it, to optional platform faces, like a browser falling
+//! back to system fonts. Glyphs no face covers draw the requested font's
+//! missing-glyph box. Paragraph wrapping, plates, shadows, document edits and
+//! native input belong to the editor integration, not this primitive. The
+//! legacy `Shape::Text` is unchanged.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, OnceLock},
+};
 
 use cosmic_text::{
-    Align, Attrs, Buffer, CacheKey, CacheKeyFlags, Family, FontSystem, Metrics, Shaping, Style,
-    SwashCache, SwashContent, SwashImage, Weight, Wrap, fontdb,
+    Align, Attrs, Buffer, CacheKey, CacheKeyFlags, Fallback, Family, FontSystem, Metrics,
+    PlatformFallback, Shaping, Style, SwashCache, SwashContent, SwashImage, Weight, Wrap, fontdb,
 };
 use image::{Pixel, Rgba, RgbaImage};
 use swash::zeno::{Format, Join, Mask, Origin, Stroke, Vector};
+use unicode_script::Script;
 
 use crate::Bounds;
 
 const MAX_LINE_BYTES: usize = 4096;
 const MAX_EXTENT: f32 = 16_384.;
 const MAX_PIXELS: u64 = 16_777_216;
+/// Fixed so shaping does not follow the machine's locale.
+const LOCALE: &str = "en-US";
 
 pub struct TextStyle<'a> {
     /// A family name embedded in one of the supplied fonts, not an OS generic.
@@ -39,32 +49,161 @@ pub struct TextLine {
     pub pixels: RgbaImage,
 }
 
+/// Faces consulted only for glyphs that no supplied face covers. They are never
+/// requested by name, persisted or copied anywhere; results that use them depend
+/// on the faces present, as shipping's browser fallback does.
+#[derive(Clone, Default)]
+pub enum PlatformFonts {
+    /// Glyphs no supplied face covers draw the missing-glyph box.
+    #[default]
+    None,
+    /// The installed system fonts, scanned once per process on first use.
+    System,
+    /// Explicit stand-ins for the installed fonts (tests use these).
+    Fonts(Vec<Arc<[u8]>>),
+}
+
 /// Reuse within a serialized editor worker. Fonts and shaping scratch persist;
 /// glyph images are retained only for the duration of each operation.
 /// Font bytes must come from a trusted font source. Output budgets do not sandbox
 /// the font parser or bound allocations inside the third-party glyph rasterizer.
 pub struct TextRenderer {
+    /// Supplied faces only, in fallback order, with no platform family lists,
+    /// so text they cover shapes identically on every machine.
     fonts: FontSystem,
     raster: SwashCache,
+    platform: PlatformFonts,
+    /// Supplied plus platform faces, built the first time a line needs it.
+    platform_fonts: Option<FontSystem>,
+}
+
+/// No named fallbacks: after the requested family, cosmic-text tries every
+/// face in database order, which [`TextRenderer::with_fallback`] controls.
+struct SuppliedOnly;
+
+impl Fallback for SuppliedOnly {
+    fn common_fallback(&self) -> &[&'static str] {
+        &[]
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        &[]
+    }
+
+    fn script_fallback(&self, _script: Script, _locale: &str) -> &[&'static str] {
+        &[]
+    }
+}
+
+fn system_fonts() -> &'static fontdb::Database {
+    static SYSTEM: OnceLock<fontdb::Database> = OnceLock::new();
+    SYSTEM.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db
+    })
+}
+
+/// Family names embedded in one font file (every face of a collection).
+#[must_use]
+pub fn font_family_names(bytes: &Arc<[u8]>) -> Vec<String> {
+    let mut db = fontdb::Database::new();
+    db.load_font_source(fontdb::Source::Binary(Arc::new(bytes.clone())));
+    let mut names = Vec::new();
+    for face in db.faces() {
+        for (name, _) in &face.families {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+    }
+    names
 }
 
 impl TextRenderer {
     pub fn new(fonts: impl IntoIterator<Item = Arc<[u8]>>) -> Result<Self, String> {
-        let mut db = fontdb::Database::new();
+        Self::with_fallback(fonts, &[], PlatformFonts::None)
+    }
+
+    /// `fallback_families` orders the supplied faces a missing glyph tries after
+    /// the requested family (unlisted families follow in load order). Platform
+    /// faces are only used when no supplied face covers a glyph in the line.
+    pub fn with_fallback(
+        fonts: impl IntoIterator<Item = Arc<[u8]>>,
+        fallback_families: &[&str],
+        platform: PlatformFonts,
+    ) -> Result<Self, String> {
+        let mut loaded = fontdb::Database::new();
         for bytes in fonts {
-            let before = db.faces().count();
-            db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
-            if db.faces().count() == before {
+            let before = loaded.faces().count();
+            loaded.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
+            if loaded.faces().count() == before {
                 return Err("Invalid or unsupported text font.".into());
             }
         }
-        if db.faces().next().is_none() {
+        if loaded.faces().next().is_none() {
             return Err("Text requires explicit font bytes.".into());
         }
+        // Stable sort: listed families first, in order, then load order.
+        let rank = |face: &fontdb::FaceInfo| {
+            fallback_families
+                .iter()
+                .position(|family| face.families.iter().any(|(name, _)| name == family))
+                .unwrap_or(fallback_families.len())
+        };
+        let mut faces = loaded.faces().cloned().collect::<Vec<_>>();
+        faces.sort_by_key(rank);
+        let mut db = fontdb::Database::new();
+        for face in faces {
+            db.push_face_info(face);
+        }
         Ok(Self {
-            fonts: FontSystem::new_with_locale_and_db("en-US".into(), db),
+            fonts: FontSystem::new_with_locale_and_db_and_fallback(LOCALE.into(), db, SuppliedOnly),
             raster: SwashCache::new(),
+            platform,
+            platform_fonts: None,
         })
+    }
+
+    /// Supplied faces first (same order), then platform faces whose family
+    /// names do not shadow a supplied family, with the platform's fallback lists.
+    fn build_platform_fonts(&self) -> Option<FontSystem> {
+        let explicit;
+        let extra = match &self.platform {
+            PlatformFonts::None => return None,
+            PlatformFonts::System => system_fonts(),
+            PlatformFonts::Fonts(fonts) => {
+                let mut db = fontdb::Database::new();
+                for bytes in fonts {
+                    db.load_font_source(fontdb::Source::Binary(Arc::new(bytes.clone())));
+                }
+                explicit = db;
+                &explicit
+            }
+        };
+        let supplied = self.fonts.db();
+        let names = supplied
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.to_lowercase()))
+            .collect::<HashSet<_>>();
+        let mut db = fontdb::Database::new();
+        for face in supplied.faces() {
+            db.push_face_info(face.clone());
+        }
+        for face in extra.faces() {
+            if !face
+                .families
+                .iter()
+                .any(|(name, _)| names.contains(&name.to_lowercase()))
+            {
+                db.push_face_info(face.clone());
+            }
+        }
+        Some(FontSystem::new_with_locale_and_db_and_fallback(
+            LOCALE.into(),
+            db,
+            PlatformFallback,
+        ))
     }
 
     pub fn render_line(&mut self, text: &str, style: &TextStyle<'_>) -> Result<TextLine, String> {
@@ -94,11 +233,14 @@ impl TextRenderer {
     /// Shape without allocating glyph bitmaps; wrapping measures many candidate lines.
     /// Advances may exceed the raster extent limit so callers can break long tokens.
     pub fn measure_line(&mut self, text: &str, style: &TextStyle<'_>) -> Result<f32, String> {
-        let buffer = self.shape_line(text, style)?;
+        let (buffer, _) = self.shape_line(text, style)?;
         Ok(buffer.layout_runs().next().expect("validated line").line_w)
     }
 
-    fn shape_line(&mut self, text: &str, style: &TextStyle<'_>) -> Result<Buffer, String> {
+    /// Shapes with the supplied faces; only a line with a glyph none of them
+    /// covers is reshaped with the platform faces. The flag says which font
+    /// system owns the buffer's font IDs.
+    fn shape_line(&mut self, text: &str, style: &TextStyle<'_>) -> Result<(Buffer, bool), String> {
         if text.len() > MAX_LINE_BYTES
             || text.contains([
                 '\r', '\n', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
@@ -117,45 +259,30 @@ impl TextRenderer {
         {
             return Err("Requested text family was not supplied.".into());
         }
-        let attrs = Attrs::new()
-            .family(Family::Name(style.family))
-            .weight(if style.bold {
-                Weight::BOLD
-            } else {
-                Weight::NORMAL
-            })
-            .style(if style.italic {
-                Style::Italic
-            } else {
-                Style::Normal
-            });
-        let mut buffer = Buffer::new_empty(Metrics::new(style.size, style.size * 1.25));
-        buffer.set_wrap(Wrap::None);
-        buffer.set_size(None, None);
-        buffer.set_text(text, &attrs, Shaping::Advanced, Some(Align::Left));
-        buffer.shape_until_scroll(&mut self.fonts, false);
-        let run = buffer
+        let buffer = shape(&mut self.fonts, text, style)?;
+        let covered = buffer
             .layout_runs()
             .next()
-            .ok_or("Text layout produced no line.")?;
-        if !run.line_w.is_finite() || run.line_w < 0. {
-            return Err("Text line has an invalid advance.".into());
+            .is_some_and(|run| run.glyphs.iter().all(|glyph| glyph.glyph_id != 0));
+        if covered || matches!(self.platform, PlatformFonts::None) {
+            return Ok((buffer, false));
         }
-        if run.glyphs.iter().any(|glyph| {
-            glyph.glyph_id == 0
-                || !self
-                    .fonts
-                    .db()
-                    .face(glyph.font_id)
-                    .is_some_and(|face| face.families.iter().any(|(name, _)| name == style.family))
-        }) {
-            return Err("Supplied fonts cannot shape every text glyph.".into());
+        if self.platform_fonts.is_none() {
+            self.platform_fonts = self.build_platform_fonts();
         }
-        Ok(buffer)
+        let fonts = self
+            .platform_fonts
+            .as_mut()
+            .expect("platform fonts were requested");
+        Ok((shape(fonts, text, style)?, true))
     }
-
-    fn outline_image(&mut self, key: CacheKey, width: f32) -> Result<Option<SwashImage>, String> {
-        let Some(fill) = self.raster.get_image(&mut self.fonts, key) else {
+    fn outline_image(
+        raster: &mut SwashCache,
+        fonts: &mut FontSystem,
+        key: CacheKey,
+        width: f32,
+    ) -> Result<Option<SwashImage>, String> {
+        let Some(fill) = raster.get_image(fonts, key) else {
             return Ok(None); // Nonpainting glyph, such as a space.
         };
         if fill.content != SwashContent::Mask
@@ -165,9 +292,8 @@ impl TextRenderer {
         }
         // cosmic-text retains the shaped face/weight, hinting and synthetic italic
         // in these paths. Match Swash's baseline-up placement and subpixel offset.
-        let commands = self
-            .raster
-            .get_outline_commands(&mut self.fonts, key)
+        let commands = raster
+            .get_outline_commands(fonts, key)
             .ok_or("Text glyph has no scalable outline.")?;
         let mut offset = Vector::new(key.x_bin.as_float(), key.y_bin.as_float());
         if key.flags.contains(CacheKeyFlags::PIXEL_FONT) {
@@ -205,7 +331,20 @@ impl TextRenderer {
         style: &TextStyle<'_>,
         outline_width: Option<f32>,
     ) -> Result<TextLine, String> {
-        let buffer = self.shape_line(text, style)?;
+        let (buffer, platform) = self.shape_line(text, style)?;
+        let Self {
+            fonts,
+            raster,
+            platform_fonts,
+            ..
+        } = self;
+        let fonts = if platform {
+            platform_fonts
+                .as_mut()
+                .expect("the line was shaped with platform fonts")
+        } else {
+            fonts
+        };
         let run = buffer.layout_runs().next().expect("validated line");
         if run.line_w > MAX_EXTENT {
             return Err("Text line exceeds the raster bounds limit.".into());
@@ -222,11 +361,16 @@ impl TextRenderer {
                 if let std::collections::hash_map::Entry::Vacant(entry) =
                     outlines.entry(physical.cache_key)
                 {
-                    entry.insert(self.outline_image(physical.cache_key, width)?);
+                    entry.insert(Self::outline_image(
+                        raster,
+                        fonts,
+                        physical.cache_key,
+                        width,
+                    )?);
                 }
                 &outlines[&physical.cache_key]
             } else {
-                self.raster.get_image(&mut self.fonts, physical.cache_key)
+                raster.get_image(fonts, physical.cache_key)
             };
             let Some(image) = image else {
                 continue; // Spaces and other nonpainting glyphs still contribute advance.
@@ -279,7 +423,7 @@ impl TextRenderer {
             let image = if outline_width.is_some() {
                 &outlines[&key]
             } else {
-                &self.raster.image_cache[&key]
+                &raster.image_cache[&key]
             }
             .as_ref()
             .expect("rasterized above");
@@ -334,4 +478,32 @@ impl TextRenderer {
             pixels,
         })
     }
+}
+
+fn shape(fonts: &mut FontSystem, text: &str, style: &TextStyle<'_>) -> Result<Buffer, String> {
+    let attrs = Attrs::new()
+        .family(Family::Name(style.family))
+        .weight(if style.bold {
+            Weight::BOLD
+        } else {
+            Weight::NORMAL
+        })
+        .style(if style.italic {
+            Style::Italic
+        } else {
+            Style::Normal
+        });
+    let mut buffer = Buffer::new_empty(Metrics::new(style.size, style.size * 1.25));
+    buffer.set_wrap(Wrap::None);
+    buffer.set_size(None, None);
+    buffer.set_text(text, &attrs, Shaping::Advanced, Some(Align::Left));
+    buffer.shape_until_scroll(fonts, false);
+    let run = buffer
+        .layout_runs()
+        .next()
+        .ok_or("Text layout produced no line.")?;
+    if !run.line_w.is_finite() || run.line_w < 0. {
+        return Err("Text line has an invalid advance.".into());
+    }
+    Ok(buffer)
 }

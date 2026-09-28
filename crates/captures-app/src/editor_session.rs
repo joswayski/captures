@@ -12,6 +12,7 @@ use std::{
 };
 
 use captures_history::{ArtifactKind, HistoryEntry, editor_draft};
+pub use captures_image::text::PlatformFonts;
 use captures_image::text::TextRenderer;
 use image::{ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -364,8 +365,10 @@ pub struct Snapshot<'a> {
     /// lifecycle marker rather than committed history or unsaved flags.
     pub active_text_input: Option<ActiveTextInput<'a>>,
     pub document: &'a Document,
-    /// Only these pinned session fonts are available; host defaults never replace
-    /// a reopened draft's exact files or expand its font set implicitly.
+    /// The session's pinned fonts plus the host families a reopened draft can
+    /// still pin (an older Sans-only draft offers all four bundled families).
+    /// Host defaults never replace a draft's pinned files; choosing an unpinned
+    /// family pins its faces then.
     pub font_families: Option<&'a BTreeMap<String, String>>,
     /// Font menu rows for `font_families`: shipping order and labels
     /// (`editor_text::font_family_options`), never asset names for known keys.
@@ -472,8 +475,113 @@ fn render_text_input_frame(
 }
 
 struct SessionFonts {
+    /// The pinned set: what renders, and what a text-bearing draft saves.
     assets: editor_draft::FontAssets,
     renderer: TextRenderer,
+    /// Host defaults a reopened draft did not pin. Choosing one of their
+    /// families pins its faces (see [`SessionFonts::pin`]).
+    host: Option<editor_draft::FontAssets>,
+    /// Pinned families plus the host families that can be pinned, so every
+    /// session offers shipping's four families where the host bundles them.
+    offered: BTreeMap<String, String>,
+    platform: PlatformFonts,
+}
+
+/// Shipping's family order; a glyph the requested face lacks tries the other
+/// pinned faces in this order before any platform font.
+const FALLBACK_FAMILY_ORDER: [&str; 4] = ["sans", "serif", "mono", "rounded"];
+
+impl SessionFonts {
+    fn new(
+        assets: editor_draft::FontAssets,
+        host: Option<editor_draft::FontAssets>,
+        platform: PlatformFonts,
+    ) -> Result<Self, String> {
+        assets.validate().map_err(|error| error.to_string())?;
+        let mut order = Vec::new();
+        for key in FALLBACK_FAMILY_ORDER
+            .iter()
+            .copied()
+            .chain(assets.families.keys().map(String::as_str))
+        {
+            if let Some(name) = assets.families.get(key)
+                && !order.contains(&name.as_str())
+            {
+                order.push(name.as_str());
+            }
+        }
+        let renderer =
+            TextRenderer::with_fallback(assets.files.values().cloned(), &order, platform.clone())?;
+        let host =
+            host.filter(|host| host.families != assets.families || host.files != assets.files);
+        let mut offered = assets.families.clone();
+        if let Some(host) = &host {
+            // A family name the pinned files already embed would give the
+            // renderer two faces of one name; such drafts keep their own.
+            let pinned_names = assets
+                .files
+                .values()
+                .flat_map(captures_image::text::font_family_names)
+                .collect::<BTreeSet<_>>();
+            for (key, name) in &host.families {
+                if !offered.contains_key(key) && !pinned_names.contains(name) {
+                    offered.insert(key.clone(), name.clone());
+                }
+            }
+        }
+        Ok(Self {
+            assets,
+            renderer,
+            host,
+            offered,
+            platform,
+        })
+    }
+
+    /// Shipping offers every family on every document. A reopened draft that
+    /// lacks an offered host family (such as an older Sans-only draft) gains
+    /// that family's host faces the first time text uses it, and later saves
+    /// keep them, as new drafts keep the whole bundled set. Pinned families
+    /// and their files never change; no OS font is ever pinned.
+    fn pin(&mut self, key: &str) -> Result<(), String> {
+        if self.assets.families.contains_key(key) || !self.offered.contains_key(key) {
+            return Ok(());
+        }
+        let host = self
+            .host
+            .as_ref()
+            .expect("offered unpinned families come from the host");
+        let name = &host.families[key];
+        let mut assets = self.assets.clone();
+        let mut pinned_any = false;
+        for (id, bytes) in &host.files {
+            if !captures_image::text::font_family_names(bytes).contains(name) {
+                continue;
+            }
+            match assets.files.get(id) {
+                Some(existing) if existing != bytes => {
+                    return Err("A draft font ID cannot change its bytes.".into());
+                }
+                _ => {
+                    assets.files.insert(id.clone(), bytes.clone());
+                    pinned_any = true;
+                }
+            }
+        }
+        if !pinned_any {
+            return Err(format!("The {name} font files are unavailable."));
+        }
+        assets.families.insert(key.to_owned(), name.clone());
+        if !assets.notices.contains(host.notices.as_str()) {
+            assets.notices = if host.notices.contains(assets.notices.as_str()) {
+                host.notices.clone()
+            } else {
+                format!("{}\n\n{}", assets.notices, host.notices)
+            };
+        }
+        *self = Self::new(assets, self.host.clone(), self.platform.clone())?;
+        Ok(())
+    }
 }
 
 fn render_frame(
@@ -500,10 +608,24 @@ impl EditorSession {
     /// Hosts supply trusted, appropriately licensed font bytes, not paths or
     /// system generic families. A draft's persisted fonts take precedence over
     /// new host defaults, including after an OS/font update. No discovery occurs.
+    ///
+    /// A glyph no pinned face covers falls back to the installed system fonts,
+    /// as shipping's browser does; they are read in place, never pinned.
     pub fn open_with_fonts(
         request: OpenRequest,
-        mut fonts: Option<editor_draft::FontAssets>,
+        fonts: Option<editor_draft::FontAssets>,
     ) -> Result<Self, String> {
+        Self::open_with_font_fallback(request, fonts, PlatformFonts::System)
+    }
+
+    /// [`Self::open_with_fonts`] with explicit last-resort glyph fallback faces;
+    /// `PlatformFonts::None` draws uncovered glyphs as the missing-glyph box.
+    pub fn open_with_font_fallback(
+        request: OpenRequest,
+        mut fonts: Option<editor_draft::FontAssets>,
+        platform: PlatformFonts,
+    ) -> Result<Self, String> {
+        let mut host = None;
         let directory =
             captures_history::entry_directory(&request.history_root, &request.artifact_id)
                 .map_err(|error| error.to_string())?;
@@ -527,7 +649,11 @@ impl EditorSession {
         let has_draft = loaded.is_some();
         let document = match loaded {
             Some(draft) => {
-                fonts = draft.fonts.or(fonts);
+                // The draft's own set wins; host defaults stay available to pin.
+                if let Some(pinned) = draft.fonts {
+                    host = fonts.take();
+                    fonts = Some(pinned);
+                }
                 let document: Document =
                     serde_json::from_value(draft.document).map_err(|error| error.to_string())?;
                 for source in sources(&document) {
@@ -547,11 +673,7 @@ impl EditorSession {
             None => original_document(&original_path, &request.artifact_id, &mut assets)?,
         };
         let mut fonts = fonts
-            .map(|assets| {
-                assets.validate().map_err(|error| error.to_string())?;
-                let renderer = TextRenderer::new(assets.files.values().cloned())?;
-                Ok::<_, String>(SessionFonts { assets, renderer })
-            })
+            .map(|assets| SessionFonts::new(assets, host, platform))
             .transpose()?;
         let pixels = Arc::new(render_frame(&document, &assets, fonts.as_mut())?);
         let persisted_assets = if has_draft {
@@ -640,9 +762,9 @@ impl EditorSession {
                     .and_then(|text| crate::editor_text::inline_editor_layout(text).ok()),
             }),
             document,
-            font_families: self.fonts.as_ref().map(|fonts| &fonts.assets.families),
+            font_families: self.fonts.as_ref().map(|fonts| &fonts.offered),
             font_family_options: self.fonts.as_ref().map_or_else(Vec::new, |fonts| {
-                crate::editor_text::font_family_options(&fonts.assets.families)
+                crate::editor_text::font_family_options(&fonts.offered)
                     .into_iter()
                     .map(|(key, label)| FontFamilyOption { key, label })
                     .collect()
@@ -652,7 +774,7 @@ impl EditorSession {
                 .filter(|preset| {
                     self.fonts
                         .as_ref()
-                        .is_some_and(|fonts| fonts.assets.families.contains_key(preset.font_family))
+                        .is_some_and(|fonts| fonts.offered.contains_key(preset.font_family))
                 })
                 .copied()
                 .collect(),
@@ -1515,6 +1637,7 @@ impl EditorSession {
                     .fonts
                     .as_mut()
                     .ok_or("Text requires explicit font bytes.")?;
+                fonts.pin(&element.font_family)?;
                 *element =
                     prepare_text_edit(element, refit, &mut fonts.renderer, &fonts.assets.families)?;
                 next.commit(document);
@@ -1782,6 +1905,7 @@ fn prepare_text_create(
     });
     let element = new_text_element(id.clone(), &create)?;
     let fonts = fonts.ok_or("Text requires explicit font bytes.")?;
+    fonts.pin(&element.font_family)?;
     if create.style_preset.is_some() && !fonts.assets.families.contains_key(&element.font_family) {
         return Err(format!(
             "Text style requires unavailable font family: {}",

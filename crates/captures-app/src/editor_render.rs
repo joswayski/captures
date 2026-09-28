@@ -35,7 +35,8 @@ pub fn render(
 
 /// Opt in to paragraph text using caller-owned fonts. `families` maps
 /// document family keys (such as `sans`) to names embedded in supplied font bytes.
-/// No installed fonts are scanned. Outlines require monochrome scalable glyphs. Text and
+/// Missing glyphs follow the renderer's fallback (other supplied faces, then any
+/// platform faces it was given). Outlines require monochrome scalable glyphs. Text and
 /// plates rotate together around the shipping selection pivot; shadow offsets
 /// stay in canvas space. Plates shadow once, otherwise glyph lines shadow first
 /// and all crisp glyph passes follow, matching shipping paint order.
@@ -63,7 +64,7 @@ fn render_inner(
         .unwrap_or(Rgba([0, 0, 0, 0]));
 
     // Reject unsupported visible styles/assets before orientation or canvas
-    // allocation. Shaping/rasterization can still fail on missing glyphs/budgets.
+    // allocation. Shaping/rasterization can still fail on line controls/budgets.
     for element in document
         .elements
         .iter()

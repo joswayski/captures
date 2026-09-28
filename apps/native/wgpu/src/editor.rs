@@ -12533,6 +12533,129 @@ mod tests {
     }
 
     #[test]
+    fn sans_only_draft_offers_every_bundled_family_and_pins_one_on_use() {
+        let (data, id) = fixture();
+        let request = || OpenRequest {
+            history_root: data.path().join("history"),
+            drafts_root: data.path().join("editor-drafts"),
+            artifact_id: id.clone(),
+        };
+        let bundled = captures_app::editor_fonts::bundled();
+        let mut legacy = bundled.clone();
+        legacy.families.retain(|key, _| key == "sans");
+        legacy
+            .files
+            .retain(|key, _| key.starts_with("liberation-sans-"));
+        let mut author = EditorSession::open_with_fonts(request(), Some(legacy.clone())).unwrap();
+        author
+            .execute(Request::ResizeCanvas {
+                width: 320.,
+                height: 120.,
+            })
+            .unwrap();
+        author
+            .execute(Request::CreateText {
+                create: TextCreate {
+                    point: Point { x: 20., y: 30. },
+                    text: "Native".into(),
+                    font_size: 40.,
+                    font_family: "sans".into(),
+                    color: "#111111".into(),
+                    style_preset: None,
+                    drop_shadow: None,
+                    drop_shadow_style: None,
+                },
+            })
+            .unwrap();
+        author
+            .execute(Request::SaveDraft { updated_at_ms: 90 })
+            .unwrap();
+        let sans_pixels = author.pixels();
+        drop(author);
+
+        let ctx = egui::Context::default();
+        let editor = Editor::open(
+            &ctx,
+            data.path().join("history"),
+            id.clone(),
+            data.path().join("exports"),
+            CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
+        );
+        receive(&editor, &ctx);
+        let layer = {
+            let view = editor.view.lock().unwrap();
+            let presented = view.presented.as_ref().unwrap();
+            // Shipping's Font menu offers all four families on every document.
+            assert_eq!(presented.font_families, bundled.families);
+            assert_eq!(
+                font_family_options(&presented.font_families)
+                    .into_iter()
+                    .map(|(_, label)| label)
+                    .collect::<Vec<_>>(),
+                ["Sans serif", "Serif", "Monospace", "Rounded"]
+            );
+            assert_eq!(view.new_text_preset.as_deref(), Some("rounded-box"));
+            assert_eq!(*presented.pixels, *sans_pixels);
+            presented
+                .document
+                .elements
+                .last()
+                .unwrap()
+                .base()
+                .id
+                .clone()
+        };
+        editor.view.lock().unwrap().submit(
+            &editor.tx,
+            Request::EditText {
+                id: layer,
+                patch: TextPatch {
+                    font_family: Some("rounded".into()),
+                    ..TextPatch::default()
+                },
+            },
+        );
+        receive(&editor, &ctx);
+        {
+            let view = editor.view.lock().unwrap();
+            assert!(view.error.is_none(), "{:?}", view.error);
+            assert_ne!(*view.presented.as_ref().unwrap().pixels, *sans_pixels);
+        }
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::SaveDraft { updated_at_ms: 91 });
+        receive(&editor, &ctx);
+        let saved = captures_history::editor_draft::load(
+            &data.path().join("editor-drafts"),
+            &id,
+            |_, id| format!("draft-asset:{id}"),
+        )
+        .unwrap()
+        .unwrap()
+        .fonts
+        .unwrap();
+        assert_eq!(
+            saved
+                .families
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["rounded", "sans"]
+        );
+        assert_eq!(
+            saved
+                .files
+                .keys()
+                .filter(|key| key.starts_with("nunito-rounded-"))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
     fn replace_original_worker_preserves_editor_and_refreshes_same_history_item() {
         let (data, id) = fixture();
         let root = data.path().join("history");

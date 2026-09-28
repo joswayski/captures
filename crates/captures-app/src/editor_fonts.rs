@@ -1,5 +1,6 @@
 //! Offline, redistributable default for the experimental native Text tool.
-//! No installed-font scan, download, or substitution for saved draft fonts.
+//! No download or substitution for saved draft fonts; a reopened draft that
+//! lacks a bundled family pins it only when its text first uses that family.
 
 use std::{
     collections::BTreeMap,

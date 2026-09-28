@@ -860,6 +860,7 @@ dependencies = [
  "serde",
  "swash",
  "tiny-skia",
+ "unicode-script",
  "webp",
 ]
 
