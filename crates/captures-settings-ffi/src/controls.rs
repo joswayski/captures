@@ -191,29 +191,47 @@ mod tests {
     #[test]
     fn select_keys_and_layout_cross_the_abi() {
         let disabled = json!([false, true, false, false]);
-        let opened = call(json!({"operation": "select_key", "open": false, "active": 0,
-            "selected": 2, "disabled": disabled, "key": "arrow_down"}));
-        assert_eq!(opened["result"], json!({"open": true, "active": 2, "chosen": null, "handled": true}));
+        let opened = call(
+            json!({"operation": "select_key", "open": false, "active": 0,
+            "selected": 2, "disabled": disabled, "key": "arrow_down"}),
+        );
+        assert_eq!(
+            opened["result"],
+            json!({"open": true, "active": 2, "chosen": null, "handled": true})
+        );
         let end = call(json!({"operation": "select_key", "open": true, "active": 0,
             "selected": 0, "disabled": disabled, "key": "end"}));
         assert_eq!(end["result"]["active"], 3);
         let home = call(json!({"operation": "select_key", "open": true, "active": 3,
             "selected": 0, "disabled": [true, false, false], "key": "home"}));
         assert_eq!(home["result"]["active"], 1, "Home skips disabled options");
-        let closed_home = call(json!({"operation": "select_key", "open": false, "active": 0,
-            "selected": 0, "disabled": disabled, "key": "home"}));
-        assert_eq!(closed_home["result"]["handled"], false, "Home/End only move an open listbox");
+        let closed_home = call(
+            json!({"operation": "select_key", "open": false, "active": 0,
+            "selected": 0, "disabled": disabled, "key": "home"}),
+        );
+        assert_eq!(
+            closed_home["result"]["handled"], false,
+            "Home/End only move an open listbox"
+        );
         let chosen = call(json!({"operation": "select_key", "open": true, "active": 2,
             "selected": 0, "disabled": disabled, "key": "enter"}));
-        assert_eq!(chosen["result"], json!({"open": false, "active": 2, "chosen": 2, "handled": true}));
+        assert_eq!(
+            chosen["result"],
+            json!({"open": false, "active": 2, "chosen": 2, "handled": true})
+        );
         let bad = call(json!({"operation": "select_key", "open": true, "active": 0,
             "selected": 0, "disabled": disabled, "key": "tab"}));
         assert_eq!(bad["ok"], false);
-        let layout = call(json!({"operation": "select_layout", "trigger": [100.0, 700.0, 120.0, 32.0],
+        let layout = call(
+            json!({"operation": "select_layout", "trigger": [100.0, 700.0, 120.0, 32.0],
             "menu_width": 200.0, "menu_height": 150.0, "viewport_width": 800.0,
-            "viewport_height": 800.0, "option_count": 4}));
+            "viewport_height": 800.0, "option_count": 4}),
+        );
         let result = &layout["result"];
-        assert_eq!(result["above"], true, "no room below: the listbox opens above");
+        assert_eq!(
+            result["above"], true,
+            "no room below: the listbox opens above"
+        );
         assert_eq!(result["width"], 200.0);
         assert_eq!(result["left"], 20.0, "right-aligned to the trigger");
         assert_eq!(result["top"], 544.0);
