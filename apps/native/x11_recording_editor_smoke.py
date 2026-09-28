@@ -904,7 +904,13 @@ def main():
             assert silent and max(abs(v) for v in silent) < .00001, "Sound off plays silently"
             press(editor, "Sound")
 
-            press(editor, "Loop preview")  # Loop reopens audio only after decoder/output teardown.
+            press(editor, "Loop preview")  # One output stream serves every gapless lap.
+            loop_pcm = output / "sound-loop.f32"
+            loop_monitor = spawn("sound-loop", ["ffmpeg", "-v", "error", "-f", "pulse", "-i",
+                "captures_preview.monitor", "-t", "15", "-ar", "48000", "-ac", "2",
+                "-f", "f32le", str(loop_pcm)])
+            wait(lambda: run("pactl", "list", "short", "source-outputs").strip(), "loop capture records")
+            time.sleep(.5)
             motion_click()
             wait(playing, "audible loop starts")
             def output_stream():
@@ -912,15 +918,27 @@ def main():
                 assert len(streams) <= 1, "loop never opens overlapping output streams"
                 return streams[0].split()[0] if streams else None
             first_stream = wait(output_stream, "first lap opens audio output")
-            wait(lambda: (stream := output_stream()) and stream != first_stream,
-                 "loop closes and reopens the audio output for the next lap")
-            assert playing(), "audible loop retains worker ownership across EOF"
+            time.sleep(7.5)  # Cross the 6 s lap boundary into the second lap.
+            assert output_stream() == first_stream, "the next lap keeps the running audio output"
+            assert playing(), "audible loop retains worker ownership across the wrap"
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             run("import", "-window", editor, str(output / "sound-minimum-running.png"))
             motion_click()
             idle(editor)
             assert not run("pactl", "list", "short", "sink-inputs").strip(), "Pause releases audio output"
             shot(editor, "sound-minimum-on-paused")
+            # The sink keeps its own clock while a stream underruns, so the time
+            # between consecutive laps' tone onsets is the lap (6 s) plus any gap.
+            assert loop_monitor.wait(timeout=20) == 0
+            loop_left = array("f", loop_pcm.read_bytes())[::2]
+            active = [max(abs(v) for v in loop_left[i:i + 48]) > .01
+                for i in range(0, len(loop_left) - 47, 48)]
+            onsets = [i for i in range(1, len(active))
+                if active[i] and not any(active[max(0, i - 200):i])]
+            assert len(onsets) >= 2, onsets
+            loop_audio_gap_ms = onsets[1] - onsets[0] - 6000
+            print(f"Sound loop: consecutive lap onsets {onsets[:2]} ms, gap {loop_audio_gap_ms} ms")
+            assert abs(loop_audio_gap_ms) <= 20, f"audible loop gap {loop_audio_gap_ms} ms"
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             press(editor, "Loop preview")
 
@@ -960,9 +978,9 @@ def main():
             close(editor)
             shot(editor, "sound-close-confirmation")
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
-                "virtual_sink_tone_amplitudes": measured,
+                "virtual_sink_tone_amplitudes": measured, "loop_audio_gap_ms": loop_audio_gap_ms,
                 "checks": ["default-sound-real-output", "explicit-silent", "both-source-tones", "short-audio-video-eof",
-                    "audible-loop-reopen", "one-output-stream", "pause-eof-release-output",
+                    "audible-gapless-loop", "one-output-stream", "pause-eof-release-output",
                     "device-failure", "explicit-silent-retry", "minimum-layout", "gif-no-device",
                     "immutable-source-history", "no-export"]}, indent=2) + "\n")
             print("PASS Sound preview: default-on virtual audio output, explicit silence, EOF, device error/retry and GIF without a device")
@@ -1514,6 +1532,9 @@ def main():
             motion_click()
             wait(playing, "loop playback starts")
             loop_click()  # Turn on while already playing, not only before Play.
+            # The previous EOF still shows blue; see this run's green first so
+            # blue and then red prove a real wrap, not the replay's start.
+            wait(lambda: motion_color(1, "loop-first-middle"), "loop plays the green middle")
             wait(lambda: motion_color(2, "loop-first-end"), "loop reaches blue trim end")
             wait(lambda: motion_color(0, "loop-restart"), "loop returns to red accepted trim start")
             assert playing(), "loop must retain worker ownership across EOF"
@@ -1527,6 +1548,35 @@ def main():
             assert 4400 <= position() < 4500
             shot(editor, "loop-disabled-ended")
             assert loop_recording.wait(timeout=20) == 0
+            # Measure the Loop wrap in the recorded presentation: the 500 ms
+            # blue trim end must hand over to the red trim start on time, not
+            # hold its last frame while a decoder reopens.
+            geometry = run("xwininfo", "-id", editor).decode()
+            left = int(re.search(r"Absolute upper-left X:\s+(-?\d+)", geometry).group(1)) - 80
+            top = int(re.search(r"Absolute upper-left Y:\s+(-?\d+)", geometry).group(1)) - 60
+            px, py = image_point(editor, .75, .75)
+            pixels = run("ffmpeg", "-v", "error", "-i", str(output / "playback-loop-motion.mp4"),
+                # Chroma-subsampled video crops on even 2x2 blocks.
+                "-vf", f"crop=2:2:{(left + px) & ~1}:{(top + py) & ~1}", "-f", "rawvideo",
+                "-pix_fmt", "rgb24", "-")
+            colors = []
+            for offset in range(0, len(pixels) - 11, 12):
+                pixel = pixels[offset:offset + 3]
+                color = next((channel for channel in range(3) if pixel[channel] > 90 and all(
+                    pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel)), None)
+                if color is None:
+                    continue  # A transition or unrelated frame; keep color runs contiguous.
+                if colors and colors[-1][0] == color:
+                    colors[-1][1] += 1
+                else:
+                    colors.append([color, 1])
+            # A complete blue run between green and the wrapped red start.
+            loop_wraps_ms = [round(colors[i][1] * 1000 / 15) for i in range(1, len(colors) - 1)
+                if colors[i - 1][0] == 1 and colors[i][0] == 2 and colors[i + 1][0] == 0]
+            assert loop_wraps_ms, colors
+            loop_wrap_ms = max(loop_wraps_ms)
+            print(f"Loop wrap: blue trim end presented for {loop_wraps_ms} ms (500 ms without a gap)")
+            assert loop_wrap_ms <= 500 + 200, f"loop wrap held the trim end for {loop_wrap_ms} ms"
             motion_click()
             wait(playing, "EOF replay decoder")
             time.sleep(.2)
@@ -1588,9 +1638,11 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True,
                 "appearance": args.appearance, "paused_at_ms": paused_at, "ended_at_ms": ended_at,
-                "replay_at_ms": replay_at, "checks": ["live-trim-play", "temporal-motion",
+                "replay_at_ms": replay_at, "loop_trim_end_presented_ms": loop_wraps_ms,
+                "checks": ["live-trim-play", "temporal-motion",
                     "pause-stable", "resume", "exclusive-trim-end", "replay", "focus-pause",
-                    "loop-active-toggle", "loop-trim-restart", "loop-pause-resume", "loop-disable-eof",
+                    "loop-active-toggle", "loop-trim-restart", "loop-gapless-wrap", "loop-pause-resume",
+                    "loop-disable-eof",
                     "failure-restores-still", "retry", "minimum-layout", "dirty-close",
                     "accepted-export-duration-colors", "source-immutable", "clean-close"]}, indent=2) + "\n")
             print("PASS silent playback: real motion, pause/resume/EOF, failure/retry, close, accepted export and immutable source")

@@ -7,7 +7,7 @@ use std::{
     fs,
     io::{Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use captures_history::{ArtifactKind, HistoryEntry};
@@ -579,6 +579,37 @@ impl RecordingEditorSession {
                 &self.edit,
                 &self.preview_export,
                 position_ms,
+                cancel,
+            )
+            .map(|inner| RecordingPlayback { inner })
+            .map_err(|error| error.to_string())
+    }
+
+    /// Start Loop-preview playback of the accepted edit. While `looping` is set
+    /// when a lap ends, the stream continues gaplessly from the accepted trim
+    /// end to the accepted trim start without reopening the output device; it
+    /// ends after the lap during which `looping` is cleared, and never restarts
+    /// a lap that presented no frame. `sound` selects
+    /// [`Self::playback_with_audio`] semantics.
+    pub fn looping_playback(
+        &self,
+        position_ms: u64,
+        sound: bool,
+        looping: Arc<AtomicBool>,
+        cancel: &CancelToken,
+    ) -> Result<RecordingPlayback, String> {
+        self.ensure_active()?;
+        validate_session_edit(&self.probe, &self.edit)?;
+        validate_preview_export(&self.preview_export)?;
+        self.tools
+            .looping_playback(
+                &self.source_path,
+                &self.probe,
+                &self.edit,
+                &self.preview_export,
+                position_ms,
+                sound,
+                looping,
                 cancel,
             )
             .map(|inner| RecordingPlayback { inner })

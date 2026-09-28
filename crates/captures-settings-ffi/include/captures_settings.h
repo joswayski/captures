@@ -949,6 +949,29 @@ CapturesRecordingEditorPlayback *captures_recording_editor_playback_open_v1(
 CapturesRecordingEditorPlayback *captures_recording_editor_playback_open_v2(
     const CapturesRecordingEditorSession *session, uint64_t position_ms,
     const CapturesRecordingEditorCancel *cancel, char **output_json);
+/* Loop preview. A flag handle is thread-safe and may change at any time; a
+ * stream reads it only when a lap ends. open_v3 has v1 (sound false) or v2
+ * (sound true) semantics and continues gaplessly from the accepted trim end
+ * to the accepted trim start while the flag is set at a lap end: the next
+ * lap's decoders are pre-rolled during the current lap, and one audio device
+ * and clock serve every lap. Frame positions stay source-relative inside the
+ * accepted trim; next returns eof once, after the lap in which the flag was
+ * cleared. A lap that presented no frame never restarts. The stream retains
+ * its own flag reference, so the flag may be freed first. NULL set/free are
+ * no-ops and NULL reads false. */
+typedef struct CapturesRecordingEditorPlaybackLoop CapturesRecordingEditorPlaybackLoop;
+CapturesRecordingEditorPlaybackLoop *captures_recording_editor_playback_loop_create_v1(
+    bool enabled);
+void captures_recording_editor_playback_loop_set_v1(
+    const CapturesRecordingEditorPlaybackLoop *looping, bool enabled);
+bool captures_recording_editor_playback_loop_enabled_v1(
+    const CapturesRecordingEditorPlaybackLoop *looping);
+void captures_recording_editor_playback_loop_free_v1(
+    CapturesRecordingEditorPlaybackLoop *looping);
+CapturesRecordingEditorPlayback *captures_recording_editor_playback_open_v3(
+    const CapturesRecordingEditorSession *session, uint64_t position_ms, bool sound,
+    const CapturesRecordingEditorPlaybackLoop *looping,
+    const CapturesRecordingEditorCancel *cancel, char **output_json);
 CapturesRecordingEditorFrame *captures_recording_editor_playback_next_v1(
     CapturesRecordingEditorPlayback *playback, char **output_json);
 void captures_recording_editor_playback_free_v1(

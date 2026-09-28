@@ -15,7 +15,10 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     ptr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 #[derive(Deserialize)]
@@ -399,6 +402,113 @@ pub unsafe extern "C" fn captures_recording_editor_playback_open_v2(
         let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
         let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
         session.playback_with_audio(position_ms, cancel)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (handle, value) = match result {
+        Ok(playback) => {
+            let value = json!({
+                "ok": true,
+                "result": {
+                    "start_position_ms": playback.start_position_ms(),
+                    "width": playback.width(),
+                    "height": playback.height(),
+                    "frames_per_second": playback.frames_per_second(),
+                    "audio_enabled": playback.audio_enabled(),
+                },
+            });
+            (
+                Box::into_raw(Box::new(RecordingEditorPlayback(playback))),
+                value,
+            )
+        }
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies aligned writable output storage.
+    unsafe { output.write(response(value)) };
+    handle
+}
+
+/// Shared Loop preview flag for v3 playback streams. The host changes it at
+/// any time; a stream reads it only when a lap ends.
+pub struct RecordingEditorPlaybackLoop(Arc<AtomicBool>);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_recording_editor_playback_loop_create_v1(
+    enabled: bool,
+) -> *mut RecordingEditorPlaybackLoop {
+    Box::into_raw(Box::new(RecordingEditorPlaybackLoop(Arc::new(
+        AtomicBool::new(enabled),
+    ))))
+}
+
+/// Thread-safe Loop preview change. Null is a no-op.
+///
+/// # Safety
+/// Non-null flag remains live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_loop_set_v1(
+    looping: *const RecordingEditorPlaybackLoop,
+    enabled: bool,
+) {
+    // SAFETY: caller retains the live flag for this call.
+    if let Some(looping) = unsafe { looping.as_ref() } {
+        looping.0.store(enabled, Ordering::Relaxed);
+    }
+}
+
+/// Thread-safe Loop preview read. Null reads false.
+///
+/// # Safety
+/// Non-null flag remains live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_loop_enabled_v1(
+    looping: *const RecordingEditorPlaybackLoop,
+) -> bool {
+    // SAFETY: caller retains the live flag for this call.
+    unsafe { looping.as_ref() }.is_some_and(|looping| looping.0.load(Ordering::Relaxed))
+}
+
+/// # Safety
+/// Null or a live flag, freed once. Streams opened with it retain their own
+/// reference, so it may be freed while they play.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_loop_free_v1(
+    looping: *mut RecordingEditorPlaybackLoop,
+) {
+    if !looping.is_null() {
+        // SAFETY: caller transfers unique box ownership.
+        drop(unsafe { Box::from_raw(looping) });
+    }
+}
+
+/// Open Loop preview playback: v1 (`sound` false) or v2 (`sound` true)
+/// semantics, continuing gaplessly from the accepted trim end to the accepted
+/// trim start while `looping` is set when a lap ends. One stream, one audio
+/// device and one next/free contract cover every lap; EOF arrives once after
+/// the final lap, and a lap that presented no frame never restarts.
+///
+/// # Safety
+/// As [`captures_recording_editor_playback_open_v2`]. `looping` is live for
+/// this call; the stream retains its own reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_playback_open_v3(
+    session: *const RecordingEditorSession,
+    position_ms: u64,
+    sound: bool,
+    looping: *const RecordingEditorPlaybackLoop,
+    cancel: *const CancelToken,
+    output: *mut *mut c_char,
+) -> *mut RecordingEditorPlayback {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains live session/loop/cancel handles for this call.
+        let session = unsafe { session.as_ref() }.ok_or("recording editor handle is null")?;
+        let looping =
+            unsafe { looping.as_ref() }.ok_or("recording playback loop handle is null")?;
+        let cancel = unsafe { cancel.as_ref() }.ok_or("recording export cancel handle is null")?;
+        session.looping_playback(position_ms, sound, looping.0.clone(), cancel)
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     let (handle, value) = match result {
@@ -873,6 +983,25 @@ mod tests {
             }
             .is_null()
         );
+        let mut looped_null_response = ptr::null_mut();
+        // SAFETY: output is writable; null handles are explicit owned errors.
+        let looped_null = unsafe {
+            captures_recording_editor_playback_open_v3(
+                ptr::null(),
+                0,
+                true,
+                ptr::null(),
+                ptr::null(),
+                &mut looped_null_response,
+            )
+        };
+        assert!(looped_null.is_null());
+        // SAFETY: failed open returned one owned response.
+        assert_eq!(unsafe { json(looped_null_response) }["ok"], false);
+        // SAFETY: null flags are no-ops that read false.
+        unsafe { captures_recording_editor_playback_loop_set_v1(ptr::null(), true) };
+        assert!(!unsafe { captures_recording_editor_playback_loop_enabled_v1(ptr::null()) });
+        unsafe { captures_recording_editor_playback_loop_free_v1(ptr::null_mut()) };
         // SAFETY: v2 also refuses work before inspecting null handles.
         assert!(
             unsafe {
@@ -1255,6 +1384,72 @@ mod tests {
         assert_eq!(audible_response["result"]["audio_enabled"], false);
         // SAFETY: independent playback owner is released once.
         unsafe { captures_recording_editor_playback_free_v1(audio_less_playback) };
+
+        // Loop preview: one v3 stream wraps from the trim end to the trim start
+        // and ends after the lap in which Loop is turned off.
+        let looping = captures_recording_editor_playback_loop_create_v1(true);
+        // SAFETY: the loop flag is live.
+        assert!(unsafe { captures_recording_editor_playback_loop_enabled_v1(looping) });
+        let mut looped_response = ptr::null_mut();
+        // SAFETY: handles/output stay live through playback open.
+        let looped = unsafe {
+            captures_recording_editor_playback_open_v3(
+                session,
+                900,
+                true,
+                looping,
+                cancel,
+                &mut looped_response,
+            )
+        };
+        assert!(!looped.is_null());
+        // SAFETY: open returned one owned response.
+        let looped_response = unsafe { json(looped_response) };
+        assert_eq!(looped_response["result"]["start_position_ms"], 900);
+        assert_eq!(looped_response["result"]["audio_enabled"], false);
+        let mut positions = Vec::new();
+        loop {
+            let mut next_response = ptr::null_mut();
+            // SAFETY: playback/output remain live for the exclusive next call.
+            let frame =
+                unsafe { captures_recording_editor_playback_next_v1(looped, &mut next_response) };
+            // SAFETY: next returned one owned response.
+            let next_response = unsafe { json(next_response) };
+            assert_eq!(next_response["ok"], true, "{next_response}");
+            if next_response["result"]["eof"] == true {
+                assert!(frame.is_null());
+                break;
+            }
+            // SAFETY: the frame owner is released once.
+            unsafe { captures_recording_editor_frame_free_v1(frame) };
+            let position = next_response["result"]["position_ms"].as_u64().unwrap();
+            assert!(position < 1_000);
+            if positions
+                .last()
+                .is_some_and(|previous| position < *previous)
+            {
+                // The next lap starts at the trim start; a loaded consumer may
+                // coalesce that first frame into a later latest frame.
+                assert!(
+                    position < 200,
+                    "wrap lands near the trim start: {positions:?}"
+                );
+                assert!(positions.len() < 10, "the first lap is 100 ms");
+                // SAFETY: the loop flag is live; this lap finishes, then EOF.
+                unsafe { captures_recording_editor_playback_loop_set_v1(looping, false) };
+            }
+            positions.push(position);
+            assert!(positions.len() < 200, "a lap without Loop must end");
+        }
+        let wraps = positions
+            .windows(2)
+            .filter(|pair| pair[1] < pair[0])
+            .count();
+        assert_eq!(wraps, 1, "{positions:?}");
+        // SAFETY: the stream retains its own reference, so the flag may be
+        // freed first; each owner is released once.
+        unsafe { captures_recording_editor_playback_loop_free_v1(looping) };
+        unsafe { captures_recording_editor_playback_free_v1(looped) };
 
         let mut playback_response = ptr::null_mut();
         // SAFETY: handles/output stay live through playback open.

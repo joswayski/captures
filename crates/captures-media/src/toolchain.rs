@@ -2,7 +2,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{ChildStderr, Command, ExitStatus, Stdio},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -18,7 +18,10 @@ use serde::Deserialize;
 use std::os::windows::process::CommandExt;
 use thiserror::Error;
 
-use crate::playback_audio::{AudioProducerControl, PreparedAudioOutput, read_audio_samples};
+use crate::playback_audio::{
+    AudioOutputFormat, AudioProducerControl, PreparedAudioOutput, read_audio_laps,
+};
+use crate::playback_loop::{DecoderProcess, LapGate, LapTiming, PlaybackProcesses, error_message};
 use crate::{
     EditSpec, ExportEstimate, ExportFormat, ExportProgress, ExportSpec, ExportStage, MediaKind,
     MediaMetadata, QualityPreset, SizeBudgetError, calculate_size_budget, estimate_sample_windows,
@@ -63,6 +66,8 @@ impl MediaPlaybackFrame {
 
 struct BufferedPlaybackFrame {
     frame: MediaPlaybackFrame,
+    /// Milliseconds since playback began on the continuous (all-lap) timeline.
+    timeline_ms: u64,
     present_at: Option<Instant>,
 }
 
@@ -92,8 +97,11 @@ struct PlaybackShared {
     stop: AtomicBool,
 }
 
-/// One persistent FFmpeg raw-RGBA decoder. Frames are paced against a shared
-/// monotonic clock and only the latest pending frame is retained.
+/// One persistent FFmpeg raw-RGBA playback stream. Frames are paced against a
+/// shared monotonic clock and only the latest pending frame is retained. With
+/// Loop preview, the stream continues through every lap on one timeline: the
+/// next lap's decoders are pre-spawned while the current lap plays, and the
+/// audio output device and its clock keep running across the boundary.
 pub struct MediaPlayback {
     width: u32,
     height: u32,
@@ -101,9 +109,8 @@ pub struct MediaPlayback {
     start_position_ms: u64,
     cancel: CancelToken,
     shared: Arc<PlaybackShared>,
-    child: Option<Child>,
+    processes: Arc<PlaybackProcesses>,
     reader: Option<thread::JoinHandle<()>>,
-    stderr_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
     audio: Option<MediaPlaybackAudio>,
     terminal: Option<PlaybackTerminal>,
     closed: bool,
@@ -111,9 +118,7 @@ pub struct MediaPlayback {
 
 struct MediaPlaybackAudio {
     output: PreparedAudioOutput,
-    child: Option<Child>,
     reader: Option<thread::JoinHandle<()>>,
-    stderr_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
     closed: bool,
 }
 
@@ -192,8 +197,8 @@ impl MediaPlayback {
                 let due = if let Some(audio) = self.audio.as_ref() {
                     audio
                         .output
-                        .position_ms(self.start_position_ms)
-                        .is_some_and(|position| position >= frame.frame.position_ms)
+                        .position_ms(0)
+                        .is_some_and(|elapsed| elapsed >= frame.timeline_ms)
                 } else {
                     frame
                         .present_at
@@ -275,37 +280,19 @@ impl MediaPlayback {
         if self.closed {
             return Ok(());
         }
+        // Readers complete each lap's decoder themselves; teardown only stops
+        // them, kills anything still running (a blocked or pre-spawned lap),
+        // and joins.
         self.shared.stop.store(true, Ordering::Release);
         self.shared.changed.notify_all();
+        self.processes.close();
 
         let mut result = Ok(());
         if let Some(audio) = self.audio.as_mut()
-            && let Err(error) = audio.finish(kill, &self.cancel)
+            && let Err(error) = audio.finish(kill)
         {
             result = Err(error);
         }
-        let status = if let Some(mut child) = self.child.take() {
-            if kill {
-                let _ = child.kill();
-            }
-            loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => break Some(status),
-                    Ok(None) if !kill && self.cancel.is_cancelled() => {
-                        let _ = child.kill();
-                        result = Err(MediaToolError::Cancelled);
-                    }
-                    Ok(None) => thread::sleep(PLAYBACK_POLL_INTERVAL),
-                    Err(error) => {
-                        result = Err(MediaToolError::Io(error));
-                        let _ = child.kill();
-                        break child.wait().ok();
-                    }
-                }
-            }
-        } else {
-            None
-        };
         if let Some(reader) = self.reader.take()
             && reader.join().is_err()
             && result.is_ok()
@@ -314,113 +301,32 @@ impl MediaPlayback {
                 "playback frame reader panicked".to_owned(),
             ));
         }
-        let stderr = match self.stderr_reader.take() {
-            None => Vec::new(),
-            Some(reader) => match reader.join() {
-                Ok(Ok(stderr)) => stderr,
-                Ok(Err(error)) => {
-                    if result.is_ok() {
-                        result = Err(MediaToolError::Io(error));
-                    }
-                    Vec::new()
-                }
-                Err(_) => {
-                    if result.is_ok() {
-                        result = Err(MediaToolError::Process(
-                            "media tool error reader panicked".to_owned(),
-                        ));
-                    }
-                    Vec::new()
-                }
-            },
-        };
         self.closed = true;
-        if !kill
-            && result.is_ok()
-            && let Some(status) = status
-        {
-            result = complete_child(status, &stderr);
-        }
         result
     }
 }
 
 impl MediaPlaybackAudio {
     fn check_error(&mut self) -> Result<(), MediaToolError> {
-        self.output.check_error()?;
-        if let Some(child) = self.child.as_mut()
-            && let Some(status) = child.try_wait()?
-            && !status.success()
-        {
-            return Err(MediaToolError::Process(
-                "audio media decoder exited before playback completed".to_owned(),
-            ));
-        }
-        Ok(())
+        self.output.check_error()
     }
 
-    fn finish(&mut self, kill: bool, cancel: &CancelToken) -> Result<(), MediaToolError> {
+    fn finish(&mut self, kill: bool) -> Result<(), MediaToolError> {
         if self.closed {
             return Ok(());
         }
         self.output.stop();
         let mut result = Ok(());
-        let status = if let Some(mut child) = self.child.take() {
-            if kill {
-                let _ = child.kill();
-            }
-            loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => break Some(status),
-                    Ok(None) if !kill && cancel.is_cancelled() => {
-                        let _ = child.kill();
-                        result = Err(MediaToolError::Cancelled);
-                    }
-                    Ok(None) => thread::sleep(PLAYBACK_POLL_INTERVAL),
-                    Err(error) => {
-                        result = Err(MediaToolError::Io(error));
-                        let _ = child.kill();
-                        break child.wait().ok();
-                    }
-                }
-            }
-        } else {
-            None
-        };
         if let Some(reader) = self.reader.take()
             && reader.join().is_err()
-            && result.is_ok()
         {
             result = Err(MediaToolError::Process(
                 "audio playback reader panicked".to_owned(),
             ));
         }
-        let stderr = match self.stderr_reader.take() {
-            None => Vec::new(),
-            Some(reader) => match reader.join() {
-                Ok(Ok(stderr)) => stderr,
-                Ok(Err(error)) => {
-                    if result.is_ok() {
-                        result = Err(MediaToolError::Io(error));
-                    }
-                    Vec::new()
-                }
-                Err(_) => {
-                    if result.is_ok() {
-                        result = Err(MediaToolError::Process(
-                            "audio media tool error reader panicked".to_owned(),
-                        ));
-                    }
-                    Vec::new()
-                }
-            },
-        };
         self.closed = true;
-        if !kill
-            && result.is_ok()
-            && let Some(status) = status
-        {
-            result = complete_child(status, &stderr);
+        if !kill && result.is_ok() {
+            result = self.output.check_error();
         }
         result
     }
@@ -428,7 +334,7 @@ impl MediaPlaybackAudio {
 
 impl Drop for MediaPlaybackAudio {
     fn drop(&mut self) {
-        let _ = self.finish(true, &CancelToken::default());
+        let _ = self.finish(true);
     }
 }
 
@@ -1210,7 +1116,7 @@ impl MediaToolchain {
         position_ms: u64,
         cancel: &CancelToken,
     ) -> Result<MediaPlayback, MediaToolError> {
-        self.playback_inner(input, probe, edit, spec, position_ms, cancel, false)
+        self.playback_inner(input, probe, edit, spec, position_ms, cancel, false, None)
     }
 
     /// Start persistent raw-RGBA and PCM decoders for accepted video and audio
@@ -1225,7 +1131,37 @@ impl MediaToolchain {
         position_ms: u64,
         cancel: &CancelToken,
     ) -> Result<MediaPlayback, MediaToolError> {
-        self.playback_inner(input, probe, edit, spec, position_ms, cancel, true)
+        self.playback_inner(input, probe, edit, spec, position_ms, cancel, true, None)
+    }
+
+    /// Start playback that continues gaplessly from the accepted trim end back
+    /// to the accepted trim start while `looping` is set when a lap ends.
+    /// `request_audio` selects [`Self::playback_with_audio`] semantics. The
+    /// stream reports one EOF after the final lap, never restarts a lap that
+    /// presented no video frame, and keeps one audio device and clock for
+    /// every lap. Frame positions stay source-relative inside the trim.
+    #[allow(clippy::too_many_arguments)]
+    pub fn looping_playback(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        position_ms: u64,
+        request_audio: bool,
+        looping: Arc<AtomicBool>,
+        cancel: &CancelToken,
+    ) -> Result<MediaPlayback, MediaToolError> {
+        self.playback_inner(
+            input,
+            probe,
+            edit,
+            spec,
+            position_ms,
+            cancel,
+            request_audio,
+            Some(looping),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1238,6 +1174,7 @@ impl MediaToolchain {
         position_ms: u64,
         cancel: &CancelToken,
         request_audio: bool,
+        looping: Option<Arc<AtomicBool>>,
     ) -> Result<MediaPlayback, MediaToolError> {
         if cancel.is_cancelled() {
             return Err(MediaToolError::Cancelled);
@@ -1267,15 +1204,22 @@ impl MediaToolchain {
             } else {
                 position_ms
             };
-        let playback_duration_ms = end_position_ms.saturating_sub(start_position_ms);
+        let timing = LapTiming {
+            first_start_ms: start_position_ms,
+            loop_start_ms: edit.trim_start_ms,
+            end_ms: end_position_ms,
+        };
+        let gate = Arc::new(LapGate::new(looping));
+        let processes = Arc::new(PlaybackProcesses::default());
         let audible = request_audio && accepted_audio_is_audible(edit, attempt);
         let audio_filter = audible.then(|| audio_filter(edit, attempt)).transpose()?;
         let mut audio = if let Some(audio_filter) = audio_filter {
             Some(self.start_playback_audio(
                 input,
-                &audio_filter,
-                start_position_ms,
-                playback_duration_ms,
+                audio_filter,
+                timing,
+                &gate,
+                &processes,
                 cancel,
             )?)
         } else {
@@ -1291,62 +1235,36 @@ impl MediaToolchain {
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or(MediaToolError::IncompleteMetadata)?;
 
-        let mut command = Command::new(&self.ffmpeg);
-        command.args(["-hide_banner", "-loglevel", "error"]);
-        if start_position_ms > 0 {
-            command.args(["-ss", &seconds(start_position_ms)]);
-        }
-        command
-            .arg("-i")
-            .arg(input)
-            .args(["-t", &seconds(playback_duration_ms), "-map", "0:v:0"])
-            .args(["-vf", &filter, "-an", "-pix_fmt", "rgba"])
-            .args(["-f", "rawvideo", "pipe:1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(target_os = "windows")]
-        command.creation_flags(0x0800_0000);
-        let mut child = match command.spawn() {
-            Ok(child) => child,
+        let video = PlaybackVideoCommand {
+            ffmpeg: self.ffmpeg.clone(),
+            input: input.to_owned(),
+            filter,
+        };
+        let first = match processes.spawn(
+            &mut video.command(timing.start_ms(0), timing.duration_ms(0)),
+            "FFmpeg",
+            read_playback_diagnostics,
+        ) {
+            Ok(first) => first,
             Err(error) => {
+                processes.close();
                 drop(audio.take());
-                return Err(map_spawn_error(error, "FFmpeg"));
+                return Err(error);
             }
         };
-        let Some(stdout) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(MediaToolError::Process(
-                "failed to read decoded playback frames".to_owned(),
-            ));
-        };
-        let Some(mut stderr) = child.stderr.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(MediaToolError::Process(
-                "failed to capture media tool errors".to_owned(),
-            ));
-        };
-        let stderr_reader = thread::spawn(move || {
-            read_bounded_diagnostics(&mut stderr, PLAYBACK_MAX_DIAGNOSTIC_BYTES)
-        });
         let shared = Arc::new(PlaybackShared::default());
-        let reader_shared = shared.clone();
-        let reader_cancel = cancel.clone();
-        let audio_clock = audio.as_ref().map(|audio| audio.output.producer_control());
-        let reader = thread::spawn(move || {
-            read_playback_frames(
-                stdout,
-                frame_size,
-                frames_per_second,
-                start_position_ms,
-                end_position_ms,
-                audio_clock,
-                &reader_cancel,
-                &reader_shared,
-            );
-        });
+        let reader = PlaybackVideoReader {
+            frame_size,
+            frames_per_second,
+            timing,
+            audio_clock: audio.as_ref().map(|audio| audio.output.producer_control()),
+            cancel: cancel.clone(),
+            shared: shared.clone(),
+            gate,
+            processes: processes.clone(),
+            command: video,
+        };
+        let reader = thread::spawn(move || reader.run(first));
         Ok(MediaPlayback {
             width,
             height,
@@ -1354,9 +1272,8 @@ impl MediaToolchain {
             start_position_ms,
             cancel: cancel.clone(),
             shared,
-            child: Some(child),
+            processes,
             reader: Some(reader),
-            stderr_reader: Some(stderr_reader),
             audio,
             terminal: None,
             closed: false,
@@ -1366,73 +1283,51 @@ impl MediaToolchain {
     fn start_playback_audio(
         &self,
         input: &Path,
-        accepted_filter: &str,
-        start_position_ms: u64,
-        playback_duration_ms: u64,
+        accepted_filter: String,
+        timing: LapTiming,
+        gate: &Arc<LapGate>,
+        processes: &Arc<PlaybackProcesses>,
         cancel: &CancelToken,
     ) -> Result<MediaPlaybackAudio, MediaToolError> {
         let mut output = PreparedAudioOutput::prepare(cancel)?;
         let format = output.format();
         let producer = output.take_producer()?;
-        let filter = playback_audio_filter(accepted_filter, playback_duration_ms);
-        let mut command = Command::new(&self.ffmpeg);
-        command.args(["-hide_banner", "-loglevel", "error"]);
-        if start_position_ms > 0 {
-            command.args(["-ss", &seconds(start_position_ms)]);
-        }
-        command
-            .arg("-i")
-            .arg(input)
-            .args(["-t", &seconds(playback_duration_ms)])
-            .args(["-filter_complex", &filter, "-map", "[playback_audio]"])
-            .args(["-vn", "-c:a", "pcm_f32le", "-f", "f32le"])
-            .args(["-ar", &format.sample_rate.to_string()])
-            .args(["-ac", &format.channels.to_string()])
-            .arg("pipe:1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(target_os = "windows")]
-        command.creation_flags(0x0800_0000);
-        let mut child = command
-            .spawn()
-            .map_err(|error| map_spawn_error(error, "FFmpeg"))?;
-        let Some(stdout) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(MediaToolError::Process(
-                "failed to read decoded playback audio".to_owned(),
-            ));
+        let command = PlaybackAudioCommand {
+            ffmpeg: self.ffmpeg.clone(),
+            input: input.to_owned(),
+            accepted_filter,
+            format,
         };
-        let Some(mut stderr) = child.stderr.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(MediaToolError::Process(
-                "failed to capture audio media tool errors".to_owned(),
-            ));
-        };
-        let stderr_reader = thread::spawn(move || {
-            read_bounded_diagnostics(&mut stderr, PLAYBACK_MAX_DIAGNOSTIC_BYTES)
-        });
-        let producer_control = output.producer_control();
-        let reader_control = producer_control.clone();
+        let first = processes.spawn(
+            &mut command.command(timing.start_ms(0), timing.duration_ms(0)),
+            "FFmpeg",
+            read_playback_diagnostics,
+        )?;
+        let reader_control = output.producer_control();
         let reader_cancel = cancel.clone();
+        let reader_gate = gate.clone();
+        let reader_processes = processes.clone();
         let reader = thread::spawn(move || {
-            if let Err(error) = read_audio_samples(
-                stdout,
+            let spawn_lap = |lap: u64| {
+                reader_processes.spawn(
+                    &mut command.command(timing.start_ms(lap), timing.duration_ms(lap)),
+                    "FFmpeg",
+                    read_playback_diagnostics,
+                )
+            };
+            read_audio_laps(
+                first,
+                &spawn_lap,
+                &reader_gate,
                 producer,
                 &reader_control,
                 &reader_cancel,
-                format.channels,
-            ) {
-                reader_control.fail(format!("failed to decode playback audio: {error}"));
-            }
+                format,
+            );
         });
         Ok(MediaPlaybackAudio {
             output,
-            child: Some(child),
             reader: Some(reader),
-            stderr_reader: Some(stderr_reader),
             closed: false,
         })
     }
@@ -2700,75 +2595,247 @@ fn read_complete_frame(reader: &mut impl Read, frame: &mut [u8]) -> io::Result<b
 }
 
 #[allow(clippy::too_many_arguments)]
-fn read_playback_frames(
-    mut stdout: impl Read,
+fn read_playback_diagnostics(stderr: &mut ChildStderr) -> io::Result<Vec<u8>> {
+    read_bounded_diagnostics(stderr, PLAYBACK_MAX_DIAGNOSTIC_BYTES)
+}
+
+/// Builds the raw-RGBA video decoder command for one lap.
+struct PlaybackVideoCommand {
+    ffmpeg: PathBuf,
+    input: PathBuf,
+    filter: String,
+}
+
+impl PlaybackVideoCommand {
+    fn command(&self, start_ms: u64, duration_ms: u64) -> Command {
+        let mut command = Command::new(&self.ffmpeg);
+        command.args(["-hide_banner", "-loglevel", "error"]);
+        if start_ms > 0 {
+            command.args(["-ss", &seconds(start_ms)]);
+        }
+        command
+            .arg("-i")
+            .arg(&self.input)
+            .args(["-t", &seconds(duration_ms), "-map", "0:v:0"])
+            .args(["-vf", &self.filter, "-an", "-pix_fmt", "rgba"])
+            .args(["-f", "rawvideo", "pipe:1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x0800_0000);
+        command
+    }
+}
+
+/// Builds the accepted-mix PCM decoder command for one lap. The PCM is padded
+/// and trimmed to exactly the lap's duration so every lap boundary lands at
+/// the same place on the audio and video timelines.
+struct PlaybackAudioCommand {
+    ffmpeg: PathBuf,
+    input: PathBuf,
+    accepted_filter: String,
+    format: AudioOutputFormat,
+}
+
+impl PlaybackAudioCommand {
+    fn command(&self, start_ms: u64, duration_ms: u64) -> Command {
+        let filter = playback_audio_filter(&self.accepted_filter, duration_ms);
+        let mut command = Command::new(&self.ffmpeg);
+        command.args(["-hide_banner", "-loglevel", "error"]);
+        if start_ms > 0 {
+            command.args(["-ss", &seconds(start_ms)]);
+        }
+        command
+            .arg("-i")
+            .arg(&self.input)
+            .args(["-t", &seconds(duration_ms)])
+            .args(["-filter_complex", &filter, "-map", "[playback_audio]"])
+            .args(["-vn", "-c:a", "pcm_f32le", "-f", "f32le"])
+            .args(["-ar", &self.format.sample_rate.to_string()])
+            .args(["-ac", &self.format.channels.to_string()])
+            .arg("pipe:1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x0800_0000);
+        command
+    }
+}
+
+enum VideoLapEnd {
+    Eof { presented_frames: bool },
+    Stopped,
+    Error(String),
+}
+
+/// Reads every video lap of one playback stream into the latest-frame slot,
+/// pacing all laps against one continuous timeline.
+struct PlaybackVideoReader {
     frame_size: usize,
     frames_per_second: u16,
-    start_position_ms: u64,
-    end_position_ms: u64,
+    timing: LapTiming,
     audio_clock: Option<AudioProducerControl>,
-    cancel: &CancelToken,
-    shared: &PlaybackShared,
-) {
-    let mut frame_index = 0_u64;
-    let mut clock = None;
-    loop {
-        if cancel.is_cancelled() || shared.stop.load(Ordering::Acquire) {
-            return;
-        }
-        let mut pixels = vec![0_u8; frame_size];
-        match read_complete_frame(&mut stdout, &mut pixels) {
-            Ok(true) => {}
-            Ok(false) => {
-                set_playback_end(shared, PlaybackReaderEnd::Eof);
-                return;
-            }
-            Err(error) => {
+    cancel: CancelToken,
+    shared: Arc<PlaybackShared>,
+    gate: Arc<LapGate>,
+    processes: Arc<PlaybackProcesses>,
+    command: PlaybackVideoCommand,
+}
+
+impl PlaybackVideoReader {
+    fn stopped(&self) -> bool {
+        self.cancel.is_cancelled() || self.shared.stop.load(Ordering::Acquire)
+    }
+
+    fn spawn_lap(&self, lap: u64) -> Result<DecoderProcess, MediaToolError> {
+        self.processes.spawn(
+            &mut self
+                .command
+                .command(self.timing.start_ms(lap), self.timing.duration_ms(lap)),
+            "FFmpeg",
+            read_playback_diagnostics,
+        )
+    }
+
+    fn run(self, first: DecoderProcess) {
+        let mut clock = None;
+        let mut lap = 0_u64;
+        let mut process = first;
+        let mut next: Option<Result<DecoderProcess, MediaToolError>> = None;
+        loop {
+            let Some(mut stdout) = process.take_stdout() else {
                 set_playback_end(
-                    shared,
-                    PlaybackReaderEnd::Error(format!(
-                        "failed to read a complete decoded playback frame: {error}"
-                    )),
+                    &self.shared,
+                    PlaybackReaderEnd::Error("failed to read decoded playback frames".to_owned()),
                 );
                 return;
+            };
+            let end = self.read_lap(&mut stdout, lap, &mut clock, &mut next);
+            drop(stdout);
+            let presented_frames = match end {
+                VideoLapEnd::Eof { presented_frames } => presented_frames,
+                VideoLapEnd::Stopped => return,
+                VideoLapEnd::Error(error) => {
+                    set_playback_end(&self.shared, PlaybackReaderEnd::Error(error));
+                    return;
+                }
+            };
+            match process.finish(&self.cancel, &|| self.shared.stop.load(Ordering::Acquire)) {
+                Ok(()) => {}
+                Err(MediaToolError::Cancelled) => return,
+                Err(error) => {
+                    set_playback_end(&self.shared, PlaybackReaderEnd::Error(error_message(error)));
+                    return;
+                }
             }
-        }
-        let elapsed_ms = frame_index.saturating_mul(1_000) / u64::from(frames_per_second);
-        let position_ms = start_position_ms.saturating_add(elapsed_ms);
-        frame_index = frame_index.saturating_add(1);
-        if position_ms >= end_position_ms {
-            continue;
-        }
-        let present_at = audio_clock.is_none().then(|| {
-            let clock = *clock.get_or_insert_with(Instant::now);
-            clock
-                .checked_add(Duration::from_millis(elapsed_ms))
-                .unwrap_or(clock)
-        });
-        let mut pending = Some(BufferedPlaybackFrame {
-            frame: MediaPlaybackFrame {
-                position_ms,
-                pixels,
-            },
-            present_at,
-        });
-        let Ok(mut state) = shared.state.lock() else {
-            return;
-        };
-        while state.frame.is_some() {
-            if cancel.is_cancelled() || shared.stop.load(Ordering::Acquire) {
+            if !self.gate.video_finished(lap, presented_frames) {
+                drop(next.take());
+                set_playback_end(&self.shared, PlaybackReaderEnd::Eof);
                 return;
             }
-            let stale = if let Some(audio_clock) = audio_clock.as_ref() {
+            process = match next.take().unwrap_or_else(|| self.spawn_lap(lap + 1)) {
+                Ok(process) => process,
+                Err(MediaToolError::Cancelled) => return,
+                Err(error) => {
+                    set_playback_end(
+                        &self.shared,
+                        PlaybackReaderEnd::Error(format!(
+                            "failed to restart looped playback: {}",
+                            error_message(error)
+                        )),
+                    );
+                    return;
+                }
+            };
+            lap += 1;
+        }
+    }
+
+    fn read_lap(
+        &self,
+        stdout: &mut impl Read,
+        lap: u64,
+        clock: &mut Option<Instant>,
+        next: &mut Option<Result<DecoderProcess, MediaToolError>>,
+    ) -> VideoLapEnd {
+        let lap_start_ms = self.timing.start_ms(lap);
+        let timeline_base_ms = self.timing.timeline_base_ms(lap);
+        let mut frame_index = 0_u64;
+        let mut presented_frames = false;
+        loop {
+            if self.stopped() {
+                return VideoLapEnd::Stopped;
+            }
+            let mut pixels = vec![0_u8; self.frame_size];
+            match read_complete_frame(stdout, &mut pixels) {
+                Ok(true) => {}
+                Ok(false) => return VideoLapEnd::Eof { presented_frames },
+                Err(error) => {
+                    if self.stopped() {
+                        return VideoLapEnd::Stopped;
+                    }
+                    return VideoLapEnd::Error(format!(
+                        "failed to read a complete decoded playback frame: {error}"
+                    ));
+                }
+            }
+            let elapsed_ms = frame_index.saturating_mul(1_000) / u64::from(self.frames_per_second);
+            let position_ms = lap_start_ms.saturating_add(elapsed_ms);
+            let timeline_ms = timeline_base_ms.saturating_add(elapsed_ms);
+            frame_index = frame_index.saturating_add(1);
+            if position_ms >= self.timing.end_ms {
+                continue;
+            }
+            if !presented_frames {
+                presented_frames = true;
+                self.gate.video_frame(lap);
+            }
+            let present_at = self.audio_clock.is_none().then(|| {
+                let clock = *clock.get_or_insert_with(Instant::now);
+                clock
+                    .checked_add(Duration::from_millis(timeline_ms))
+                    .unwrap_or(clock)
+            });
+            if !self.offer(BufferedPlaybackFrame {
+                frame: MediaPlaybackFrame {
+                    position_ms,
+                    pixels,
+                },
+                timeline_ms,
+                present_at,
+            }) {
+                return VideoLapEnd::Stopped;
+            }
+            if next.is_none() && self.gate.looping() {
+                // Pre-roll the next lap once this one is presenting: its
+                // decoder opens, seeks and decodes while this lap plays, then
+                // blocks on its pipe until the boundary.
+                *next = Some(self.spawn_lap(lap + 1));
+            }
+        }
+    }
+
+    /// Store `frame` once the slot is free or the pending frame is stale.
+    fn offer(&self, frame: BufferedPlaybackFrame) -> bool {
+        let timeline_ms = frame.timeline_ms;
+        let present_at = frame.present_at;
+        let Ok(mut state) = self.shared.state.lock() else {
+            return false;
+        };
+        while state.frame.is_some() {
+            if self.stopped() {
+                return false;
+            }
+            let stale = if let Some(audio_clock) = self.audio_clock.as_ref() {
                 audio_clock
-                    .position_ms(start_position_ms)
-                    .is_some_and(|position| position >= position_ms)
+                    .position_ms(0)
+                    .is_some_and(|elapsed| elapsed >= timeline_ms)
             } else {
                 present_at.is_some_and(|present_at| Instant::now() >= present_at)
             };
             if stale {
-                state.frame = pending.take();
-                shared.changed.notify_all();
                 break;
             }
             let wait = present_at.map_or(PLAYBACK_POLL_INTERVAL, |present_at| {
@@ -2776,16 +2843,14 @@ fn read_playback_frames(
                     .saturating_duration_since(Instant::now())
                     .min(PLAYBACK_POLL_INTERVAL)
             });
-            let Ok((next, _)) = shared.changed.wait_timeout(state, wait) else {
-                return;
+            let Ok((next, _)) = self.shared.changed.wait_timeout(state, wait) else {
+                return false;
             };
             state = next;
         }
-        if let Some(frame) = pending.take() {
-            state.frame = Some(frame);
-            shared.changed.notify_all();
-        }
-        drop(state);
+        state.frame = Some(frame);
+        self.shared.changed.notify_all();
+        true
     }
 }
 
@@ -2893,7 +2958,7 @@ fn seconds(milliseconds: u64) -> String {
     format!("{}.{:03}", milliseconds / 1_000, milliseconds % 1_000)
 }
 
-fn process_message(stderr: &[u8]) -> String {
+pub(crate) fn process_message(stderr: &[u8]) -> String {
     let message = String::from_utf8_lossy(stderr).trim().to_owned();
     if message.is_empty() {
         "the media tool exited unsuccessfully".to_owned()
@@ -3306,9 +3371,8 @@ mod tests {
         assert!(playback.next_frame().unwrap().is_none());
         assert!(playback.next_frame().unwrap().is_none());
         assert!(!cancel.is_cancelled());
-        assert!(playback.child.is_none());
+        assert!(playback.closed);
         assert!(playback.reader.is_none());
-        assert!(playback.stderr_reader.is_none());
 
         let (_directory, mut playback, cancel) =
             scripted_playback("printf '000000000000000000000000000000000000000000000000'");
@@ -3328,9 +3392,8 @@ mod tests {
         assert!(playback.next_frame().unwrap().is_none());
         assert!(playback.next_frame().unwrap().is_none());
         assert!(!cancel.is_cancelled());
-        assert!(playback.child.is_none());
+        assert!(playback.closed);
         assert!(playback.reader.is_none());
-        assert!(playback.stderr_reader.is_none());
 
         let (_directory, mut playback, _cancel) = scripted_playback("printf '12345678'");
         let first = match playback.next_frame() {
@@ -3375,9 +3438,8 @@ mod tests {
                 playback.next_frame(),
                 Err(super::MediaToolError::Cancelled)
             ));
-            assert!(playback.child.is_none());
+            assert!(playback.closed);
             assert!(playback.reader.is_none());
-            assert!(playback.stderr_reader.is_none());
         }
     }
 
@@ -4313,6 +4375,148 @@ mod tests {
             .status()
             .expect("bundled FFmpeg starts");
         assert!(status.success(), "test recording segment generated");
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn looping_playback_wraps_on_one_timeline_and_loop_off_finishes_the_lap() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let Some((toolchain, ffmpeg, _ffprobe)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("loop-source.mp4");
+        let status = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+            .args(["-i", "testsrc=size=64x48:rate=30:duration=1.2"])
+            .args(["-c:v", "mpeg4"])
+            .arg(&source)
+            .status()
+            .expect("FFmpeg starts");
+        assert!(status.success());
+        let probe = toolchain.probe(&source).expect("probe loop source");
+        let edit = EditSpec {
+            trim_start_ms: 300,
+            trim_end_ms: Some(800),
+            ..EditSpec::default()
+        };
+        let spec = ExportSpec {
+            format: ExportFormat::Mp4,
+            quality: QualityPreset::Preserve,
+            max_size_bytes: None,
+            frames_per_second: Some(30),
+            gif_max_colors: None,
+        };
+        let looping = Arc::new(AtomicBool::new(true));
+        let cancel = CancelToken::default();
+        let mut playback = toolchain
+            .looping_playback(
+                &source,
+                &probe,
+                &edit,
+                &spec,
+                600,
+                false,
+                looping.clone(),
+                &cancel,
+            )
+            .expect("start looping playback");
+        assert_eq!(playback.start_position_ms(), 600);
+        let mut frames = Vec::new();
+        let mut laps = 0;
+        while let Some(frame) = playback.next_frame().expect("looped frame") {
+            let now = std::time::Instant::now();
+            if frames
+                .last()
+                .is_some_and(|(_, previous)| frame.position_ms < *previous)
+            {
+                laps += 1;
+                // Every later lap starts at the trim start; a descheduled
+                // consumer may only coalesce into a later latest frame.
+                assert!(
+                    (300..400).contains(&frame.position_ms),
+                    "lap {laps} wrapped to {} ms",
+                    frame.position_ms
+                );
+                if laps == 2 {
+                    // Loop off finishes the current lap, then the stream ends.
+                    looping.store(false, Ordering::Relaxed);
+                }
+            }
+            frames.push((now, frame.position_ms));
+            assert!(laps <= 2, "loop off must stop after the current lap");
+        }
+        assert_eq!(laps, 2);
+        assert!(
+            frames
+                .iter()
+                .all(|(_, position)| (300..800).contains(position))
+        );
+        assert!(playback.next_frame().unwrap().is_none(), "EOF repeats");
+        assert!(playback.closed);
+        assert!(!cancel.is_cancelled());
+
+        // Every frame, including each lap's first, is presented on one
+        // continuous 30 fps timeline: 200 ms for the first lap from 600 ms,
+        // then 500 ms per lap. A reopened decoder would add its startup to
+        // each wrap and accumulate lateness across laps.
+        let origin = frames[0].0;
+        let mut timeline = 0_u64;
+        let mut worst_wrap = std::time::Duration::ZERO;
+        for pair in frames.windows(2) {
+            let ((previous_at, previous), (at, position)) = (pair[0], pair[1]);
+            timeline += if position < previous {
+                800 - previous + (position - 300)
+            } else {
+                position - previous
+            };
+            let late = at
+                .saturating_duration_since(origin)
+                .saturating_sub(std::time::Duration::from_millis(timeline));
+            assert!(
+                late < std::time::Duration::from_millis(300),
+                "frame at {position} ms is {late:?} behind the loop timeline"
+            );
+            if position < previous {
+                worst_wrap = worst_wrap.max(at.saturating_duration_since(previous_at));
+            }
+        }
+        eprintln!("looped playback: worst lap wrap {worst_wrap:?} across {laps} wraps");
+        assert!(
+            timeline <= 200 + 500 * 2 - 34,
+            "last frame starts by 766 ms"
+        );
+        assert!(
+            worst_wrap < std::time::Duration::from_millis(200),
+            "lap wrap took {worst_wrap:?}"
+        );
+
+        // Cancelling mid-loop tears down the current and pre-rolled decoders.
+        let cancel = CancelToken::default();
+        let mut playback = toolchain
+            .looping_playback(
+                &source,
+                &probe,
+                &edit,
+                &spec,
+                300,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                &cancel,
+            )
+            .expect("start looping playback");
+        assert_eq!(playback.next_frame().unwrap().unwrap().position_ms, 300);
+        cancel.cancel();
+        assert!(matches!(
+            playback.next_frame(),
+            Err(MediaToolError::Cancelled)
+        ));
+        assert!(playback.closed);
+        assert_eq!(playback.processes.live_count(), 0);
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]

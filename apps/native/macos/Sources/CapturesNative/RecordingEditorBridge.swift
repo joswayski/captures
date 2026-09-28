@@ -103,15 +103,20 @@ enum RecordingPlaybackCompletion: Equatable {
     case cancelled
 }
 
+/// The shared, thread-safe Loop preview flag. A playback stream reads it only
+/// when a lap ends, so turning Loop off finishes the current lap.
 final class RecordingPlaybackLoopControl: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Bool
+    let handle: OpaquePointer
 
-    init(enabled: Bool) { value = enabled }
+    init(enabled: Bool) {
+        handle = captures_recording_editor_playback_loop_create_v1(enabled)
+    }
+
+    deinit { captures_recording_editor_playback_loop_free_v1(handle) }
 
     var isEnabled: Bool {
-        get { lock.withLock { value } }
-        set { lock.withLock { value = newValue } }
+        get { captures_recording_editor_playback_loop_enabled_v1(handle) }
+        set { captures_recording_editor_playback_loop_set_v1(handle, newValue) }
     }
 }
 
@@ -567,6 +572,24 @@ final class NativeRecordingEditorSession {
                 self.handle, positionMilliseconds, cancel.handle, &response)
             : captures_recording_editor_playback_open_v1(
                 self.handle, positionMilliseconds, cancel.handle, &response)
+        return try playbackStream(handle: handle, response: response, soundEnabled: soundEnabled)
+    }
+
+    /// One gapless Loop preview stream: while `loop` is enabled when a lap
+    /// ends, the same stream continues at the accepted trim start without
+    /// reopening its decoders or audio device.
+    func playback(positionMilliseconds: UInt64, soundEnabled: Bool,
+                  loop: RecordingPlaybackLoopControl,
+                  cancel: NativeRecordingEditorCancel) throws -> NativeRecordingEditorPlayback {
+        var response: UnsafeMutablePointer<CChar>?
+        let handle = captures_recording_editor_playback_open_v3(
+            self.handle, positionMilliseconds, soundEnabled, loop.handle, cancel.handle,
+            &response)
+        return try playbackStream(handle: handle, response: response, soundEnabled: soundEnabled)
+    }
+
+    private func playbackStream(handle: OpaquePointer?, response: UnsafeMutablePointer<CChar>?,
+                                soundEnabled: Bool) throws -> NativeRecordingEditorPlayback {
         defer { captures_settings_free_v1(response) }
         guard let response else {
             captures_recording_editor_playback_free_v1(handle)
@@ -828,36 +851,26 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The recording editor is closed.")
                 }
-                var didStart = false
-                func runLap(from position: UInt64) throws -> Int {
-                    let playback = try session.playback(positionMilliseconds: position,
-                                                        soundEnabled: soundEnabled,
-                                                        cancel: cancel)
-                    if !didStart {
-                        didStart = true
-                        let metadata = playback.metadata
-                        DispatchQueue.main.async { started(metadata) }
-                    }
-                    var frameCount = 0
-                    while let value = try playback.nextFrame() {
-                        frameCount += 1; delivery.offer(value)
-                    }
-                    return frameCount
+                // One shared stream plays every Loop lap: Rust pre-rolls the
+                // next lap at the accepted trim start (loopStartMilliseconds)
+                // and keeps one audio device and clock, so the wrap is
+                // gapless. It ends after the lap in which Loop is turned off
+                // and never restarts a lap without frames.
+                let playback = try session.playback(positionMilliseconds: positionMilliseconds,
+                                                    soundEnabled: soundEnabled, loop: loop,
+                                                    cancel: cancel)
+                let metadata = playback.metadata
+                DispatchQueue.main.async { started(metadata) }
+                var frameCount = 0
+                while let value = try playback.nextFrame() {
+                    frameCount += 1; delivery.offer(value)
                 }
-
-                var position = positionMilliseconds
-                while true {
-                    let frameCount = try runLap(from: position)
-                    if cancel.isCancelled {
-                        result = .success(.cancelled); break
-                    }
-                    guard frameCount > 0 else {
-                        result = .success(.empty); break
-                    }
-                    guard loop.isEnabled else {
-                        result = .success(.eof); break
-                    }
-                    position = loopStartMilliseconds
+                if cancel.isCancelled {
+                    result = .success(.cancelled)
+                } else if frameCount == 0 {
+                    result = .success(.empty)
+                } else {
+                    result = .success(.eof)
                 }
             } catch {
                 result = .failure(error)

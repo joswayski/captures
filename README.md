@@ -351,8 +351,8 @@ paused. It can be switched on or off during playback and never changes the expor
 **Sound**, on by default like the shipping preview and changeable while stopped,
 plays the accepted MP4 audio mix on the default output device. GIF and mixes with no audible tracks stay
 silent without opening a device. Device failures are visible; turn Sound off to
-retry silently. Loop reopens the decoders each lap and is not gapless. Physical
-audio routing and A/V synchronization acceptance remain open.
+retry silently. Loop continues from the trim end to the trim start without a
+gap, keeping the same sound output. Physical audio routing and A/V synchronization acceptance remain open.
 The preview identifies its accepted format/quality, and saving uses those settings.
 **Save quality** offers Preserve quality (MP4 only; choosing GIF switches to Compress),
 Compress with Tiny, Smaller, Balanced, High or Highest, or Maximum file size.
@@ -408,8 +408,8 @@ canceled or retried without disabling editing. Play/Pause presents bounded accep
 a source-relative playhead without changing the accepted preview, edits, History or
 source. Like the shipping preview it plays the accepted MP4 mix with Sound on by
 default, on the default device; GIF and inaudible mixes stay silent without opening a device.
-Optional Loop preview repeats the accepted trim without changing
-exports or dirty state; each lap reopens the decoders and is not gapless.
+Optional Loop preview repeats the accepted trim gaplessly without changing
+exports or dirty state.
 **Adjust crop** loads one immutable full-source frame at the accepted position, then
 stages source-pixel crop changes with eight resize handles or interior movement without
 decoding on each pointer event. Crop changes apply when each gesture ends while the
