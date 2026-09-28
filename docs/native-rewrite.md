@@ -1140,16 +1140,16 @@ No recording-editor edit drafts or undo are promised.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
-decoded frames, source-relative seek, numeric trim, MP4/GIF format and quality,
-size estimation, progress/cancel, collision-safe Save new copy and dirty close/quit
+decoded frames, source-relative seek, numeric trim, MP4/GIF/WebM format and quality,
+automatic size estimation, progress/cancel, collision-safe Save new copy and dirty close/quit
 guards. AppKit's graphical trim handles use the shared allocation-free geometry and
-only stage the existing numeric values; pointer movement never seeks or decodes, and
-Apply/estimate/save gating is unchanged. AppKit now also stages independent volume
+only stage the existing numeric values; pointer movement never seeks or decodes, the
+edit applies live once the drag ends, and estimate/save gating is unchanged. AppKit now also stages independent volume
 and mute for trusted system/microphone tracks plus mono output in that same atomic
-Apply flow. GIF disables audio controls while retaining MP4 values, and the decoded
+live-edit flow. GIF disables audio controls while retaining MP4 values, and the decoded
 frame preview remains explicitly silent. AppKit also stages source-relative numeric
 crop and Original/1080p/720p or independent custom output dimensions through the
-same atomic Apply flow. Aspect-locked crop dimensions and resolution presets use the
+same atomic live-edit flow. Aspect-locked crop dimensions and resolution presets use the
 shared allocation-free geometry; the lock remains UI-only, and Original omits explicit
 output dimensions. AppKit's trim row also shows the shared fixed 12-frame full-source
 thumbnail strip. Generation runs once after open on the serialized worker, is retained
@@ -1170,14 +1170,14 @@ and caches one immutable full-source frame at the accepted source position. Eigh
 resize handles and interior movement call the shared source-pixel crop geometry and
 stage the existing numeric fields without per-pointer decoding or publication. The
 overlay maps top-down source coordinates through letterboxing in AppKit's flipped view;
-Apply remains the only publication boundary, while Done restores the exact prior
-accepted or motion frame. Source loading has the existing serialized cancel, close,
+crop gestures apply live when they end while the source frame stays shown, and Done
+shows the accepted (edited) preview. Source loading has the existing serialized cancel, close,
 item-generation and retry guards. Sound-selected GIF/no-track/inaudible mixes stay
 silent without opening a device; default-device failures remain visible for retry.
 Its display-only Fit/100% control uses the currently decoded accepted, motion or
 crop-source frame without a new decode. At 100%, one decoded pixel occupies one
 logical point inside a bounded two-axis native scroll view; smaller frames remain
-centered. Apply, Seek, Pause and frame delivery retain the item-local mode, while a
+centered. Edits, Seek, Pause and frame delivery retain the item-local mode, while a
 new History item defaults to Fit. Scrolling, scale changes and layout changes end an
 active crop gesture, and crop mapping uses the exact scrolled image rectangle.
 Windows/X11 implement the same edit controls through wgpu; private X11/software-GL

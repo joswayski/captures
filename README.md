@@ -388,13 +388,13 @@ file, and adds a distinct History item. A History failure retains the saved path
 Recording edits are not drafts: save or explicitly discard them before closing or
 quitting. AppKit connects a separate History editor with decoded source-relative
 frames, numeric trim and source-relative crop, Original/1080p/720p or independent
-custom output dimensions, accepted MP4/GIF settings, size estimation and cancellable
-**Save new copy**. Available system and microphone tracks have independent 0–200%
+custom output dimensions, MP4/GIF/WebM settings, automatic size estimation and
+cancellable **Save** with the same shipping save semantics as Windows/Linux. Available system and microphone tracks have independent 0–200%
 volume and mute controls plus mono output; audio applies to MP4 while GIF disables
 the controls without losing their MP4 values. Its graphical trim handles overlay an
 immutable 12-frame source-relative thumbnail strip and stage the same numeric values
-without seeking; loading can be canceled or retried without disabling editing, and
-Apply remains explicit. Play/Pause presents bounded accepted-edit motion frames and
+without seeking; the edited preview updates when the drag ends. Loading can be
+canceled or retried without disabling editing. Play/Pause presents bounded accepted-edit motion frames and
 a source-relative playhead without changing the accepted preview, edits, History or
 source. Like the shipping preview it plays the accepted MP4 mix with Sound on by
 default, on the default device; GIF and inaudible mixes stay silent without opening a device.
@@ -402,8 +402,9 @@ Optional Loop preview repeats the accepted trim without changing
 exports or dirty state; each lap reopens the decoders and is not gapless.
 **Adjust crop** loads one immutable full-source frame at the accepted position, then
 stages source-pixel crop changes with eight resize handles or interior movement without
-decoding on each pointer event. **Done cropping** restores the prior accepted or motion
-frame; only Apply publishes the staged values. Loading is cancellable and retryable.
+decoding on each pointer event. Crop changes apply when each gesture ends while the
+source frame stays shown; **Done cropping** shows the edited preview. Loading is
+cancellable and retryable.
 Fit or 100% applies to the accepted, paused/playback or crop-source frame without
 decoding again or changing edits, estimates, exports or History; each item defaults to Fit.
 Windows/X11 provide the same full-source graphical adjustment alongside numeric crop

@@ -2047,10 +2047,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false) {
         invalidateComparison()
         let old = presentation?.snapshot
-        if old?.artifactID != value.snapshot.artifactID
-            || old?.positionMilliseconds != value.snapshot.positionMilliseconds {
-            sourceFrameCache = nil
-        }
+        let positionChanged = old?.artifactID != value.snapshot.artifactID
+            || old?.positionMilliseconds != value.snapshot.positionMilliseconds
+        if positionChanged { sourceFrameCache = nil }
+        // Adjust crop shows the source frame at the accepted position; a live
+        // edit that moves that position ends it, as on wgpu.
+        if cropAdjustmentActive, positionChanged { finishCropAdjustment(restorePriorImage: false) }
         presentation = value
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackAudioEnabled = nil
@@ -2978,7 +2980,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             filenameField.stringValue = sourceStem
         }
         saveAsNew = copy
-        lastSavedPath = nil
+        // Shipping clears the saved state, toast and error with the switch.
+        lastSavedPath = nil; savedFingerprint = nil
+        status.stringValue = ""; status.textColor = tokens.color("text-subtle")
         updateControls()
     }
 
