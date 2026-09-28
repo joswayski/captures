@@ -151,6 +151,9 @@ jobs:
       - name: Exercise registered target keys inside New Capture on private X11
         if: matrix.suite == 'capture'
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --controls --target-shortcuts --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-target-shortcuts
+      - name: Recapture an open selector and report a busy capture on private X11
+        if: matrix.suite == 'capture'
+        run: /usr/bin/python3 apps/native/x11_capture_smoke.py --recapture --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recapture
       - name: Show the capture failure dialog and recover from the display shortcut on private X11
         if: matrix.suite == 'capture'
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --failure-dialog --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-failure-dialog

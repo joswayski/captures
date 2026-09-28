@@ -1842,14 +1842,70 @@ settings ABI: no session opens the region or window selector, or the capture men
 Full screen for display; a running or paused take takes the screenshot beside it; a
 take that is selecting, counting down, finalizing or in its editor refuses silently,
 like `screenshot_capture_is_blocked` (`recording.rs`). The shared shortcut routes pass
-the region, window, display and New Capture chords while a running take owns the
-capture flow, including while its controls are hidden. The recording shortcuts and tray
-items stay blocked and do nothing (`prepare_capture_selector_inner` returns
-`CaptureInProgress`, which they ignore), so a second recording cannot start. New Capture
+every chord to the host while a take owns the capture flow, including while its
+controls are hidden (see the busy capture slice below). The recording shortcuts and tray
+items do nothing there (`prepare_capture_selector_inner` returns `CaptureInProgress`,
+which they ignore), so a second recording cannot start. New Capture
 restores hidden controls; with the controls showing it reports "capture already in
 progress" in the "Captures" error dialog, as shipping's `open_capture_controls` does
 (`capture_error::new_capture_route`). Only New Capture restores hidden controls; the
 other tray items leave them hidden.
+
+The busy capture slice matches what shipping does with a capture shortcut or tray item
+while a capture is already open or in flight. `captures_app::capture_error::busy_route`
+holds the rule (AppKit reads it through the settings ABI's `busy_capture_route`), and
+the shared shortcut routes now deliver every chord to the host while a capture or
+recording owns the flow (`CaptureShortcuts::set_capture_busy`), so shortcuts and tray
+items take the same path:
+
+- **Recapture.** Over an open region or window selector (`overlay_visible` /
+  `should_recapture_visible_capture_ui`), Screenshot Region and Window open that
+  selector again, and New Capture, Screenshot Display and the Record items open the
+  capture menu (Record mode for Record), each on a frozen snapshot of the display under
+  the pointer taken with the old selector still on screen. With the menu open, the
+  shortcut of its own screenshot target (New Capture on Region) recaptures the menu the
+  same way (`should_recapture_open_capture_menu`); other targets and modes switch it in
+  place. That target is the one the menu opened on or its shortcuts and tray items last
+  set, like shipping's selection summary (`open_menu_screenshot_target`); a target picked
+  inside the menu does not change it. The old UI stays up until the new snapshot is ready, and a recaptured
+  selection never counts down (`screenshot_countdown_seconds_for_capture_ui`). wgpu
+  prepares the new session on the same capture generation and swaps the viewport when
+  it arrives; AppKit keeps the old panel on screen with `sharingType = .readOnly` so it
+  is in the snapshot, then closes it.
+- **Beside a recording.** Screenshot Region and Window over the take's screenshot
+  selector recapture it on its child generation; Screenshot Display saves the display
+  under the pointer at once with the selector in it, then closes the selector.
+- **Busy.** New Capture reports "capture already in progress" in the "Captures" dialog
+  during a screenshot countdown, preparation or capture outside a recording, and
+  during any recording state (`prepare_capture_selector_inner`), including a recording
+  countdown or finalize. Screenshot Display reports it too outside a recording, since it
+  opens the menu through the same path. Region, window and Record are refused silently
+  (`screenshot_capture_is_blocked`, `CaptureInProgress`).
+- **Concealed controls.** Shipping's `restore_hidden_recording_controls` shows the
+  recording controls whenever their window is off screen, so New Capture during a
+  screenshot beside a running or paused take brings back controls that the screenshot
+  concealed (the default, without "include recording controls"); only with the
+  controls showing does it report the busy take.
+
+Shipping's brief preparing and capturing gaps race its prefetch and session maps (a
+region shortcut there drops the stale session and starts again); native hosts treat
+them like a countdown. Private-X11 acceptance (`x11_capture_smoke.py --recapture`) presses
+the region shortcut over a live region selector and checks the new selector stays on the
+frozen desktop after it changes, and the saved pixels are that desktop under the old
+selector's veil, saved without a countdown; replaces
+the selector with the window selector, New Capture and Screenshot Display; and during a
+countdown checks the busy dialog and that other shortcuts start nothing. The
+`--target-shortcuts` smoke checks the busy Screenshot Display dialog during a menu
+countdown. The shared `busy_route` tests cover every action against every activity and
+recording state; wgpu unit tests cover how its capture states map to those activities
+and what each route requests, and AppKit XCTest covers the route through the settings
+ABI and the recapture preferences. `x11_recording_smoke.py --display-screenshot-only`
+checks, over the take's region selector, that New Capture brings the concealed controls
+back without closing the selector and that Screenshot Display saves the display at once
+without a countdown. The region and window recapture beside a recording and the menu
+recapture's snapshot pixels have no end-to-end smoke. wgpu reuses the selector's
+viewport for a recapture and repaints it when the new snapshot arrives. The AppKit side has not yet been built or run on macOS, and real macOS
+and Windows capture, Wayland and multi-monitor acceptance remain open.
 
 Each screenshot reuses the child generation above. Region and window open their normal
 selector over the take on the display under the pointer with the current screenshot
@@ -2421,8 +2477,10 @@ controls include aspect selection, Enter/Escape and auto-start behavior, while
 Record remains explicitly disabled. Existing direct screenshot paths remain
 available. Global region/window/display keys now switch targets inside the open
 menu under its exact capture generation, without a new session or keyboard
-Full screen auto-start. Leaving selection clears held/pending target keys before
-preparation or countdown. Recording, physical
+Full screen auto-start, and New Capture switches it to Screenshot on Region. As in
+shipping, the shortcut of the screenshot target already selected (New Capture on
+Region) recaptures the menu instead (see the busy capture slice below). Leaving
+selection clears held/pending target keys before preparation or countdown. Recording, physical
 platform input/display acceptance and full capture-menu visual/accessibility
 parity remain open.
 

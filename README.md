@@ -246,8 +246,14 @@ screenshot, History, Preferences, output-folder and Quit actions, plus configure
 New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared
 Screenshot and Record controls for Region, Window and Full screen, retaining selections when
 switching targets with the toolbar. While these controls are open, the configured
-region/window/display shortcuts switch mode and target in the same session; keyboard
-Full screen does not auto-start capture. As in the shipping app, the display
+region/window/display shortcuts and New Capture switch mode and target in the same session; keyboard
+Full screen does not auto-start capture. As in the shipping app, pressing the shortcut of
+the screenshot target the controls opened on or a shortcut last selected (New Capture for
+Region) freezes the controls into a new capture instead. Any capture shortcut or tray item over an open region or window
+selector does the same, opening its selector or these controls on a snapshot that shows the
+old one; that selection never counts down. Over a screenshot selector beside a recording,
+the region and window shortcuts do this too, and Screenshot Display saves the display with
+the selector in it at once. As in the shipping app, the display
 screenshot shortcut and tray Screenshot Display open these controls on Full screen
 with its display picker, and a failed capture shows a "Captures" error dialog
 instead of a History error. During a running or paused recording the region, window
@@ -255,11 +261,13 @@ and display screenshot shortcuts and tray items take that screenshot beside the 
 as the shipping app does: region and window open their selector on the display under
 the pointer, display captures that display directly, and each uses the screenshot
 countdown and leaves out the recording controls unless they are included in captures.
-The recording keeps running untouched. Focused Preferences and capture
-preparation/countdown suppress those shortcuts, an active recording ignores the
-recording shortcuts and tray items, and New Capture reports that a capture is already
-in progress. While recording controls are hidden, New Capture restores the same take
-and the screenshot shortcuts and tray items still take a screenshot. Native Preferences can edit all seven capture
+The recording keeps running untouched. Focused Preferences suppresses those shortcuts.
+While a screenshot outside a recording is preparing, counting down or capturing, New Capture
+and Screenshot Display report that a capture is already in progress and the other shortcuts and tray
+items do nothing. An active recording ignores the recording shortcuts and tray items, and
+New Capture reports that a capture is already in progress. While recording controls are
+hidden, or left out of a screenshot beside the take, New Capture brings them back, and
+the screenshot shortcuts and tray items still take a screenshot. Native Preferences can edit all seven capture
 and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.

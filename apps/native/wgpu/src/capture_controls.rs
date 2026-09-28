@@ -23,6 +23,26 @@ pub enum TargetMode {
     Display,
 }
 
+impl TargetMode {
+    pub fn target(self) -> captures_app::capture_error::Target {
+        use captures_app::capture_error::Target;
+        match self {
+            Self::Region => Target::Region,
+            Self::Window => Target::Window,
+            Self::Display => Target::Display,
+        }
+    }
+
+    pub fn of(target: captures_app::capture_error::Target) -> Self {
+        use captures_app::capture_error::Target;
+        match target {
+            Target::Region => Self::Region,
+            Target::Window => Self::Window,
+            Target::Display => Self::Display,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ActionMode {
     #[default]

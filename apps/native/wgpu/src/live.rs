@@ -358,6 +358,35 @@ struct RecordingSelectorShot {
     /// the recording's display for its controls' Screenshot button.
     display_id: String,
     target: CaptureTarget,
+    /// A recapture froze the previous selector into this one's snapshot, so
+    /// its selection never counts down (shipping `includes_capture_ui`).
+    includes_capture_ui: bool,
+}
+
+/// The capture UI an action puts in place of the open one, on a fresh
+/// snapshot that shows it (`capture_error::busy_route`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Recapture {
+    Selector(RecordingSelectorKind),
+    Menu {
+        record: bool,
+        target: capture_controls::TargetMode,
+    },
+    /// Beside a running take: the display under the pointer, at once.
+    Display,
+}
+
+/// A recapture whose snapshot is being taken while the open UI stays up.
+struct PendingRecapture {
+    kind: Recapture,
+    generation: u64,
+    /// The screenshot beside a recording, not the main capture flow.
+    child: bool,
+    /// The main flow's phase whose UI stays up until the snapshot is ready.
+    from_phase: Option<CapturePhase>,
+    display_id: String,
+    target: CaptureTarget,
+    settings: AppSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1465,6 +1494,18 @@ pub struct Live {
     confirm_clear_history: Option<Instant>,
     clearing_history: bool,
     requested_capture: Option<CaptureRequest>,
+    /// A capture action asked to recapture the open UI; launched with the
+    /// next frame's display list.
+    requested_recapture: Option<Recapture>,
+    /// The capture menu's Screenshot target as its shortcuts and tray items
+    /// last set it, or `None` in Record mode. Like shipping's selection
+    /// summary (`open_menu_screenshot_target`), toolbar clicks and window
+    /// picks inside the menu leave it unchanged.
+    menu_screenshot_target: Option<captures_app::capture_error::Target>,
+    recapture: Option<PendingRecapture>,
+    /// New Capture brought the recording controls back during a screenshot
+    /// beside the take (shipping `restore_hidden_recording_controls`).
+    recording_screenshot_controls_restored: bool,
     restore_root_visible: bool,
     /// A failed capture awaiting the host's shipping error dialog (or
     /// permission recovery). Never shown in the History error card.
@@ -1789,6 +1830,10 @@ impl Live {
             confirm_clear_history: None,
             clearing_history: false,
             requested_capture: None,
+            requested_recapture: None,
+            menu_screenshot_target: None,
+            recapture: None,
+            recording_screenshot_controls_restored: false,
             restore_root_visible: true,
             capture_failure: None,
             preference_target_requested: None,
@@ -2062,24 +2107,6 @@ impl Live {
         )
     }
 
-    pub fn apply_selector_shortcut(
-        &mut self,
-        shortcut: CaptureShortcut,
-        ctx: &egui::Context,
-    ) -> bool {
-        if self.selector_generation().is_none() {
-            return false;
-        }
-        if shortcut != CaptureShortcut::NewCapture {
-            self.controls
-                .lock()
-                .unwrap()
-                .apply_target_shortcut(shortcut);
-            ctx.request_repaint_of(egui::ViewportId::from_hash_of("capture-controls"));
-        }
-        true
-    }
-
     fn can_start_capture(&self) -> bool {
         self.can_launch_capture() && self.can_hide == Some(true)
     }
@@ -2155,12 +2182,372 @@ impl Live {
         }
     }
 
+    /// Opens the capture menu's state for the current flow, in Record mode
+    /// on `target` when `record`, and otherwise in Screenshot mode on it.
+    fn configure_capture_menu(
+        &mut self,
+        settings: &AppSettings,
+        record: bool,
+        target: capture_controls::TargetMode,
+    ) {
+        self.selector_scope_generation.store(0, Ordering::Release);
+        self.controls_error = None;
+        self.controls_freeze = settings.freeze_screen;
+        self.controls_auto_start = settings.auto_start_on_selection;
+        self.controls_switching_display = false;
+        self.controls_countdown_seconds = settings.screenshot_countdown_seconds;
+        self.include_recording_controls = settings.include_recording_controls_in_captures;
+        let mut controls = self.controls.lock().unwrap();
+        controls.reset();
+        controls.configure_recording(
+            &settings.recording,
+            RecordingCapabilities::current(settings.include_recording_controls_in_captures),
+        );
+        match (record, target) {
+            (true, target) => controls.select_recording_target(target),
+            (false, capture_controls::TargetMode::Region) => {}
+            (false, capture_controls::TargetMode::Window) => {
+                controls.apply_target_shortcut(CaptureShortcut::Window)
+            }
+            (false, capture_controls::TargetMode::Display) => {
+                controls.apply_target_shortcut(CaptureShortcut::Display)
+            }
+        }
+        drop(controls);
+        self.menu_screenshot_target = (!record).then_some(target.target());
+        self.recording_toolchain_ready = false;
+        self.recording_toolchain_error = None;
+        self.recording_has_started = false;
+        let generation = self
+            .flow
+            .as_ref()
+            .expect("the capture menu owns the flow")
+            .generation();
+        self.recording_worker
+            .send(recording::Command::VerifyToolchain { generation });
+        self.recording_worker
+            .send(recording::Command::ListMicrophones { generation });
+    }
+
+    /// What is open or in flight for `capture_error::busy_route`.
+    fn capture_activity(&self) -> captures_app::capture_error::Activity {
+        capture_activity(
+            self.recording_screenshot_flow
+                .is_some()
+                .then_some(self.recording_screenshot_phase),
+            self.capture_phase,
+            || self.menu_screenshot_target,
+            self.flow.is_some() || self.capture_in_flight,
+        )
+    }
+
+    /// The take's controls are showing now: neither hidden by the user nor
+    /// concealed for a screenshot beside it.
+    fn recording_controls_on_screen(&self) -> bool {
+        !self.recording_controls_hidden()
+            && (self.recording_screenshot_flow.is_none()
+                || self.recording_screenshot_keeps_controls())
+    }
+
+    /// A capture shortcut or tray item, routed like shipping: with nothing
+    /// open it starts, and while a capture is open or in flight it follows
+    /// `capture_error::busy_route` (recapture, switch the menu, restore the
+    /// controls, report the busy capture or refuse silently).
+    pub fn capture_action(
+        &mut self,
+        action: captures_app::capture_error::Action,
+        ctx: &egui::Context,
+    ) {
+        use captures_app::capture_error::{
+            Action, BusyRoute, CAPTURE_IN_PROGRESS, Target, busy_route,
+        };
+        if self.recapture.is_some() || self.requested_recapture.is_some() {
+            // The open UI is already being recaptured.
+            return;
+        }
+        let route = busy_route(
+            action,
+            self.capture_activity(),
+            recording_route_state(self.capture_phase, self.recording_has_started),
+            self.recording_controls_on_screen(),
+        );
+        let selector_kind = |target| match target {
+            Target::Window => RecordingSelectorKind::Window,
+            Target::Region | Target::Display => RecordingSelectorKind::Region,
+        };
+        match route {
+            BusyRoute::Idle => match action {
+                Action::NewCapture => {
+                    if !self.show_recording_controls(ctx) {
+                        self.request_capture(CaptureRequest::NewCapture);
+                    }
+                }
+                Action::Screenshot(Target::Display) => {
+                    if let Some(request) = self.display_request() {
+                        self.request_capture(request);
+                    }
+                }
+                Action::Screenshot(Target::Region) => self.request_capture(CaptureRequest::Region),
+                Action::Screenshot(Target::Window) => self.request_capture(CaptureRequest::Window),
+                Action::Record(target) => self.request_capture(CaptureRequest::Recording(
+                    capture_controls::TargetMode::of(target),
+                )),
+            },
+            BusyRoute::RestoreControls => {
+                self.show_recording_controls(ctx);
+                if self.recording_screenshot_flow.is_some() {
+                    self.recording_screenshot_controls_restored = true;
+                }
+                ctx.request_repaint_of(egui::ViewportId::from_hash_of("recording-controls"));
+                request_hidden_root_paint(ctx);
+            }
+            BusyRoute::InProgress => self.capture_failed(CAPTURE_IN_PROGRESS.into()),
+            BusyRoute::Ignore => {}
+            BusyRoute::SwitchMenu { record, target } => {
+                let shortcut = match (record, target) {
+                    (false, Target::Region) => CaptureShortcut::Region,
+                    (false, Target::Window) => CaptureShortcut::Window,
+                    (false, Target::Display) => CaptureShortcut::Display,
+                    (true, Target::Region) => CaptureShortcut::RecordRegion,
+                    (true, Target::Window) => CaptureShortcut::RecordWindow,
+                    (true, Target::Display) => CaptureShortcut::RecordDisplay,
+                };
+                self.controls
+                    .lock()
+                    .unwrap()
+                    .apply_target_shortcut(shortcut);
+                self.menu_screenshot_target = (!record).then_some(target);
+                ctx.request_repaint_of(egui::ViewportId::from_hash_of("capture-controls"));
+            }
+            BusyRoute::RecaptureSelector(target) => {
+                self.requested_recapture = Some(Recapture::Selector(selector_kind(target)));
+            }
+            BusyRoute::RecaptureDisplay => self.requested_recapture = Some(Recapture::Display),
+            BusyRoute::RecaptureMenu { record, target } => {
+                self.requested_recapture = Some(Recapture::Menu {
+                    record,
+                    target: capture_controls::TargetMode::of(target),
+                });
+            }
+        }
+        if self.requested_recapture.is_some() {
+            request_hidden_root_paint(ctx);
+            ctx.request_repaint();
+        }
+    }
+
+    /// Freezes the display under the pointer with the open capture UI still
+    /// on it, then puts the requested UI in its place (or, for a display
+    /// screenshot beside a take, saves that frame). Shipping
+    /// `include_capture_ui_in_snapshot` before `prepare_capture`.
+    fn launch_recapture(
+        &mut self,
+        frame: &eframe::Frame,
+        settings: Result<AppSettings, String>,
+        kind: Recapture,
+    ) {
+        let settings = match settings {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.capture_failed(error);
+                return;
+            }
+        };
+        let child = self.recording_screenshot_flow.is_some();
+        let (generation, showing) = if let Some(flow) = &self.recording_screenshot_flow {
+            (
+                flow.generation(),
+                flow.is_current()
+                    && self.recording_screenshot_phase == Some(RecordingScreenshotPhase::Selecting),
+            )
+        } else if let Some(flow) = &self.flow {
+            (
+                flow.generation(),
+                flow.is_current()
+                    && matches!(
+                        self.capture_phase,
+                        Some(
+                            CapturePhase::RegionSelecting
+                                | CapturePhase::WindowSelecting
+                                | CapturePhase::ControlsSelecting
+                        )
+                    ),
+            )
+        } else {
+            return;
+        };
+        if !showing || (kind == Recapture::Display && !child) {
+            return;
+        }
+        let pointer = captures_capture::pointer_position()
+            .and_then(|point| captures_capture::XcapBackend.display_id_at_point(point));
+        let display_id = match resolve_capture_display(
+            &mut self.displays,
+            self.display_id.as_deref(),
+            pointer.as_deref(),
+            || {
+                captures_capture::XcapBackend
+                    .displays()
+                    .map_err(|error| error.to_string())
+            },
+        ) {
+            Ok(id) => id,
+            Err(error) => {
+                self.capture_failed(error);
+                return;
+            }
+        };
+        let Some(target) = capture_target(frame, &self.displays, Some(&display_id)) else {
+            self.capture_failed("The selected display is no longer available for capture.".into());
+            return;
+        };
+        let include_cursor = settings.show_cursor_in_screenshots;
+        let job = match kind {
+            Recapture::Display => {
+                // The selector stays declared while this frame is taken; the
+                // reply saves it and closes the selector.
+                self.recording_display_shot = Some(RecordingDisplayShot {
+                    display_id: display_id.clone(),
+                    target: Some(target),
+                    countdown_seconds: 0,
+                    include_cursor,
+                    keeps_controls: self.recording_screenshot_keeps_controls(),
+                });
+                self.recording_screenshot_phase = Some(RecordingScreenshotPhase::DisplayCapturing);
+                self.status = "Capturing screenshot while recording…".into();
+                self.pending += 1;
+                let _ = self.tx.send(Job::CaptureDisplay {
+                    root: self.root.clone(),
+                    display_id,
+                    generation,
+                    include_cursor,
+                });
+                return;
+            }
+            Recapture::Selector(RecordingSelectorKind::Region) => Job::PrepareRegion {
+                display_id: display_id.clone(),
+                generation,
+                freeze: true,
+                include_cursor,
+            },
+            Recapture::Selector(RecordingSelectorKind::Window) | Recapture::Menu { .. } => {
+                Job::PrepareWindow {
+                    display_id: display_id.clone(),
+                    generation,
+                    freeze: true,
+                    include_cursor,
+                }
+            }
+        };
+        self.pending += 1;
+        let _ = self.tx.send(job);
+        self.recapture = Some(PendingRecapture {
+            kind,
+            generation,
+            child,
+            from_phase: (!child).then_some(self.capture_phase).flatten(),
+            display_id,
+            target,
+            settings,
+        });
+        self.status = "Capturing the open capture UI… Press Escape to cancel.".into();
+    }
+
+    /// Takes the pending recapture a prepare reply belongs to.
+    fn take_recapture(&mut self, generation: u64) -> Option<PendingRecapture> {
+        if self
+            .recapture
+            .as_ref()
+            .is_some_and(|pending| pending.generation == generation)
+        {
+            self.recapture.take()
+        } else {
+            None
+        }
+    }
+
+    /// Retires the UI a recapture kept up and puts the flow in the phase
+    /// that accepts its prepared snapshot. Returns false when that UI is
+    /// no longer the open one (it was confirmed, cancelled or replaced).
+    fn begin_recaptured(&mut self, pending: PendingRecapture) -> bool {
+        if pending.child {
+            let showing =
+                self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
+                    flow.generation() == pending.generation && flow.is_current()
+                }) && self.recording_screenshot_phase == Some(RecordingScreenshotPhase::Selecting);
+            let Recapture::Selector(kind) = pending.kind else {
+                return false;
+            };
+            if !showing {
+                return false;
+            }
+            self.recording_screenshot_session = None;
+            self.recording_screenshot_window_session = None;
+            self.recording_screenshot_texture = None;
+            self.recording_selector_shot = Some(RecordingSelectorShot {
+                kind,
+                display_id: pending.display_id,
+                target: pending.target,
+                includes_capture_ui: true,
+            });
+            self.recording_screenshot_phase = Some(RecordingScreenshotPhase::Preparing);
+            return true;
+        }
+        let showing = self
+            .flow
+            .as_ref()
+            .is_some_and(|flow| flow.generation() == pending.generation && flow.is_current())
+            && self.capture_phase == pending.from_phase;
+        if !showing {
+            return false;
+        }
+        self.display_id = Some(pending.display_id);
+        self.countdown_target = Some(pending.target);
+        self.last_capture_target = Some(pending.target);
+        self.previews.capture_target = Some(pending.target);
+        self.selector_scope_generation.store(0, Ordering::Release);
+        self.region_session = None;
+        self.region_texture = None;
+        self.region_selector.lock().unwrap().reset();
+        self.window_session = None;
+        self.window_texture = None;
+        self.window_selector.lock().unwrap().reset();
+        self.controls.lock().unwrap().reset();
+        // The new selection has the old UI in its snapshot: no countdown
+        // (shipping `screenshot_countdown_seconds_for_capture_ui`).
+        match pending.kind {
+            Recapture::Selector(RecordingSelectorKind::Region) => {
+                self.region_freeze = true;
+                self.region_countdown_seconds = 0;
+                self.capture_phase = Some(CapturePhase::RegionPreparing);
+            }
+            Recapture::Selector(RecordingSelectorKind::Window) => {
+                self.window_freeze = true;
+                self.window_countdown_seconds = 0;
+                self.capture_phase = Some(CapturePhase::WindowPreparing);
+            }
+            Recapture::Menu { record, target } => {
+                self.configure_capture_menu(&pending.settings, record, target);
+                self.controls_freeze = true;
+                self.controls_countdown_seconds = 0;
+                self.recording_screenshot_settings = Some(pending.settings);
+                self.capture_phase = Some(CapturePhase::ControlsPreparing);
+            }
+            Recapture::Display => return false,
+        }
+        true
+    }
+
     pub fn launch_requested_capture(
         &mut self,
         ctx: &egui::Context,
         frame: &eframe::Frame,
         settings: Result<AppSettings, String>,
     ) {
+        if let Some(kind) = self.requested_recapture.take() {
+            self.launch_recapture(frame, settings, kind);
+            return;
+        }
         let Some(request) = self.requested_capture.take() else {
             return;
         };
@@ -2287,48 +2674,14 @@ impl Live {
             CaptureRequest::NewCapture
             | CaptureRequest::DisplayMenu
             | CaptureRequest::Recording(_) => {
-                self.selector_scope_generation.store(0, Ordering::Release);
-                self.capture_phase = Some(CapturePhase::ControlsPreparing);
-                self.controls_error = None;
-                self.controls_freeze = settings.freeze_screen;
-                self.controls_auto_start = settings.auto_start_on_selection;
-                self.controls_switching_display = false;
-                self.controls_countdown_seconds = settings.screenshot_countdown_seconds;
-                self.include_recording_controls = settings.include_recording_controls_in_captures;
-                let mut controls = self.controls.lock().unwrap();
-                controls.reset();
-                controls.configure_recording(
-                    &settings.recording,
-                    RecordingCapabilities::current(settings.include_recording_controls_in_captures),
-                );
-                match request {
-                    CaptureRequest::Recording(target) => controls.select_recording_target(target),
+                let (record, target) = match request {
+                    CaptureRequest::Recording(target) => (true, target),
                     // Shipping `open_capture_controls_with_target(Screenshot, Display)`.
-                    CaptureRequest::DisplayMenu => {
-                        controls.apply_target_shortcut(CaptureShortcut::Display)
-                    }
-                    _ => {}
-                }
-                drop(controls);
-                self.recording_toolchain_ready = false;
-                self.recording_toolchain_error = None;
-                self.recording_has_started = false;
-                self.recording_worker
-                    .send(recording::Command::VerifyToolchain {
-                        generation: self
-                            .flow
-                            .as_ref()
-                            .expect("new capture owns flow")
-                            .generation(),
-                    });
-                self.recording_worker
-                    .send(recording::Command::ListMicrophones {
-                        generation: self
-                            .flow
-                            .as_ref()
-                            .expect("new capture owns flow")
-                            .generation(),
-                    });
+                    CaptureRequest::DisplayMenu => (false, capture_controls::TargetMode::Display),
+                    _ => (false, capture_controls::TargetMode::Region),
+                };
+                self.configure_capture_menu(&settings, record, target);
+                self.capture_phase = Some(CapturePhase::ControlsPreparing);
                 self.status = "Preparing capture controls… Press Escape to cancel.".into();
                 self.hide_for_capture(ctx);
             }
@@ -2621,11 +2974,7 @@ impl Live {
                     }) && self.recording_screenshot_phase
                         == Some(RecordingScreenshotPhase::Selecting) =>
                 {
-                    let seconds = self
-                        .recording_screenshot_settings
-                        .as_ref()
-                        .map(|settings| settings.screenshot_countdown_seconds)
-                        .unwrap_or(0);
+                    let seconds = self.recording_selector_countdown_seconds();
                     let Some(flow) = &mut self.recording_screenshot_flow else {
                         continue;
                     };
@@ -2651,11 +3000,7 @@ impl Live {
                     }) && self.recording_screenshot_phase
                         == Some(RecordingScreenshotPhase::Selecting) =>
                 {
-                    let seconds = self
-                        .recording_screenshot_settings
-                        .as_ref()
-                        .map(|settings| settings.screenshot_countdown_seconds)
-                        .unwrap_or(0);
+                    let seconds = self.recording_selector_countdown_seconds();
                     let Some(flow) = &mut self.recording_screenshot_flow else {
                         continue;
                     };
@@ -4425,6 +4770,12 @@ impl Live {
                 }
                 Reply::RegionPrepared { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
+                    if let Some(pending) = self.take_recapture(generation) {
+                        if !self.begin_recaptured(pending) {
+                            continue;
+                        }
+                        request_recaptured_viewports(ctx, generation);
+                    }
                     let recording_screenshot =
                         self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
                             flow.generation() == generation && flow.is_current()
@@ -4570,6 +4921,12 @@ impl Live {
                 }
                 Reply::WindowPrepared { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
+                    if let Some(pending) = self.take_recapture(generation) {
+                        if !self.begin_recaptured(pending) {
+                            continue;
+                        }
+                        request_recaptured_viewports(ctx, generation);
+                    }
                     let recording_screenshot =
                         self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
                             flow.generation() == generation && flow.is_current()
@@ -4912,6 +5269,7 @@ impl Live {
             kind: RecordingSelectorKind::Region,
             display_id,
             target,
+            includes_capture_ui: false,
         };
         if let Err(error) = self.begin_recording_selector_screenshot(ctx, shot, settings) {
             self.hud_action_failed(ctx, error);
@@ -4967,6 +5325,7 @@ impl Live {
             kind,
             display_id,
             target,
+            includes_capture_ui: false,
         };
         if let Err(error) = self.begin_recording_selector_screenshot(ctx, shot, settings) {
             self.capture_failed(error);
@@ -5038,6 +5397,9 @@ impl Live {
     /// screenshot: only when they are opted into captures (shipping
     /// `conceal_capture_chrome_for_snapshot`).
     fn recording_screenshot_keeps_controls(&self) -> bool {
+        if self.recording_screenshot_controls_restored {
+            return true;
+        }
         if let Some(shot) = &self.recording_display_shot {
             return shot.keeps_controls;
         }
@@ -5046,6 +5408,22 @@ impl Live {
                 .recording_screenshot_settings
                 .as_ref()
                 .is_some_and(|settings| settings.include_recording_controls_in_captures)
+    }
+
+    /// The countdown after a selection beside the take: none when the
+    /// selector froze the previous one into its snapshot.
+    fn recording_selector_countdown_seconds(&self) -> u8 {
+        if self
+            .recording_selector_shot
+            .as_ref()
+            .is_some_and(|shot| shot.includes_capture_ui)
+        {
+            return 0;
+        }
+        self.recording_screenshot_settings
+            .as_ref()
+            .map(|settings| settings.screenshot_countdown_seconds)
+            .unwrap_or(0)
     }
 
     /// Shipping display shortcut and tray "Screenshot Display" during a
@@ -5154,6 +5532,9 @@ impl Live {
 
     fn finish_recording_screenshot(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
         self.recording_screenshot_flow = None;
+        self.recording_screenshot_controls_restored = false;
+        self.requested_recapture = None;
+        self.recapture = None;
         self.recording_display_shot = None;
         self.recording_selector_shot = None;
         self.recording_screenshot_phase = None;
@@ -5185,6 +5566,9 @@ impl Live {
         }
         self.selector_scope_generation.store(0, Ordering::Release);
         self.recording_screenshot_flow = None;
+        self.recording_screenshot_controls_restored = false;
+        self.requested_recapture = None;
+        self.recapture = None;
         self.recording_screenshot_phase = None;
         self.recording_screenshot_hide_started = None;
         self.recording_screenshot_session = None;
@@ -6812,8 +7196,11 @@ impl Live {
                 },
             );
         }
-        let recording_selector = (self.recording_screenshot_phase
-            == Some(RecordingScreenshotPhase::Selecting))
+        // A display recapture keeps the selector up until it is captured.
+        let recording_selector = matches!(
+            self.recording_screenshot_phase,
+            Some(RecordingScreenshotPhase::Selecting | RecordingScreenshotPhase::DisplayCapturing)
+        )
         .then(|| self.recording_selector_shot.clone())
         .flatten();
         let recording_region = recording_selector
@@ -8054,6 +8441,51 @@ fn recording_hud_state(
 
 /// The shipping coordinator state a recording phase stands for, which decides
 /// where Screenshot Display goes (`capture_error::display_route`).
+/// A recaptured selector or menu reuses its viewport, which egui repaints
+/// only on request: paint the new snapshot as soon as it is in place.
+fn request_recaptured_viewports(ctx: &egui::Context, generation: u64) {
+    for id in [
+        egui::ViewportId::from_hash_of("region-selector"),
+        egui::ViewportId::from_hash_of("window-selector"),
+        egui::ViewportId::from_hash_of("capture-controls"),
+        egui::ViewportId::from_hash_of(("recording-screenshot-selector", generation)),
+        egui::ViewportId::from_hash_of(("recording-screenshot-window-selector", generation)),
+    ] {
+        ctx.request_repaint_of(id);
+    }
+}
+
+/// What is open or in flight for `capture_error::busy_route`. `beside` is the
+/// phase of a screenshot beside the take, when one is in progress; the menu
+/// target is read only while the capture menu is open.
+fn capture_activity(
+    beside: Option<Option<RecordingScreenshotPhase>>,
+    phase: Option<CapturePhase>,
+    menu_target: impl FnOnce() -> Option<captures_app::capture_error::Target>,
+    in_flight: bool,
+) -> captures_app::capture_error::Activity {
+    use captures_app::capture_error::Activity;
+    if let Some(beside) = beside {
+        return if beside == Some(RecordingScreenshotPhase::Selecting) {
+            Activity::Selector
+        } else {
+            Activity::Busy
+        };
+    }
+    if is_recording_phase(phase) {
+        return Activity::Idle;
+    }
+    match phase {
+        Some(CapturePhase::RegionSelecting | CapturePhase::WindowSelecting) => Activity::Selector,
+        Some(CapturePhase::ControlsSelecting) => Activity::Menu {
+            screenshot_target: menu_target(),
+        },
+        Some(_) => Activity::Busy,
+        None if in_flight => Activity::Busy,
+        None => Activity::Idle,
+    }
+}
+
 fn recording_route_state(phase: Option<CapturePhase>, has_started: bool) -> Option<RecordingState> {
     Some(match phase? {
         CapturePhase::RecordingPreparing { .. } => RecordingState::Selecting,
@@ -8440,6 +8872,204 @@ mod tests {
     }
 
     #[test]
+    fn capture_actions_while_a_capture_is_open_follow_the_shipping_busy_route() {
+        use captures_app::capture_error::{Action, Target};
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        let busy = || FailureReport::Dialog {
+            title: captures_app::capture_error::TITLE,
+            message: "Captures could not start the capture: capture already in progress".into(),
+        };
+        // A countdown or a screenshot without its selector: New Capture and
+        // Screenshot Display report the busy capture, the rest do nothing.
+        for phase in [
+            CapturePhase::RegionCountdown {
+                rect: SelectionRect {
+                    x: 0.,
+                    y: 0.,
+                    width: 10.,
+                    height: 10.,
+                },
+                after_countdown: true,
+            },
+            CapturePhase::DisplayCountdown,
+            CapturePhase::RegionPreparing,
+            CapturePhase::WindowCapturing,
+        ] {
+            live.capture_phase = Some(phase);
+            for action in [Action::NewCapture, Action::Screenshot(Target::Display)] {
+                live.capture_action(action, &ctx);
+                assert_eq!(
+                    live.take_capture_failure().map(|failure| failure.report()),
+                    Some(busy()),
+                    "{phase:?} {action:?}"
+                );
+            }
+            for action in [
+                Action::Screenshot(Target::Region),
+                Action::Screenshot(Target::Window),
+                Action::Record(Target::Region),
+            ] {
+                live.capture_action(action, &ctx);
+                assert!(
+                    live.take_capture_failure().is_none(),
+                    "{phase:?} {action:?}"
+                );
+                assert_eq!(live.requested_capture, None);
+                assert_eq!(live.requested_recapture, None);
+            }
+        }
+        // An open selector is recaptured by every action.
+        live.capture_phase = Some(CapturePhase::RegionSelecting);
+        for (action, expected) in [
+            (
+                Action::Screenshot(Target::Region),
+                Recapture::Selector(RecordingSelectorKind::Region),
+            ),
+            (
+                Action::Screenshot(Target::Window),
+                Recapture::Selector(RecordingSelectorKind::Window),
+            ),
+            (
+                Action::NewCapture,
+                Recapture::Menu {
+                    record: false,
+                    target: capture_controls::TargetMode::Region,
+                },
+            ),
+            (
+                Action::Screenshot(Target::Display),
+                Recapture::Menu {
+                    record: false,
+                    target: capture_controls::TargetMode::Display,
+                },
+            ),
+            (
+                Action::Record(Target::Window),
+                Recapture::Menu {
+                    record: true,
+                    target: capture_controls::TargetMode::Window,
+                },
+            ),
+        ] {
+            live.capture_action(action, &ctx);
+            assert_eq!(live.requested_recapture, Some(expected), "{action:?}");
+            // One recapture at a time: later actions wait for it.
+            live.capture_action(Action::NewCapture, &ctx);
+            assert_eq!(live.requested_recapture, Some(expected));
+            assert!(live.take_capture_failure().is_none());
+            live.requested_recapture = None;
+        }
+        // The open capture menu switches in place, or recaptures its own target.
+        live.capture_phase = Some(CapturePhase::ControlsSelecting);
+        live.capture_action(Action::Screenshot(Target::Window), &ctx);
+        assert_eq!(live.requested_recapture, None);
+        assert_eq!(
+            live.controls.lock().unwrap().mode(),
+            capture_controls::TargetMode::Window
+        );
+        live.capture_action(Action::Screenshot(Target::Window), &ctx);
+        assert_eq!(
+            live.requested_recapture,
+            Some(Recapture::Selector(RecordingSelectorKind::Window))
+        );
+        live.requested_recapture = None;
+        live.capture_action(Action::NewCapture, &ctx);
+        assert_eq!(live.requested_recapture, None);
+        assert_eq!(live.menu_screenshot_target, Some(Target::Region));
+        // Like shipping's selection summary, a target picked inside the menu
+        // (here Full screen) is not the one its shortcuts compare against.
+        live.controls
+            .lock()
+            .unwrap()
+            .apply_target_shortcut(CaptureShortcut::Display);
+        live.capture_action(Action::Screenshot(Target::Display), &ctx);
+        assert_eq!(live.requested_recapture, None);
+        assert_eq!(live.menu_screenshot_target, Some(Target::Display));
+        live.controls
+            .lock()
+            .unwrap()
+            .apply_target_shortcut(CaptureShortcut::Region);
+        live.capture_action(Action::NewCapture, &ctx);
+        assert_eq!(live.requested_recapture, None);
+        assert_eq!(live.menu_screenshot_target, Some(Target::Region));
+        live.capture_action(Action::NewCapture, &ctx);
+        assert_eq!(
+            live.requested_recapture,
+            Some(Recapture::Menu {
+                record: false,
+                target: capture_controls::TargetMode::Region
+            })
+        );
+        live.requested_recapture = None;
+        live.capture_action(Action::Record(Target::Display), &ctx);
+        assert_eq!(live.menu_screenshot_target, None);
+        assert_eq!(live.requested_recapture, None);
+        live.capture_phase = None;
+        live.flush();
+    }
+
+    #[test]
+    fn the_busy_activity_follows_the_open_capture_ui() {
+        use captures_app::capture_error::{Activity, Target};
+        let menu = || Some(Target::Window);
+        // A screenshot beside the take: its selector, or busy otherwise.
+        for phase in [
+            Some(CapturePhase::Recording),
+            Some(CapturePhase::RecordingPaused),
+        ] {
+            assert_eq!(
+                capture_activity(
+                    Some(Some(RecordingScreenshotPhase::Selecting)),
+                    phase,
+                    menu,
+                    true
+                ),
+                Activity::Selector
+            );
+            for beside in [
+                None,
+                Some(RecordingScreenshotPhase::WaitingForHud),
+                Some(RecordingScreenshotPhase::Preparing),
+                Some(RecordingScreenshotPhase::DisplayCapturing),
+            ] {
+                assert_eq!(
+                    capture_activity(Some(beside), phase, menu, true),
+                    Activity::Busy,
+                    "{beside:?}"
+                );
+            }
+            // The take alone leaves the recording routes to decide.
+            assert_eq!(capture_activity(None, phase, menu, true), Activity::Idle);
+        }
+        for phase in [CapturePhase::RegionSelecting, CapturePhase::WindowSelecting] {
+            assert_eq!(
+                capture_activity(None, Some(phase), menu, true),
+                Activity::Selector
+            );
+        }
+        assert_eq!(
+            capture_activity(None, Some(CapturePhase::ControlsSelecting), menu, true),
+            Activity::Menu {
+                screenshot_target: Some(Target::Window)
+            }
+        );
+        for phase in [
+            CapturePhase::ControlsPreparing,
+            CapturePhase::RegionPreparing,
+            CapturePhase::DisplayCountdown,
+        ] {
+            assert_eq!(
+                capture_activity(None, Some(phase), menu, true),
+                Activity::Busy
+            );
+        }
+        assert_eq!(capture_activity(None, None, menu, true), Activity::Busy);
+        assert_eq!(capture_activity(None, None, menu, false), Activity::Idle);
+    }
+
+    #[test]
     fn selector_screenshots_count_down_where_they_open_and_honor_controls() {
         let root = tempfile::tempdir().unwrap();
         let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
@@ -8455,6 +9085,7 @@ mod tests {
             kind: RecordingSelectorKind::Window,
             display_id: "pointer".into(),
             target: target(1280.),
+            includes_capture_ui: false,
         });
         assert_eq!(
             live.recording_screenshot_target()

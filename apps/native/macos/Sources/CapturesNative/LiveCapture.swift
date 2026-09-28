@@ -80,6 +80,15 @@ private struct RecordingDisplayShot {
     let preferences: CapturePreferences
 }
 
+/// The capture UI an action puts in place of the open one, on a fresh
+/// snapshot that shows it (`captures_app::capture_error::busy_route`).
+private enum Recapture {
+    case selector(StillCaptureKind)
+    case menu(record: Bool, target: UnifiedCaptureTarget)
+    /// Beside a running take: the display under the pointer, at once.
+    case display
+}
+
 enum CaptureWindowRestoreAction: Equatable {
     case none
     case visible
@@ -198,6 +207,10 @@ final class LiveCaptureController: NSObject {
     private var unifiedDisplay: DisplayItem?
     private var unifiedScreen: NSScreen?
     private var unifiedControlsState = UnifiedCaptureControlsState.initial
+    /// The menu's Screenshot target as its shortcuts and tray items last set
+    /// it, or nil in Record mode. Like shipping's selection summary
+    /// (`open_menu_screenshot_target`), picks inside the menu leave it as is.
+    private var unifiedRouteTarget: UnifiedCaptureTarget?
     private var recordingCapabilities: NativeRecordingCapabilities?
     private var microphoneDevices: [NativeMicrophoneDevice] = []
     private var recordingControlState = RecordingControlState(framesPerSecond: 60,
@@ -243,6 +256,14 @@ final class LiveCaptureController: NSObject {
     private var recordingScreenshotPreviewGeneration: UInt64?
     /// Set while the recording screenshot is a display screenshot.
     private var recordingDisplayShot: RecordingDisplayShot?
+    /// The open selector's shot beside the take, for a recapture.
+    private var recordingSelectorShot: RecordingSelectorShot?
+    /// Preferences of the capture in flight; a recapture swaps in
+    /// `recapturing()` ones, which the final capture honours.
+    private var capturePreferences: CapturePreferences?
+    /// The open capture UI a recapture keeps on screen, and in the new
+    /// snapshot, until the UI replacing it is ready.
+    private var recapturedPanels: [NSWindow] = []
     /// Last value published to the shortcut routes.
     private var publishedRecordingDisplayRoute = false
     private var preparingRecording = false
@@ -374,6 +395,209 @@ final class LiveCaptureController: NSObject {
         displayScreenshotAvailableDuringRecording(routeState: recordingRouteState,
             screenshotActive: recordingScreenshotGeneration != nil,
             lifecycleBusy: recordingLifecycle.busy)
+    }
+
+    /// A capture or recording owns the flow, so every capture shortcut goes to
+    /// the host's routes.
+    var captureInFlight: Bool { capturing }
+
+    /// What is open or in flight for `busy_route`.
+    var captureActivity: CaptureActivity {
+        if recordingScreenshotGeneration != nil {
+            return recordingScreenshotPanel != nil || recordingScreenshotWindowPanel != nil
+                ? .selector : .busy
+        }
+        if recordingSession != nil || !capturing { return .idle }
+        if unifiedPanel != nil { return .menu(screenshotTarget: unifiedRouteTarget) }
+        if regionPanel != nil || windowPanel != nil { return .selector }
+        return .busy
+    }
+
+    /// Routes a capture shortcut or tray item while a capture is open or in
+    /// flight (shipping `open_capture_controls` and `start_capture_inner`).
+    func routeBusyCaptureAction(_ action: CaptureAction) -> BusyCaptureOutcome {
+        // The open UI is already being recaptured.
+        if !recapturedPanels.isEmpty { return .handled }
+        let activity = captureActivity
+        if activity == .idle { return .idle }
+        let route = (try? BusyCaptureRoute(action: action, activity: activity,
+            recordingState: recordingRouteState,
+            controlsOnScreen: recordingHUD?.isVisible == true)) ?? .idle
+        switch route {
+        case .idle:
+            return .idle
+        case .restoreControls:
+            // Shipping `restore_hidden_recording_controls` shows the HUD
+            // window whenever it is off screen, including while a screenshot
+            // beside the take conceals it.
+            if recordingControlsHidden { _ = showRecordingControls() }
+            else if let hud = recordingHUD { hud.orderFrontRegardless(); updateRecordingMeter() }
+            return .handled
+        case .inProgress(let message):
+            return .inProgress(message: message)
+        case .ignore:
+            return .handled
+        case .switchMenu(let record, let target):
+            unifiedPanel?.selector.setTargetFromShortcut(target, mode: record ? .record : .screenshot)
+            unifiedRouteTarget = record ? nil : target
+            return .handled
+        case .recaptureSelector(let kind):
+            recapture(.selector(kind))
+            return .handled
+        case .recaptureDisplay:
+            recapture(.display)
+            return .handled
+        case .recaptureMenu(let record, let target):
+            recapture(.menu(record: record, target: target))
+            return .handled
+        }
+    }
+
+    /// Keeps the open capture UI up and in captures while a fresh snapshot
+    /// of it is taken (shipping `include_capture_ui_in_snapshot`).
+    private func holdForRecapture(_ panels: [NSWindow?]) {
+        for case let panel? in panels {
+            panel.sharingType = .readOnly
+            recapturedPanels.append(panel)
+        }
+    }
+
+    private func closeRecapturedPanels() {
+        let panels = recapturedPanels
+        recapturedPanels.removeAll()
+        for panel in panels { panel.close() }
+    }
+
+    /// The display under the pointer, or `fallback`.
+    private func pointerDisplay(or fallback: DisplayItem?) -> DisplayItem? {
+        let pointer = pointerDisplayID()
+        return displays.first(where: { $0.id == pointer }) ?? fallback
+    }
+
+    /// Freezes the display under the pointer with the open capture UI still on
+    /// it and opens the requested UI on that snapshot in its place; beside a
+    /// take, a display recapture saves that frame instead.
+    private func recapture(_ kind: Recapture) {
+        if recordingScreenshotGeneration != nil {
+            recaptureBesideRecording(kind)
+            return
+        }
+        if case .display = kind { return }
+        let listed: DisplayItem? = displays.indices.contains(selectedDisplayIndex)
+            ? displays[selectedDisplayIndex] : nil
+        let fallback = unifiedDisplay ?? listed
+        guard capturing, recordingSession == nil, let generation = flowGeneration,
+              let preferences = capturePreferences?.recapturing(),
+              let display = pointerDisplay(or: fallback), let screen = screen(for: display)
+        else { return }
+        holdForRecapture([regionPanel, windowPanel, unifiedPanel])
+        regionPanel = nil; windowPanel = nil; unifiedPanel = nil
+        selectorShortcutGeneration = nil
+        regionSession = nil; regionRect = nil
+        windowSession = nil; windowTarget = nil
+        unifiedSession = nil; unifiedTarget = nil
+        capturePreferences = preferences
+        let menu: Bool
+        if case .menu = kind { menu = true } else { menu = false }
+        if !menu { unifiedDisplay = nil; unifiedScreen = nil }
+        // The flow's poll follows the new UI's display and preferences, not
+        // the replaced UI's.
+        countdownTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.tickCountdown(display: menu ? (self.unifiedDisplay ?? display) : display,
+                preferences: preferences, generation: generation)
+        }
+        countdownTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        status.stringValue = "Capturing the open capture UI… Press Escape to cancel."
+        switch kind {
+        case .selector(.window):
+            preparingWindow = true
+            prepareWindow(display: display, screen: screen, preferences: preferences,
+                generation: generation)
+        case .selector:
+            preparingRegion = true
+            prepareRegion(display: display, screen: screen, preferences: preferences,
+                generation: generation)
+        case .menu(let record, let target):
+            unifiedControlsState = .initial
+            if record { unifiedControlsState.mode = .record }
+            unifiedControlsState.target = target
+            unifiedRouteTarget = record ? nil : target
+            preparingUnified = true
+            run({ [settingsPath] in
+                let loaded = try CapturePreferences.load(path: settingsPath)
+                let capabilities = try NativeRecordingInfo.capabilities(
+                    includeControls: loaded.includeRecordingControlsInCaptures)
+                let devices = capabilities.microphone
+                    ? try NativeRecordingInfo.microphoneDevices() : []
+                return (loaded, capabilities, devices)
+            }) { [weak self] result in
+                guard let self, self.flowGeneration == generation else { return }
+                do {
+                    let (loaded, capabilities, devices) = try result.get()
+                    self.applyMenuState(loaded, capabilities: capabilities, devices: devices)
+                    self.prepareUnified(display: display, preferences: preferences,
+                        generation: generation)
+                } catch {
+                    self.finishCapture()
+                    self.showCaptureError("Couldn’t start New Capture", error)
+                }
+            }
+        case .display:
+            return
+        }
+    }
+
+    /// Recaptures the selector of a screenshot beside the take: a new region
+    /// or window selector on a snapshot that shows it, or the display at once.
+    private func recaptureBesideRecording(_ kind: Recapture) {
+        guard let generation = recordingScreenshotGeneration, let shot = recordingSelectorShot,
+              recordingScreenshotPanel != nil || recordingScreenshotWindowPanel != nil,
+              let display = pointerDisplay(or: shot.display), let screen = screen(for: display)
+        else { return }
+        if case .menu = kind { return }
+        let preferences = shot.preferences.recapturing()
+        holdForRecapture([recordingScreenshotPanel, recordingScreenshotWindowPanel])
+        recordingScreenshotPanel = nil; recordingScreenshotWindowPanel = nil
+        recordingScreenshotTimer?.invalidate(); recordingScreenshotTimer = nil
+        recordingScreenshotSession = nil; recordingScreenshotRect = nil
+        recordingScreenshotWindowSession = nil; recordingScreenshotWindowTarget = nil
+        switch kind {
+        case .display:
+            recordingSelectorShot = nil
+            recordingDisplayShot = RecordingDisplayShot(display: display, screen: screen,
+                preferences: preferences)
+            startRecordingDisplayCountdown(generation: generation)
+        case .selector(let still):
+            let next = RecordingSelectorShot(kind: still, display: display, screen: screen,
+                preferences: preferences)
+            recordingSelectorShot = next
+            if still == .window {
+                prepareRecordingWindowSelector(next, generation: generation, fromControls: false)
+            } else {
+                prepareRecordingRegionSelector(next, generation: generation, fromControls: false)
+            }
+        case .menu:
+            return
+        }
+    }
+
+    /// The capture menu's recording row for these preferences.
+    private func applyMenuState(_ preferences: CapturePreferences,
+                                capabilities: NativeRecordingCapabilities,
+                                devices: [NativeMicrophoneDevice]) {
+        recordingCapabilities = capabilities
+        microphoneDevices = devices
+        recordingControlState = RecordingControlState(
+            framesPerSecond: preferences.recording.framesPerSecond,
+            maxResolution: preferences.recording.maxResolution,
+            showCursor: preferences.recording.showCursor,
+            highlightClicks: preferences.recording.highlightClicks,
+            systemAudio: preferences.recording.captureSystemAudio,
+            microphoneDeviceID: capabilities.microphone
+                ? preferences.recording.microphoneDeviceID : nil)
     }
 
     @objc private func displaysChanged() {
@@ -1209,6 +1433,7 @@ final class LiveCaptureController: NSObject {
             guard let self else { return }
             do {
                 let preferences = try result.get()
+                self.capturePreferences = preferences
                 guard let screen = NSScreen.screens.first(where: {
                     ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue == display.id
                 }) else { throw AppBridgeError.backend("The selected display is no longer available.") }
@@ -1272,6 +1497,7 @@ final class LiveCaptureController: NSObject {
             // Shipping `open_capture_controls_with_target(Screenshot, target)`.
             unifiedControlsState.target = screenshotTarget
         }
+        unifiedRouteTarget = recordingTarget == nil ? (screenshotTarget ?? .region) : nil
         setBusy(true, message: "Preparing capture controls…")
         let request = unifiedPreparation.begin()
         run({ [settingsPath] in
@@ -1285,16 +1511,8 @@ final class LiveCaptureController: NSObject {
             guard let self, self.capturing, self.unifiedPreparation.accepts(request) else { return }
             do {
                 let (preferences, capabilities, devices) = try result.get()
-                self.recordingCapabilities = capabilities
-                self.microphoneDevices = devices
-                self.recordingControlState = RecordingControlState(
-                    framesPerSecond: preferences.recording.framesPerSecond,
-                    maxResolution: preferences.recording.maxResolution,
-                    showCursor: preferences.recording.showCursor,
-                    highlightClicks: preferences.recording.highlightClicks,
-                    systemAudio: preferences.recording.captureSystemAudio,
-                    microphoneDeviceID: capabilities.microphone
-                        ? preferences.recording.microphoneDeviceID : nil)
+                self.applyMenuState(preferences, capabilities: capabilities, devices: devices)
+                self.capturePreferences = preferences
                 let response = try AppBridge.flow(["operation": "begin", "seconds": 0])
                 guard let generation = response["generation"] as? NSNumber else {
                     throw AppBridgeError.invalidResponse
@@ -1366,6 +1584,7 @@ final class LiveCaptureController: NSObject {
                             "The selected display changed. Open New Capture again.")
                     }
                     self.unifiedSession = session
+                    self.closeRecapturedPanels()
                     let selectedDisplay = self.displays.firstIndex(where: { $0.id == display.id }) ?? 0
                     let panel = UnifiedCapturePanel(screen: screen, image: image,
                         targets: session.windows, tokens: self.tokens,
@@ -1551,6 +1770,7 @@ final class LiveCaptureController: NSObject {
                         throw AppBridgeError.backend("The selected display changed. Select the region again.")
                     }
                     self.regionSession = session
+                    self.closeRecapturedPanels()
                     // Shipping direct overlays commit on release; auto-start
                     // applies only to the New Capture menu.
                     let panel = RegionSelectionPanel(screen: screen, image: image, tokens: self.tokens,
@@ -1597,6 +1817,7 @@ final class LiveCaptureController: NSObject {
                         throw AppBridgeError.backend("The selected display changed. Select the window again.")
                     }
                     self.windowSession = session
+                    self.closeRecapturedPanels()
                     let panel = WindowSelectionPanel(screen: screen, image: image,
                         targets: session.windows, tokens: self.tokens,
                         autoStart: true,
@@ -1651,20 +1872,23 @@ final class LiveCaptureController: NSObject {
             else if windowSession != nil { status.stringValue = "Capturing window…" }
             else if regionSession != nil { status.stringValue = "Capturing region…" }
             else { status.stringValue = "Capturing display…" }
+            // A recaptured selection has no countdown and keeps its frozen
+            // pixels (`capturePreferences` holds its `recapturing()` copy).
+            let afterCountdown = (capturePreferences ?? preferences).countdown > 0
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, self.flowGeneration == generation else { return }
                 self.run({ [transport, historyRoot, regionSession, regionRect, windowSession, windowTarget,
                             unifiedSession, unifiedTarget] in
                     if let unifiedSession, let unifiedTarget {
                         return try unifiedSession.capture(root: historyRoot, target: unifiedTarget,
-                            afterCountdown: preferences.countdown > 0)
+                            afterCountdown: afterCountdown)
                     }
                     if let windowSession, let windowTarget {
                         return try windowSession.capture(root: historyRoot, target: windowTarget,
-                            afterCountdown: preferences.countdown > 0)
+                            afterCountdown: afterCountdown)
                     }
                     if let regionSession, let regionRect {
-                        return try regionSession.capture(root: historyRoot, rect: regionRect, afterCountdown: preferences.countdown > 0)
+                        return try regionSession.capture(root: historyRoot, rect: regionRect, afterCountdown: afterCountdown)
                     }
                     let result = try transport.request(["operation": "capture_display", "root": historyRoot,
                         "display_id": display.id, "generation": generation, "include_cursor": preferences.includeCursor])
@@ -1888,6 +2112,7 @@ final class LiveCaptureController: NSObject {
     /// they are opted into captures, then the region or window selector opens.
     private func openRecordingSelector(_ shot: RecordingSelectorShot, generation: UInt64,
                                        fromControls: Bool) {
+        recordingSelectorShot = shot
         recordingScreenshotPreviewGeneration = miniPreviews?.beginCapture(
             settings: shot.preferences.miniPreviewSettings)
         if recordingDisplayScreenshotHidesControls(
@@ -1964,6 +2189,7 @@ final class LiveCaptureController: NSObject {
                     throw AppBridgeError.backend("The display changed. Select the region again.")
                 }
                 self.recordingScreenshotSession = session
+                self.closeRecapturedPanels()
                 let panel = RegionSelectionPanel(screen: shot.screen, image: image,
                     tokens: self.tokens, autoStart: true,
                     confirm: { [weak self] rect in
@@ -2008,6 +2234,7 @@ final class LiveCaptureController: NSObject {
                     throw AppBridgeError.backend("The display changed. Select the window again.")
                 }
                 self.recordingScreenshotWindowSession = session
+                self.closeRecapturedPanels()
                 let panel = WindowSelectionPanel(screen: shot.screen, image: image,
                     targets: session.windows, tokens: self.tokens, autoStart: true,
                     hitTest: { [weak session] point in session?.hitTest(point) },
@@ -2099,6 +2326,8 @@ final class LiveCaptureController: NSObject {
 
     private func finishRecordingScreenshot(restorePreview: Bool = true) {
         recordingDisplayShot = nil
+        recordingSelectorShot = nil
+        closeRecapturedPanels()
         recordingScreenshotTimer?.invalidate(); recordingScreenshotTimer = nil
         recordingScreenshotCountdownPanel?.close(); recordingScreenshotCountdownPanel = nil
         recordingScreenshotPanel?.close(); recordingScreenshotPanel = nil
@@ -2802,6 +3031,7 @@ final class LiveCaptureController: NSObject {
         selectorShortcutGeneration = nil
         countdownTimer?.invalidate(); countdownTimer = nil
         countdownPanel?.close(); countdownPanel = nil
+        closeRecapturedPanels(); capturePreferences = nil
         regionPanel?.close(); regionPanel = nil
         windowPanel?.close(); windowPanel = nil
         unifiedPanel?.close(); unifiedPanel = nil
@@ -2832,13 +3062,6 @@ final class LiveCaptureController: NSObject {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
-    }
-
-    @discardableResult func selectUnifiedTargetFromShortcut(_ shortcut: CaptureShortcut) -> Bool {
-        guard let panel = unifiedPanel, selectorShortcutGeneration == flowGeneration,
-              let target = shortcut.target else { return false }
-        panel.selector.setTargetFromShortcut(target, mode: shortcut.mode)
-        return true
     }
 
     private func setBusy(_ busy: Bool, message: String = "") {
