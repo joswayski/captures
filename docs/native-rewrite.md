@@ -2516,19 +2516,41 @@ shipping 2.4 s. Full screen shows the display identity (OS name, W × H, and
 "· N FPS" in Record) instead of guidance. The recording row uses labelled
 FPS (60/30/15) / Max resolution selects, Show cursor / Show clicks / Desktop audio
 switches with On/Off/Unavailable text and unavailable-reason tooltips, coupled
-cursor/clicks, and the microphone select's "Selected microphone" and (wgpu, which
-enumerates after opening) "Loading microphones…" states. The primary button uses
+cursor/clicks, and the microphone select's "Selected microphone" and "Loading
+microphones…" states. The primary button uses
 the shipping labels and hides under auto-start unless a start failed; AppKit Record
 now honors auto-start like shipping and wgpu, while tray/shortcut Record Full Screen
 never auto-starts. Guidance uses the shipping copy and chip placement, stays until a
 window is selected, hides while dragging a region and fades within 28 points of the
 pointer (12-point leave slack). The wgpu region drag also settles at the release
-point when a slow frame batches the release with later motion. Neither host keeps
-the menu open while starting or switching displays, so "Capturing…", "Starting…" and
-"Switching…" are shared but not reachable; AppKit enumerates microphones before
-opening and never shows the loading row. The segmented indicators slide and the
-Record row arrives as shipped (see the motion slice below); wgpu segment icons,
-the Full screen display icon and Wayland remain open.
+point when a slow frame batches the release with later motion. The segmented
+indicators slide and the Record row arrives as shipped (see the motion slice below);
+both hosts draw the shared segment icons (wgpu `SegmentGlyph::Icon`), and Full screen
+now shows shipping's `.recording-display-icon` above the display identity: a 68 × 50
+glass tile (`--glass`, `--glass-border-strong`, `--r-xl`, `--glass-shadow`) holding the
+34-point display icon at a 1.4 stroke, one `--s-4` gap above the name, with the group
+still raised 60% of its height. Wayland remains open.
+
+The menu's in-flight states now follow shipping `RecordingSelector` on both hosts,
+through the shared `capture_menu::primary_action` state. A start shows "Capturing…"
+(Screenshot) or "Starting…" (Record) and disables the primary; under auto-start the
+hidden primary reappears for it. Shipping hides the selector as soon as
+`capture_selection_screenshot` begins, so a screenshot's "Capturing…" lasts only
+until the host closes the menu (a frame or so); a Record start keeps the menu up with
+"Starting…" until the take is prepared (the recovery bundle, and on AppKit the FFmpeg
+check), as `start_recording` does until its HUD is ready. Choosing another display in
+Full screen keeps the current menu, its snapshot and its selections, up with
+"Switching…" until the new display's session is ready, then replaces it (wgpu declares
+one viewport per monitor). While either is in flight, further starts, display changes
+and shortcut routing are ignored and Escape or Close still cancels; a failure still
+ends the capture with the host's error rather than shipping's inline menu error.
+Microphones enumerate as shipping `loadAudioDevices` does: once per menu, the first
+time it shows Record with a microphone available (no longer when the menu opens, and
+kept across a display switch), with the select disabled and "Loading microphones…" /
+"Loading microphone…" until the list arrives. Rust unit tests and AppKit XCTests (not
+run here) cover the labels, the disabled and hidden primary, blocked starts and the
+one-time microphone request; the private-X11 capture and recording smokes exercise
+the menu's start paths.
 Verified with Rust/XCTest source tests and private-X11 capture/recording smokes;
 AppKit compiles and runs only in macOS CI, and Windows presentation is unverified.
 

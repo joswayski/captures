@@ -50,6 +50,15 @@ pub enum ActionMode {
     Recording,
 }
 
+/// A start or display switch the menu has sent and still shows (shipping
+/// `starting` / `switchingDisplay`): "Capturing…" or "Starting…", then
+/// "Switching…", until the host closes or reopens the menu.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InFlight {
+    Starting,
+    Switching,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {
     Region(Rect),
@@ -88,8 +97,11 @@ pub struct CaptureControls {
     recording: RecordingSelection,
     recording_capabilities: RecordingCapabilities,
     microphones: Vec<AudioDevice>,
-    /// Devices enumerate on the recording worker after the menu opens.
+    /// Like shipping, devices enumerate on the recording worker once the menu
+    /// is first in Record mode; the host takes the request.
+    microphones_requested: bool,
     microphones_loading: bool,
+    in_flight: Option<InFlight>,
     /// egui time the Record options row appeared, for its entrance.
     recording_options_since: Option<f64>,
 }
@@ -125,7 +137,9 @@ impl Default for CaptureControls {
             },
             recording_capabilities: RecordingCapabilities::current(false),
             microphones: vec![],
+            microphones_requested: false,
             microphones_loading: false,
+            in_flight: None,
             recording_options_since: None,
         }
     }
@@ -169,13 +183,40 @@ impl CaptureControls {
                 .flatten(),
             mono_audio: settings.mono_audio,
         };
-        self.microphones_loading = capabilities.microphone;
+        self.microphones_requested = false;
+        self.microphones_loading = false;
         self.recording_capabilities = capabilities;
     }
 
     pub fn set_microphones(&mut self, microphones: Vec<AudioDevice>) {
         self.microphones = microphones;
         self.microphones_loading = false;
+    }
+
+    /// Whether the host should enumerate microphones now: once per menu, when
+    /// it first shows Record with a microphone available (shipping
+    /// `loadAudioDevices`). Shows "Loading microphones…" until
+    /// [`Self::set_microphones`].
+    pub fn take_microphone_request(&mut self) -> bool {
+        let wanted = self.action_mode == ActionMode::Recording
+            && self.recording_capabilities.microphone
+            && !self.microphones_requested;
+        if wanted {
+            self.microphones_requested = true;
+            self.microphones_loading = true;
+        }
+        wanted
+    }
+
+    /// The start or display switch still in flight, if any.
+    pub fn in_flight(&self) -> Option<InFlight> {
+        self.in_flight
+    }
+
+    /// The host kept the menu open without starting (an inline error), or
+    /// reopened it on another display: end the in-flight state.
+    pub fn end_in_flight(&mut self) {
+        self.in_flight = None;
     }
 
     pub fn recording_selection(&self) -> RecordingSelection {
@@ -322,12 +363,14 @@ impl CaptureControls {
             action = Some(self.action_for_target(target));
         }
 
+        let in_flight = self.in_flight;
         let primary = capture_menu::primary_action(
             menu_mode,
             view.auto_start,
             PrimaryState {
+                starting: in_flight == Some(InFlight::Starting),
+                switching_display: in_flight == Some(InFlight::Switching),
                 error: view.error.is_some(),
-                ..PrimaryState::default()
             },
         );
         let content_rect = ui.ctx().content_rect();
@@ -517,16 +560,27 @@ impl CaptureControls {
                                     .gap(tokens.number("s-3"))
                                     .fill(tokens.color("theme-accent"))
                                     .stroke(Stroke::NONE);
+                                    // Shipping disables the primary while starting.
                                     let shown = ui
-                                        .add_enabled_ui(target.is_some(), |ui| {
-                                            let shown = button.atom_ui(ui);
-                                            if let Some(rect) = shown.rect(glyph)
-                                                && !recording
-                                            {
-                                                paint_icon(ui.painter(), "capture", rect, 1.8, ink);
-                                            }
-                                            shown
-                                        })
+                                        .add_enabled_ui(
+                                            target.is_some()
+                                                && in_flight != Some(InFlight::Starting),
+                                            |ui| {
+                                                let shown = button.atom_ui(ui);
+                                                if let Some(rect) = shown.rect(glyph)
+                                                    && !recording
+                                                {
+                                                    paint_icon(
+                                                        ui.painter(),
+                                                        "capture",
+                                                        rect,
+                                                        1.8,
+                                                        ink,
+                                                    );
+                                                }
+                                                shown
+                                            },
+                                        )
                                         .inner;
                                     if let Some(rect) = shown.rect(glyph)
                                         && recording
@@ -594,6 +648,20 @@ impl CaptureControls {
             if self.mode == TargetMode::Region {
                 self.region.cancel_drag();
             }
+        }
+        if in_flight.is_some() {
+            // Shipping ignores starts and switches while one is in flight;
+            // Escape and Close still cancel.
+            return action.filter(|action| *action == Action::Cancel);
+        }
+        self.in_flight = match action {
+            Some(Action::Capture(_) | Action::StartRecording(_)) => Some(InFlight::Starting),
+            Some(Action::SwitchDisplay(_)) => Some(InFlight::Switching),
+            _ => None,
+        };
+        if self.in_flight.is_some() {
+            // Paint the in-flight label until the host closes the menu.
+            ui.ctx().request_repaint();
         }
         action
     }
@@ -1726,11 +1794,89 @@ mod tests {
             run_input(&mut controls, vec![key(egui::Key::Enter)]),
             Some(Action::StartRecording(Target::Region(_)))
         ));
+        // The host answers a start by closing the menu or ending it.
+        controls.end_in_flight();
         controls.apply_target_shortcut(CaptureShortcut::Display);
         assert_eq!(controls.action_mode, ActionMode::Screenshot);
         assert_eq!(
             run_input(&mut controls, vec![key(egui::Key::Enter)]),
             Some(Action::Capture(Target::Display))
+        );
+    }
+
+    #[test]
+    fn starts_and_switches_show_shipping_in_flight_labels_until_settled() {
+        let panel_id = egui::Id::unique("in-flight");
+        let size = egui::vec2(1000., 720.);
+        let ctx = egui::Context::default();
+        let mut controls = CaptureControls {
+            mode: TargetMode::Display,
+            ..Default::default()
+        };
+        let frame = |controls: &mut CaptureControls, events| {
+            render(&ctx, controls, size, events, panel_id, false, None)
+        };
+        // The Area sizes itself on its first pass.
+        frame(&mut controls, vec![]);
+        assert!(painted(&frame(&mut controls, vec![]).1, "Capture").is_some());
+        let (action, _) = frame(&mut controls, vec![key(egui::Key::Enter)]);
+        assert_eq!(action, Some(Action::Capture(Target::Display)));
+        assert_eq!(controls.in_flight(), Some(InFlight::Starting));
+        let (action, texts) = frame(&mut controls, vec![key(egui::Key::Enter)]);
+        assert_eq!(action, None, "a start in flight ignores Enter");
+        assert!(painted(&texts, "Capturing…").is_some(), "{texts:?}");
+        assert_eq!(
+            frame(&mut controls, vec![key(egui::Key::Escape)]).0,
+            Some(Action::Cancel),
+            "Escape still cancels"
+        );
+        controls.end_in_flight();
+        assert!(painted(&frame(&mut controls, vec![]).1, "Capture").is_some());
+
+        controls.action_mode = ActionMode::Recording;
+        let (action, _) = frame(&mut controls, vec![key(egui::Key::Enter)]);
+        assert_eq!(action, Some(Action::StartRecording(Target::Display)));
+        let texts = frame(&mut controls, vec![]).1;
+        assert!(painted(&texts, "Starting…").is_some(), "{texts:?}");
+        controls.end_in_flight();
+
+        // Auto-start hides the primary, but not while a start is in flight.
+        controls.in_flight = Some(InFlight::Starting);
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, true, None).1;
+        assert!(painted(&texts, "Starting…").is_some(), "{texts:?}");
+        controls.in_flight = Some(InFlight::Switching);
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        assert!(painted(&texts, "Switching…").is_some(), "{texts:?}");
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, true, None).1;
+        assert!(
+            painted(&texts, "Switching…").is_none(),
+            "auto-start keeps it hidden"
+        );
+        controls.end_in_flight();
+        assert!(painted(&frame(&mut controls, vec![]).1, "Start recording").is_some());
+    }
+
+    #[test]
+    fn microphones_enumerate_once_when_the_menu_first_shows_record() {
+        let mut capabilities = RecordingCapabilities::current(false);
+        capabilities.microphone = true;
+        let mut controls = CaptureControls::default();
+        controls.configure_recording(&RecordingSettings::default(), capabilities.clone());
+        assert!(
+            !controls.take_microphone_request(),
+            "Screenshot mode lists none"
+        );
+        controls.action_mode = ActionMode::Recording;
+        assert!(controls.take_microphone_request());
+        assert!(controls.microphones_loading);
+        assert!(!controls.take_microphone_request());
+        controls.set_microphones(vec![]);
+        assert!(!controls.microphones_loading);
+        capabilities.microphone = false;
+        controls.configure_recording(&RecordingSettings::default(), capabilities);
+        assert!(
+            !controls.take_microphone_request(),
+            "no microphone, no request"
         );
     }
 
@@ -2069,6 +2215,11 @@ mod tests {
         capabilities.click_highlights = false;
         capabilities.microphone = true;
         controls.configure_recording(&RecordingSettings::default(), capabilities);
+        assert!(
+            controls.take_microphone_request(),
+            "Record asks for devices"
+        );
+        assert!(!controls.take_microphone_request(), "once per menu");
         let (_, _, texts) = settle(&mut controls, false, None);
         for label in [
             "FPS",

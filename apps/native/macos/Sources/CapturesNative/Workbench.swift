@@ -76,11 +76,12 @@ enum ShippingIcons {
         return result
     }
 
-    /// Stroke a named icon into `rect` (flipped view coordinates), 1.8-unit round strokes.
-    static func stroke(_ name: String, in rect: NSRect) {
+    /// Stroke a named icon into `rect` (flipped view coordinates), round strokes
+    /// `width` units wide (1.8 unless the shipping CSS sets another).
+    static func stroke(_ name: String, in rect: NSRect, width: CGFloat = 1.8) {
         for line in polylines(name) where line.count > 1 {
             let path = NSBezierPath()
-            path.lineWidth = 1.8 * rect.width / 24
+            path.lineWidth = width * rect.width / 24
             path.lineCapStyle = .round; path.lineJoinStyle = .round
             for (index, point) in line.enumerated() {
                 let mapped = NSPoint(x: rect.minX + point.x * rect.width / 24,
