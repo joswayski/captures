@@ -8444,6 +8444,16 @@ mod tests {
         live.tx.send(Job::Barrier(done)).unwrap();
         completed.recv_timeout(Duration::from_secs(5)).unwrap();
         while live.rx.try_recv().is_ok() {}
+        // Startup History also lists interrupted recordings on the recovery
+        // worker, which wakes ROOT on its own schedule. A late wake between the
+        // paints below and the callback leaves ROOT's repaint outstanding, and
+        // egui then skips the callback for the History wake under test.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() {
+            assert!(Instant::now() < deadline, "recovery listing never finished");
+            live.recovery.receive();
+            thread::sleep(Duration::from_millis(5));
+        }
         for _ in 0..3 {
             ctx.begin_pass(Default::default());
             let mut output = ctx.end_pass();
