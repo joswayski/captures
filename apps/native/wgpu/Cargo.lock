@@ -801,6 +801,8 @@ dependencies = [
  "trash",
  "uuid",
  "winreg",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
