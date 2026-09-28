@@ -312,13 +312,13 @@ impl Workbench {
     fn schedule(&self, ctx: &egui::Context) {
         let elapsed = self.started.elapsed();
         if let Some(quit) = self.options.quit_after {
-            ctx.request_repaint_after(quit.saturating_sub(elapsed));
+            request_repaint_at(ctx, quit.saturating_sub(elapsed));
         }
         if self.options.exercise && self.cycle < 6 {
-            ctx.request_repaint_after(exercise_at(self.cycle).saturating_sub(elapsed));
+            request_repaint_at(ctx, exercise_at(self.cycle).saturating_sub(elapsed));
         }
         if self.options.screenshot.is_some() && !self.screenshot_requested {
-            ctx.request_repaint_after(self.options.screenshot_after.saturating_sub(elapsed));
+            request_repaint_at(ctx, self.options.screenshot_after.saturating_sub(elapsed));
         }
     }
 
@@ -2115,6 +2115,19 @@ fn glass(t: &Tokens) -> egui::Frame {
 fn uv() -> Rect {
     Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.))
 }
+/// Wake at a deadline, not before it.
+///
+/// egui wakes a delayed repaint one predicted frame early. A pass that lands
+/// just before a deadline then re-requests an immediate repaint, and so on
+/// every frame until the deadline passes. The faster the frames, the more
+/// passes that burst costs, which pushed the settled `--quit-after` pass count
+/// (`smoke.py`'s `uiPassesAfterTwoSeconds`) past its limit on Windows CI.
+/// Adding the predicted frame back makes egui wake at the deadline itself.
+fn request_repaint_at(ctx: &egui::Context, remaining: Duration) {
+    let early = ctx.input(|input| Duration::try_from_secs_f32(input.predicted_dt));
+    ctx.request_repaint_after(remaining + early.unwrap_or_default());
+}
+
 fn exercise_at(cycle: usize) -> Duration {
     Duration::from_secs(2 + cycle as u64 * 4)
 }
@@ -2365,6 +2378,44 @@ mod tests {
                 .any(|command| matches!(command, egui::ViewportCommand::RequestPaintWhileHidden))
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn deadlines_wake_at_the_deadline_instead_of_one_predicted_frame_early() {
+        fn wake_delay(request: impl FnOnce(&egui::Context)) -> Duration {
+            let ctx = egui::Context::default();
+            let (wakes, received) = mpsc::channel();
+            ctx.set_request_repaint_callback(move |info| {
+                let _ = wakes.send(info.delay);
+            });
+            let input = egui::RawInput {
+                predicted_dt: 1. / 60.,
+                ..Default::default()
+            };
+            // Let egui's own startup repaints pass first.
+            for _ in 0..3 {
+                ctx.begin_pass(input.clone());
+                ctx.end_pass().textures_delta.clear();
+            }
+            ctx.begin_pass(input);
+            while received.try_recv().is_ok() {}
+            request(&ctx);
+            let delay = received.try_recv().unwrap();
+            ctx.end_pass().textures_delta.clear();
+            delay
+        }
+        let remaining = Duration::from_millis(10);
+        // Plain egui scheduling wakes one frame early: before this deadline,
+        // so that pass would spin through immediate repaints until it arrived.
+        assert_eq!(
+            wake_delay(|ctx| ctx.request_repaint_after(remaining)),
+            Duration::ZERO
+        );
+        let delay = wake_delay(|ctx| request_repaint_at(ctx, remaining));
+        assert!(
+            delay.abs_diff(remaining) < Duration::from_micros(1),
+            "{delay:?}"
+        );
     }
 
     #[test]
