@@ -504,18 +504,18 @@ shadow color, opacity, blur and offsets, apply as you edit, as in the shipping
 editor; typing in one field is one undo step. Before placement, choose a
 named style and size; boxed styles center on the click. As in the shipping editor,
 new text takes the drawing Color (annotation red until you change it). These
-defaults last only for that editor. Both hosts start at Rounded Box when its pinned
+defaults last only for that editor. Both hosts start at Rounded Box when its
 font is offered, otherwise Standard, then Plain, with an initial size scaled to the
 original capture (24–72). The bundle includes
 Nunito and Liberation Sans, Serif and Mono (OFL 1.1); exact font
-bytes and license notices stay with the draft. Older drafts offer only their saved
-fonts; adding new fonts to an existing draft is not implemented.
-Nunito covers fewer characters than Sans; for characters such as Greek λ, choose a
-Sans-based style (Standard or Box) before typing. Missing glyphs produce an error
-rather than a substitute font.
-Selected-text named styles use those pinned fonts; Rounded and Rounded Box are
-available in new sessions, but remain unavailable in older drafts without a
-saved rounded face.
+bytes and license notices stay with the draft. As in the shipping editor, every
+draft offers all four families: an older draft saved with fewer fonts adds a
+bundled family's files the first time its text uses that family.
+Like the shipping editor's browser fallback, a character the chosen font lacks
+(Nunito has no Greek λ, for example) is drawn from another bundled font, then from
+the fonts installed on the computer, rather than failing; installed fonts are
+never copied into drafts.
+Selected-text named styles use those fonts, including Rounded and Rounded Box.
 In both native editors, explicitly choosing a named style for selected text also makes that
 style the next new-text choice for this editor. Undo or a failed edit does not
 undo that future choice; size, color and manual font edits do not carry forward.
@@ -528,8 +528,9 @@ layer; the Windows/Linux box rotates its glyphs, plate and caret but keeps selec
 highlights and pointer caret placement unrotated, and both draw outlined labels
 approximately. Physical macOS, Windows, Wayland, IME and accessibility acceptance
 remain unverified.
-This is not Tauri system-font equivalence or universal Unicode coverage:
-missing glyphs remain errors, and fonts are never discovered or downloaded automatically.
+This is not Tauri system-font equivalence: the four families use the bundled faces
+rather than the operating system's, installed fonts only fill in missing characters,
+and fonts are never imported or downloaded.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts. Typed rectangle/ellipse/triangle/diamond/star, straight-line/arrow and
@@ -739,7 +740,7 @@ Release commits one undo step; Escape, focus loss or changing tools cancels the
 preview without editing. Properties shows a stroke or brush preview for drawing
 tools and Erase/Restore, and Apply crop pulses while a crop is staged. Physical-platform
 input acceptance remains parity work.
-Text controls support a style picker, multiline content, pinned font families (listed
+Text controls support a style picker, multiline content, font families (listed
 as Sans serif, Serif, Monospace and Rounded), size, bold/italic and alignment buttons,
 swatch-row text and background colors, a Text background plate and a Drop shadow
 toggle; outlined and rounded plates come from the Outlined and Rounded Box styles.

@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects (backdrop blur, dust dissolve blur, fan stagger and drag sway), physical setup/login and installed Open With acceptance, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts and shared new-text drop shadow, the shipping Erase/Restore brush ring, copy and save-new-copy | Remaining text/font parity (explicit font migration, OS/imported fonts, IME), remaining viewport/output controls and Tauri design parity; remaining recording controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts (all four families offered on every draft, pinned on first use; missing glyphs fall back to other bundled faces, then installed fonts) and shared new-text drop shadow, the shipping Erase/Restore brush ring, copy and save-new-copy | Remaining text parity (shipping's OS font stacks versus bundled faces, IME), remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
 Development package staging now supplies macOS Editor/Alternate document types,
@@ -730,12 +730,18 @@ transaction: an external change during encoding is not locked out. The file and
 History publication are separate, and a History failure cannot roll back a saved file.
 Physical macOS/Windows/Wayland and full output acceptance remain open.
 The shared text prerequisite uses `cosmic-text` advanced shaping and CPU Swash
-rasterization for a single line from caller-supplied fonts, with fixed locale and
-no system-font scan. It returns logical advance, baseline, painted bounds and
+rasterization for a single line from caller-supplied fonts, with fixed locale.
+It returns logical advance, baseline, painted bounds and
 straight-alpha pixels, including ligatures, combining marks, bidi ordering and
 negative bearings. Glyph images are scoped to one operation, with line/size/pixel
-limits and explicit missing-font/glyph errors. Original generated fonts give
-independent metrics for tests rather than depending on installed fonts.
+limits and explicit missing-family errors. A glyph the requested face lacks falls
+back, like a browser, to the other supplied faces in a caller-given family order
+(no platform family lists, so covered text shapes identically everywhere); only a
+line with a glyph no supplied face covers is reshaped with optional platform faces
+(`PlatformFonts::System` scans the installed fonts once per process and never lets
+them shadow a supplied family name), and a glyph nothing covers draws the requested
+font's missing-glyph box. Original generated fonts give independent metrics for
+tests rather than depending on installed fonts.
 Color-outline and embedded-bitmap glyphs use different alpha representations;
 the primitive normalizes outlines before compositing and retains bitmap RGB.
 Swash's color-outline flattening has integer alpha-rounding loss. Font bytes must
@@ -771,7 +777,7 @@ ASCII tabs, carriage returns and form feeds become spaces for both measurement a
 painting, following Canvas text preparation; remaining interior line-control
 characters are rejected by the single-line shaper, not silently omitted.
 Text bitmaps have a shared 16,777,216-pixel budget across the visible document,
-in addition to individual line budgets. Missing fonts/glyphs, invalid styles and
+in addition to individual line budgets. Missing font families, invalid styles and
 budget failures return errors without changing the document or assets. The lower-level bitmap compositor
 now supports a shadow/source pass using transformed pixel alpha, layer opacity,
 canvas-space offsets, blur and blend mode. Shadow work is clipped to output plus
@@ -800,7 +806,7 @@ Content/type edits refit from owned-font measurements while preserving alignment
 anchors; paint/alignment-only edits do not refit. Blank text keeps the shipping
 eight-em composing field; fixed-width and legacy fields remain intact. Property
 edits match shipping's hidden/locked-layer behavior and validate those layers too.
-Missing families/glyphs and invalid requests preserve frames, redo and saved drafts;
+Missing families, control characters and invalid requests preserve frames, redo and saved drafts;
 successful changes use the existing render-before-publish transaction. Font-face
 matching retains the existing shaper's closest supplied face behavior; it does not
 acquire missing faces. Both hosts now connect click-to-place Text, fresh-ID selection,
@@ -819,20 +825,38 @@ manifest). New native sessions use twelve unmodified Liberation Sans/Serif/Mono
 font bytes total, shared across workers), with complete OFL 1.1 notices in
 native resources, `--font-license` output and text-bearing saved drafts. Image-only
 drafts do not persist the worker's unused font set. No OS fonts are copied
-and no network fallback occurs. This Latin/Greek/Cyrillic-oriented default is not
-universal Unicode or Tauri system-font equivalence; missing glyphs are errors.
+and no network fallback occurs.
+Shipping (`EDITOR_TEXT_FONT_STACKS` in `lib/screenshotEditor.ts`) draws the four
+family keys with OS font stacks (system UI, Georgia/Times, SF Mono/Consolas,
+ui-rounded/SF Pro Rounded) and stores only the key in its draft JSON; it bundles,
+imports and persists no font files and offers no OS font picker, so neither do the
+native hosts. Its browser falls back to other installed fonts for glyphs a face
+lacks. The native equivalent keeps rendering deterministic for covered text:
+a glyph the chosen face lacks uses the session's other pinned faces in Sans,
+Serif, Mono, Rounded order, then the installed system fonts (read in place, never
+pinned into a draft), then the missing-glyph box; it no longer rejects the text.
 Nunito's regular cmap is narrower than Liberation Sans's (938 versus 2,327
-code points): é, Ω and Ж render, but Greek λ is absent in Nunito despite being
-present in Sans. A rounded host default can therefore reject previously
-accepted text; it must not silently substitute Sans.
-Both hosts apply family changes live with the other text fields. Their
-family picker reads the session's actual pinned map, not host defaults. Older
-Sans-only drafts remain Sans-only; explicit font migration is still unimplemented.
+code points): é, Ω and Ж render in Nunito, and Greek λ renders from Liberation
+Sans. Editor preview, thumbnails, copy, export and reopened drafts share one
+shaper, so they stay identical; a line that needs installed fonts depends on the
+fonts present, as shipping does, and the hosts' inline composing field uses its
+toolkit's own fallback until the text is committed.
+Both hosts apply family changes live with the other text fields. Like shipping,
+which offers all four families on every document, the family picker and style
+presets read the session's pinned map plus the host's bundled families a reopened
+draft lacks, so an older Sans-only draft offers Serif, Mono and Rounded (and the
+Rounded Box new-text default). Choosing one, by Font, Style or placement, pins
+that family's four faces and license notice into the session; the next draft save
+keeps them. Offering alone pins nothing, pinned families and bytes never change,
+and a draft that already embeds a bundled family name under another key keeps its
+own. A failed edit may leave a family pinned for the session, which only adds its
+unused faces to later saves.
 Both selected-text inspectors offer a Style menu whose choice applies at once.
-Rust supplies the shipping seven-style catalog filtered by the session's pinned
-font families: the bundle offers all seven styles, including Rounded and Rounded Box;
-Sans-only drafts offer Standard, Outlined and Box. Rounded/Rounded Box require an
-actual pinned `rounded` face and are not substituted with Sans. Presets change only
+Rust supplies the shipping seven-style catalog filtered by the session's offered
+font families: the bundle offers all seven styles, including Rounded and Rounded Box,
+also for older Sans-only drafts, which pin Rounded when it is chosen. A draft opened
+without the host bundle offers only its pinned families' styles; Rounded/Rounded Box
+require an actual `rounded` face and are not substituted with Sans. Presets change only
 family, plate/outline flags and (when no plate existed) the default plate color.
 They preserve content, size, alignment, traits, text color, custom plate colors,
 shadows and unknown metadata; the usual worker edit/refit rules still apply.
@@ -840,8 +864,8 @@ Shipping-TypeScript fixtures check the catalog; live failure handling and
 font filtering are covered separately in host/session tests. This is not the
 shipping style-picker layout or a new-text-default picker.
 Reopening prefers the saved font set over host
-defaults; missing/corrupt fonts return errors without silently substituting or
-deleting the draft. Font cleanup follows successful manifest publication; the
+defaults (which only add unpinned families); missing/corrupt fonts return errors
+without silently substituting or deleting the draft. Font cleanup follows successful manifest publication; the
 existing image save order is still per-file atomic, not a whole-draft transaction.
 Discard removes the draft and restores the capture while retaining the worker's
 font capability. Original generated-font tests cover exact restored/exported pixels,
@@ -852,8 +876,8 @@ transformed and minimum-size captures were inspected. These synthetic-font
 fixtures do not provide Text input controls or establish macOS, Windows, Wayland
 or physical Text-tool presentation/input acceptance.
 The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
-per slice, not inferred from shared tests. Additional font import and OS acquisition,
-inline input and physical input/IME/accessibility remain open.
+per slice, not inferred from shared tests. Font import and OS font selection are not
+shipping features; physical input/IME/accessibility remain open.
 Both hosts now offer new-text style and size (8–512) before placement.
 Like shipping, the Text section also shows the drawing defaults' Drop shadow:
 one shared toggle and custom style, whose untouched fields scale from the new text
@@ -872,7 +896,7 @@ supplies Tauri's initial size: 5.5% of the original capture's shorter side,
 rounded and clamped to 24–72. It uses History dimensions,
 not the resized/cropped canvas of a restored draft; later user choices remain
 unchanged across editing responses. Plain retains the explicit saved-family path for custom-font
-drafts. Presets come only from pinned fonts; Rounded is not substituted. Shared
+drafts. Presets come only from pinned or pinnable fonts; Rounded is not substituted. Shared
 Rust validates the chosen preset and creates boxed text centered at the click using
 the eight-em composing width, retaining the anchor when content later refits.
 Placement is one render-before-publish transaction with fresh selection and normal
@@ -900,8 +924,9 @@ failed Begin, Escape retries and a cleared box is dismissed. Save, copy, import 
 the transaction resolves. Begin/update/finish failures keep retryable input, and
 close/quit drain accepted work, preserving the latest commit buffer before draft
 handling. TextKit line layout approximates CSS line boxes; blend modes and a
-draft's own non-bundled font (which falls back to the system face) remain parity
-work. Existing inspector styling remains staged outside active composition. Automated macOS
+draft's own non-bundled font (which falls back to the system face while typing)
+remain parity work. Only seeded test drafts carry non-bundled fonts, since neither
+shipping nor the native hosts import fonts. Existing inspector styling remains staged outside active composition. Automated macOS
 fixtures cover light/dark normal, 760×540 and failure states, but physical macOS
 IME, VoiceOver, keyboard layout and mixed-scale acceptance remain unverified.
 No host text parity gate is closed.
