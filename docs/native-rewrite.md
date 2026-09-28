@@ -584,13 +584,19 @@ Apply crop, or shipping's drag hint. Native-only rows and copy are gone: the Out
 and Rounded plate controls (the Outlined and Rounded Box styles set them, and "Text
 background" adds shipping's `#111318` plate, clearing both) and the per-tool helper
 paragraphs. wgpu draws every row from `editor/inspector.rs` with the shared
-`NumberInput`, `RangeSlider`, `Select` and `ColorField` primitives; its Crop tool
-arms a new selection whenever it is active, as shipping's does. AppKit follows the
-same order, spacing and labels for the selected layer and text, Text defaults, the
-Eraser and the crop Aspect ratio, but still differs: its drawing defaults keep
-Width/Opacity number fields and a two-column shadow grid, its Crop keeps native
-X/Y/Width/Height fields and Draw crop, it has no grouped-shape picker, and the
-inspector remains 272 points wide (wgpu 230) rather than shipping's 320 px column.
+`NumberInput`, `RangeSlider`, `Select` and `ColorField` primitives (a typed decimal
+such as 37.5 now commits as typed when focus leaves). While the rail's Crop is
+active, wgpu stays ready for a new selection after Apply crop, Clear or Escape, as
+shipping does, and a selection starts only once a press becomes a drag. AppKit follows
+shipping's order, spacing and labels for the selected layer (Shift rotation snap
+first, with its hint and rule), selected text (the Text style picker showing the
+current treatment, Text, Font beside Size, format buttons, Text color, Text
+background, Drop shadow), Text defaults (no Color row), the Eraser copy and the
+crop Aspect ratio, but still differs: selected-text shadow fields, annotation style
+controls and drawing defaults keep native label-beside-field rows and number fields
+(no sliders), its Crop keeps X/Y/Width/Height fields and Draw crop, it has no
+grouped-shape picker, and the inspector remains 272 points wide (wgpu 230) rather
+than shipping's 320 px column.
 X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete

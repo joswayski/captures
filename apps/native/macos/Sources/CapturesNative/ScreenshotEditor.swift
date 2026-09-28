@@ -2650,6 +2650,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self?.updateDrawingPreviewStyle()
         }
         drawingStrokeColor = strokeSwatches; drawingStrokeColorLabel = strokeColorLabel
+        // Shipping `defaultStyle.color` until a snapshot supplies its defaults;
+        // new text takes this one shared Color too.
+        strokeSwatches.selectedHex = "#ff3b5c"
         let numbersY = 146 + swatchRow
         let widthLabel = panelFieldLabel("Width (2–40)", x: 0, y: numbersY, parent: content)
         let opacityLabel = panelFieldLabel("Opacity (0–100)", x: 132, y: numbersY, parent: content)
