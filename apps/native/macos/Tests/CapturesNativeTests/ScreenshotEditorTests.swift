@@ -6017,6 +6017,48 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(strokes.count, count, "off-image starts and cancellation never edit")
     }
 
+    func testBrushRingFollowsShippingHoverRulesAndPaintsPastTheImage() throws {
+        _ = NSApplication.shared
+        XCTAssertEqual(NativeBrushRing.diameter(size: 28, scale: 0.5), 14)
+        XCTAssertEqual(NativeBrushRing.diameter(size: 4, scale: 0.1), 1)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: false, stroking: false, panning: false), .notAllowed)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: false, stroking: true, panning: false), .ring)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: true, stroking: false, panning: true), .pan)
+        let overlay = EditorDrawOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+        overlay.canvasSize = NSSize(width: 640, height: 360); overlay.drawingEnabled = true
+        overlay.imageRect = { NSRect(x: 20, y: 10, width: 160, height: 90) }
+        overlay.shape = .erase
+        var sampled: [NSPoint] = []
+        // Only the left half of the canvas holds a visible image.
+        overlay.brushOverImage = { point in sampled.append(point); return point.x < 320 }
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 60, y: 55)), .ring)
+        XCTAssertEqual(sampled.last, NSPoint(x: 160, y: 180))
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 140, y: 55)), .notAllowed)
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 5, y: 5)), .notAllowed)
+        overlay.begin(at: NSPoint(x: 60, y: 55))
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 5, y: 5)), .ring, "a stroke keeps the ring")
+
+        // A 50 pt ring (200 document px at 0.25×) past the image's right edge:
+        // shipping's fixed ring is not clipped to the image.
+        overlay.brushDiameter = 200
+        overlay.drag(to: NSPoint(x: 175, y: 55))
+        let bitmap = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: bitmap)
+        let factor = CGFloat(bitmap.pixelsWide) / overlay.bounds.width
+        func brightest(_ xs: ClosedRange<CGFloat>, y: CGFloat) -> CGFloat {
+            stride(from: xs.lowerBound, through: xs.upperBound, by: 0.5).map { x -> CGFloat in
+                guard let color = bitmap.colorAt(x: Int(x * factor), y: Int(y * factor))?
+                        .usingColorSpace(.sRGB) else { return 0 }
+                return min(color.redComponent, color.greenComponent, color.blueComponent) * color.alphaComponent
+            }.max() ?? 0
+        }
+        XCTAssertGreaterThan(brightest(197...199.5, y: 55), 0.75, "white border outside the image")
+        XCTAssertGreaterThan(brightest(150...152.5, y: 55), 0.75, "white border on the left")
+        overlay.cancelGesture()
+        overlay.shape = .rectangle
+        XCTAssertNil(overlay.brushHover(at: NSPoint(x: 60, y: 55)))
+    }
+
     func testBackgroundBrushOptionsIssueOneRetryableSerializedCommand() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))

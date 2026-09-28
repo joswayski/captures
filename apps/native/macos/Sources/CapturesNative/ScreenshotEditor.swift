@@ -402,7 +402,9 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         }
     }
 
-    var shape: Shape = .rectangle { didSet { if shape != oldValue { cancelGesture() } } }
+    var shape: Shape = .rectangle {
+        didSet { if shape != oldValue { cancelGesture(); window?.invalidateCursorRects(for: self) } }
+    }
     var canvasSize = NSSize.zero {
         didSet { if canvasSize != oldValue { cancelGesture() }; needsDisplay = true }
     }
@@ -424,6 +426,13 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     var onBackgroundBrush: ((Shape, [NSPoint]) -> Void)?
     var brushDiameter: CGFloat = 28 { didSet { needsDisplay = true } }
     var brushOutlineColor = NSColor.labelColor
+    /// Restore ring fill (`rgba(var(--theme-accent-rgb), 0.08)`).
+    var brushAccentColor = NSColor.controlAccentColor
+    /// Whether a document point lies on a visible image (shipping
+    /// `hitTestImageElement`); the brush ring shows only there until a stroke starts.
+    var brushOverImage: ((NSPoint) -> Bool)?
+    /// The pointer while Erase/Restore hovers the canvas; nil after exit.
+    private(set) var brushHoverPoint: NSPoint?
     var fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
     var strokeColor = NSColor.controlAccentColor
     var annotationOpacity: CGFloat = 1 { didSet { needsDisplay = true } }
@@ -544,6 +553,18 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         onComplete?(shape, start, end, points)
     }
 
+    /// The ring at the pointer (or the stroke's latest point), unclipped by
+    /// the image like shipping's fixed-position ring.
+    private func drawBrushRing() {
+        guard let center = startPoint != nil ? currentPoint : brushHoverPoint,
+              brushHover(at: center) == .ring, canvasSize.width > 0 else { return }
+        let scale = presentedImageRect.width / canvasSize.width
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NativeBrushRing.draw(center: center, diameter: NativeBrushRing.diameter(size: brushDiameter, scale: scale),
+                             restore: shape == .restore, accent: brushAccentColor)
+    }
+
     func cancelGesture() {
         let active = startPoint != nil || pixelPreviewVisible
         startPoint = nil; currentPoint = nil; needsDisplay = true
@@ -565,12 +586,17 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     override func mouseDragged(with event: NSEvent) {
         if continueViewportPan(event) { return }
-        drag(to: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        drag(to: point)
+        if shape.isBackgroundBrush { updateBrushHover(point) }
     }
 
     override func mouseUp(with event: NSEvent) {
         if isViewportPanning { _ = continueViewportPan(event); endViewportPan(); return }
-        end(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        end(at: point)
+        // Stay on the ring after a stroke ends, as shipping does.
+        if shape.isBackgroundBrush { updateBrushHover(point) }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -584,7 +610,32 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     }
 
     override func resetCursorRects() {
-        if drawingEnabled { addCursorRect(bounds, cursor: .crosshair) }
+        // Erase/Restore set their cursor per pointer position instead.
+        if drawingEnabled && !shape.isBackgroundBrush { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    /// Shipping `syncRemoveBgHoverCursor` for Erase/Restore at `point`.
+    func brushHover(at point: NSPoint?) -> NativeBrushRing.Hover? {
+        guard drawingEnabled, shape.isBackgroundBrush, let point else { return nil }
+        let stroking = startPoint != nil
+        let panning = isViewportPanning || NSEvent.modifierFlags.contains(.command)
+        let overImage = presentedImageRect.contains(point)
+            && (brushOverImage?(canvasPoint(for: point)) ?? true)
+        return NativeBrushRing.hover(overImage: overImage, stroking: stroking, panning: panning)
+    }
+
+    private func updateBrushHover(_ point: NSPoint?) {
+        guard shape.isBackgroundBrush else {
+            if brushHoverPoint != nil { brushHoverPoint = nil; needsDisplay = true }
+            return
+        }
+        brushHoverPoint = point
+        needsDisplay = true
+        switch brushHover(at: point) {
+        case .ring?: NativeBrushRing.blankCursor.set()
+        case .notAllowed?: NSCursor.operationNotAllowed.set()
+        case .pan?, nil: if point != nil { NSCursor.arrow.set() }
+        }
     }
 
     override func updateTrackingAreas() {
@@ -598,19 +649,26 @@ final class EditorDrawOverlay: EditorViewportGestureView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        onHover?(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateBrushHover(point)
+        onHover?(point)
     }
 
     override func mouseEntered(with event: NSEvent) {
-        onHover?(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateBrushHover(point)
+        onHover?(point)
     }
 
     override func mouseExited(with event: NSEvent) {
+        // Leaving the canvas hides the ring unless a stroke is under way.
+        updateBrushHover(startPoint != nil ? currentPoint : nil)
         onHover?(nil)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        defer { drawBrushRing() }
         guard let startPoint, let currentPoint else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
@@ -630,10 +688,6 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             path.lineWidth = 1.5; path.lineCapStyle = .round
             path.lineJoinStyle = .round
             if !pixelPreviewVisible { path.stroke() }
-            let radius = max(2, brushDiameter * scale / 2)
-            let ring = NSBezierPath(ovalIn: NSRect(x: currentPoint.x - radius, y: currentPoint.y - radius,
-                                                  width: radius * 2, height: radius * 2))
-            ring.lineWidth = 1.5; ring.stroke()
             return
         }
         if pixelPreviewVisible { return }
@@ -2037,6 +2091,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.onPreviewCancel = { [weak self] in self?.cancelDrawingPreview() }
         drawOverlay.onWand = { [weak self] point in self?.removeImageBackground(at: point) }
         drawOverlay.onHover = { [weak self] point in self?.wandHover(point) }
+        drawOverlay.brushOverImage = { [weak self] point in
+            NativeBrushRing.overImage(self?.state.snapshot?.layers ?? [], at: point)
+        }
         drawOverlay.onBackgroundBrush = { [weak self] mode, points in
             self?.paintImageBackground(mode: mode, points: points)
         }
@@ -6383,6 +6440,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.fillColor = tokens.color("theme-accent").withAlphaComponent(0.22)
         drawOverlay.strokeColor = tokens.color("theme-accent")
         drawOverlay.brushOutlineColor = tokens.color("text")
+        drawOverlay.brushAccentColor = tokens.color("theme-accent")
         selectionOverlay.strokeColor = tokens.color("theme-accent")
         selectionOverlay.dotFill = tokens.color("surface-raised")
         selectionOverlay.hintFill = tokens.color("glass-strong")
