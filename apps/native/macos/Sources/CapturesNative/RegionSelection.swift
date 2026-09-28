@@ -42,6 +42,57 @@ struct RegionSelection {
     }
 }
 
+/// Shipping `CaptureDim` under the selection chrome, in its own layer so the
+/// dim can fade in on reveal (`.capture-region .capture-shade` over `--dur-4`
+/// `ease-in-out`, and New Capture's region and window shades) while the frozen
+/// snapshot beneath is opaque from the first frame. The fade is
+/// presentation-only; the model opacity stays 1.
+final class CaptureShadeView: NSView {
+    private let tokens: Tokens
+    private var pendingFade = false
+    var drawShade: () -> Void = {}
+    /// Whether the dim on screen at reveal fades (New Capture's Full screen
+    /// shade does not).
+    var fadesOnReveal: () -> Bool = { true }
+    override var isFlipped: Bool { true }
+
+    init(frame: NSRect, tokens: Tokens) {
+        self.tokens = tokens
+        super.init(frame: frame)
+        wantsLayer = true
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ dirtyRect: NSRect) { drawShade() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Fade the dim in once this view is on screen (skipped under Reduce Motion).
+    func fadeInOnReveal() {
+        pendingFade = true
+        if window != nil { playFade() }
+    }
+
+    /// Whether the reveal fade is playing, for tests.
+    var isFading: Bool { layer?.animation(forKey: "capture-shade-fade") != nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil && pendingFade { playFade() }
+    }
+
+    private func playFade() {
+        pendingFade = false
+        let tween = NativeMotion.transition("capture_shade_fade", tokens: tokens)
+        guard tween.duration > 0, fadesOnReveal(), let layer else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0; fade.toValue = 1
+        fade.duration = tween.duration; fade.timingFunction = tween.timing
+        fade.fillMode = .backwards
+        layer.add(fade, forKey: "capture-shade-fade")
+    }
+}
+
 private final class RegionCanvas: NSView {
     weak var selector: RegionSelectionView?
     override var isFlipped: Bool { true }
@@ -53,12 +104,14 @@ private final class RegionCanvas: NSView {
 }
 
 /// Same retained image/canvas/native-button tree in live selection and CI fixtures.
-/// Only the canvas and changed labels redraw on input; no animation/display timer.
+/// Only the shade, canvas and changed labels redraw on input; no display timer
+/// (the shade's reveal fade is a Core Animation opacity animation).
 final class RegionSelectionView: NSView {
     private let tokens: Tokens
     private let autoStart: Bool
     private(set) var selection: RegionSelection
     private let canvas = RegionCanvas()
+    private let shade: CaptureShadeView
     private let toolbar = NSView()
     private let guidance: CaptureGuidanceChip
     private let dimensions = NSTextField(labelWithString: "")
@@ -73,6 +126,7 @@ final class RegionSelectionView: NSView {
          confirm: @escaping (CapturesSelectionRect) -> Void, cancel: @escaping () -> Void) {
         self.tokens = tokens; self.autoStart = autoStart; self.confirm = confirm; self.cancel = cancel
         guidance = CaptureGuidanceChip(tokens: tokens)
+        shade = CaptureShadeView(frame: NSRect(origin: .zero, size: frame.size), tokens: tokens)
         selection = RegionSelection(bounds: CapturesSelectionBounds(width: frame.width, height: frame.height))
         super.init(frame: frame)
         wantsLayer = true
@@ -84,6 +138,9 @@ final class RegionSelectionView: NSView {
             background.setAccessibilityElement(false)
             addSubview(background)
         }
+        shade.drawShade = { [weak self] in self?.drawShade() }
+        addSubview(shade)
+        shade.fadeInOnReveal()
         canvas.frame = bounds; canvas.wantsLayer = true; canvas.selector = self
         canvas.setAccessibilityElement(false); addSubview(canvas)
         let gap = tokens.number("s-4"), height = tokens.number("h-lg")
@@ -186,7 +243,7 @@ final class RegionSelectionView: NSView {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
 
     private func update() {
-        canvas.needsDisplay = true
+        canvas.needsDisplay = true; shade.needsDisplay = true
         guidance.setSuppressed(selection.mode != nil)
         captureButton.isEnabled = selection.capturable && selection.mode == nil
         for (index, button) in aspectButtons.enumerated() {
@@ -208,10 +265,16 @@ final class RegionSelectionView: NSView {
         captureButton.needsDisplay = true
     }
 
-    fileprivate func drawSelection() {
+    fileprivate func drawShade() {
         let path = NSBezierPath(rect: bounds)
         if selection.capturable { path.appendRect(selection.nsRect) }
         path.windingRule = .evenOdd; tokens.color("capture-shade").setFill(); path.fill()
+    }
+
+    /// The reveal fade of the dim, for tests.
+    var isShadeFading: Bool { shade.isFading }
+
+    fileprivate func drawSelection() {
         guard selection.capturable else { return }
         RegionSelectionView.drawMarquee(selection.nsRect, tokens: tokens, radius: 0)
     }

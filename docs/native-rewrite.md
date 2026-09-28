@@ -22,7 +22,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview with per-card errors, the capture menu's Capturing/Starting/Switching states, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
-| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback, permission recovery on a denied capture, OS reduced-motion change notifications (wgpu on Windows/Linux) | Remaining Preferences parity, remaining preview effects (backdrop blur, dust dissolve blur, fan stagger and drag sway), physical setup/login, permission revocation and installed Open With acceptance, crash reporting |
+| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and sway and a staggered hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback, permission recovery on a denied capture, OS reduced-motion change notifications (wgpu on Windows/Linux) | Remaining Preferences parity, remaining preview effects (backdrop blur), physical setup/login, permission revocation and installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, curve and endpoint grips, Fit/100%/zoom steps/wheel and magnify zoom/pan/Recenter, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts (all four families offered on every draft, pinned on first use; missing glyphs fall back to other bundled faces, then installed fonts) and shared new-text drop shadow, the shipping Erase/Restore brush ring, Trim edges hover preview, Wand loupe, the shipping header/rail and export bar (copy, overwrite Save, save-new-copy) | Remaining text parity (shipping's OS font stacks versus bundled faces, IME), Tauri inspector design parity; remaining recording-editor parity |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
@@ -201,7 +201,13 @@ corner radius from the screen's outline, like shipping. wgpu has no display radi
 on Windows or Linux, and shipping uses 0 there too. New Capture uses the same shades
 and frame hairlines, and keeps its handles and centered badge. The direct overlays
 now share New Capture's guidance chip (see the overlay guidance slice below). The
-shade fade-in and New Capture's desktop-hover dim still differ from shipping.
+region overlay's shade, and New Capture's region and window shades, fade in over
+`--dur-4` `ease-in-out` once the overlay is revealed (`captures_app::motion`
+`capture_shade_fade`) while the frozen snapshot is opaque from the first frame;
+the direct window overlay and New Capture's Full screen shade appear at once, as
+in shipping. AppKit draws the dim in its own view and fades its layer
+(presentation-only); wgpu scales the shade's alpha. New Capture's desktop-hover
+dim still differs from shipping.
 Rendering was checked on X11. AppKit is covered by XCTest only.
 
 Shortcut, tray and New Capture flows now start on the display under the pointer,
@@ -343,10 +349,20 @@ the capture highlight, main-action icon pop, clipboard chip arrival and the hove
 pile sparkle, plus the "Not in History"/"Clipboard unavailable" card warnings (native
 captures reach only the latter, after a failed copy). Reduce Motion skips all of
 them. wgpu draws the hover blur and the Close streak with real separable Gaussians
-(see the preview effects slice below); the dust chips still carry only the
-pre-blurred hover media rather than their own `--blur-dissolve`. A saved card's dust
-starts after its Trash request succeeds rather than before it. wgpu unit tests and AppKit XCTests (not run here)
-cover the state machine, exits, flight, morph and warnings. The private-X11 preview
+(see the preview effects slice below). Dust chips follow shipping's canvas path on
+both hosts: each chip is cut sharp from the card media, padded with 8 pt of
+transparency and blurred on its own (`blur(2px) brightness(.5)`), so flying chips
+keep soft edges. AppKit filters one Core Image atlas; wgpu blurs one atlas at a
+pixel per point when the exit first paints. A saved card's Delete now runs in
+shipping's order: the card dissolves at once, the Trash request goes out after the
+dust has played and the stack settled (at once under Reduce Motion), and a failed
+Trash puts the card back in its slot with the error so it can be retried; a card
+presented again under the same ID meanwhile is left alone. wgpu holds the
+dissolved card's empty slot (and the preview window) until the reply, as shipping
+keeps the card until `trash_artifact` resolves; AppKit rebuilds the stack when the
+dust ends and re-adds the card if the Trash fails. wgpu unit tests and
+AppKit XCTests (not run here) cover the state machine, exits, flight, morph,
+warnings and the Trash order. The private-X11 preview
 `--stack` smoke now waits for settled pixels after exits and flights (and before
 its frozen-capture comparison) and lets the hovered pile's sparkle dots through its
 fan checks. Physical macOS/Windows and Wayland acceptance remain open.
@@ -1738,8 +1754,23 @@ rear cards: shared Rust calculates `min(.72, poseDepth * .14)`, with no shade on
 the front or expanded images. AppKit uses a clipped native view overlay; wgpu
 paints the same token over the retained image without altering source pixels.
 This connects translation and depth shading; the preview effects slice below
-adds the 3D tilt, depth blur, shadows and hover glow. The per-card 16 ms fan
-stagger, drag sway and the expand blur keyframe remain open. Shipping keeps the pile on the primary
+adds the 3D tilt, depth blur, shadows and hover glow. The hover fan now eases over
+`--stack-fan-dur`/`--stack-fan-ease` (`--dur-3`, `--ease-standard`) with shipping's
+16 ms stagger per layer: the transform, glow and position wait `pose depth × 16 ms`
+and the media blur `slot depth × 16 ms` (shared `preview_motion::StackFan`, which
+retargets each card from where it is; AppKit delays each layer's Core Animation).
+Expand clears the blur each card had on screen when it began, usually the fanned
+pile's (`thumbnail-card-expand-blur` from `--thumbnail-stack-expand-blur-from`), over
+the 0.52 s flight; wgpu also starts the flight from the fanned pose. Carrying the
+pile now plays shipping's drag sway: once the fan has held open for its gather
+(`--stack-fan-dur` plus the deepest layer's stagger), the rear cards lean with the
+pointer's velocity through the shared under-damped spring
+(`preview_motion::DragSway`, `captures_preview_drag_sway_tick_v1`) and the
+`.thumbnail-stack-drag-sway` pose (`collapsed_card_sway_pose`,
+`captures_preview_pile_sway_pose_v1`); dropping eases the lean back over the fan's
+staggered transition. wgpu ticks the spring once per frame from desktop pointer
+samples; AppKit on a display-rate timer that stops once the lean settles. Reduce
+Motion never leans. Shipping keeps the pile on the primary
 monitor; both hosts already open it on the capture display. Physical
 AppKit, Windows and Wayland presentation/interaction are unverified; private X11
 provides the Linux rendering/input evidence. The effects parity gate remains open.
@@ -1781,11 +1812,19 @@ tilt from the shipping values instead of approximations:
   `0 0 0 1px rgba(accent, .55), 0 0 22px rgba(accent, .28)` on every card.
 
 Masks and blurs are built once per size or radius, so settled frames stay idle.
+- **Arrival blur.** `thumbnail-arrive`'s `filter: blur(3px → 0)` plays on the
+  media: AppKit animates a second Core Image Gaussian that is removed once the
+  card lands; wgpu cross-fades a copy blurred at 3 pt (built with the hover blur
+  off the UI thread) out as the radius falls. The card's border and chrome are not
+  blurred.
+- **History hover shadow.** `.history-card` draws `--shadow-sm` and eases to
+  `--shadow-md` with the hover lift (`--dur-3`, `--ease-standard`). Both hosts
+  cross-fade the two token shadows instead of interpolating each layer, so their
+  cached masks serve every frame.
+
 Still open: `backdrop-filter` glass (wgpu cannot read the desktop behind its
 window; AppKit's `NSVisualEffectView` materials add their own tint over the 82–93%
-opaque token fills, so neither host blurs the backdrop yet), the dust chips'
-`--blur-dissolve`, the 16 ms fan stagger, drag sway, the expand blur keyframe, the
-preview arrival's 3 px blur and the History hover shadow. Verified with Rust unit
+opaque token fills, so neither host blurs the backdrop yet). Verified with Rust unit
 tests, `node --test scripts/native-tokens.test.mjs` and the private-X11 preview
 smoke; AppKit XCTests run only in macOS CI, and physical macOS/Windows/Wayland
 visual acceptance remains open.
@@ -2306,12 +2345,29 @@ are described below. Physical input/accessibility acceptance stays open.
 The wgpu Import image action picks PNG/JPEG/WebP/TIFF files independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
 normalizes EXIF orientation and supplies owned RGBA to the shared import command.
-RGB/grayscale ICC profiles convert to sRGB before publication, preserving straight
-alpha; untagged files assume sRGB. Unsupported or malformed ICC profiles, CMYK
-profiles, and PNG gamma/chromaticity-only or CICP descriptions fail recoverably
-instead of silently relabeling samples. Those color formats and HDR/wide-gamut
-editing remain open; imports normalize to RGBA8. Analytic linear-to-sRGB fixtures
-exercise profile transport through PNG, JPEG, WebP and TIFF plus grayscale alpha.
+Shipping decodes Add images and dropped layers in the webview, which color-manages
+them into its 8-bit sRGB canvas; native import follows the same rules. RGB/grayscale
+ICC profiles convert to sRGB before publication, preserving straight alpha;
+untagged files assume sRGB. CMYK JPEGs (Adobe CMYK or YCCK) and CMYK TIFFs with a
+CMYK profile convert their original ink samples through that profile; untagged
+CMYK keeps the naive conversion shipping's decoders use. PNGs follow PNG 3
+precedence: a supported cICP chunk (any H.273 primaries with an SDR transfer)
+outranks iCCP, then sRGB, then gAMA/cHRM, which build a power-law source profile.
+HDR PQ and HLG cICP PNGs map BT.2408 reference white (203 nits; HLG on a 1000-nit
+display) to SDR white and clip brighter highlights, as an 8-bit sRGB canvas
+receives them. Narrow-range or unspecified cICP falls back to the other chunks,
+as in browsers; non-RGB cICP is rejected by the png decoder shipping's Open path
+also uses. HDR/wide-gamut editing is not a shipping feature either: both
+normalize to 8-bit sRGB. Malformed ICC profiles, or profiles whose color space
+does not match the samples, still fail recoverably rather than being ignored as
+browsers do. Undecodable imports report shipping's "<name> could not be loaded."
+TIFF import matches the macOS webview (WebView2 and WebKitGTK cannot decode TIFF,
+so native accepts more there); GIF, BMP, AVIF, SVG and HEIC layers, which shipping
+accepts through the webview, remain open. Analytic fixtures in
+`captures-app` cover ICC transport through PNG, JPEG, WebP and TIFF plus
+grayscale alpha, a generated CMYK lut16 profile through Adobe CMYK and YCCK JPEGs
+and a CMYK TIFF, cICP precedence/primaries/fallback, PQ/HLG reference white, and
+gamma/chromaticity-only PNGs.
 The returned stable ID selects the new layer. Cancellation, decode failures and
 late results after close preserve the editor; a completed selection waits for
 already accepted edits before importing. Imports do not write a draft or History
@@ -2368,7 +2424,9 @@ geometry (`min(96px, 42%)` with an 8 % overhang for the drop guide, 96 px for
 Expand canvas). Both hosts share one bloom/bar/particle painter with the Trim edges
 preview, whose bloom now breathes too. Under reduced motion every loop rests on the
 element's own style (bloom opacity 0.95, bar and ghost 1) with no particles and no
-redraw timer. The edge pulse's `brightness()` filter is omitted. Private X11 checks
+redraw timer. The bar pulses' `brightness(1.15)` (drop guide, Expand canvas) and
+`brightness(1.12)` (Trim edges) now cross the ABI as keyframe data and scale the
+bar's and its glows' colour channels on both hosts. Private X11 checks
 the multi-select portal request and import in both appearances; AppKit is covered by
 XCTest only (macOS CI is its first compile). Windows/Wayland share the wgpu code but
 are presentation-unverified.
@@ -2380,7 +2438,10 @@ paths through the shared History-backed `open_media` request using repeatable
 callback. Both queue startup inputs and serialize opens against editor focus and
 History refresh; unsupported
 paths do not block later ones. Still images reuse the bounded, color-managed decoder
-above, excluding TIFF. Already-open canonical sources preserve active edits; a
+above. As in shipping's `open_media`, TIFF and other stills are rejected with
+"Captures can open PNG, JPEG, WebP, GIF, MP4, and WebM files." Shipping's Open
+relabels decoded samples as sRGB; native converts ICC, CMYK, cICP/HDR and
+gamma-only sources as described above. Already-open canonical sources preserve active edits; a
 closed source reloads under the same History ID and, as in shipping, drops its
 autosaved draft, but only after the new pixels decode (a bad source keeps the draft).
 AppKit waits for its current editor open to settle before advancing the batch;
@@ -2699,13 +2760,15 @@ settled for code and tests that read them. Both hosts now play:
 - the recording-saved (15 s) and controls-hidden (6 s) lifecycles: arrive, hold,
   and fade out ending 200 ms before the window closes. A save that extends the
   saved notice's life holds it steady instead of replaying the entrance;
-- mini-preview `thumbnail-arrive` for each newly decoded card;
+- mini-preview `thumbnail-arrive` for each newly decoded card, including its
+  3 px media blur;
 - countdown scrim/content fade-in and the cancelling fade-out;
 - capture menu `recording-options-arrive` on the Record row, and sliding
   `.capture-segmented-indicator`s for Screenshot/Record, Region/Window/Full
   screen and the Preferences Appearance control (`--dur-4` `--ease-standard`);
 - the Preferences save-status pop-in (`--dur-2`);
-- History card hover lift (2 pt over `--dur-3`); wgpu also eases the border.
+- History card hover lift (2 pt over `--dur-3`) with its `--shadow-sm` →
+  `--shadow-md` shadow; wgpu also eases the border.
 
 Reduced motion follows the shipping global rule (0.01 ms animations and
 transitions): entrances and transitions land at rest with no frames between,
@@ -2715,11 +2778,17 @@ invisible final keyframe, so both hosts keep them still and visible until their
 windows close. The existing system Reduce Motion wiring (AppKit workspace
 setting; wgpu portal/Windows preference or `--reduced-motion`) drives all of it.
 wgpu requests repaints only while a pose changes, and its motion wrapper keeps
-widget ids stable when an animation settles. Not reproduced: the preview
-arrival's 3 px blur (no egui/Core Animation equivalent without filters), the
-History hover shadow and AppKit's hover border easing, segment label colour
-transitions, and pop-ins on native select menus (AppKit uses system menus; wgpu
-uses egui popups). Confirmation dialogs are native in shipping and have no
+widget ids stable when an animation settles. The preview arrival's 3 px blur and
+the History hover shadow now play too (see the preview effects slice), as do
+segment label colours (`color var(--dur-3) var(--ease-standard)` toward the
+hovered or active label, `segment_label`) on the Preferences segmented controls
+and the capture menu's Screenshot/Record and target switches, and the shared
+select listbox's `ui-pop-in` (`--dur-2`, `--ease-out`) in wgpu. AppKit's capture
+menu segments now rest on `--glass-text-muted` like shipping instead of always
+`--glass-text`. Not reproduced: AppKit's History hover border easing, pop-ins on
+AppKit's select menus (system menus) and on the wgpu screenshot editor's Format
+and Output size menus, which are still egui `ComboBox` popups where shipping uses
+`CustomSelect` (its crop aspect and font menus are native `<select>`s). Confirmation dialogs are native in shipping and have no
 entrance to match. Verified with Rust/XCTest source tests and private-X11 smokes;
 AppKit runs only in macOS CI, and physical macOS/Windows motion acceptance remains
 open.

@@ -215,15 +215,38 @@ impl StackExits {
 
     /// Drop exits whose hold ended. Returns whether any card left.
     pub fn prune(&mut self, now_ms: f64, reduced_motion: bool) -> bool {
+        self.prune_holding(now_ms, reduced_motion, &|_| false)
+    }
+
+    /// [`Self::prune`], except that finished exits `held` names keep their
+    /// slot (shipping keeps a deleted card until its Trash request resolves)
+    /// until [`Self::release`].
+    pub fn prune_holding(
+        &mut self,
+        now_ms: f64,
+        reduced_motion: bool,
+        held: &dyn Fn(&str) -> bool,
+    ) -> bool {
         let before = self.exits.len();
         let finished: Vec<String> = self
             .exits
             .iter()
-            .filter(|(_, exit)| exit.finished(now_ms, reduced_motion))
+            .filter(|(id, exit)| exit.finished(now_ms, reduced_motion) && !held(id))
             .map(|(id, _)| id.clone())
             .collect();
         self.exits.retain(|(id, _)| !finished.contains(id));
         self.display.retain(|id| !finished.contains(id));
+        self.exits.len() != before
+    }
+
+    /// End `id`'s exit now. `keep_slot` leaves its display slot for the card
+    /// returning to the stack (a failed Trash); otherwise the slot goes too.
+    pub fn release(&mut self, id: &str, keep_slot: bool) -> bool {
+        let before = self.exits.len();
+        self.exits.retain(|(exit, _)| exit != id);
+        if !keep_slot {
+            self.display.retain(|existing| existing != id);
+        }
         self.exits.len() != before
     }
 
@@ -236,8 +259,11 @@ impl StackExits {
     /// Milliseconds until the next exit ends, for hosts that schedule one
     /// wake-up instead of polling.
     pub fn next_finish_in_ms(&self, now_ms: f64) -> Option<f64> {
+        // A finished exit still here is held (see `prune_holding`); it waits
+        // for its host instead of a wake-up.
         self.exits
             .iter()
+            .filter(|(_, exit)| !exit.finished(now_ms, false))
             .map(|(_, exit)| (exit.kind.hold_ms() - exit.elapsed_ms(now_ms)).max(0.0))
             .reduce(f64::min)
     }
@@ -376,6 +402,233 @@ impl StackToolbar {
                 .resolve(tokens)
                 .is_some_and(|animation| animation.running(now_ms - started, reduced))
         })
+    }
+}
+
+/// `--stack-fan-stagger`: each pile layer starts its fan transition this
+/// much later per depth, so the lift cascades instead of moving as a slab.
+pub const FAN_STAGGER_MS: f64 = 16.0;
+
+/// Fan transition delay of a card's `transform`, `opacity`, `box-shadow` and
+/// depth shade: `calc(var(--thumbnail-stack-pile-depth) * 16ms)`, the pose
+/// depth ([`crate::preview::stack_pose_depth`]).
+pub fn fan_delay_ms(depth: usize) -> f64 {
+    crate::preview::stack_pose_depth(depth as f64) * FAN_STAGGER_MS
+}
+
+/// Fan transition delay of a card's media `filter`:
+/// `calc(var(--thumbnail-stack-depth) * 16ms)`, the whole slot depth.
+pub fn fan_media_delay_ms(depth: usize) -> f64 {
+    depth as f64 * FAN_STAGGER_MS
+}
+
+/// The collapsed pile's hover fan with shipping's per-card stagger. Each card
+/// runs its own CSS transition toward the target: a change mid-way starts
+/// from where that card is, after its delay again.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StackFan {
+    open: bool,
+    since_ms: f64,
+    /// Each card's `(pose, media)` progress when the latest change began.
+    from: Vec<(String, f64, f64)>,
+}
+
+impl StackFan {
+    /// Retarget the fan. `cards` are the pile's `(id, depth)`; returns whether
+    /// the target changed.
+    pub fn set(
+        &mut self,
+        open: bool,
+        now_ms: f64,
+        cards: &[(&str, usize)],
+        tween: &Tween,
+        reduced_motion: bool,
+    ) -> bool {
+        if open == self.open {
+            return false;
+        }
+        // Under reduced motion every card lands at once, and a later change
+        // with motion back on must not replay a stale pose.
+        let target = if open { 1.0 } else { 0.0 };
+        self.from = cards
+            .iter()
+            .map(|&(id, depth)| {
+                let (pose, media) = if reduced_motion {
+                    (target, target)
+                } else {
+                    self.progress(id, depth, now_ms, tween, false)
+                };
+                (id.to_owned(), pose, media)
+            })
+            .collect();
+        self.open = open;
+        self.since_ms = now_ms;
+        true
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    /// Eased `(pose, media)` progress of one card toward the fanned pose
+    /// (0 = rest, 1 = fanned). A card the fan has not seen starts at rest.
+    pub fn progress(
+        &self,
+        id: &str,
+        depth: usize,
+        now_ms: f64,
+        tween: &Tween,
+        reduced_motion: bool,
+    ) -> (f64, f64) {
+        let target = if self.open { 1.0 } else { 0.0 };
+        let (from_pose, from_media) = self
+            .from
+            .iter()
+            .find(|(card, ..)| card == id)
+            .map_or((0.0, 0.0), |&(_, pose, media)| (pose, media));
+        let elapsed = now_ms - self.since_ms;
+        (
+            tween.value(
+                from_pose,
+                target,
+                elapsed - fan_delay_ms(depth),
+                reduced_motion,
+            ),
+            tween.value(
+                from_media,
+                target,
+                elapsed - fan_media_delay_ms(depth),
+                reduced_motion,
+            ),
+        )
+    }
+
+    /// Whether any card down to depth `deepest` is still moving.
+    pub fn running(&self, deepest: usize, now_ms: f64, tween: &Tween, reduced: bool) -> bool {
+        let delay = fan_delay_ms(deepest).max(fan_media_delay_ms(deepest));
+        tween.running(now_ms - self.since_ms - delay, reduced)
+    }
+
+    /// Milliseconds until the deepest card lands, as shipping's
+    /// `thumbnailStackFanCollapseMs`: `--stack-fan-dur` plus the pose-depth
+    /// stagger.
+    pub fn settle_ms(deepest: usize, tween: &Tween) -> f64 {
+        tween.duration_ms + fan_delay_ms(deepest)
+    }
+}
+
+/// `THUMBNAIL_STACK_DRAG_SWAY_MAX_X_PX` / `_Y_PX`: the lean's bounds.
+pub const DRAG_SWAY_MAX: (f64, f64) = (3.0, 2.0);
+const DRAG_SWAY_WOBBLE_SPRING: f64 = 500.0;
+const DRAG_SWAY_WOBBLE_DAMPING: f64 = 32.0;
+const DRAG_SWAY_POINTER_SPEED_GAIN: f64 = 0.0012;
+const DRAG_SWAY_DRIVE_IN_RATE: f64 = 55.0;
+const DRAG_SWAY_DRIVE_OUT_RATE: f64 = 10.0;
+/// The first sample after the lean starts counts as one 16 ms frame.
+pub const DRAG_SWAY_DEFAULT_DT_MS: f64 = 16.0;
+const DRAG_SWAY_MAX_DT_MS: f64 = 48.0;
+const DRAG_SWAY_POSITION_EPSILON: f64 = 0.001;
+const DRAG_SWAY_VELOCITY_EPSILON: f64 = 0.01;
+
+/// Shipping's velocity-driven lean of a carried pile
+/// (`tickThumbnailStackDragSwayState`): the pointer's speed sets a drive
+/// the pile picks up quickly and releases gently, followed by an
+/// under-damped spring, so the rear cards trail the carry, overshoot it a
+/// little and ease back when it stops. Points, negative x for a rightward
+/// carry.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DragSway {
+    position: (f64, f64),
+    velocity: (f64, f64),
+    drive: (f64, f64),
+}
+
+impl DragSway {
+    /// Advance by a pointer step of `(dx, dy)` points over `dt_ms` (zero
+    /// when the pointer held still this frame). Reduced motion never leans.
+    pub fn tick(&mut self, dx: f64, dy: f64, dt_ms: f64, reduced_motion: bool) {
+        if reduced_motion {
+            *self = Self::default();
+            return;
+        }
+        if !dt_ms.is_finite() || dt_ms <= 0.0 {
+            return;
+        }
+        let dt = dt_ms.min(DRAG_SWAY_MAX_DT_MS) / 1000.0;
+        let advance = |position: f64, velocity: f64, drive: f64, step: f64, max: f64| {
+            let desired = (-(step / dt) * DRAG_SWAY_POINTER_SPEED_GAIN).clamp(-max, max);
+            let rate = if step == 0.0 {
+                DRAG_SWAY_DRIVE_OUT_RATE
+            } else {
+                DRAG_SWAY_DRIVE_IN_RATE
+            };
+            let drive = drive + (desired - drive) * (1.0 - (-rate * dt).exp());
+            let velocity = velocity * (-DRAG_SWAY_WOBBLE_DAMPING * dt).exp()
+                + (drive - position) * DRAG_SWAY_WOBBLE_SPRING * dt;
+            let position = (position + velocity * dt).clamp(-max, max);
+            // A clamp is a boundary, not stored momentum.
+            let velocity = if position.abs() == max { 0.0 } else { velocity };
+            (position, velocity, drive)
+        };
+        let x = advance(
+            self.position.0,
+            self.velocity.0,
+            self.drive.0,
+            dx,
+            DRAG_SWAY_MAX.0,
+        );
+        let y = advance(
+            self.position.1,
+            self.velocity.1,
+            self.drive.1,
+            dy,
+            DRAG_SWAY_MAX.1,
+        );
+        *self = Self {
+            position: (x.0, y.0),
+            velocity: (x.1, y.1),
+            drive: (x.2, y.2),
+        };
+        if self.settled() {
+            *self = Self::default();
+        }
+    }
+
+    /// The lean now, `(--thumbnail-drag-sway-x, --thumbnail-drag-sway-y)`.
+    pub fn offset(&self) -> (f64, f64) {
+        self.position
+    }
+
+    /// `[position x, y, velocity x, y, drive x, y]`, for hosts that keep
+    /// the state across an ABI.
+    pub fn state(&self) -> [f64; 6] {
+        [
+            self.position.0,
+            self.position.1,
+            self.velocity.0,
+            self.velocity.1,
+            self.drive.0,
+            self.drive.1,
+        ]
+    }
+
+    pub fn from_state([px, py, vx, vy, dx, dy]: [f64; 6]) -> Self {
+        Self {
+            position: (px, py),
+            velocity: (vx, vy),
+            drive: (dx, dy),
+        }
+    }
+
+    /// Nothing left to animate: well below a visible subpixel.
+    pub fn settled(&self) -> bool {
+        let small = |value: f64, epsilon: f64| value.abs() <= epsilon;
+        small(self.position.0, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.position.1, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.drive.0, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.drive.1, DRAG_SWAY_POSITION_EPSILON)
+            && small(self.velocity.0, DRAG_SWAY_VELOCITY_EPSILON)
+            && small(self.velocity.1, DRAG_SWAY_VELOCITY_EPSILON)
     }
 }
 
@@ -800,6 +1053,76 @@ pub fn exit_catalog() -> serde_json::Value {
 mod tests {
     use super::*;
 
+    fn fan_tween() -> Tween {
+        Tween {
+            duration_ms: 200.0,
+            easing: CubicBezier::LINEAR,
+        }
+    }
+
+    #[test]
+    fn drag_sway_trails_the_carry_and_settles_at_rest() {
+        let mut sway = DragSway::default();
+        assert!(sway.settled());
+        // A fast rightward carry leans the pile left, within its bounds, and
+        // the under-damped spring carries it past the drive it follows.
+        let mut overshot = false;
+        for _ in 0..10 {
+            sway.tick(30.0, 0.0, 16.0, false);
+            overshot |= sway.offset().0 < sway.state()[4];
+        }
+        let (x, y) = sway.offset();
+        assert!(x < -1.0 && x >= -DRAG_SWAY_MAX.0, "{x}");
+        assert_eq!(y, 0.0);
+        assert!(overshot, "the lean overshoots its drive");
+        // Stopping lets it ease back and settle exactly at rest.
+        for _ in 0..240 {
+            sway.tick(0.0, 0.0, 16.0, false);
+        }
+        assert!(sway.settled() && sway.offset() == (0.0, 0.0));
+        // Clamped at its bound, and reduced motion never leans.
+        sway.tick(0.0, 5_000.0, 16.0, false);
+        for _ in 0..20 {
+            sway.tick(0.0, 5_000.0, 16.0, false);
+        }
+        assert!(sway.offset().1 >= -DRAG_SWAY_MAX.1);
+        sway.tick(40.0, 40.0, 16.0, true);
+        assert_eq!(sway, DragSway::default());
+    }
+
+    #[test]
+    fn the_hover_fan_staggers_each_layer_by_its_depth() {
+        let tween = fan_tween();
+        let cards = [("front", 0), ("one", 1), ("two", 2)];
+        let mut fan = StackFan::default();
+        assert!(fan.set(true, 1_000.0, &cards, &tween, false));
+        assert!(!fan.set(true, 1_010.0, &cards, &tween, false));
+        // 16 ms per pose depth for the transform, per slot depth for the blur.
+        assert_eq!(fan_delay_ms(0), 0.0);
+        let pose_one = crate::preview::stack_pose_depth(1.0) * 16.0;
+        assert!((fan_delay_ms(1) - pose_one).abs() < 1e-6);
+        assert_eq!(fan_media_delay_ms(2), 32.0);
+        assert_eq!(fan.progress("front", 0, 1_100.0, &tween, false), (0.5, 0.5));
+        let (pose, media) = fan.progress("two", 2, 1_100.0, &tween, false);
+        assert!((pose - (100.0 - fan_delay_ms(2)) / 200.0).abs() < 1e-6);
+        assert!((media - 68.0 / 200.0).abs() < 1e-6);
+        // Nothing of a deeper card moves before its delay.
+        assert_eq!(fan.progress("two", 2, 1_010.0, &tween, false), (0.0, 0.0));
+        assert!(fan.running(2, 1_210.0, &tween, false));
+        assert!(!fan.running(2, 1_232.0, &tween, false));
+        assert!((StackFan::settle_ms(2, &tween) - (200.0 + fan_delay_ms(2))).abs() < 1e-6);
+        // Reversing mid-way starts each card from where it is, delayed again.
+        assert!(fan.set(false, 1_100.0, &cards, &tween, false));
+        assert_eq!(fan.progress("front", 0, 1_100.0, &tween, false), (0.5, 0.5));
+        let (pose, _) = fan.progress("two", 2, 1_110.0, &tween, false);
+        assert!((pose - (100.0 - fan_delay_ms(2)) / 200.0).abs() < 1e-6);
+        assert_eq!(fan.progress("front", 0, 1_300.0, &tween, false), (0.0, 0.0));
+        // Reduced motion lands at once.
+        assert!(fan.set(true, 2_000.0, &cards, &tween, true));
+        assert_eq!(fan.progress("two", 2, 2_000.0, &tween, true), (1.0, 1.0));
+        assert!(!fan.running(2, 2_000.0, &tween, true));
+    }
+
     struct Shipping;
     impl MotionTokens for Shipping {
         fn duration_ms(&self, token: &str) -> Option<f64> {
@@ -871,6 +1194,30 @@ mod tests {
         assert_eq!(exits.display_ids(), ["a", "c"]);
         assert!(exits.is_empty() && !exits.running(2_030., false));
         assert_eq!(exits.shift_slots("a", 2_030., false, &settle), 0.);
+    }
+
+    #[test]
+    fn a_held_exit_keeps_its_slot_until_released() {
+        let settle = settle_tween();
+        let live = ["a".to_owned(), "b".to_owned()];
+        let mut exits = StackExits::default();
+        exits.sync(&live);
+        assert!(exits.begin(&live, "b", ExitKind::Dust, 0., 0., true, &settle));
+        let done = ExitKind::Dust.hold_ms();
+        // A held exit outlives its hold without asking for a wake-up.
+        assert!(!exits.prune_holding(done, false, &|id| id == "b"));
+        assert!(exits.exiting("b").is_some());
+        assert_eq!(exits.next_finish_in_ms(done), None);
+        assert!(!exits.running(done, false));
+        // Released for a card coming back, its slot stays in place.
+        assert!(exits.release("b", true));
+        exits.sync(&live);
+        assert_eq!(exits.display_ids(), ["a", "b"]);
+        // Released for good, the slot goes too.
+        assert!(exits.begin(&live, "b", ExitKind::Dust, 0., 0., true, &settle));
+        assert!(exits.release("b", false));
+        assert_eq!(exits.display_ids(), ["a"]);
+        assert!(!exits.release("b", false));
     }
 
     #[test]

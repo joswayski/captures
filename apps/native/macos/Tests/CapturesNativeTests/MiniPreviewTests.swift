@@ -153,6 +153,35 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertTrue(panel.becomesKeyOnlyIfNeeded)
     }
 
+    func testCarriedPileLeansAfterItsGatherAndDropsTheLean() throws {
+        _ = NSApplication.shared
+        let ids = ["oldest", "middle", "newest"]
+        let images = Dictionary(uniqueKeysWithValues: ids.map { ($0, solidImage(.systemBlue)) })
+        let panel = fixturePanel(ids: ids, images: images, collapsed: true)
+        defer { panel.close() }
+        let view = panel.previewView
+        let rear = try XCTUnwrap(view.card(for: "oldest"))
+        view.carryPile(at: NSPoint(x: 100, y: 100))
+        let start = CACurrentMediaTime()
+        view.stepCarry(now: start + 0.01)
+        XCTAssertEqual(view.pileLean.x, 0, "the fanned pose holds while the fan gathers")
+        view.stepCarry(now: start + 1)
+        let still = rear.frame.origin
+        for step in 1...8 {
+            view.carryPile(at: NSPoint(x: 100 + 30 * CGFloat(step), y: 100))
+            view.stepCarry(now: start + 1 + 0.016 * Double(step))
+        }
+        if NativeMotion.reduceMotion {
+            XCTAssertEqual(view.pileLean.x, 0, "reduced motion never leans")
+        } else {
+            XCTAssertLessThan(view.pileLean.x, -1, "a rightward carry leans the rear cards left")
+            XCTAssertLessThan(rear.frame.minX, still.x, "the rear card trails the carry")
+        }
+        view.carryPile(at: nil)
+        XCTAssertEqual(view.pileLean.x, 0)
+        XCTAssertEqual(view.pileLean.y, 0)
+    }
+
     func testCollapsedPileAppliesTheSharedDepthPose() throws {
         _ = NSApplication.shared
         let ids = ["oldest", "middle", "newest"]
@@ -590,6 +619,9 @@ final class MiniPreviewTests: XCTestCase {
         actions.bind(previews: controller); actions.configure(historyRoot: "/历史/History")
 
         actions.trash(captured)
+        XCTAssertEqual(controller.presentedArtifactIDs, [],
+                       "shipping dissolves the card before its Trash request")
+        XCTAssertEqual(transport.requestCount, 0, "Trash waits for the dust")
         XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
         actions.save(captured)
         XCTAssertEqual(transport.saveCount, 0, "Save and Trash share the artifact busy guard")
@@ -614,9 +646,12 @@ final class MiniPreviewTests: XCTestCase {
         actions.bind(previews: controller); actions.configure(historyRoot: "/History")
         actions.trash(captured); LiveCaptureController.flush()
         try waitUntil { controller.statusText(for: captured.id) == "Trash failed" }
-        let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-            .first { $0.previewView.artifactIDs == [captured.id] })
-        let status = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? NSTextField }
+        // The failed card returns in the rebuilt stack's panel; an earlier
+        // panel can linger in NSApp.windows, so read the one on screen now.
+        let view = try XCTUnwrap(controller.previewView)
+        XCTAssertEqual(view.artifactIDs, [captured.id])
+        let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
+        let status = try XCTUnwrap(view.subviewsRecursive.compactMap { $0 as? NSTextField }
             .first { $0.stringValue == "Trash failed" })
         XCTAssertFalse(try XCTUnwrap(status.toolTip).isEmpty)
         XCTAssertTrue(panel.isVisible)
@@ -624,7 +659,7 @@ final class MiniPreviewTests: XCTestCase {
         transport.fail = false
         actions.trash(captured); LiveCaptureController.flush()
         try waitUntil { controller.presentedArtifactIDs.isEmpty }
-        XCTAssertEqual(transport.trashCount, 2)
+        try waitUntil { transport.trashCount == 2 }
     }
 
     func testTrashRejectsStaleSavedPathAndMalformedResponse() throws {
@@ -647,7 +682,7 @@ final class MiniPreviewTests: XCTestCase {
         actions.trash(current); LiveCaptureController.flush()
         try waitUntil { controller.statusText(for: current.id) == "Trash failed" }
         XCTAssertEqual(controller.presentedArtifactIDs, [current.id],
-            "malformed success responses must never dismiss")
+            "a malformed success response restores the dissolved card")
     }
 
     func testUnsavedTrashOnlyDismissesAndLateSavedCompletionCannotRemoveReplacement() throws {
@@ -661,7 +696,7 @@ final class MiniPreviewTests: XCTestCase {
         unsavedActions.trash(unsaved)
         LiveCaptureController.flush()
         try waitUntil { unsavedController.presentedArtifactIDs.isEmpty }
-        XCTAssertEqual(unsavedTransport.requestCount, 1)
+        try waitUntil { unsavedTransport.requestCount == 1 }
         XCTAssertEqual(unsavedTransport.lastRequest?["operation"] as? String, "trash_preview")
         XCTAssertTrue(unsavedTransport.lastRequest?["saved_path"] is NSNull,
             "unsaved Trash must never send a private file as the exported path")
@@ -675,30 +710,22 @@ final class MiniPreviewTests: XCTestCase {
             loadPreferences: { try self.preferences() })
         actions.bind(previews: controller); actions.configure(historyRoot: "/History")
         actions.trash(saved)
+        XCTAssertEqual(controller.presentedArtifactIDs, [],
+                       "shipping dissolves the card before its Trash request")
         XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
-        let changed = artifact(id: "same", previewPath: "/old-preview.png", savedPath: "/changed.png")
-        controller.refreshArtifacts([changed])
+        let replacement = artifact(id: "same", previewPath: "/replacement-preview.png")
+        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.present(replacement, on: screenID(), settings: previewSettings(), generation: generation)
+        try waitUntil { controller.decodedArtifactIDs == ["same"] }
+        // Even a late failure must not restore the dissolved card over it.
+        transport.fail = true
         transport.gate?.signal(); LiveCaptureController.flush()
         var completionDrained = false
         DispatchQueue.main.async { completionDrained = true }
         try waitUntil { completionDrained }
         XCTAssertEqual(controller.presentedArtifactIDs, ["same"],
-            "a changed saved-path snapshot must reject late completion")
-
-        transport.gate = DispatchSemaphore(value: 0)
-        actions.trash(changed)
-        XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
-        controller.dismiss(saved.id)
-        let replacement = artifact(id: "same", previewPath: "/replacement-preview.png")
-        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
-        controller.present(replacement, on: screenID(), settings: previewSettings(), generation: generation)
-        try waitUntil { controller.decodedArtifactIDs == ["same"] }
-        transport.gate?.signal(); LiveCaptureController.flush()
-        completionDrained = false
-        DispatchQueue.main.async { completionDrained = true }
-        try waitUntil { completionDrained }
-        XCTAssertEqual(controller.presentedArtifactIDs, ["same"],
             "late Trash completion must not remove an identity/path replacement")
+        XCTAssertNotEqual(controller.statusText(for: "same"), "Trash failed")
     }
 
     func testOutOfOrderDecodesPreserveCaptureOrderAndCaptureCancellationRestoresPanel() throws {

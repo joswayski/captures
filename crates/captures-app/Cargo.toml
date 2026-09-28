@@ -28,6 +28,11 @@ tempfile.workspace = true
 thiserror.workspace = true
 trash = "5"
 uuid.workspace = true
+zune-core = "0.5"
+zune-jpeg = "0.5"
+
+[dev-dependencies]
+jpeg-encoder = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

@@ -105,7 +105,10 @@ final class CaptureButton: NSButton {
     var signal = false
     /// A segment whose selected fill is its switch's sliding indicator view
     /// (shipping `.capture-segmented-indicator`), so it draws no idle chrome.
-    var slidingSegment = false { didSet { needsDisplay = true } }
+    var slidingSegment = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    /// A sliding segment's label: `--glass-text-muted`, easing to
+    /// `--glass-text` over `--dur-3` `--ease-standard` while selected or hovered.
+    private lazy var segmentLabel = NativeBoolTransition("segment_label", tokens: tokens, view: self)
     var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
     /// Shipping quiet editor chrome (header icon buttons, `.screenshot-canvas-tool`):
     /// no fill until hover, muted ink that lifts to text, `.selected` for an active state.
@@ -156,7 +159,7 @@ final class CaptureButton: NSButton {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
         hoverTracking = nil
-        if hudControl || quiet || icon?.isEditorTool == true {
+        if hudControl || quiet || slidingSegment || icon?.isEditorTool == true {
             let tracking = NSTrackingArea(rect: .zero,
                 options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                 owner: self, userInfo: nil)
@@ -195,6 +198,13 @@ final class CaptureButton: NSButton {
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    /// The sliding segment's label ink now (see `segmentLabel`).
+    var segmentLabelColor: NSColor {
+        let lit = CGFloat(segmentLabel.progress(toward: selected || hovered))
+        let muted = tokens.color("glass-text-muted")
+        return muted.blended(withFraction: lit, of: tokens.color("glass-text")) ?? muted
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -264,6 +274,8 @@ final class CaptureButton: NSButton {
                 : hovered || cell?.isHighlighted == true ? "glass-text" : "glass-text-muted")
         } else if editorTool && isEnabled && !selected {
             foreground = tokens.color(hovered ? "text" : "text-muted")
+        } else if slidingSegment && glass && isEnabled {
+            foreground = segmentLabelColor
         } else if quiet {
             let dark = tokens.color("text").brightnessComponent > 0.5
             foreground = selected

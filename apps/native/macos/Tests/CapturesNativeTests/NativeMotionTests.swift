@@ -39,6 +39,21 @@ final class NativeMotionTests: XCTestCase {
         XCTAssertEqual(saved.restOffsets.last, 0.86, accuracy: 1e-9)
     }
 
+    func testArrivalBlurAnimatesTheNamedFilterRadiusFromThreePoints() throws {
+        let layer = CALayer()
+        let seconds = NativeMotion.playBlur("preview_card_arrive", onLayer: layer, filter: "arrive",
+                                            tokens: tokens, key: "arrive-blur", reduced: false)
+        XCTAssertEqual(seconds, 0.52, accuracy: 1e-6)
+        let blur = try XCTUnwrap(layer.animation(forKey: "arrive-blur") as? CAKeyframeAnimation)
+        XCTAssertEqual(blur.keyPath, "filters.arrive.inputRadius")
+        XCTAssertEqual(blur.values as? [NSNumber], [3, 0])
+        XCTAssertEqual(NativeMotion.playBlur("preview_card_arrive", onLayer: CALayer(), filter: "arrive",
+                                             tokens: tokens, key: "arrive-blur", reduced: true), 0)
+        XCTAssertEqual(NativeMotion.playBlur("update_notice_in", onLayer: CALayer(), filter: "arrive",
+                                             tokens: tokens, key: "arrive-blur", reduced: false), 0,
+                       "keyframes without a blur play nothing")
+    }
+
     func testTokensResolveDurationsAndEasings() {
         XCTAssertEqual(NativeMotion.seconds(.token("dur-4"), tokens: tokens), 0.28, accuracy: 1e-9)
         XCTAssertEqual(NativeMotion.seconds(.millis(520), tokens: tokens), 0.52, accuracy: 1e-9)
@@ -132,6 +147,20 @@ final class NativeMotionTests: XCTestCase {
         XCTAssertTrue(labels.allSatisfy { NativeMotion.isPlaying(on: $0) })
         XCTAssertEqual(view.layer?.opacity, 1)
         XCTAssertEqual(view.subviews.map(\.frame), labels.map(\.frame))
+    }
+
+    func testSegmentLabelTransitionLandsFirstThenEasesOverTheShippingTiming() {
+        let view = NSView(frame: .zero)
+        let lit = NativeBoolTransition("segment_label", tokens: tokens, view: view)
+        let duration = NativeMotion.transition("segment_label", tokens: tokens, reduced: false).duration
+        XCTAssertEqual(duration, Double(tokens.number("dur-3")) / 1000, accuracy: 1e-9)
+        XCTAssertEqual(lit.progress(toward: true, now: 10, reduced: false), 1, "the first target lands at once")
+        XCTAssertEqual(lit.progress(toward: false, now: 10, reduced: false), 1, accuracy: 1e-9)
+        let mid = lit.progress(toward: false, now: 10 + duration / 2, reduced: false)
+        XCTAssertTrue(mid > 0 && mid < 1, "\(mid)")
+        XCTAssertEqual(lit.progress(toward: false, now: 10 + duration, reduced: false), 0, accuracy: 1e-9)
+        XCTAssertFalse(lit.isRunning, "a view outside a window schedules no redraws")
+        XCTAssertEqual(lit.progress(toward: true, now: 11, reduced: true), 1, "reduced motion lands at once")
     }
 
     func testCaptureMenuIndicatorsFollowTheSelectedSegments() throws {

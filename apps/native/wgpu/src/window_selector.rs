@@ -440,8 +440,14 @@ fn paint_surface(
     let direct = matches!(guidance, SurfaceGuidance::Direct { .. });
     let display_target = matches!(guidance, SurfaceGuidance::None);
     // Shipping `CaptureDim`: window mode uses the stronger window shade and
-    // the Full screen target the region shade.
+    // the Full screen target the region shade. New Capture's window shade
+    // fades in as the overlay is revealed; the direct overlay's does not.
     let window_shade = tokens.color("capture-shade-window");
+    let window_shade = if direct {
+        window_shade
+    } else {
+        window_shade.gamma_multiply(chip.shade_opacity(ui, tokens))
+    };
     if let Some((rect, window)) = selected.filter(|(rect, _)| rect.is_positive()) {
         let radius = window
             .corner_radius
@@ -810,7 +816,7 @@ mod tests {
             CoordinateMap::new(screen, &display),
             hovered,
             guidance,
-            &mut crate::capture_controls::GuidanceState::default(),
+            &mut crate::capture_controls::GuidanceState::revealed(),
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();

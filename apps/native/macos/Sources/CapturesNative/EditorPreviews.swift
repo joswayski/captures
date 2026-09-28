@@ -415,6 +415,19 @@ enum NativeEdgeEffects {
         return CGFloat(NativeMotion.poseRepeating(name, at: elapsed, tokens: tokens, reduced: false)?.opacity ?? 1)
     }
 
+    /// A looping pulse's `filter: brightness()`; 1 under reduced motion.
+    static func loopBrightness(_ name: String, at elapsed: Double, tokens: Tokens?, reduced: Bool) -> CGFloat {
+        guard !reduced, let tokens else { return 1 }
+        return CGFloat(NativeMotion.poseRepeating(name, at: elapsed, tokens: tokens, reduced: false)?.brightness ?? 1)
+    }
+
+    /// CSS `filter: brightness()`: scale the sRGB channels, clamped.
+    static func brighten(_ color: NSColor, by factor: CGFloat) -> NSColor {
+        guard factor != 1, let rgb = color.usingColorSpace(.sRGB) else { return color }
+        return NSColor(srgbRed: min(1, rgb.redComponent * factor), green: min(1, rgb.greenComponent * factor),
+                       blue: min(1, rgb.blueComponent * factor), alpha: rgb.alphaComponent)
+    }
+
     /// A bar `thickness` thick centered on one side of `rect`, 1 point past each end.
     static func strip(_ rect: CGRect, edge: NativeCanvasExpand.Edge, thickness: CGFloat) -> CGRect {
         switch edge {
@@ -487,15 +500,17 @@ enum NativeEdgeEffects {
     }
 
     /// A pill with layered `(grow, alpha)` glows, all scaled by `opacity`.
+    /// The pulsing pill and its glows; `brightness` is the pulse's
+    /// `filter: brightness()`, which covers the element's glows too.
     static func drawBar(_ strip: CGRect, halos: [(CGFloat, CGFloat)], opacity: CGFloat,
-                        color: (CGFloat) -> NSColor) {
+                        brightness: CGFloat = 1, color: (CGFloat) -> NSColor) {
         let radius = min(strip.width, strip.height) / 2
         for (grow, alpha) in halos {
-            color(alpha * opacity).setFill()
+            brighten(color(alpha * opacity), by: brightness).setFill()
             NSBezierPath(roundedRect: strip.insetBy(dx: -grow, dy: -grow),
                          xRadius: radius + grow, yRadius: radius + grow).fill()
         }
-        color(opacity).setFill()
+        brighten(color(opacity), by: brightness).setFill()
         NSBezierPath(roundedRect: strip, xRadius: radius, yRadius: radius).fill()
     }
 
@@ -536,6 +551,7 @@ enum NativeEdgeEffects {
         let bar = strip(target, edge: edge, thickness: NativeEditorPreviewPaint.snap("edge_bar", 5))
         drawBar(bar, halos: [(16, 0.08), (9, 0.16), (3.5, 0.36)],
                 opacity: loopOpacity("snap_edge_pulse", at: elapsed, tokens: tokens, reduced: reduced),
+                brightness: loopBrightness("snap_edge_pulse", at: elapsed, tokens: tokens, reduced: reduced),
                 color: color)
         drawParticles(target, edge: edge, elapsed: elapsed, reduced: reduced, color: color)
     }
@@ -663,7 +679,10 @@ final class EditorTrimPreviewView: NSView {
                                         scale: bloom.scale, color: color)
             // `0 0 8px .95, 0 0 20px .55, 0 0 32px .32` around the pill.
             NativeEdgeEffects.drawBar(NativeEdgeEffects.strip(keep, edge: edge, thickness: bar),
-                                      halos: [(14, 0.06), (8, 0.12), (3, 0.3)], opacity: pose.edge, color: color)
+                                      halos: [(14, 0.06), (8, 0.12), (3, 0.3)], opacity: pose.edge,
+                                      brightness: NativeEdgeEffects.loopBrightness("trim_edge_pulse", at: elapsed,
+                                                                                   tokens: tokens, reduced: reduced),
+                                      color: color)
             NativeEdgeEffects.drawParticles(keep, edge: edge, elapsed: elapsed, reduced: reduced, color: color)
         }
     }
