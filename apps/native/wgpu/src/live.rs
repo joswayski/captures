@@ -4663,10 +4663,11 @@ impl Live {
                 }
                 Reply::RegionPrepared { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
-                    if let Some(pending) = self.take_recapture(generation)
-                        && !self.begin_recaptured(pending)
-                    {
-                        continue;
+                    if let Some(pending) = self.take_recapture(generation) {
+                        if !self.begin_recaptured(pending) {
+                            continue;
+                        }
+                        request_recaptured_viewports(ctx, generation);
                     }
                     let recording_screenshot =
                         self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
@@ -4813,10 +4814,11 @@ impl Live {
                 }
                 Reply::WindowPrepared { generation, result } => {
                     self.pending = self.pending.saturating_sub(1);
-                    if let Some(pending) = self.take_recapture(generation)
-                        && !self.begin_recaptured(pending)
-                    {
-                        continue;
+                    if let Some(pending) = self.take_recapture(generation) {
+                        if !self.begin_recaptured(pending) {
+                            continue;
+                        }
+                        request_recaptured_viewports(ctx, generation);
                     }
                     let recording_screenshot =
                         self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
@@ -8292,6 +8294,20 @@ fn recording_hud_state(
 
 /// The shipping coordinator state a recording phase stands for, which decides
 /// where Screenshot Display goes (`capture_error::display_route`).
+/// A recaptured selector or menu reuses its viewport, which egui repaints
+/// only on request: paint the new snapshot as soon as it is in place.
+fn request_recaptured_viewports(ctx: &egui::Context, generation: u64) {
+    for id in [
+        egui::ViewportId::from_hash_of("region-selector"),
+        egui::ViewportId::from_hash_of("window-selector"),
+        egui::ViewportId::from_hash_of("capture-controls"),
+        egui::ViewportId::from_hash_of(("recording-screenshot-selector", generation)),
+        egui::ViewportId::from_hash_of(("recording-screenshot-window-selector", generation)),
+    ] {
+        ctx.request_repaint_of(id);
+    }
+}
+
 /// What is open or in flight for `capture_error::busy_route`. `beside` is the
 /// phase of a screenshot beside the take, when one is in progress; the menu
 /// target is read only while the capture menu is open.

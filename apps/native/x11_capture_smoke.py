@@ -720,8 +720,9 @@ def recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, scre
     def entries():
         return {p for p in history.glob("*/metadata.json") if not p.parent.name.startswith(".")}
 
-    def pixel(window, x, y):
-        return tuple(crop_rgb(window, f"1x1+{x}+{y}"))
+    def pixel(x, y):
+        # The live selector is transparent, so read what the desktop shows.
+        return tuple(crop_rgb("root", f"1x1+{x}+{y}"))
 
     def open_selector(key, title):
         run("xdotool", "key", key)
@@ -740,13 +741,22 @@ def recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, scre
     selector = open_selector("ctrl+shift+F7", "Captures Region Selection")
     background(1)
     time.sleep(.5)
-    screenshot(selector, f"{prefix}-live-selector")
-    run("xdotool", "key", "ctrl+shift+F7")
-    time.sleep(.5)
-    background(0)
+    screenshot("root", f"{prefix}-live-selector")
+    # The old selector's veil over the live desktop the recapture freezes; the
+    # snapshot keeps it, like shipping's `include_capture_ui_in_snapshot`.
+    veiled = [bytes(pixel(x, 400)) for x in (10, 400)]
+    live = [bytes(color) for color in BACKGROUNDS[0]]
     frozen = [bytes(color) for color in BACKGROUNDS[1]]
-    wait(lambda: pixel(selector, 10, 400) == tuple(frozen[2]),
-         "the recaptured selector shows the frozen desktop")
+    run("xdotool", "key", "ctrl+shift+F7")
+    time.sleep(1)
+    background(0)
+
+    def shows_frozen():
+        red, _, blue = pixel(10, 400)
+        return red > blue  # BACKGROUNDS[1] is red there, BACKGROUNDS[0] blue.
+    wait(shows_frozen, "the recaptured selector shows the frozen desktop")
+    time.sleep(.5)
+    assert shows_frozen(), "the recaptured selector went live again"
     assert windows("Captures Region Selection") == [selector], "the recapture closed the selector"
     screenshot(selector, f"{prefix}-recaptured-selector")
     run("xdotool", "windowfocus", "--sync", selector, "mousemove", "--window", selector,
@@ -761,13 +771,14 @@ def recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, scre
     assert (entry["mode"], entry["width"], entry["height"]) == ("region", 310, 170), entry
     pixels = run("convert", str(metadata.parent / "capture.png"), "-depth", "8", "RGB:-")
     rows = [pixels[y * 310 * 3:(y + 1) * 310 * 3] for y in range(170)]
-    # Below the old selector's guidance chip the frozen desktop is exact: the
-    # recapture froze the desktop as it was, not as it is now.
-    expected = [(frozen[2] * 160 + frozen[3] * 150) for _ in range(90, 170)]
+    # Below the old selector's guidance chip row the frozen desktop under its
+    # veil is exact: frozen as it was, not the live desktop now.
+    expected = [(veiled[0] * 160 + veiled[1] * 150) for _ in range(90, 170)]
     assert rows[90:] == expected, "the recaptured selection lost the frozen desktop"
-    # The old selector's guidance chip (top edge 16% down, centred) is in it.
-    chip = b"".join(row[210 * 3:] for row in rows[:40])
-    assert chip != (frozen[1] * 100) * 40, "the old selector is missing from the recapture"
+    assert live[2] not in rows[100], "the recapture saved the live desktop"
+    # The old selector is in it: its veil dims the frozen desktop.
+    assert veiled[0] != frozen[2] and veiled[1] != frozen[3], \
+        "the old selector is missing from the recapture"
     print(f"PASS {prefix}: region shortcut recaptures the open region selector", flush=True)
 
     # Another shortcut over the selector opens its UI on the recapture.
@@ -796,7 +807,7 @@ def recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, scre
     dialog = wait(lambda: windows("Captures"), "busy New Capture dialog")[0]
     settled(dialog, "400x100+20+16", lambda rgb: len(set(rgb)) > 8, "busy dialog message")
     screenshot(dialog, f"{prefix}-busy-dialog")
-    run("xdotool", "key", "ctrl+shift+F7", "sleep", ".3", "ctrl+shift+F8", "sleep", ".3")
+    run("xdotool", "key", "ctrl+shift+F7", "sleep", ".3", "key", "ctrl+shift+F8", "sleep", ".3")
     assert not windows("Captures Region Selection") and not windows("Captures Window Selection"), \
         "a shortcut started a capture behind the countdown"
     run("xdotool", "windowactivate", "--sync", dialog, "key", "Return")
