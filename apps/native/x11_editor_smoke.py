@@ -769,7 +769,7 @@ def main():
         elif name in ("wand", "erase", "restore"):
             rail_click("eraser")
             # Shipping's Eraser mode group below the Properties heading.
-            prop_click({"wand": 43, "erase": 115, "restore": 190}[name], ERASER_MODE_ROW)
+            prop_click({"wand": 58, "erase": 160, "restore": 263}[name], ERASER_MODE_ROW)
         else:
             rail_click({"text": "text", "arrow": "arrow", "pen": "pen"}[name])
 
@@ -794,10 +794,10 @@ def main():
         else:
             raise AssertionError(name)
 
-    # Eraser mode buttons (Wand, Erase, Restore) sit below a two-line intro;
-    # the Eraser rows that follow move down by ERASER_ROWS.
-    ERASER_MODE_ROW = 126
-    ERASER_ROWS = 95
+    # Eraser mode buttons (Wand, Erase, Restore) span the 320px column below
+    # a one-line intro; the Eraser rows that follow move down by ERASER_ROWS.
+    ERASER_MODE_ROW = 109
+    ERASER_ROWS = 78
 
     def draw_tool(name):
         tool_state["draw"] = name
@@ -2766,7 +2766,7 @@ def main():
             # Shipping's DrawToolPreview brush dab: opaque `--solid` at its centre,
             # in the 88px card below the Eraser mode row.
             dab = run("convert", str(output / "brush-controls.png"), "-crop",
-                      f"1x1+{inspector_x(115)}+{properties_top() + ERASER_MODE_ROW + 16 + 12 + 44}",
+                      f"1x1+{inspector_x(160)}+{properties_top() + ERASER_MODE_ROW + 16 + 12 + 44}",
                       "-depth", "8", "rgb:-")
             assert (min(dab) >= 200) if args.appearance == "dark" else (max(dab) <= 60), dab
             # Shipping `.screenshot-brush-cursor`: over the image the system
@@ -3258,16 +3258,17 @@ def main():
             topbar_click("fit")  # Fit resets the viewport-center anchor.
             topbar_click("slider-min")  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
-            # The header and export bar leave x=64..522, y=60..452, center
-            # (293,256). The 5% source is 32×18, starting at (277,247).
-            pixel("viewport-slider-minimum", 278, 248, (40, 110, 166))
-            pixel("viewport-slider-minimum", 276, 248, surface)
-            pixel("viewport-slider-minimum", 309, 248, surface)
-            pixel("viewport-slider-minimum", 278, 265, surface)
+            # The header, export bar and 320px sidebar leave x=64..432,
+            # y=60..452, center (248,256). The 5% source is 32×18, starting
+            # at (232,247).
+            pixel("viewport-slider-minimum", 233, 248, (40, 110, 166))
+            pixel("viewport-slider-minimum", 231, 248, surface)
+            pixel("viewport-slider-minimum", 264, 248, surface)
+            pixel("viewport-slider-minimum", 233, 265, surface)
             topbar_click("slider-max")  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
-            pixel("viewport-slider-maximum", 520, 450, (40, 110, 166))
+            pixel("viewport-slider-maximum", 430, 450, (40, 110, 166))
             assert not draft.exists(), "slider changes must not create a draft"
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
