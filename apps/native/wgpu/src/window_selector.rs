@@ -303,11 +303,37 @@ fn paint_display_identity(
         tokens.color("glass-text-muted"),
     );
     let gap = tokens.number("s-4");
-    let height = name.size().y + gap + detail.size().y;
+    // Shipping `.recording-display-icon`: a 68 × 50 glass tile with the 34 px
+    // Full screen icon, above the name.
+    let tile = egui::vec2(68., 50.);
+    let height = tile.y + gap + name.size().y + gap + detail.size().y;
     // translate(-50%, -60%) around the display center.
     let top = surface.center().y - height * 0.6;
+    let tile = egui::Rect::from_center_size(Pos2::new(surface.center().x, top + tile.y / 2.), tile);
+    crate::effects::paint_box_shadows(
+        painter,
+        tile,
+        tokens.number("r-xl"),
+        tokens.shadow("glass-shadow"),
+        1.,
+    );
+    painter.rect(
+        tile,
+        tokens.number("r-xl"),
+        tokens.color("glass"),
+        egui::Stroke::new(1., tokens.color("glass-border-strong")),
+        egui::StrokeKind::Inside,
+    );
+    crate::capture_controls::paint_icon(
+        painter,
+        "target-display",
+        egui::Rect::from_center_size(tile.center(), egui::Vec2::splat(34.)),
+        1.4,
+        tokens.color("glass-text"),
+    );
+    let name_top = tile.bottom() + gap;
     let detail_top = top + height - detail.size().y;
-    for (galley, y) in [(name, top), (detail, detail_top)] {
+    for (galley, y) in [(name, name_top), (detail, detail_top)] {
         let origin = Pos2::new(surface.center().x - galley.size().x / 2., y);
         // The shipping text-shadow keeps the label legible on bright desktops.
         painter.galley_with_override_text_color(

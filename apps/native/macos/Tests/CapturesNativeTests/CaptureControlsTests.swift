@@ -273,6 +273,82 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertEqual(confirmed, [.display])
     }
 
+    func testInFlightStartsAndSwitchesUseShippingLabelsAndBlockNewStarts() {
+        _ = NSApplication.shared
+        var confirmed: [WindowSelectionChoice] = []
+        let view = makeView(confirm: { confirmed.append($0) })
+        view.setTarget(.display)
+        XCTAssertEqual(view.controls.primaryTitle, "Capture")
+        XCTAssertTrue(view.controls.primaryEnabled)
+        view.controls.setInFlight(.starting)
+        XCTAssertEqual(view.controls.primaryTitle, "Capturing…")
+        XCTAssertFalse(view.controls.primaryEnabled, "shipping disables the primary while starting")
+        view.confirmSelection()
+        XCTAssertTrue(confirmed.isEmpty, "a start in flight ignores another")
+        view.controls.setInFlight(nil)
+        XCTAssertEqual(view.controls.primaryTitle, "Capture")
+        view.confirmSelection()
+        XCTAssertEqual(confirmed, [.display])
+
+        view.setMode(.record)
+        view.controls.setInFlight(.starting)
+        XCTAssertEqual(view.controls.primaryTitle, "Starting…")
+        view.controls.setInFlight(.switching)
+        XCTAssertEqual(view.controls.primaryTitle, "Switching…")
+        XCTAssertTrue(view.controls.primaryEnabled)
+        confirmed.removeAll()
+        view.confirmSelection()
+        XCTAssertTrue(confirmed.isEmpty, "a display switch in flight ignores starts")
+        view.controls.setInFlight(nil)
+        XCTAssertEqual(view.controls.primaryTitle, "Start recording")
+
+        // Auto-start hides the primary unless a start is in flight.
+        let automatic = makeView(autoStart: true)
+        XCTAssertTrue(automatic.controls.primaryHidden)
+        automatic.controls.setInFlight(.starting)
+        XCTAssertFalse(automatic.controls.primaryHidden)
+        XCTAssertEqual(automatic.controls.primaryTitle, "Capturing…")
+        automatic.controls.setInFlight(.switching)
+        XCTAssertTrue(automatic.controls.primaryHidden)
+    }
+
+    func testMicrophonesLoadOnceWhenTheMenuFirstShowsRecord() throws {
+        _ = NSApplication.shared
+        let view = UnifiedCaptureSelectionView(frame: frame, image: nil, targets: targets,
+            tokens: Tokens.variants["dark-mustard"]!, autoStart: false,
+            hitTest: { _ in nil }, displayTitles: ["Main display · 1000 × 720"],
+            selectedDisplay: 0, confirm: { _ in }, cancel: {}, changeDisplay: { _ in },
+            recordingState: RecordingControlState(framesPerSecond: 60, maxResolution: "original",
+                showCursor: true, highlightClicks: false, systemAudio: false,
+                microphoneDeviceID: "stored-mic"),
+            recordingAvailability: RecordingControlAvailability(cursor: true, clicks: true,
+                systemAudio: true, microphone: true),
+            microphonesLoaded: false)
+        var requests = 0
+        view.controls.loadMicrophones = { requests += 1 }
+        let microphone = try XCTUnwrap(descendant(in: view.controls,
+            accessibilityLabel: "Microphone") as? NSPopUpButton)
+        XCTAssertEqual(requests, 0, "Screenshot mode lists no devices")
+        view.setMode(.record)
+        XCTAssertEqual(requests, 1)
+        XCTAssertTrue(view.controls.microphonesLoading)
+        XCTAssertFalse(microphone.isEnabled, "shipping disables the select while loading")
+        XCTAssertEqual(microphone.titleOfSelectedItem, "Loading microphone…")
+        XCTAssertTrue(microphone.itemTitles.contains("Loading microphones…"))
+        XCTAssertEqual(microphone.item(withTitle: "Loading microphones…")?.isEnabled, false)
+        view.setMode(.screenshot); view.setMode(.record)
+        XCTAssertEqual(requests, 1, "devices load once per menu")
+        view.controls.setMicrophones([
+            try XCTUnwrap(NativeMicrophoneDevice(["id": "built-in", "name": "MacBook Microphone",
+                "is_default": true])),
+        ])
+        XCTAssertFalse(view.controls.microphonesLoading)
+        XCTAssertTrue(microphone.isEnabled)
+        XCTAssertEqual(microphone.titleOfSelectedItem, "Selected microphone")
+        XCTAssertFalse(microphone.itemTitles.contains("Loading microphones…"))
+        XCTAssertTrue(microphone.itemTitles.contains("MacBook Microphone"))
+    }
+
     func testPreparationGateRejectsCancelledAndSupersededResults() {
         var gate = CapturePreparationGate()
         let first = gate.begin()
@@ -614,12 +690,18 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertFalse(view.isGuidanceVisible, "Full screen shows the identity, not guidance")
         XCTAssertTrue(view.isDisplayIdentityVisible)
         XCTAssertEqual(view.displayIdentityText, "Studio Display · 5120 × 2880")
+        let icon = try XCTUnwrap(view.displayIdentityIconFrame, "the shipping display icon tile")
+        XCTAssertEqual(icon.size, NSSize(width: 68, height: 50))
+        XCTAssertEqual(icon.midX, compact.midX, accuracy: 1)
+        XCTAssertEqual(view.displayIdentityNameFrame.minY, icon.maxY + 8, accuracy: 0.5,
+            "the name sits one --s-4 gap below the tile")
         try render(view, window: window, name: "capture-controls-light-display-identity")
         view.setMode(.record)
         XCTAssertEqual(view.displayIdentityText, "Studio Display · 5120 × 2880 · 60 FPS")
 
         view.setMode(.screenshot); view.setTarget(.window)
         XCTAssertFalse(view.isDisplayIdentityVisible)
+        XCTAssertNil(view.displayIdentityIconFrame)
         XCTAssertEqual(view.guidanceText, "Select a window to continue · Esc to cancel")
         XCTAssertTrue(view.hoverWindow(NSPoint(x: 700, y: 400)))
         XCTAssertEqual(view.guidanceText, "Click to capture this display · Esc to cancel")
