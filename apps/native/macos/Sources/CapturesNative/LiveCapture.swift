@@ -495,6 +495,19 @@ final class LiveCaptureController: NSObject {
         windowSession = nil; windowTarget = nil
         unifiedSession = nil; unifiedTarget = nil
         capturePreferences = preferences
+        let menu: Bool
+        if case .menu = kind { menu = true } else { menu = false }
+        if !menu { unifiedDisplay = nil; unifiedScreen = nil }
+        // The flow's poll follows the new UI's display and preferences, not
+        // the replaced UI's.
+        countdownTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.tickCountdown(display: menu ? (self.unifiedDisplay ?? display) : display,
+                preferences: preferences, generation: generation)
+        }
+        countdownTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
         status.stringValue = "Capturing the open capture UI… Press Escape to cancel."
         switch kind {
         case .selector(.window):
