@@ -1,5 +1,6 @@
 mod accessibility;
 mod capture_controls;
+mod capture_error;
 mod clipboard_input;
 mod clipboard_revision;
 mod compare_overlay;

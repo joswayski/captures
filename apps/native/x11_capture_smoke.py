@@ -124,6 +124,8 @@ def main():
                         help="Exercise the same capture oracles through New Capture controls")
     parser.add_argument("--target-shortcuts", action="store_true",
                         help="Switch New Capture targets using registered global shortcuts")
+    parser.add_argument("--failure-dialog", action="store_true",
+                        help="Fail a display-shortcut capture and check the shipping error dialog")
     args = parser.parse_args()
     if args.target_shortcuts and not args.controls:
         parser.error("--target-shortcuts requires --controls")
@@ -265,6 +267,11 @@ def main():
         spawn("picom", ["picom", "--config", "/dev/null", "--backend", "xrender"])
         time.sleep(1)
 
+        if args.failure_dialog:
+            failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb, screenshot,
+                           background)
+            return
+
         cases = [("region", True, 0, False, False), ("region", True, 1, False, False),
                  ("window", True, 0, False, False), ("window", True, 1, False, False),
                  ("window", False, 0, False, False), ("window", True, 0, True, False),
@@ -322,11 +329,14 @@ def main():
                 else:
                     click(selector, {"region": 530, "window": 627, "display": 738}[target], 811)
 
-            def begin_selection(full_display=False, select=True, check_guidance=False):
+            def begin_selection(full_display=False, select=True, check_guidance=False,
+                                display_shortcut=False):
                 nonlocal checked_toolbar_drag
                 # Shipping entry points (History has no capture buttons): the
-                # New Capture shortcut, or the region/window shortcut.
-                run("xdotool", "key", "ctrl+shift+F10" if args.controls
+                # New Capture shortcut, the region/window shortcut, or the
+                # display shortcut, which opens the menu on Full screen.
+                run("xdotool", "key", "ctrl+shift+F9" if display_shortcut
+                    else "ctrl+shift+F10" if args.controls
                     else "ctrl+shift+F7" if mode == "region" else "ctrl+shift+F8")
                 selector = wait(lambda: windows(title), f"{mode} selector")[0]
                 if windows("Capture History"):
@@ -368,7 +378,8 @@ def main():
                         select_target(selector, "display")
                         assert entries() == previous, "keyboard Full screen armed automatic capture"
                 if args.controls and full_display:
-                    select_target(selector, "display")
+                    if not display_shortcut:
+                        select_target(selector, "display")
                     return selector
                 if args.controls and mode == "window":
                     select_target(selector, "window")
@@ -473,12 +484,14 @@ def main():
                 background(0)
                 captured = entries()
                 # Direct window picking falls back on empty desktop; unified
-                # controls expose a dedicated Full screen target instead.
-                selector = begin_selection(full_display=args.controls)
+                # controls expose a dedicated Full screen target instead, which
+                # the display shortcut preselects (no target click).
+                selector = begin_selection(full_display=args.controls,
+                                           display_shortcut=args.controls)
                 screenshot(selector, f"{prefix}-display-selection")
                 background(1)
                 if args.controls:
-                    run("xdotool", "key", "Return")
+                    run("xdotool", "windowfocus", "--sync", selector, "key", "Return")
                 else:
                     click(selector, 660, 360)  # Empty desktop commits the display.
                 new_entries = wait(lambda: entries() - captured, "display capture from window picker")
@@ -507,6 +520,12 @@ def main():
                 wait(lambda: not windows("Captures Screenshot Countdown") and windows("Capture History"),
                      "vanished-target failure restores workspace")
                 assert len(entries()) == saved_count, "vanished target captured stale or replacement pixels"
+                # Shipping `report_capture_error`: the failure is a modal
+                # "Captures" dialog, not a History error card.
+                dialog = wait(lambda: windows("Captures"), "vanished-target failure dialog")[0]
+                screenshot(dialog, f"{prefix}-failure-dialog")
+                run("xdotool", "windowactivate", "--sync", dialog, "key", "Return")
+                wait(lambda: not windows("Captures"), "failure dialog dismissed")
                 screenshot(root, f"{prefix}-vanished-target")
                 fixture.show()
 
@@ -564,6 +583,93 @@ def main():
             thread.join(timeout=5)
         for log in logs:
             log.close()
+
+
+def failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb, screenshot,
+                   background):
+    """A failed capture shows shipping's "Captures" error dialog in its own
+    window (visible while History is hidden), never the History error card,
+    and the next capture recovers. Checked in both appearances."""
+    for appearance in ("dark", "light"):
+        prefix = f"failure-dialog-{appearance}"
+        history = output / prefix / "history"
+        history.mkdir(parents=True)
+        settings = output / f"{prefix}-settings.json"
+        settings.write_text(json.dumps({
+            "onboarding_completed": True,
+            "settings_schema_version": 5, "appearance": appearance, "theme": "mustard",
+            "output_directory": str(output / prefix / "exports"),
+            "new_capture_shortcut": "Ctrl+Shift+F10",
+            "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+            "display_shortcut": "Ctrl+Shift+F9",
+            "launch_at_login": False, "auto_copy_to_clipboard": False,
+            "auto_start_on_selection": False, "freeze_screen": True,
+            "show_cursor_in_screenshots": False, "screenshot_countdown_seconds": 0,
+        }))
+        background(0)
+        app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
+                             "--settings-file", str(settings), "--quit-after", "90"])
+        root = wait(lambda: windows("Capture History"), "capture workspace")[0]
+        time.sleep(2)
+        settled(root, "600x200+100+160", lambda rgb: True, "History settles")
+        empty_history = crop_rgb(root, "600x200+100+160")
+
+        def entries():
+            return {p for p in history.glob("*/metadata.json") if not p.parent.name.startswith(".")}
+
+        def display_menu_capture():
+            # The display shortcut opens the capture menu on Full screen;
+            # Enter confirms the preselected target.
+            run("xdotool", "key", "ctrl+shift+F9")
+            menu = wait(lambda: windows("Captures Capture Controls"), "display shortcut opens the capture menu")[0]
+            wait(lambda: int(run("import", "-window", menu, "-crop", "1280x96+0+804",
+                                 "-format", "%k", "info:")) > 16, "capture menu paint")
+            assert not windows("Capture History"), "capture menu did not hide History"
+            run("xdotool", "windowfocus", "--sync", menu, "key", "Return")
+
+        # History publishes into this root; a file in its place makes the
+        # capture's persistence fail even for a privileged user.
+        parked = history.with_name("history-parked")
+        history.rename(parked)
+        history.write_text("not a directory")
+        display_menu_capture()
+        dialog = wait(lambda: windows("Captures"), "capture failure dialog")[0]
+        wait(lambda: windows("Capture History"), "failed capture restores History")
+        # The dialog body is the fixed media-free surface: dark text on a light
+        # surface or light text on a dark one, with the message and OK button.
+        settled(dialog, "8x8+4+4", lambda rgb: len(set(rgb)) <= 3, "dialog surface settles")
+        corner = crop_rgb(dialog, "8x8+4+4")
+        luminance = sum(corner) / len(corner)
+        assert (luminance < 96) if appearance == "dark" else (luminance > 160), (appearance, luminance)
+        settled(dialog, "400x100+20+16", lambda rgb: True, "dialog message settles")
+        body = crop_rgb(dialog, "400x100+20+16")
+        assert len({body[i:i + 3] for i in range(0, len(body), 3)}) > 8, "dialog message is not drawn"
+        screenshot(dialog, f"{prefix}-dialog")
+        settled(root, "600x200+100+160", lambda rgb: True, "History settles")
+        assert crop_rgb(root, "600x200+100+160") == empty_history, \
+            "the capture failure reached the History error card"
+        screenshot(root, f"{prefix}-history")
+        assert not entries()
+        run("xdotool", "windowactivate", "--sync", dialog, "key", "Return")
+        wait(lambda: not windows("Captures"), "OK dismisses the dialog")
+
+        # The next capture recovers without a relaunch.
+        history.unlink()
+        parked.rename(history)
+        display_menu_capture()
+        entry = wait(lambda: entries(), "recovered display capture")
+        metadata = json.loads(next(iter(entry)).read_text())
+        assert (metadata["mode"], metadata["width"], metadata["height"]) == ("display", 1280, 900), metadata
+        wait(lambda: windows("Capture History"), "workspace restored")
+        time.sleep(.5)
+        assert not windows("Captures"), "a successful capture showed the error dialog"
+        run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+        assert app.wait(timeout=10) == 0
+        print(f"PASS {prefix}: display-shortcut menu, capture failure dialog, History card untouched, recovery", flush=True)
+    (output / "result.json").write_text(json.dumps({
+        "passed": True, "failureDialog": True, "appearances": ["dark", "light"],
+        "scope": "Real X11 capture failure on private Xvfb with software GL; not Windows or Wayland.",
+    }, indent=2))
 
 
 if __name__ == "__main__":

@@ -1133,9 +1133,19 @@ def main():
                 assert not windows("Capture History") and entries() == previous | {entry}
 
                 previous = entries()
+                # Shipping's display shortcut opens the capture menu on Full
+                # screen (with its display picker); it never captures at once.
                 run("xdotool", "key", "ctrl+shift+F9")
-                wait(lambda: entries() - previous, "hidden-root display shortcut")
-                wait(lambda: windows(PREVIEW), "display preview")
+                controls = wait(lambda: windows(CONTROLS), "hidden-root display shortcut opens the capture menu")[0]
+                wait(lambda: int(run("import", "-window", controls, "-crop", "1280x96+0+804",
+                                     "-format", "%k", "info:")) > 16, "display menu paint")
+                assert entries() == previous, "display shortcut captured before Full screen was confirmed"
+                shot(controls, "lifecycle-display-menu")
+                run("xdotool", "windowfocus", "--sync", controls, "key", "Return")
+                entry = wait(lambda: entries() - previous, "Full screen from the display shortcut").pop()
+                metadata = json.loads(entry.read_text())
+                assert (metadata["mode"], metadata["width"], metadata["height"]) == ("display", 1280, 900), metadata
+                wait(lambda: windows(PREVIEW) and not windows(CONTROLS), "display preview")
                 assert not windows("Capture History"), "display capture reopened workspace"
 
                 menu_action("Capture History…", screenshot=True)  # Real GTK/DBusMenu item.
@@ -1176,7 +1186,8 @@ def main():
                 wait(lambda: not windows(SELECTOR) and not windows("Captures Screenshot Countdown"),
                      "cancel hidden Preferences countdown")
                 assert not windows("Capture History") and entries() == previous
-                for label, title in [("Screenshot Region", SELECTOR), ("Screenshot Window", "Captures Window Selection")]:
+                for label, title in [("Screenshot Region", SELECTOR), ("Screenshot Window", "Captures Window Selection"),
+                                     ("Screenshot Display", CONTROLS)]:
                     menu_action(label)
                     selector = wait(lambda: windows(title), f"tray {label} launches from hidden Preferences")[0]
                     shot(selector, "lifecycle-selector-" + label.lower().replace(" ", "-"))

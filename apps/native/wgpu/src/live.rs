@@ -188,6 +188,9 @@ enum Reply {
         result: Result<Box<Response>, String>,
     },
     HistoryCleared(Result<Box<Response>, String>),
+    /// The display list is a capture input, not History: a failure waits for
+    /// the next capture, which lists the displays again.
+    DisplaysListed(Result<Box<Response>, String>),
     RegionPrepared {
         generation: u64,
         result: Result<Box<RegionSession>, String>,
@@ -375,9 +378,51 @@ impl RecordingScreenshotPhase {
 pub enum CaptureRequest {
     NewCapture,
     Recording(capture_controls::TargetMode),
+    /// Shipping Screenshot Display: the capture menu on Full screen.
+    DisplayMenu,
+    /// Capture the display under the pointer directly (only while recording).
     Display,
     Region,
     Window,
+}
+
+/// A capture that failed after the tray, a shortcut or the capture menu
+/// started it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CaptureFailure {
+    pub error: String,
+    /// Recording failures use shipping `report_recording_error`.
+    pub recording: bool,
+}
+
+/// How the host reports a [`CaptureFailure`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FailureReport {
+    /// Shipping answers a denied screenshot with permission recovery.
+    PermissionRecovery,
+    Dialog {
+        title: &'static str,
+        message: String,
+    },
+}
+
+impl CaptureFailure {
+    pub fn report(&self) -> FailureReport {
+        use captures_app::capture_error;
+        if self.recording {
+            FailureReport::Dialog {
+                title: capture_error::RECORDING_TITLE,
+                message: self.error.clone(),
+            }
+        } else if captures_app::permission_recovery::is_permission_denied(&self.error) {
+            FailureReport::PermissionRecovery
+        } else {
+            FailureReport::Dialog {
+                title: capture_error::TITLE,
+                message: capture_error::message(&self.error),
+            }
+        }
+    }
 }
 
 enum SelectorMessage {
@@ -1266,9 +1311,9 @@ pub struct Live {
     clearing_history: bool,
     requested_capture: Option<CaptureRequest>,
     restore_root_visible: bool,
-    permission_recovery_requested: bool,
-    /// The denied-capture error that last opened permission recovery.
-    permission_error_offered: Option<String>,
+    /// A failed capture awaiting the host's shipping error dialog (or
+    /// permission recovery). Never shown in the History error card.
+    capture_failure: Option<CaptureFailure>,
     /// A capture-menu note link asked the workbench to open Preferences here.
     preference_target_requested: Option<PreferenceTarget>,
     /// A start or display switch failed while New Capture stayed open.
@@ -1336,11 +1381,14 @@ impl Live {
                         notice,
                     } => {
                         let clearing = matches!(request, Request::ClearHistory { .. });
+                        let listing = matches!(request, Request::Displays);
                         let result = captures_app::execute(request)
                             .map(Box::new)
                             .map_err(|error| error.to_string());
                         if clearing {
                             Reply::HistoryCleared(result)
+                        } else if listing {
+                            Reply::DisplaysListed(result)
                         } else {
                             Reply::Executed {
                                 preview,
@@ -1561,8 +1609,7 @@ impl Live {
             clearing_history: false,
             requested_capture: None,
             restore_root_visible: true,
-            permission_recovery_requested: false,
-            permission_error_offered: None,
+            capture_failure: None,
             preference_target_requested: None,
             controls_error: None,
             permission_recovery_visible: false,
@@ -1716,19 +1763,11 @@ impl Live {
             && self.requested_capture.is_none()
     }
 
-    /// Shipping answers a denied capture with its permission dialog
-    /// (`report_capture_error`); History has no permissions button. A new
-    /// denied-capture error opens permission recovery once.
-    pub fn take_permission_recovery_requested(&mut self) -> bool {
-        let denied = self
-            .error
-            .as_ref()
-            .filter(|error| captures_app::permission_recovery::is_permission_denied(error));
-        if denied != self.permission_error_offered.as_ref() {
-            self.permission_error_offered = denied.cloned();
-            self.permission_recovery_requested |= denied.is_some();
-        }
-        std::mem::take(&mut self.permission_recovery_requested)
+    /// The failed capture the host reports next, once. Shipping reports
+    /// every failed tray, shortcut or menu capture in a modal dialog
+    /// (`report_capture_error`); denied permissions open recovery instead.
+    pub fn take_capture_failure(&mut self) -> Option<CaptureFailure> {
+        self.capture_failure.take()
     }
 
     pub fn preference_target_pending(&self) -> bool {
@@ -1815,7 +1854,23 @@ impl Live {
     }
 
     fn can_start_capture(&self) -> bool {
-        self.can_launch_capture() && self.display_id.is_some() && self.can_hide == Some(true)
+        self.can_launch_capture() && self.can_hide == Some(true)
+    }
+
+    /// Shipping `recording_session_is_active`: a recording owns the capture
+    /// flow, so Screenshot Display captures directly instead of opening the menu.
+    pub fn recording_session_active(&self) -> bool {
+        is_recording_phase(self.capture_phase)
+    }
+
+    /// The request for the display shortcut and tray "Screenshot Display".
+    pub fn display_request(&self) -> CaptureRequest {
+        if captures_app::capture_error::display_opens_capture_menu(self.recording_session_active())
+        {
+            CaptureRequest::DisplayMenu
+        } else {
+            CaptureRequest::Display
+        }
     }
 
     pub fn request_capture(&mut self, request: CaptureRequest) {
@@ -1827,8 +1882,11 @@ impl Live {
             self.requested_capture = None;
             return;
         }
-        if !self.can_launch_capture() {
-            self.error = Some("Another capture or history action is still in progress.".into());
+        if self.is_capturing() || self.requested_capture.is_some() {
+            // Shipping ignores a capture that arrives while another one owns
+            // the flow (`CaptureInProgress`); no dialog, no History error.
+        } else if !self.can_launch_capture() {
+            self.capture_failed("Another capture or history action is still in progress.".into());
         } else {
             self.requested_capture = Some(request);
         }
@@ -1844,34 +1902,36 @@ impl Live {
             return;
         };
         if !self.can_start_capture() {
-            self.error = Some(
-                "Capture is unavailable until the current action finishes and a display is ready."
-                    .into(),
-            );
+            self.capture_failed("Capture is unavailable until the current action finishes.".into());
             return;
         }
         let settings = match settings {
             Ok(settings) => settings,
             Err(error) => {
-                self.error = Some(error);
+                self.capture_failed(error);
                 return;
             }
         };
         // Shipping shortcut, tray and New Capture flows start on the display
-        // under the pointer. Keep the current display when it is unknown
-        // (for example Wayland, where the pointer position is unavailable).
-        if let Some(id) = captures_capture::pointer_position()
-            .and_then(|point| captures_capture::XcapBackend.display_id_at_point(point))
-        {
-            // History has no display list to refresh: like shipping's capture
-            // menu, list the displays again when the pointer is on a new one.
-            if !self.displays.iter().any(|display| display.id == id)
-                && let Ok(displays) = captures_capture::XcapBackend.displays()
-            {
-                self.displays = displays;
-            }
-            if self.displays.iter().any(|display| display.id == id) {
-                self.display_id = Some(id);
+        // under the pointer, looked up fresh for every capture. Keep the
+        // current display when the pointer is unknown (for example Wayland).
+        let pointer = captures_capture::pointer_position()
+            .and_then(|point| captures_capture::XcapBackend.display_id_at_point(point));
+        match resolve_capture_display(
+            &mut self.displays,
+            self.display_id.as_deref(),
+            pointer.as_deref(),
+            || {
+                captures_capture::XcapBackend
+                    .displays()
+                    .map_err(|error| error.to_string())
+            },
+        ) {
+            Ok(id) => self.display_id = Some(id),
+            Err(error) => {
+                self.display_id = None;
+                self.capture_failed(error);
+                return;
             }
         }
         let target = capture_target(frame, &self.displays, self.display_id.as_deref());
@@ -1886,11 +1946,13 @@ impl Live {
             && (!matches!(request, CaptureRequest::Display)
                 || settings.screenshot_countdown_seconds > 0)
         {
-            self.error = Some(match request {
+            self.capture_failed(match request {
                 CaptureRequest::Display => {
                     "The selected display is no longer available for countdown.".into()
                 }
-                CaptureRequest::NewCapture | CaptureRequest::Recording(_) => {
+                CaptureRequest::NewCapture
+                | CaptureRequest::DisplayMenu
+                | CaptureRequest::Recording(_) => {
                     "The selected display is no longer available for capture controls.".into()
                 }
                 CaptureRequest::Region => {
@@ -1905,7 +1967,7 @@ impl Live {
         let flow = match CaptureFlow::begin(countdown) {
             Ok(flow) => flow,
             Err(error) => {
-                self.error = Some(format!("Could not arm capture Escape: {error}"));
+                self.capture_failed(format!("Could not arm capture Escape: {error}"));
                 return;
             }
         };
@@ -1914,7 +1976,7 @@ impl Live {
                 .begin_capture(&settings, target, ctx.cumulative_frame_nr())
         {
             flow.cancel();
-            self.error = Some(error);
+            self.capture_failed(error);
             return;
         }
         // winit on X11 reports a mapped window as not visible until its first
@@ -1936,11 +1998,13 @@ impl Live {
         self.new_capture_shortcut = settings.new_capture_shortcut.clone();
         self.recording_screenshot_settings = matches!(
             request,
-            CaptureRequest::NewCapture | CaptureRequest::Recording(_)
+            CaptureRequest::NewCapture | CaptureRequest::DisplayMenu | CaptureRequest::Recording(_)
         )
         .then(|| settings.clone());
         match request {
-            CaptureRequest::NewCapture | CaptureRequest::Recording(_) => {
+            CaptureRequest::NewCapture
+            | CaptureRequest::DisplayMenu
+            | CaptureRequest::Recording(_) => {
                 self.selector_scope_generation.store(0, Ordering::Release);
                 self.capture_phase = Some(CapturePhase::ControlsPreparing);
                 self.controls_error = None;
@@ -1954,8 +2018,13 @@ impl Live {
                     &settings.recording,
                     RecordingCapabilities::current(settings.include_recording_controls_in_captures),
                 );
-                if let CaptureRequest::Recording(target) = request {
-                    controls.select_recording_target(target);
+                match request {
+                    CaptureRequest::Recording(target) => controls.select_recording_target(target),
+                    // Shipping `open_capture_controls_with_target(Screenshot, Display)`.
+                    CaptureRequest::DisplayMenu => {
+                        controls.apply_target_shortcut(CaptureShortcut::Display)
+                    }
+                    _ => {}
                 }
                 drop(controls);
                 self.recording_toolchain_ready = false;
@@ -2288,8 +2357,7 @@ impl Live {
                             request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_recording_screenshot(ctx, false);
+                            self.fail_recording_screenshot(ctx, error);
                         }
                     }
                 }
@@ -2343,8 +2411,7 @@ impl Live {
                             ctx.request_repaint();
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(ctx, error);
                         }
                     }
                 }
@@ -2371,8 +2438,7 @@ impl Live {
                             ctx.request_repaint();
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(ctx, error);
                         }
                     }
                 }
@@ -2399,8 +2465,7 @@ impl Live {
                             ctx.request_repaint();
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(ctx, error);
                         }
                     }
                 }
@@ -2414,11 +2479,11 @@ impl Live {
                     ) =>
                 {
                     if !self.recording_toolchain_ready {
-                        self.error =
+                        // The menu stays open and shows this inline, like shipping.
+                        self.controls_error =
                             Some(self.recording_toolchain_error.clone().unwrap_or_else(|| {
                                 "FFmpeg and ffprobe verification is still in progress.".into()
                             }));
-                        self.controls_error.clone_from(&self.error);
                         continue;
                     }
                     let Some(display) = self
@@ -2427,8 +2492,10 @@ impl Live {
                         .find(|display| Some(&display.id) == self.display_id.as_ref())
                         .cloned()
                     else {
-                        self.error = Some("The recording display is no longer available.".into());
-                        self.finish_capture(ctx, false);
+                        self.fail_recording(
+                            ctx,
+                            "The recording display is no longer available.".into(),
+                        );
                         continue;
                     };
                     let selection = self.controls.lock().unwrap().recording_selection();
@@ -2440,8 +2507,7 @@ impl Live {
                     ) {
                         Ok(options) => options,
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_recording(ctx, error);
                             continue;
                         }
                     };
@@ -2649,18 +2715,18 @@ impl Live {
                     if !self.displays.iter().any(|display| display.id == display_id) {
                         self.selector_scope_generation
                             .store(generation, Ordering::Release);
-                        self.error = Some("The selected display is no longer available.".into());
-                        self.controls_error.clone_from(&self.error);
+                        self.controls_error =
+                            Some("The selected display is no longer available.".into());
                         continue;
                     }
                     self.display_id = Some(display_id);
                     let Some(target) =
                         capture_target(frame, &self.displays, self.display_id.as_deref())
                     else {
-                        self.error = Some(
+                        self.fail_capture(
+                            ctx,
                             "The selected display is unavailable for capture controls.".into(),
                         );
-                        self.finish_capture(ctx, false);
                         continue;
                     };
                     self.countdown_target = Some(target);
@@ -3000,7 +3066,10 @@ impl Live {
                                     request_hidden_root_paint(ctx);
                                 }
                                 Err(error) => {
-                                    self.error = Some(error);
+                                    self.capture_failure = Some(CaptureFailure {
+                                        error,
+                                        recording: true,
+                                    });
                                     self.recording_worker
                                         .send(recording::Command::Discard { generation });
                                     self.capture_phase = Some(CapturePhase::RecordingDiscarding);
@@ -3008,8 +3077,7 @@ impl Live {
                             }
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_recording(ctx, error);
                         }
                     }
                 }
@@ -3129,8 +3197,7 @@ impl Live {
                             request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_recording(ctx, error);
                         }
                     }
                 }
@@ -3267,8 +3334,7 @@ impl Live {
                             request_hidden_root_paint(ctx);
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_recording(ctx, error);
                         }
                     }
                 }
@@ -3449,9 +3515,10 @@ impl Live {
                             }) =>
                     {
                         let Some(display_id) = self.display_id.clone() else {
-                            self.error =
-                                Some("The recording display is no longer available.".into());
-                            self.finish_recording_screenshot(ctx, false);
+                            self.fail_recording_screenshot(
+                                ctx,
+                                "The recording display is no longer available.".into(),
+                            );
                             return;
                         };
                         let settings = self
@@ -3493,9 +3560,10 @@ impl Live {
                         });
                         if let Some((rect, after_countdown)) = ready {
                             let Some(session) = self.recording_screenshot_session.take() else {
-                                self.error =
-                                    Some("Region preparation was lost before capture.".into());
-                                self.finish_recording_screenshot(ctx, false);
+                                self.fail_recording_screenshot(
+                                    ctx,
+                                    "Region preparation was lost before capture.".into(),
+                                );
                                 return;
                             };
                             self.pending += 1;
@@ -3591,8 +3659,10 @@ impl Live {
                         after_countdown,
                     }) => {
                         let Some(session) = self.region_session.take() else {
-                            self.error = Some("Region preparation was lost before capture.".into());
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(
+                                ctx,
+                                "Region preparation was lost before capture.".into(),
+                            );
                             return;
                         };
                         self.region_texture = None;
@@ -3612,17 +3682,20 @@ impl Live {
                         after_countdown,
                     }) => {
                         let Some(session) = self.window_session.take() else {
-                            self.error = Some("Window preparation was lost before capture.".into());
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(
+                                ctx,
+                                "Window preparation was lost before capture.".into(),
+                            );
                             return;
                         };
                         let target = match target {
                             SelectionTarget::Display => WindowCaptureTarget::Display,
                             SelectionTarget::Window(index) => {
                                 let Some(window) = session.windows().get(index) else {
-                                    self.error =
-                                        Some("The selected window changed before capture.".into());
-                                    self.finish_capture(ctx, false);
+                                    self.fail_capture(
+                                        ctx,
+                                        "The selected window changed before capture.".into(),
+                                    );
                                     return;
                                 };
                                 WindowCaptureTarget::Window {
@@ -3647,9 +3720,10 @@ impl Live {
                         after_countdown,
                     }) => {
                         let Some(session) = self.window_session.take() else {
-                            self.error =
-                                Some("Capture-control preparation was lost before capture.".into());
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(
+                                ctx,
+                                "Capture-control preparation was lost before capture.".into(),
+                            );
                             return;
                         };
                         let target = match target {
@@ -3659,9 +3733,10 @@ impl Live {
                             capture_controls::Target::Display => WindowCaptureTarget::Display,
                             capture_controls::Target::Window(index) => {
                                 let Some(window) = session.windows().get(index) else {
-                                    self.error =
-                                        Some("The selected window changed before capture.".into());
-                                    self.finish_capture(ctx, false);
+                                    self.fail_capture(
+                                        ctx,
+                                        "The selected window changed before capture.".into(),
+                                    );
                                     return;
                                 };
                                 WindowCaptureTarget::Window {
@@ -3688,9 +3763,10 @@ impl Live {
                 .is_some_and(|since| since.elapsed() > Duration::from_secs(2))
             {
                 self.capture_waiting_for_hide = false;
-                self.error =
-                    Some("Could not hide the capture window. No screenshot was taken.".into());
-                self.finish_capture(ctx, false);
+                self.fail_capture(
+                    ctx,
+                    "Could not hide the capture window. No screenshot was taken.".into(),
+                );
             } else {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
@@ -3726,6 +3802,15 @@ impl Live {
                         Err(error) => {
                             self.error = Some(captures_app::history_view::load_error(&error));
                         }
+                    }
+                }
+                Reply::DisplaysListed(result) => {
+                    self.pending = self.pending.saturating_sub(1);
+                    match result {
+                        Ok(response) => self.apply(*response, true),
+                        // Shipping never lists displays ahead of a capture;
+                        // the next capture lists them again and reports it.
+                        Err(error) => eprintln!("Could not list displays: {error}"),
                     }
                 }
                 Reply::HistoryCleared(result) => {
@@ -3813,7 +3898,9 @@ impl Live {
                     result,
                 } => {
                     self.pending = self.pending.saturating_sub(1);
-                    if self.capture_phase == Some(CapturePhase::DisplayCapturing) {
+                    let display_capture =
+                        self.capture_phase == Some(CapturePhase::DisplayCapturing);
+                    if display_capture {
                         self.capture_in_flight = false;
                         let captured = matches!(result.as_deref(), Ok(Response::Captured { .. }));
                         self.finish_capture(ctx, captured);
@@ -3844,6 +3931,8 @@ impl Live {
                                     card.busy = None;
                                     card.message = Some(format!("{action} failed: {error}"));
                                 }
+                            } else if display_capture {
+                                self.capture_failed(error);
                             } else {
                                 self.error = Some(error);
                             }
@@ -3921,11 +4010,8 @@ impl Live {
                                 if !expected.is_some_and(|display| {
                                     same_display_geometry(display, session.display())
                                 }) {
-                                    self.error = Some(
-                                        "The recording display changed while preparing the screenshot."
-                                            .into(),
-                                    );
-                                    self.finish_recording_screenshot(ctx, false);
+                                    self.fail_recording_screenshot(ctx, "The recording display changed while preparing the screenshot."
+                                            .into(),);
                                     continue;
                                 }
                                 self.recording_screenshot_texture =
@@ -3948,8 +4034,7 @@ impl Live {
                                 request_hidden_root_paint(ctx);
                             }
                             Err(error) => {
-                                self.error = Some(error);
-                                self.finish_recording_screenshot(ctx, false);
+                                self.fail_recording_screenshot(ctx, error);
                             }
                         }
                         continue;
@@ -3973,11 +4058,11 @@ impl Live {
                             if !expected.is_some_and(|display| {
                                 same_display_geometry(display, session.display())
                             }) {
-                                self.error = Some(
+                                self.fail_capture(
+                                    ctx,
                                     "The selected display changed while preparing the region."
                                         .into(),
                                 );
-                                self.finish_capture(ctx, false);
                                 continue;
                             }
                             self.region_texture = session.frozen_image().map(|image| {
@@ -3998,8 +4083,7 @@ impl Live {
                             ctx.request_repaint();
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(ctx, error);
                         }
                     }
                 }
@@ -4017,7 +4101,7 @@ impl Live {
                         match result {
                             Ok(artifact) => self
                                 .accept_artifact(*artifact, "Screenshot captured while recording"),
-                            Err(error) => self.error = Some(error),
+                            Err(error) => self.capture_failed(error),
                         }
                         continue;
                     }
@@ -4034,7 +4118,7 @@ impl Live {
                     self.finish_capture(ctx, captured);
                     match result {
                         Ok(artifact) => self.accept_artifact(*artifact, "Region captured as PNG"),
-                        Err(error) => self.error = Some(error),
+                        Err(error) => self.capture_failed(error),
                     }
                 }
                 Reply::WindowPrepared { generation, result } => {
@@ -4065,10 +4149,10 @@ impl Live {
                             if !expected.is_some_and(|display| {
                                 same_display_geometry(display, session.display())
                             }) {
-                                self.error = Some(
+                                self.fail_capture(
+                                    ctx,
                                     "The selected display changed while preparing windows.".into(),
                                 );
-                                self.finish_capture(ctx, false);
                                 continue;
                             }
                             self.window_texture = session.frozen_image().map(|image| {
@@ -4093,8 +4177,7 @@ impl Live {
                                     if let Err(error) =
                                         flow.start_countdown(self.controls_countdown_seconds)
                                     {
-                                        self.error = Some(error);
-                                        self.finish_capture(ctx, false);
+                                        self.fail_capture(ctx, error);
                                         continue;
                                     }
                                     self.capture_phase = Some(CapturePhase::ControlsCountdown {
@@ -4119,8 +4202,7 @@ impl Live {
                             ctx.request_repaint();
                         }
                         Err(error) => {
-                            self.error = Some(error);
-                            self.finish_capture(ctx, false);
+                            self.fail_capture(ctx, error);
                         }
                     }
                 }
@@ -4150,7 +4232,7 @@ impl Live {
                                 "Window selection captured as PNG"
                             },
                         ),
-                        Err(error) => self.error = Some(error),
+                        Err(error) => self.capture_failed(error),
                     }
                 }
                 Reply::ThumbnailDecoded {
@@ -4342,6 +4424,34 @@ impl Live {
         self.status = "Preparing region screenshot… Press Escape to cancel.".into();
         request_hidden_root_paint(ctx);
         ctx.request_repaint_after(Duration::from_millis(300));
+    }
+
+    /// Reports a failed screenshot in the shipping error dialog.
+    fn capture_failed(&mut self, error: String) {
+        self.capture_failure = Some(CaptureFailure {
+            error,
+            recording: false,
+        });
+    }
+
+    /// Ends the current capture flow and reports why.
+    fn fail_capture(&mut self, ctx: &egui::Context, error: String) {
+        self.finish_capture(ctx, false);
+        self.capture_failed(error);
+    }
+
+    /// Ends a recording flow that could not continue and reports why.
+    fn fail_recording(&mut self, ctx: &egui::Context, error: String) {
+        self.finish_capture(ctx, false);
+        self.capture_failure = Some(CaptureFailure {
+            error,
+            recording: true,
+        });
+    }
+
+    fn fail_recording_screenshot(&mut self, ctx: &egui::Context, error: String) {
+        self.finish_recording_screenshot(ctx, false);
+        self.capture_failed(error);
     }
 
     fn finish_recording_screenshot(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
@@ -6833,6 +6943,41 @@ fn recording_controls_hidden(
     hidden_generation.is_some() && hidden_generation == active_generation
 }
 
+/// Shipping looks the monitor up fresh for every capture
+/// (`capture_display_at_point`). List the displays again when the list is
+/// empty or lacks the display under the pointer, so a failed or stale first
+/// list recovers without a relaunch.
+fn resolve_capture_display(
+    displays: &mut Vec<DisplayDescriptor>,
+    current: Option<&str>,
+    pointer: Option<&str>,
+    list: impl FnOnce() -> Result<Vec<DisplayDescriptor>, String>,
+) -> Result<String, String> {
+    fn listed(displays: &[DisplayDescriptor], id: &str) -> bool {
+        displays.iter().any(|display| display.id == id)
+    }
+    if displays.is_empty() || pointer.is_some_and(|id| !listed(displays, id)) {
+        match list() {
+            Ok(fresh) => *displays = fresh,
+            Err(error) if displays.is_empty() => return Err(error),
+            // A stale list still has usable displays.
+            Err(_) => {}
+        }
+    }
+    pointer
+        .filter(|id| listed(displays, id))
+        .or_else(|| current.filter(|id| listed(displays, id)))
+        .map(str::to_owned)
+        .or_else(|| {
+            displays
+                .iter()
+                .find(|display| display.is_primary)
+                .or(displays.first())
+                .map(|display| display.id.clone())
+        })
+        .ok_or_else(|| "No display is available for capture.".to_owned())
+}
+
 fn capture_target(
     frame: &eframe::Frame,
     displays: &[DisplayDescriptor],
@@ -7264,31 +7409,127 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn display(id: &str, is_primary: bool) -> DisplayDescriptor {
+        DisplayDescriptor {
+            id: id.into(),
+            name: id.into(),
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 900,
+            scale_factor: 1.,
+            is_primary,
+        }
+    }
+
     #[test]
-    fn a_denied_capture_opens_permission_recovery_once() {
-        // Shipping History has no permissions button; a denied capture opens
-        // recovery the way shipping's `report_capture_error` shows its dialog.
+    fn an_empty_or_failed_display_list_is_listed_again_for_each_capture() {
+        // A failed first list leaves nothing to capture on; shipping looks the
+        // monitor up for every capture, so the next capture lists again.
+        let mut displays = Vec::new();
+        assert_eq!(
+            resolve_capture_display(&mut displays, None, Some("a"), || Err(
+                "monitor query failed".into()
+            )),
+            Err("monitor query failed".into())
+        );
+        assert!(displays.is_empty());
+        let mut listed = 0;
+        assert_eq!(
+            resolve_capture_display(&mut displays, None, Some("b"), || {
+                listed += 1;
+                Ok(vec![display("a", true), display("b", false)])
+            }),
+            Ok("b".into()),
+            "the recovered list resolves the display under the pointer"
+        );
+        assert_eq!(listed, 1);
+        assert_eq!(displays.len(), 2);
+        // Wayland reports no pointer: an empty list still recovers, and the
+        // primary display is used.
+        let mut displays = Vec::new();
+        assert_eq!(
+            resolve_capture_display(&mut displays, None, None, || Ok(vec![
+                display("a", false),
+                display("b", true)
+            ])),
+            Ok("b".into())
+        );
+        let mut displays = Vec::new();
+        assert_eq!(
+            resolve_capture_display(&mut displays, None, None, || Ok(vec![])),
+            Err("No display is available for capture.".into())
+        );
+    }
+
+    #[test]
+    fn a_stale_display_list_is_refreshed_only_when_the_pointer_display_is_missing() {
+        let mut displays = vec![display("a", true)];
+        assert_eq!(
+            resolve_capture_display(&mut displays, Some("a"), Some("a"), || {
+                panic!("a current list is not listed again")
+            }),
+            Ok("a".into())
+        );
+        assert_eq!(
+            resolve_capture_display(&mut displays, Some("a"), Some("c"), || Ok(vec![
+                display("a", true),
+                display("c", false)
+            ])),
+            Ok("c".into()),
+            "a newly attached display under the pointer is listed"
+        );
+        // A failed refresh of a stale list keeps the displays it has.
+        assert_eq!(
+            resolve_capture_display(&mut displays, Some("c"), Some("d"), || Err("busy".into())),
+            Ok("c".into())
+        );
+        assert_eq!(displays.len(), 2);
+    }
+
+    #[test]
+    fn screenshot_display_opens_the_capture_menu_unless_recording() {
         let root = tempfile::tempdir().unwrap();
         let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
-        live.error = Some("Could not start the capture".into());
-        assert!(!live.take_permission_recovery_requested());
-        let denied = format!(
-            "Could not start the capture: {}",
-            captures_capture::CaptureError::PermissionDenied
+        assert_eq!(live.display_request(), CaptureRequest::DisplayMenu);
+        live.capture_phase = Some(CapturePhase::Recording);
+        assert!(live.recording_session_active());
+        assert_eq!(
+            live.display_request(),
+            CaptureRequest::Display,
+            "shipping captures the display directly while recording"
         );
-        live.error = Some(denied.clone());
-        assert!(live.take_permission_recovery_requested());
+        live.capture_phase = Some(CapturePhase::ControlsSelecting);
+        assert_eq!(live.display_request(), CaptureRequest::DisplayMenu);
+        live.capture_phase = None;
+        live.flush();
+    }
+
+    #[test]
+    fn capture_failures_skip_the_history_error_card() {
+        let root = tempfile::tempdir().unwrap();
+        let mut live = Live::new(egui::Context::default(), Some(root.path().into()));
+        live.capture_failed("The selected window changed before capture.".into());
         assert!(
-            !live.take_permission_recovery_requested(),
-            "offered once per error"
+            live.error.is_none(),
+            "History shows only load and delete errors"
         );
-        live.error = None;
-        assert!(!live.take_permission_recovery_requested());
-        live.error = Some(denied);
-        assert!(
-            live.take_permission_recovery_requested(),
-            "a new denial offers again"
+        assert_eq!(
+            live.take_capture_failure(),
+            Some(CaptureFailure {
+                error: "The selected window changed before capture.".into(),
+                recording: false,
+            })
         );
+        assert_eq!(live.take_capture_failure(), None, "reported once");
+        // A capture that arrives while another owns the flow is ignored, like
+        // shipping's `CaptureInProgress`.
+        live.capture_in_flight = true;
+        live.request_capture(CaptureRequest::DisplayMenu);
+        assert_eq!(live.requested_capture, None);
+        assert_eq!(live.take_capture_failure(), None);
+        assert!(live.error.is_none());
+        live.capture_in_flight = false;
         live.flush();
     }
 
@@ -8336,10 +8577,20 @@ mod tests {
         assert_eq!(live.requested_capture, Some(CaptureRequest::Region));
         live.request_capture(CaptureRequest::Window);
         assert_eq!(live.requested_capture, Some(CaptureRequest::Region));
+        // Shipping ignores the second request silently (`CaptureInProgress`).
+        assert_eq!(live.error, None);
+        assert_eq!(live.take_capture_failure(), None);
+        live.requested_capture = None;
+        live.pending = 1;
+        live.request_capture(CaptureRequest::Window);
+        assert_eq!(live.requested_capture, None);
         assert_eq!(
-            live.error.as_deref(),
-            Some("Another capture or history action is still in progress.")
+            live.take_capture_failure().map(|failure| failure.error),
+            Some("Another capture or history action is still in progress.".into()),
+            "a History action in progress is reported in the capture dialog"
         );
+        assert_eq!(live.error, None);
+        live.pending = 0;
         live.flush();
     }
 

@@ -88,6 +88,8 @@ pub struct Workbench {
     root_hidden: bool,
     onboarding_presented: bool,
     permission_dialog_presented: bool,
+    /// Shipping `report_capture_error` dialog for a failed capture.
+    capture_error: crate::capture_error::CaptureErrorDialog,
     workspace_was_focused: bool,
     tray: Option<Tray>,
     /// Preferences generation last applied to tray accelerators.
@@ -279,6 +281,7 @@ impl Workbench {
             root_hidden,
             onboarding_presented: false,
             permission_dialog_presented: false,
+            capture_error: Default::default(),
             workspace_was_focused: false,
             tray,
             tray_shortcuts_generation: u64::MAX,
@@ -417,7 +420,9 @@ impl Workbench {
                     return;
                 }
                 if let Some(live) = &mut self.live {
-                    live.request_capture(CaptureRequest::Display);
+                    // Shipping opens the capture menu on Full screen.
+                    let request = live.display_request();
+                    live.request_capture(request);
                 }
             }
             TrayAction::CaptureRegion => {
@@ -1438,9 +1443,10 @@ impl eframe::App for Workbench {
         }
         let mut recovery_requested = false;
         if let Some(live) = &mut self.live {
-            if live.take_permission_recovery_requested() {
-                self.preferences_state.open_permission_recovery();
-                recovery_requested = true;
+            if let Some(failure) = live.take_capture_failure() {
+                recovery_requested |=
+                    self.capture_error
+                        .report(&failure, &mut self.preferences_state, ctx);
             }
             live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
             // A capture waits until the Preferences window is hidden too.
@@ -1535,7 +1541,7 @@ impl eframe::App for Workbench {
                 CaptureShortcut::NewCapture => CaptureRequest::NewCapture,
                 CaptureShortcut::Region => CaptureRequest::Region,
                 CaptureShortcut::Window => CaptureRequest::Window,
-                CaptureShortcut::Display => CaptureRequest::Display,
+                CaptureShortcut::Display => live.display_request(),
                 CaptureShortcut::RecordRegion => {
                     CaptureRequest::Recording(crate::capture_controls::TargetMode::Region)
                 }
@@ -1693,6 +1699,7 @@ impl eframe::App for Workbench {
                 self.preferences_state
                     .reduced_motion(self.options.reduced_motion),
             );
+            self.capture_error.viewport(&ctx, &t);
             Self::startup_notice_viewport(
                 &ctx,
                 &t,
@@ -1730,9 +1737,10 @@ impl eframe::App for Workbench {
             }
             live.ui(ui, &t, frame, || self.preferences_state.snapshot());
             let mut recovery_requested = false;
-            if live.take_permission_recovery_requested() {
-                self.preferences_state.open_permission_recovery();
-                recovery_requested = true;
+            if let Some(failure) = live.take_capture_failure() {
+                recovery_requested |=
+                    self.capture_error
+                        .report(&failure, &mut self.preferences_state, &ctx);
             }
             if self.preferences_state.permission_recovery_open() {
                 permission_recovery_ui(&mut self.preferences_state, &ctx, &t);
