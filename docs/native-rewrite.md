@@ -342,7 +342,10 @@ pixel per point when the exit first paints. A saved card's Delete now runs in
 shipping's order: the card dissolves at once, the Trash request goes out after the
 dust has played and the stack settled (at once under Reduce Motion), and a failed
 Trash puts the card back in its slot with the error so it can be retried; a card
-presented again under the same ID meanwhile is left alone. wgpu unit tests and
+presented again under the same ID meanwhile is left alone. wgpu holds the
+dissolved card's empty slot (and the preview window) until the reply, as shipping
+keeps the card until `trash_artifact` resolves; AppKit rebuilds the stack when the
+dust ends and re-adds the card if the Trash fails. wgpu unit tests and
 AppKit XCTests (not run here) cover the state machine, exits, flight, morph,
 warnings and the Trash order. The private-X11 preview
 `--stack` smoke now waits for settled pixels after exits and flights (and before

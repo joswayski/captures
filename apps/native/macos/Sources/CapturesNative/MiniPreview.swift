@@ -1922,13 +1922,13 @@ final class MiniPreviewView: NSView {
             let deepest = restLayouts.values.map(\.depth).max() ?? 0
             guard now - started >= fan.duration + captures_preview_fan_delay_ms_v1(deepest, false) / 1000
             else { return }
-            carryReady = true; carrySway = CapturesDragSway(); carrySample = (pointer, now)
+            carryReady = true; carrySway = CapturesDragSway(); carrySample = (point: pointer, time: now)
         }
-        let last = carrySample ?? (pointer, now - 0.016)
+        let last = carrySample ?? (point: pointer, time: now - 0.016)
         // Screen y points up; the shipping lean's y points down.
         let settled = captures_preview_drag_sway_tick_v1(&carrySway, Double(pointer.x - last.point.x),
             Double(last.point.y - pointer.y), (now - last.time) * 1000, NativeMotion.reduceMotion)
-        carrySample = (pointer, now)
+        carrySample = (point: pointer, time: now)
         applyCarryPoses()
         // A still pointer lets the timer stop; the next sample restarts it.
         if settled { stopCarryTimer() }

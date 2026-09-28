@@ -215,15 +215,38 @@ impl StackExits {
 
     /// Drop exits whose hold ended. Returns whether any card left.
     pub fn prune(&mut self, now_ms: f64, reduced_motion: bool) -> bool {
+        self.prune_holding(now_ms, reduced_motion, &|_| false)
+    }
+
+    /// [`Self::prune`], except that finished exits `held` names keep their
+    /// slot (shipping keeps a deleted card until its Trash request resolves)
+    /// until [`Self::release`].
+    pub fn prune_holding(
+        &mut self,
+        now_ms: f64,
+        reduced_motion: bool,
+        held: &dyn Fn(&str) -> bool,
+    ) -> bool {
         let before = self.exits.len();
         let finished: Vec<String> = self
             .exits
             .iter()
-            .filter(|(_, exit)| exit.finished(now_ms, reduced_motion))
+            .filter(|(id, exit)| exit.finished(now_ms, reduced_motion) && !held(id))
             .map(|(id, _)| id.clone())
             .collect();
         self.exits.retain(|(id, _)| !finished.contains(id));
         self.display.retain(|id| !finished.contains(id));
+        self.exits.len() != before
+    }
+
+    /// End `id`'s exit now. `keep_slot` leaves its display slot for the card
+    /// returning to the stack (a failed Trash); otherwise the slot goes too.
+    pub fn release(&mut self, id: &str, keep_slot: bool) -> bool {
+        let before = self.exits.len();
+        self.exits.retain(|(exit, _)| exit != id);
+        if !keep_slot {
+            self.display.retain(|existing| existing != id);
+        }
         self.exits.len() != before
     }
 
@@ -236,8 +259,11 @@ impl StackExits {
     /// Milliseconds until the next exit ends, for hosts that schedule one
     /// wake-up instead of polling.
     pub fn next_finish_in_ms(&self, now_ms: f64) -> Option<f64> {
+        // A finished exit still here is held (see `prune_holding`); it waits
+        // for its host instead of a wake-up.
         self.exits
             .iter()
+            .filter(|(_, exit)| !exit.finished(now_ms, false))
             .map(|(_, exit)| (exit.kind.hold_ms() - exit.elapsed_ms(now_ms)).max(0.0))
             .reduce(f64::min)
     }
@@ -1168,6 +1194,30 @@ mod tests {
         assert_eq!(exits.display_ids(), ["a", "c"]);
         assert!(exits.is_empty() && !exits.running(2_030., false));
         assert_eq!(exits.shift_slots("a", 2_030., false, &settle), 0.);
+    }
+
+    #[test]
+    fn a_held_exit_keeps_its_slot_until_released() {
+        let settle = settle_tween();
+        let live = ["a".to_owned(), "b".to_owned()];
+        let mut exits = StackExits::default();
+        exits.sync(&live);
+        assert!(exits.begin(&live, "b", ExitKind::Dust, 0., 0., true, &settle));
+        let done = ExitKind::Dust.hold_ms();
+        // A held exit outlives its hold without asking for a wake-up.
+        assert!(!exits.prune_holding(done, false, &|id| id == "b"));
+        assert!(exits.exiting("b").is_some());
+        assert_eq!(exits.next_finish_in_ms(done), None);
+        assert!(!exits.running(done, false));
+        // Released for a card coming back, its slot stays in place.
+        assert!(exits.release("b", true));
+        exits.sync(&live);
+        assert_eq!(exits.display_ids(), ["a", "b"]);
+        // Released for good, the slot goes too.
+        assert!(exits.begin(&live, "b", ExitKind::Dust, 0., 0., true, &settle));
+        assert!(exits.release("b", false));
+        assert_eq!(exits.display_ids(), ["a"]);
+        assert!(!exits.release("b", false));
     }
 
     #[test]

@@ -1202,11 +1202,19 @@ impl MiniPreviews {
     }
 
     /// Trash requests whose dust has finished: `(id, generation, saved path)`.
-    fn due_trash(&mut self) -> Vec<(String, u64, Option<PathBuf>)> {
-        let exiting = &self.exiting;
+    /// The dissolved card keeps its (empty) slot until the reply, as
+    /// shipping keeps the card until `trash_artifact` resolves.
+    fn due_trash(&mut self, reduced_motion: bool) -> Vec<(String, u64, Option<PathBuf>)> {
+        let now = self.now_ms();
+        let exits = &self.exits;
         self.trashing
             .iter_mut()
-            .filter(|(id, pending)| !pending.sent && !exiting.contains_key(*id))
+            .filter(|(id, pending)| {
+                !pending.sent
+                    && exits
+                        .exiting(id)
+                        .is_none_or(|exit| exit.finished(now, reduced_motion))
+            })
             .map(|(id, pending)| {
                 pending.sent = true;
                 (
@@ -1228,6 +1236,8 @@ impl MiniPreviews {
             return false;
         }
         self.trashing.remove(artifact_id);
+        self.exits.release(artifact_id, false);
+        self.exiting.remove(artifact_id);
         self.release_empty_stack();
         true
     }
@@ -1248,8 +1258,11 @@ impl MiniPreviews {
         else {
             return false;
         };
+        // The held slot becomes the card's again.
+        self.exits.release(artifact_id, true);
         self.exiting.remove(artifact_id);
         if !self.stack.restore(artifact_id.to_owned(), index) {
+            self.exits.sync(self.stack.ids());
             return false;
         }
         card.busy = None;
@@ -1291,7 +1304,10 @@ impl MiniPreviews {
     /// Drop exits and stack flights that finished. Returns whether any did.
     fn settle_exits(&mut self, reduced_motion: bool) -> bool {
         let now = self.now_ms();
-        let mut changed = self.exits.prune(now, reduced_motion);
+        let trashing = &self.trashing;
+        let mut changed = self
+            .exits
+            .prune_holding(now, reduced_motion, &|id| trashing.contains_key(id));
         let exits = &self.exits;
         let before = self.exiting.len();
         self.exiting.retain(|id, _| exits.exiting(id).is_some());
@@ -5705,7 +5721,7 @@ impl Live {
             ctx.request_repaint();
         }
         // A saved card's Trash goes out once its dust has played.
-        for (artifact_id, generation, saved_path) in self.previews.due_trash() {
+        for (artifact_id, generation, saved_path) in self.previews.due_trash(reduced_motion) {
             self.send_preview(
                 Request::TrashPreview {
                     root: self.root.clone(),
@@ -6594,9 +6610,14 @@ impl Live {
                                             },
                                         );
                                     }
-                                    if !exiting.is_empty() {
+                                    if exiting
+                                        .iter()
+                                        .any(|exit| exit.elapsed_ms < exit.kind.hold_ms())
+                                    {
                                         // Exits and the survivor settle move
-                                        // every frame until the root drops them.
+                                        // every frame until they end; a
+                                        // dissolved card waiting on its Trash
+                                        // holds an empty slot without frames.
                                         ui.ctx().request_repaint();
                                     }
                                 })
@@ -10391,23 +10412,40 @@ mod tests {
         assert!(!previews.begin_trash(&id, false));
         assert_eq!(previews.stack.ids(), &[ids[0].0.clone()]);
         assert!(previews.exiting.contains_key(&id));
-        assert!(previews.due_trash().is_empty());
-        assert!(previews.settle_exits(true));
-        assert_eq!(previews.due_trash(), vec![(id.clone(), generation, saved)]);
-        assert!(previews.due_trash().is_empty(), "sent once");
+        assert!(previews.due_trash(false).is_empty());
+        // The dissolved card keeps its empty slot until the reply.
+        assert!(!previews.settle_exits(true));
+        assert!(previews.exiting.contains_key(&id));
+        assert_eq!(previews.exits.display_ids().len(), 2);
+        assert!(previews.is_visible());
+        assert_eq!(
+            previews.due_trash(true),
+            vec![(id.clone(), generation, saved.clone())]
+        );
+        assert!(previews.due_trash(true).is_empty(), "sent once");
         // A failure puts the card back in its slot with the error.
         assert!(!previews.restore_trashed(&id, generation + 1, "stale".into()));
         assert!(previews.restore_trashed(&id, generation, "Trash failed: denied".into()));
         assert_eq!(previews.stack.ids(), &[ids[0].0.clone(), id.clone()]);
+        assert_eq!(previews.exits.display_ids(), previews.stack.ids());
+        assert!(!previews.exiting.contains_key(&id));
         assert_eq!(
             previews.cards[&id].message.as_deref(),
             Some("Trash failed: denied")
         );
         // Success forgets the dissolved card; reduced motion sends at once.
-        assert!(previews.begin_trash(&id, true));
-        assert!(previews.due_trash().is_empty());
+        assert!(!previews.begin_trash(&id, false));
+        previews.settle_exits(true);
+        assert_eq!(previews.due_trash(true).len(), 1);
         assert!(previews.finish_trash(&id, generation));
         assert!(previews.trashing.is_empty() && !previews.cards.contains_key(&id));
+        assert!(!previews.exiting.contains_key(&id));
+        assert_eq!(previews.exits.display_ids(), previews.stack.ids());
+        assert!(
+            previews.begin_trash(&ids[0].0, true),
+            "reduced motion sends at once"
+        );
+        assert!(previews.due_trash(true).is_empty());
     }
 
     #[test]
