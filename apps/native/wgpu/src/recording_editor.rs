@@ -122,7 +122,11 @@ enum PlaybackEnd {
 }
 
 enum Event {
-    Opened(Presented, Option<PathBuf>),
+    Opened(
+        Presented,
+        Option<PathBuf>,
+        recording_editor_ui::SaveDefaults,
+    ),
     Presented(Result<Presented, String>),
     Progress(ExportProgress),
     Saved(Result<SavedRecording, String>),
@@ -131,7 +135,9 @@ enum Event {
     Compared(u64, Result<Comparison, String>),
     Thumbnails(Result<RecordingTimelineThumbnails, String>),
     SourceFrame(Result<Arc<RgbaImage>, String>),
-    PlaybackStarted { audio_enabled: bool },
+    PlaybackStarted {
+        audio_enabled: bool,
+    },
     PlaybackFinished(Result<PlaybackEnd, String>),
     Destination(Option<PathBuf>),
 }
@@ -150,10 +156,18 @@ struct CropGesture {
     locked: bool,
 }
 
-struct ReplacementConfirmation {
-    path: PathBuf,
-    revision: u64,
+/// Accepted edit and export identity: what live apply and estimates follow.
+type EditKey = (EditSpec, ExportSpec);
+
+/// What a successful Save wrote, so Save stays disabled until something
+/// changes (shipping's `alreadySaved` fingerprint).
+#[derive(Clone, Debug, PartialEq)]
+struct SaveFingerprint {
+    edit: EditSpec,
     export: ExportSpec,
+    webm: bool,
+    copy: bool,
+    destination: PathBuf,
 }
 
 #[derive(Default)]
@@ -174,8 +188,26 @@ struct View {
     comparison_due: Option<(ComparisonKey, Instant)>,
     comparison_error: Option<String>,
     /// Shipping's "Save as new file" (`makeCopy`): off saves over the
-    /// original through the confirmed Replace original operation.
+    /// original through the shared Replace original operation.
     save_as_new: bool,
+    /// Shipping's footer defaults for the original (`recordingUserFacingDefaults`).
+    source_directory: PathBuf,
+    source_stem: String,
+    /// Staged edits waiting to settle before they decode a preview frame.
+    apply_due: Option<(EditKey, Instant)>,
+    /// The staged identity the in-flight live apply publishes.
+    applying: Option<EditKey>,
+    /// A staged identity that failed to apply; it is not retried until edited.
+    apply_failed: Option<EditKey>,
+    /// Shipping's debounced background estimate for an accepted identity.
+    estimate_due: Option<(EditKey, Instant)>,
+    /// The accepted identity the latest estimate was requested for.
+    estimate_attempt: Option<EditKey>,
+    /// The background estimate's own token: edits and saves supersede it.
+    estimate_cancel: Option<CancelToken>,
+    /// A user operation waiting for a superseded estimate to stop.
+    queued: Option<Job>,
+    saved_fingerprint: Option<SaveFingerprint>,
     preview_actual_size: bool,
     adjusting_crop: bool,
     crop_gesture: Option<CropGesture>,
@@ -191,7 +223,8 @@ struct View {
     playback_audio_enabled: bool,
     playback_position_ms: Option<u64>,
     playback_ended: bool,
-    close_after_playback: bool,
+    /// Close once playback or a superseded estimate stops.
+    close_after_work: bool,
     busy: bool,
     cancel: Option<CancelToken>,
     estimating: bool,
@@ -200,7 +233,6 @@ struct View {
     closed: bool,
     confirm_close: bool,
     original_path: Option<PathBuf>,
-    confirm_replace: Option<ReplacementConfirmation>,
     requires_reopen: bool,
     history_changed: bool,
     original_replaced: bool,
@@ -221,6 +253,9 @@ struct View {
     directory: PathBuf,
     stem: String,
     gif: bool,
+    /// Shipping offers WebM, which its bundled FFmpeg cannot encode. The
+    /// accepted preview keeps the MP4 settings; Save reports shipping's error.
+    webm: bool,
     gif_frames_per_second: Option<u16>,
     gif_maximum_width: Option<u32>,
     quality: QualityPreset,
@@ -242,8 +277,127 @@ impl View {
         self.directory.join(format!(
             "{}.{}",
             self.stem,
-            if self.gif { "gif" } else { "mp4" }
+            if self.webm {
+                "webm"
+            } else if self.gif {
+                "gif"
+            } else {
+                "mp4"
+            }
         ))
+    }
+
+    /// The source's own output format (shipping's `recordingSourceFormat`).
+    fn source_gif(&self) -> bool {
+        self.presented
+            .as_ref()
+            .is_some_and(|p| p.source.mime_type == "image/gif")
+    }
+
+    /// Shipping `updateOutputFormat`: another format always saves a new
+    /// file, named `-edited` beside the original.
+    fn set_format(&mut self, gif: bool, webm: bool) {
+        if gif == self.gif && webm == self.webm {
+            return;
+        }
+        self.gif = gif;
+        self.webm = webm;
+        if (webm || gif != self.source_gif()) && !self.save_as_new {
+            self.save_as_new = true;
+            self.stem = recording_editor_ui::edited_file_stem(&self.source_stem);
+            self.directory = self.source_directory.clone();
+        }
+        // Shipping offers Preserve quality only for MP4 and switches a GIF to
+        // Compress; Maximum keeps its remembered preset.
+        if gif && !self.maximum_size && self.quality == QualityPreset::Preserve {
+            self.quality = self
+                .compress_quality
+                .unwrap_or(recording_editor_ui::DEFAULT_COMPRESS_PRESET);
+        }
+    }
+
+    /// Shipping `updateMakeCopy`: the `-edited` name follows the switch while
+    /// the filename and folder are still the original's.
+    fn set_save_as_new(&mut self, copy: bool) {
+        if !copy && !self.replace_supported() {
+            return;
+        }
+        self.save_as_new = copy;
+        if copy && self.stem == self.source_stem && self.directory == self.source_directory {
+            self.stem = recording_editor_ui::edited_file_stem(&self.source_stem);
+        } else if !copy && self.stem == recording_editor_ui::edited_file_stem(&self.source_stem) {
+            self.stem = self.source_stem.clone();
+        }
+        self.saved_fingerprint = None;
+        self.saved_path = None;
+        self.status = None;
+        self.error = None;
+    }
+
+    /// Worker work that holds edits: everything but a background estimate
+    /// that nothing is waiting behind.
+    fn blocked(&self) -> bool {
+        self.busy && (!self.estimating || self.queued.is_some())
+    }
+
+    fn save_fingerprint(&self) -> Option<SaveFingerprint> {
+        let p = self.presented.as_ref()?;
+        Some(SaveFingerprint {
+            edit: p.edit.clone(),
+            export: p.export.clone(),
+            webm: self.webm,
+            copy: self.saving_copy(),
+            destination: self.destination(),
+        })
+    }
+
+    /// Shipping disables Save after a successful save until anything changes.
+    fn already_saved(&self) -> bool {
+        self.saved_fingerprint.is_some() && self.saved_fingerprint == self.save_fingerprint()
+    }
+
+    fn can_save(&self) -> bool {
+        self.presented.is_some()
+            && !self.unapplied()
+            && !self.already_saved()
+            && !self.blocked()
+            && !self.picker
+            && !self.confirm_close
+            && !self.requires_reopen
+    }
+
+    /// Shipping's Save: a new copy, or the original replaced in place.
+    fn save(&mut self, tx: &Sender<Job>) {
+        if !self.can_save() {
+            return;
+        }
+        if let Some(error) = recording_editor_ui::filename_error(&self.stem) {
+            self.error = Some(error.into());
+            return;
+        }
+        self.status = None;
+        self.error = None;
+        if self.webm {
+            // Shipping's bundled FFmpeg has no libvpx; its export fails here.
+            self.error = Some(recording_editor_ui::WEBM_EXPORT_ERROR.into());
+            return;
+        }
+        if !self.saving_copy() {
+            if self.can_replace() {
+                let cancel = CancelToken::default();
+                self.cancel = Some(cancel.clone());
+                self.send(tx, Job::Replace(cancel));
+            }
+            return;
+        }
+        let cancel = CancelToken::default();
+        self.cancel = Some(cancel.clone());
+        self.saved_path = None;
+        let request = RecordingSaveRequest {
+            destination: self.destination(),
+            export: self.presented.as_ref().unwrap().export.clone(),
+        };
+        self.send(tx, Job::Save(request, cancel));
     }
 
     fn export_spec(&self) -> ExportSpec {
@@ -365,7 +519,7 @@ impl View {
     }
 
     fn can_replace(&self) -> bool {
-        !self.busy
+        !self.blocked()
             && !self.picker
             && !self.closed
             && !self.confirm_close
@@ -378,6 +532,7 @@ impl View {
     /// MP4/GIF with a known path (shipping's `formatRequiresCopy` is false).
     fn replace_supported(&self) -> bool {
         !self.requires_reopen
+            && !self.webm
             && self.presented.as_ref().is_some_and(|p| {
                 let extension = match (p.source.mime_type.as_str(), p.export.format) {
                     ("video/mp4", ExportFormat::Mp4) => "mp4",
@@ -397,57 +552,16 @@ impl View {
         self.save_as_new || !self.replace_supported()
     }
 
-    fn begin_replace(&mut self) {
-        if !self.can_replace() || self.confirm_replace.is_some() {
-            return;
-        }
-        let p = self.presented.as_ref().unwrap();
-        self.confirm_replace = Some(ReplacementConfirmation {
-            path: self.original_path.clone().unwrap(),
-            revision: p.revision,
-            export: p.export.clone(),
-        });
-        self.trim_gesture = None;
-        self.crop_gesture = None;
-    }
-
-    fn confirm_replacement(&mut self, tx: &Sender<Job>) {
-        let Some(confirmed) = self.confirm_replace.take() else {
-            return;
-        };
-        if !self.can_replace()
-            || self.original_path.as_ref() != Some(&confirmed.path)
-            || self
-                .presented
-                .as_ref()
-                .is_none_or(|p| p.revision != confirmed.revision || p.export != confirmed.export)
-        {
-            self.error = Some("Recording changed. Review the original and confirm again.".into());
-            return;
-        }
-        let cancel = CancelToken::default();
-        self.cancel = Some(cancel.clone());
-        self.send(tx, Job::Replace(cancel));
-    }
-
     fn estimate_presentation(&self) -> recording_editor_ui::EstimatePresentation {
         let estimate = self.estimate.as_ref();
         recording_editor_ui::estimate(&recording_editor_ui::EstimateInput {
             estimating: self.estimating,
-            unapplied: self.unapplied(),
-            invalid_maximum: self.maximum_size && self.maximum_bytes().is_none(),
-            maximum_bytes: self
-                .presented
-                .as_ref()
-                .and_then(|p| p.export.max_size_bytes),
+            webm: self.webm,
+            maximum: self.maximum_size,
+            maximum_bytes: self.maximum_bytes(),
             estimate_bytes: estimate.map(|estimate| estimate.size_bytes),
             estimate_exact: estimate.is_some_and(|estimate| estimate.exact),
-            // A staged Maximum never advertises a reduction.
-            original_bytes: if self.maximum_size {
-                0
-            } else {
-                self.presented.as_ref().map_or(0, |p| p.source.size_bytes)
-            },
+            original_bytes: self.presented.as_ref().map_or(0, |p| p.source.size_bytes),
         })
     }
 
@@ -460,30 +574,123 @@ impl View {
         }
     }
 
+    /// The accepted identity a background estimate would describe, when
+    /// shipping estimates it (not Maximum, WebM or staged edits).
+    fn estimate_key(&self) -> Option<EditKey> {
+        let p = self.presented.as_ref()?;
+        (!self.maximum_size
+            && !self.webm
+            && p.export.max_size_bytes.is_none()
+            && !self.unapplied()
+            && !self.requires_reopen
+            && !self.closed)
+            .then(|| (p.edit.clone(), p.export.clone()))
+    }
+
     fn request_estimate(&mut self, tx: &Sender<Job>) {
-        if self.busy
-            || self.picker
-            || self.confirm_close
-            || self.confirm_replace.is_some()
-            || self.presented.is_none()
-            || self.unapplied()
-            || self
-                .presented
-                .as_ref()
-                .is_some_and(|p| p.export.max_size_bytes.is_some())
-        {
+        if self.busy || self.picker || self.confirm_close || self.estimate_key().is_none() {
             return;
         }
         let cancel = CancelToken::default();
-        self.cancel = Some(cancel.clone());
+        self.estimate_cancel = Some(cancel.clone());
         self.send(tx, Job::Estimate(cancel));
+    }
+
+    /// Stop a background estimate that newer edits or an operation supersede.
+    fn supersede_estimate(&mut self) {
+        if self.estimating
+            && let Some(cancel) = &self.estimate_cancel
+        {
+            cancel.cancel();
+        }
+    }
+
+    /// Shipping's background estimate: 600 ms after the accepted settings
+    /// settle, once per identity; newer edits cancel it.
+    fn drive_estimate(&mut self, ctx: &egui::Context, tx: &Sender<Job>) {
+        let Some(key) = self.estimate_key() else {
+            self.estimate_due = None;
+            return;
+        };
+        if self.estimate_attempt.as_ref() == Some(&key) {
+            self.estimate_due = None;
+            return;
+        }
+        let now = Instant::now();
+        let due = match &self.estimate_due {
+            Some((pending, due)) if *pending == key => *due,
+            _ => {
+                let due = now + Duration::from_millis(recording_editor_ui::ESTIMATE_DEBOUNCE_MS);
+                self.estimate_due = Some((key.clone(), due));
+                due
+            }
+        };
+        if now < due {
+            ctx.request_repaint_after(due - now);
+            return;
+        }
+        if self.busy || self.picker || self.confirm_close {
+            // The worker's completion wakes this viewport again.
+            return;
+        }
+        self.estimate_due = None;
+        self.estimate_attempt = Some(key);
+        self.request_estimate(tx);
+    }
+
+    /// Live edits: once staged values settle (no held pointer or gesture),
+    /// decode the edited preview. Shipping applies every edit immediately.
+    fn drive_apply(&mut self, ctx: &egui::Context, tx: &Sender<Job>, holding: bool) {
+        let Some(p) = &self.presented else {
+            self.apply_due = None;
+            return;
+        };
+        if !self.unapplied()
+            || (self.maximum_size && self.maximum_bytes().is_none())
+            || self.requires_reopen
+            || self.closed
+        {
+            self.apply_due = None;
+            return;
+        }
+        let key = (self.staged_edit(p), self.export_spec());
+        if self.apply_failed.as_ref() == Some(&key) {
+            self.apply_due = None;
+            return;
+        }
+        let delay = Duration::from_millis(recording_editor_ui::LIVE_APPLY_DELAY_MS);
+        let now = Instant::now();
+        let holding = holding || self.trim_gesture.is_some() || self.crop_gesture.is_some();
+        let due = match &self.apply_due {
+            Some((pending, due)) if *pending == key && !holding => *due,
+            _ => {
+                self.apply_due = Some((key.clone(), now + delay));
+                now + delay
+            }
+        };
+        // Newer edits supersede a background estimate right away.
+        self.supersede_estimate();
+        if holding || now < due {
+            ctx.request_repaint_after(if holding { delay } else { due - now });
+            return;
+        }
+        if self.busy || self.picker || self.confirm_close {
+            return;
+        }
+        self.apply_due = None;
+        self.applying = Some(key.clone());
+        let (edit, export) = key;
+        self.send(
+            tx,
+            Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }),
+        );
     }
 
     fn can_compare(&self) -> bool {
         !self.busy
             && !self.picker
             && !self.confirm_close
-            && self.confirm_replace.is_none()
+            && !self.webm
             && !self.closed
             && !self.adjusting_crop
             && !self.unapplied()
@@ -526,6 +733,7 @@ impl View {
                 self.comparison_dismissed,
             )
         }) && !self.adjusting_crop
+            && !self.webm
             && !self.unapplied()
     }
 
@@ -583,10 +791,9 @@ impl View {
     }
 
     fn request_thumbnails(&mut self, tx: &Sender<Job>) {
-        if self.busy
+        if self.blocked()
             || self.picker
             || self.confirm_close
-            || self.confirm_replace.is_some()
             || self.closed
             || self.presented.is_none()
             || self.thumbnails.is_some()
@@ -599,10 +806,9 @@ impl View {
     }
 
     fn request_crop_view(&mut self, tx: &Sender<Job>) {
-        if self.busy
+        if self.blocked()
             || self.picker
             || self.confirm_close
-            || self.confirm_replace.is_some()
             || self.closed
             || self.presented.is_none()
             || self.crop.is_none()
@@ -620,10 +826,9 @@ impl View {
     }
 
     fn request_playback(&mut self, tx: &Sender<Job>) {
-        if self.busy
+        if self.blocked()
             || self.picker
             || self.confirm_close
-            || self.confirm_replace.is_some()
             || self.requires_reopen
             || self.closed
             || self.unapplied()
@@ -679,7 +884,18 @@ impl View {
     }
 
     fn send(&mut self, tx: &Sender<Job>, job: Job) {
-        if self.busy || self.picker || self.confirm_replace.is_some() || self.requires_reopen {
+        if self.picker || self.requires_reopen {
+            return;
+        }
+        if self.busy {
+            // An operation supersedes a background estimate and runs as soon
+            // as the worker stops it; everything else waits for the worker.
+            if self.estimating && self.queued.is_none() && !matches!(job, Job::Estimate(_)) {
+                self.supersede_estimate();
+                self.trim_gesture = None;
+                self.crop_gesture = None;
+                self.queued = Some(job);
+            }
             return;
         }
         self.trim_gesture = None;
@@ -714,13 +930,14 @@ impl View {
                 if loading_thumbnails {
                     self.thumbnail_error = None;
                 }
-                if estimating {
-                    self.estimate = None;
+                // Shipping keeps showing the previous estimate while a newer
+                // one is pending, and never reports an estimate as an error.
+                if !estimating {
+                    self.error = None;
                 }
-                self.error = None;
                 // Automatic source thumbnails must not erase the preceding
                 // replacement result while refreshing the rebased timeline.
-                if !loading_thumbnails {
+                if !loading_thumbnails && !estimating {
                     // The comparison frame shows its own Processing state.
                     self.status = loading_source.then(|| "Loading uncropped source frame…".into());
                 }
@@ -728,24 +945,38 @@ impl View {
             Err(_) => {
                 self.error = Some("Recording editor worker stopped.".into());
                 self.cancel = None;
+                self.estimate_cancel = None;
             }
         }
     }
 
     fn receive(&mut self, ctx: &egui::Context, event: Event) {
         match event {
-            Event::Opened(presented, original_path) => {
+            Event::Opened(presented, original_path, defaults) => {
                 // Confirm the session's accepted path, never an older History
                 // list hint loaded before the worker opened this recording.
                 self.original_path = original_path;
+                // Shipping's footer starts on the original's folder and name;
+                // Save replaces it unless the format or source needs a copy.
+                self.source_directory = PathBuf::from(defaults.directory);
+                self.source_stem = defaults.stem;
+                self.directory = self.source_directory.clone();
+                self.stem = self.source_stem.clone();
                 self.receive(ctx, Event::Presented(Ok(presented)));
+                // Without a replaceable original (a reference or a History-only
+                // recording), Save as new file is locked on with its `-edited`
+                // name, as shipping does for a format change.
+                if self.presented.is_some() && !self.replace_supported() {
+                    self.save_as_new = true;
+                    self.stem = recording_editor_ui::edited_file_stem(&self.source_stem);
+                }
             }
             Event::Presented(result) => {
                 self.busy = false;
                 self.comparison = None;
+                let applied = self.applying.take();
                 match result {
                     Ok(p) => {
-                        self.adjusting_crop = false;
                         if self
                             .presented
                             .as_ref()
@@ -753,12 +984,10 @@ impl View {
                         {
                             self.source_texture = None;
                         }
-                        if self
-                            .presented
-                            .as_ref()
-                            .is_none_or(|old| old.edit != p.edit || old.export != p.export)
-                        {
-                            self.estimate = None;
+                        // Live edits keep Adjust crop open over the same source
+                        // frame; a new position ends it.
+                        if self.source_texture.is_none() {
+                            self.adjusting_crop = false;
                         }
                         self.set_frame(ctx, &p.frame);
                         self.playback_position_ms = None;
@@ -801,8 +1030,17 @@ impl View {
                             self.saved_export = Some(p.export.clone());
                         }
                         self.presented = Some(p);
+                        // An edit the session normalises differently must not
+                        // loop: retry only after the user edits again.
+                        self.apply_failed = applied.filter(|key| {
+                            self.unapplied()
+                                && self.presented.as_ref().is_some_and(|p| {
+                                    *key == (self.staged_edit(p), self.export_spec())
+                                })
+                        });
                     }
                     Err(error) => {
+                        self.apply_failed = applied;
                         // A failed command restores the accepted still, rather
                         // than labelling transient playback pixels as accepted.
                         if let Some(p) = &self.presented {
@@ -827,12 +1065,16 @@ impl View {
                         // Drop every source-dependent cache and saved baseline.
                         let directory = std::mem::take(&mut self.directory);
                         let stem = std::mem::take(&mut self.stem);
+                        let source_directory = std::mem::take(&mut self.source_directory);
+                        let source_stem = std::mem::take(&mut self.source_stem);
                         let artifact_id = std::mem::take(&mut self.artifact_id);
                         let preview_loop = self.preview_loop.clone();
                         preview_loop.store(false, Ordering::Relaxed);
                         *self = Self {
                             directory,
                             stem,
+                            source_directory,
+                            source_stem,
                             artifact_id,
                             original_path: Some(path.clone()),
                             preview_actual_size: self.preview_actual_size,
@@ -847,7 +1089,14 @@ impl View {
                             ..Self::default()
                         };
                         self.receive(ctx, Event::Presented(Ok(presented)));
-                        self.status = Some(format!("Replaced original: {}", path.display()));
+                        // Shipping's save toast and Show in Folder, for the
+                        // original that now holds the edits.
+                        let (gif, size) = self.presented.as_ref().map_or((false, 0), |p| {
+                            (p.export.format == ExportFormat::Gif, p.source.size_bytes)
+                        });
+                        self.status = Some(recording_editor_ui::saved_message(gif, size));
+                        self.saved_path = Some(path);
+                        self.saved_fingerprint = self.save_fingerprint();
                     }
                     Err(error) if error.requires_reopen => {
                         self.requires_reopen = true;
@@ -899,6 +1148,7 @@ impl View {
                             self.saved_edit = p.edit.clone();
                             self.saved_export = Some(p.export.clone());
                         }
+                        self.saved_fingerprint = self.save_fingerprint();
                         self.status = Some(status);
                         self.error = warning;
                     }
@@ -908,16 +1158,20 @@ impl View {
             Event::Estimated(result) => {
                 self.busy = false;
                 self.estimating = false;
-                self.cancel = None;
-                match result {
-                    Ok(estimate) => {
-                        self.estimate = Some(estimate);
-                        self.error = None;
-                    }
-                    Err(error) => {
-                        self.estimate = None;
-                        self.error = Some(error);
-                    }
+                let superseded = self
+                    .estimate_cancel
+                    .take()
+                    .is_some_and(|cancel| cancel.is_cancelled());
+                if superseded {
+                    // Newer settings estimate again once they settle; the
+                    // previous value stays visible meanwhile, as in shipping.
+                    self.estimate_attempt = None;
+                } else {
+                    // Shipping shows "—" for a failed estimate, not an error.
+                    self.estimate = result.ok();
+                }
+                if std::mem::take(&mut self.close_after_work) {
+                    self.request_close();
                 }
             }
             Event::Compared(generation, result) => {
@@ -1066,7 +1320,7 @@ impl View {
                     }
                 }
                 self.playback_audio_enabled = false;
-                if std::mem::take(&mut self.close_after_playback) {
+                if std::mem::take(&mut self.close_after_work) {
                     self.request_close();
                 }
             }
@@ -1083,10 +1337,13 @@ impl View {
         self.trim_gesture = None;
         self.crop_gesture = None;
         self.comparison = None;
-        self.confirm_replace = None;
         if self.playing {
-            self.close_after_playback = true;
+            self.close_after_work = true;
             self.pause_playback();
+        } else if self.busy && self.estimating && self.queued.is_none() {
+            // Closing supersedes a background estimate.
+            self.close_after_work = true;
+            self.supersede_estimate();
         } else if self.busy || self.picker {
             self.error =
                 Some("Wait for the current operation, or cancel it, before closing.".into());
@@ -1101,7 +1358,11 @@ impl View {
         // The automatic comparison's refresh delay leads straight into work.
         // Shipping's title; the " — Working…" suffix is a native addition
         // that the X11 exercises wait on.
-        if self.busy || self.comparison_due.is_some() {
+        if self.busy
+            || self.comparison_due.is_some()
+            || self.apply_due.is_some()
+            || self.estimate_due.is_some()
+        {
             "Captures Editor — Working…"
         } else {
             captures_app::app_windows::RECORDING_EDITOR_TITLE
@@ -1147,6 +1408,7 @@ impl Editor {
         let latest_frame = playback_frame.clone();
         let preview_loop = Arc::<AtomicBool>::default();
         let loop_enabled = preview_loop.clone();
+        let output_directory = directory.clone();
         let worker = thread::spawn(move || {
             let mut session = match RecordingEditorSession::open(
                 RecordingEditorOpenRequest {
@@ -1159,6 +1421,7 @@ impl Editor {
                     let _ = out.send(Event::Opened(
                         Presented::from_session(&session),
                         session.original_save_path().map(std::path::Path::to_owned),
+                        session.save_defaults(&output_directory),
                     ));
                     Some(session)
                 }
@@ -1313,10 +1576,6 @@ impl Editor {
                 busy: true,
                 preview_loop,
                 artifact_id: artifact_id_for_view,
-                stem: format!(
-                    "Captures_{}_edited",
-                    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
-                ),
                 directory,
                 ..View::default()
             })),
@@ -1355,6 +1614,11 @@ impl Editor {
             let opening = view.presented.is_none();
             let replaced = matches!(&event, Event::Replaced(Ok(_)));
             view.receive(ctx, event);
+            if !view.busy
+                && let Some(job) = view.queued.take()
+            {
+                view.send(&self.tx, job);
+            }
             if (opening || replaced) && view.presented.is_some() {
                 view.request_thumbnails(&self.tx);
             }
@@ -1370,7 +1634,8 @@ impl Editor {
         self.receive(ctx);
         let mut view = self.view.lock().unwrap();
         view.pause_playback();
-        if !view.closed && (view.busy || view.picker || view.dirty()) {
+        view.supersede_estimate();
+        if !view.closed && (view.blocked() || view.picker || view.dirty()) {
             let error = "Recording edits are not saved as drafts. Save a new copy or close the recording editor before quitting.".to_owned();
             view.error = Some(error.clone());
             drop(view);
@@ -1423,9 +1688,11 @@ impl Editor {
 
 impl Drop for Editor {
     fn drop(&mut self) {
-        if let Some(cancel) = &self.view.lock().unwrap().cancel {
+        let view = self.view.lock().unwrap();
+        for cancel in [&view.cancel, &view.estimate_cancel].into_iter().flatten() {
             cancel.cancel();
         }
+        drop(view);
         let _ = self.tx.send(Job::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -1491,7 +1758,7 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
         ]
     };
     let enabled = ui.is_enabled()
-        && !view.busy
+        && !view.blocked()
         && !view.picker
         && !view.confirm_close
         && ui.input(|input| input.focused)
@@ -2054,7 +2321,7 @@ fn show_overlay_play(
     let enabled = if view.playing {
         !pausing
     } else {
-        !view.busy
+        !view.blocked()
             && !view.picker
             && !view.confirm_close
             && !view.adjusting_crop
@@ -2083,7 +2350,7 @@ fn show_overlay_play(
         .on_hover_text(if view.playing {
             "Pause the preview."
         } else if view.unapplied() {
-            "Apply staged edits before playing."
+            "Updating the edited preview…"
         } else {
             "Play the accepted trim and mix with Sound on. Motion preview fits within 1280 × 720."
         });
@@ -2195,7 +2462,7 @@ fn show_trim_timeline(
         ]
     };
     let enabled = ui.is_enabled()
-        && !view.busy
+        && !view.blocked()
         && !view.picker
         && !view.confirm_close
         && view.start_ms < view.end_ms
@@ -2208,10 +2475,26 @@ fn show_trim_timeline(
     let handle_rects = handles(view.start_ms, view.end_ms);
     let responses = ["Trim start", "Trim end"].map(|label| {
         let index = usize::from(label == "Trim end");
-        ui.interact(handle_rects[index], ui.scope_id().with(label),
-                    if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() })
-            .on_hover_text(format!("{label}: {}. Drag or use arrow keys/Page Up/Page Down. Apply edits to update the preview.",
-                recording_editor_ui::format_editor_time(if index == 0 { view.start_ms } else { view.end_ms }, duration)))
+        ui.interact(
+            handle_rects[index],
+            ui.scope_id().with(label),
+            if enabled {
+                egui::Sense::click_and_drag()
+            } else {
+                egui::Sense::hover()
+            },
+        )
+        .on_hover_text(format!(
+            "{label}: {}. Drag or use arrow keys/Page Up/Page Down.",
+            recording_editor_ui::format_editor_time(
+                if index == 0 {
+                    view.start_ms
+                } else {
+                    view.end_ms
+                },
+                duration
+            )
+        ))
     });
     if !enabled
         || view
@@ -2536,12 +2819,15 @@ fn show(
     if probe_env() || PROBE.with_borrow(Option::is_some) {
         PROBE.with_borrow_mut(|controls| *controls = Some(BTreeMap::new()));
     }
+    let holding = ui.input(|input| input.pointer.any_down());
+    view.drive_apply(ui.ctx(), tx, holding);
+    view.drive_estimate(ui.ctx(), tx);
     view.drive_comparison(ui.ctx(), tx);
     show_footer(ui, tokens, view, tx, events, viewport);
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(tokens.color("surface-canvas")))
         .show(ui, |ui| {
-            if view.confirm_replace.is_some() || view.requires_reopen {
+            if view.requires_reopen {
                 ui.disable();
             }
             crate::primitives::scroll_area(
@@ -2598,7 +2884,8 @@ fn show_footer(
             if let Some(progress) = &view.progress {
                 // `.recording-export-progress`: a 3px accent bar on the top edge.
                 let bar = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), 3.));
-                ui.painter().rect_filled(bar, 0., tokens.color("surface-sunken"));
+                ui.painter()
+                    .rect_filled(bar, 0., tokens.color("surface-sunken"));
                 ui.painter().rect_filled(
                     egui::Rect::from_min_size(
                         bar.min,
@@ -2637,34 +2924,12 @@ fn show_footer(
                     });
                 });
             }
-            if let Some(confirmation) = &view.confirm_replace {
-                let path = confirmation.path.display().to_string();
-                card(ui, tokens, "caution-surface", "border-subtle", |ui| {
-                    ui.spacing_mut().item_spacing.y = tokens.number("s-3");
-                    ui.label(text(tokens, "Replace the original recording?", "text-md", "text").strong());
-                    ui.label(text(tokens, path, "text-sm", "text-muted").monospace());
-                    ui.label(text(tokens, "Replaces this file and its History recovery copy with the accepted edits. This cannot be undone.", "text-sm", "text"));
-                    ui.label(text(tokens, "A matching recovery copy is required. Cancellation stops preparation, not an update already being committed.", "text-xs", "text-subtle"));
-                    ui.horizontal(|ui| {
-                        let cancel = ui.button("Cancel replacement");
-                        probe(ui, "Cancel replacement", cancel.rect);
-                        if cancel.clicked() {
-                            view.confirm_replace = None;
-                        }
-                        let confirm = ui.add(primary_button(tokens, "Replace original"));
-                        probe(ui, "Replace original", confirm.rect);
-                        if confirm.clicked() {
-                            view.confirm_replacement(tx);
-                        }
-                    });
-                });
-            }
-            if view.confirm_replace.is_some() || view.requires_reopen {
+            if view.requires_reopen {
                 ui.disable();
             }
             let available = ui.available_width();
             let wide = available >= 820.;
-            let editable = !view.busy && !view.picker && !view.confirm_close;
+            let editable = !view.blocked() && !view.picker && !view.confirm_close;
             let filename_width = if wide {
                 (available - 500. - tokens.number("s-6")).clamp(280., 420.)
             } else {
@@ -2806,35 +3071,22 @@ fn show_filename(
             .max_rect(format_rect.shrink2(egui::vec2(1., 1.)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    let old = view.gif;
-    let mut gif = view.gif;
+    // Shipping's MP4 / GIF / WebM select (`.filename-format-select`).
+    let mut format = (view.gif, view.webm);
     select_styled(
         &mut format_ui,
         tokens,
         "Format",
         format_rect.width() - 2.,
-        &mut gif,
-        &[(false, ".mp4".into(), "MP4"), (true, ".gif".into(), "GIF")],
+        &mut format,
+        &[
+            ((false, false), ".mp4".into(), "MP4"),
+            ((true, false), ".gif".into(), "GIF"),
+            ((false, true), ".webm".into(), "WebM"),
+        ],
         crate::primitives::SelectStyle::Inline,
     );
-    if gif != old {
-        view.gif = gif;
-        // Shipping `updateOutputFormat`: another format always saves a new file.
-        if view
-            .presented
-            .as_ref()
-            .is_some_and(|p| (p.source.mime_type == "image/gif") != gif)
-        {
-            view.save_as_new = true;
-        }
-        // Shipping offers Preserve quality only for MP4 and switches a GIF to
-        // Compress; Maximum keeps its remembered preset.
-        if gif && !view.maximum_size && view.quality == QualityPreset::Preserve {
-            view.quality = view
-                .compress_quality
-                .unwrap_or(recording_editor_ui::DEFAULT_COMPRESS_PRESET);
-        }
-    }
+    view.set_format(format.0, format.1);
 }
 
 fn show_save_actions(
@@ -2867,48 +3119,25 @@ fn show_save_actions(
             ui.add_enabled_ui(editable, |ui| {
                 let copy = view.saving_copy();
                 let save = ui
-                    .add_enabled(
-                        view.presented.is_some() && !view.unapplied(),
-                        primary_button(tokens, "Save"),
-                    )
+                    .add_enabled(view.can_save(), primary_button(tokens, "Save"))
                     .on_hover_text(if copy {
-                        "Creates a separate copy. The original and existing files are never replaced."
+                        "Save as a new file and leave the original untouched."
                     } else {
-                        "Replace the saved original and matching History recovery copy after confirmation. Only same-format MP4/GIF; apply edits first. A saved path is only a hint: the backend checks both files before writing."
+                        "Save the edits over the original recording and its History item."
                     });
                 probe(ui, "Save", save.rect);
                 // What Save does now, for the smoke tests' named targets.
-                probe(ui, if copy { "Save new copy" } else { "Replace original…" }, save.rect);
-                if save.clicked() && !copy {
-                    view.begin_replace();
-                } else if save.clicked() {
-                    if let Some(error) = recording_editor_ui::filename_error(&view.stem) {
-                        view.error = Some(error.into());
+                probe(
+                    ui,
+                    if copy {
+                        "Save new copy"
                     } else {
-                        let cancel = CancelToken::default();
-                        view.cancel = Some(cancel.clone());
-                        view.saved_path = None;
-                        let request = RecordingSaveRequest {
-                            destination: view.destination(),
-                            export: view.presented.as_ref().unwrap().export.clone(),
-                        };
-                        view.send(tx, Job::Save(request, cancel));
-                    }
-                }
-                let apply = ui
-                    .add_enabled(
-                        view.unapplied() && (!view.maximum_size || view.maximum_bytes().is_some()),
-                        egui::Button::new("Apply edits").min_size(egui::vec2(0., tokens.number("h-md"))),
-                    )
-                    .on_hover_text("Update the preview before scrubbing or saving");
-                probe(ui, "Apply edits", apply.rect);
-                if apply.clicked() {
-                    let edit = view.staged_edit(view.presented.as_ref().unwrap());
-                    let export = view.export_spec();
-                    view.send(
-                        tx,
-                        Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export }),
-                    );
+                        "Replace original"
+                    },
+                    save.rect,
+                );
+                if save.clicked() {
+                    view.save(tx);
                 }
                 if view.cancel.is_none() {
                     // `.recording-show-in-folder`: after a save, until the next one.
@@ -2935,8 +3164,6 @@ fn show_save_actions(
                     "Cancel source preview"
                 } else if view.loading_thumbnails {
                     "Cancel thumbnails"
-                } else if view.estimating {
-                    "Cancel estimate"
                 } else if view.comparing.is_some() {
                     "Cancel comparison"
                 } else {
@@ -2968,9 +3195,7 @@ fn show_save_actions(
                 });
             probe(ui, "Save as new file", toggle.rect);
             if toggle.changed() {
-                view.save_as_new = copy;
-                view.saved_path = None;
-                view.error = None;
+                view.set_save_as_new(copy);
             }
         });
     });
@@ -3018,27 +3243,31 @@ fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
     let source_size = (p.source.width, p.source.height);
     let system_audio = p.edit.audio.source_has_system_audio;
     let microphone_audio = p.edit.audio.source_has_microphone_audio;
-    ui.add_enabled_ui(!view.busy && !view.picker && !view.confirm_close, |ui| {
-        show_timeline_card(ui, tokens, view, tx, duration);
-        let wide = ui.available_width() >= 700.;
-        if view.gif {
-            show_gif_card(ui, tokens, view);
-        }
-        if wide {
-            ui.columns(2, |columns| {
-                columns[0].spacing_mut().item_spacing.y = gap;
-                columns[1].spacing_mut().item_spacing.y = gap;
-                show_crop_card(&mut columns[0], tokens, view, tx, source_size);
-                show_quality_card(&mut columns[1], tokens, view, tx);
-            });
-        } else {
-            show_crop_card(ui, tokens, view, tx, source_size);
-            show_quality_card(ui, tokens, view, tx);
-        }
-        if system_audio || microphone_audio {
-            show_audio_card(ui, tokens, view, system_audio, microphone_audio);
-        }
-    });
+    ui.add_enabled_ui(
+        !view.blocked() && !view.picker && !view.confirm_close,
+        |ui| {
+            show_timeline_card(ui, tokens, view, tx, duration);
+            let wide = ui.available_width() >= 700.;
+            if view.gif {
+                show_gif_card(ui, tokens, view);
+            }
+            if wide {
+                ui.columns(2, |columns| {
+                    columns[0].spacing_mut().item_spacing.y = gap;
+                    columns[1].spacing_mut().item_spacing.y = gap;
+                    show_crop_card(&mut columns[0], tokens, view, tx, source_size);
+                    show_quality_card(&mut columns[1], tokens, view);
+                });
+            } else {
+                show_crop_card(ui, tokens, view, tx, source_size);
+                show_quality_card(ui, tokens, view);
+            }
+            // Shipping shows the Audio card for MP4 and the GIF note, not WebM.
+            if (system_audio || microphone_audio) && !view.webm {
+                show_audio_card(ui, tokens, view, system_audio, microphone_audio);
+            }
+        },
+    );
 }
 
 /// `.recording-editor-preview`: raised card whose viewport is sunken.
@@ -3091,7 +3320,7 @@ fn show_preview_card(
             tokens,
             looping,
             view.presented.is_some()
-                && (!view.busy || view.playing)
+                && (!view.blocked() || view.playing)
                 && !view.picker
                 && !view.confirm_close
                 && view.cancel.as_ref().is_none_or(|cancel| !cancel.is_cancelled()),
@@ -3106,7 +3335,7 @@ fn show_preview_card(
             tokens,
             "Sound",
             !view.preview_muted,
-            view.presented.is_some() && !view.busy && !view.picker && !view.confirm_close,
+            view.presented.is_some() && !view.blocked() && !view.picker && !view.confirm_close,
         )
         .on_hover_text("Preview accepted MP4 audio on the default output device. Change only while stopped. If the device fails, turn Sound off and retry. This never changes the export.")
         .clicked()
@@ -3115,7 +3344,7 @@ fn show_preview_card(
         }
         if view.adjusting_crop {
             let done = ui.add_enabled(
-                !view.busy && !view.picker && !view.confirm_close,
+                !view.blocked() && !view.picker && !view.confirm_close,
                 egui::Button::new(text(tokens, "Done cropping", "text-sm", "text")),
             );
             probe(ui, "Done cropping (preview)", done.rect);
@@ -3317,7 +3546,7 @@ fn show_preview_card(
         caption.label(text(
             tokens,
             format!(
-                "Uncropped source · {} · {} × {} · Drag to stage the crop, then Apply edits.",
+                "Uncropped source · {} · {} × {} · Drag to crop the source.",
                 time(displayed_position),
                 p.source.width,
                 p.source.height
@@ -3421,7 +3650,7 @@ fn show_timeline_card(
                     if let Some(error) = view.thumbnail_error.clone() {
                         let retry = ui
                             .add_enabled(
-                                !view.busy && !view.picker && !view.confirm_close,
+                                !view.blocked() && !view.picker && !view.confirm_close,
                                 egui::Button::new(text(tokens, "Retry thumbnails", "text-xs", "text")).small(),
                             )
                             .on_hover_text(error);
@@ -3719,14 +3948,14 @@ fn show_crop_card(
         }
         ui.label(text(
             tokens,
-            "Apply previews even-pixel sizes for the selected format and quality.",
+            "The preview uses even-pixel sizes for the selected format and quality.",
             "text-xs",
             "text-subtle",
         ));
     });
 }
 
-fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
     card(ui, tokens, "surface-raised", "border-subtle", |ui| {
         card_title(ui, tokens, "Save quality");
         ui.spacing_mut().item_spacing.y = tokens.number("s-3");
@@ -3734,7 +3963,7 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
         let current = QualityMode::of(view.quality, view.maximum_size);
         let mut mode = current;
         let width = ui.available_width().min(430.);
-        let mut options: Vec<_> = QualityMode::available(view.gif)
+        let mut options: Vec<_> = QualityMode::available(view.gif || view.webm)
             .iter()
             .map(|mode| (*mode, mode.label().to_owned(), mode.description()))
             .collect();
@@ -3789,7 +4018,11 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
             QualityMode::of(p.export.quality, p.export.max_size_bytes.is_some())
                 != QualityMode::Preserve
         });
-        if mode != QualityMode::Preserve && accepted_compresses && view.comparison_dismissed {
+        if mode != QualityMode::Preserve
+            && accepted_compresses
+            && view.comparison_dismissed
+            && !view.webm
+        {
             ui.add_space(tokens.number("s-2"));
             field_label(ui, tokens, compare::SHOW_CAPTION);
             let show = ui.add(
@@ -3871,18 +4104,6 @@ fn show_quality_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &S
                     .response
                     .on_hover_text(recording_editor_ui::DELTA_HELP);
                 probe(ui, "Est. size delta", pill.rect);
-            }
-            if !view.maximum_size {
-                let estimate = ui
-                    .add_enabled(
-                        view.presented.is_some() && !view.unapplied(),
-                        egui::Button::new(text(tokens, "Estimate size", "text-sm", "text")),
-                    )
-                    .on_hover_text("Percentage change compares the accepted estimate with the original recording file. Longer recordings use approximate encoded samples. No History entry or saved file is created.");
-                probe(ui, "Estimate size", estimate.rect);
-                if estimate.clicked() {
-                    view.request_estimate(tx);
-                }
             }
         });
     });
@@ -4064,6 +4285,8 @@ mod tests {
                 dropped_frames: 0,
             })),
         );
+        // Renders must not race the automatic estimate of the opened state.
+        view.estimate_attempt = view.estimate_key();
         view
     }
 
@@ -4087,50 +4310,98 @@ mod tests {
             egui::Shape::Text(text) if text.galley.job.text == copy)));
     }
 
+    fn defaults(directory: &str, stem: &str) -> recording_editor_ui::SaveDefaults {
+        recording_editor_ui::SaveDefaults {
+            directory: directory.into(),
+            stem: stem.into(),
+        }
+    }
+
     #[test]
-    fn replacement_requires_confirmation_of_unchanged_accepted_identity() {
+    fn save_replaces_the_session_original_without_confirmation() {
         let ctx = egui::Context::default();
         let (tx, jobs) = mpsc::channel();
         let mut view = opened();
-        assert!(!view.can_replace());
+        assert!(!view.can_replace() && view.saving_copy());
         view.original_path = Some("stale-history-path.mp4".into());
         view.receive(
             &ctx,
-            Event::Opened(opened().presented.unwrap(), Some("original.mp4".into())),
+            Event::Opened(
+                opened().presented.unwrap(),
+                Some("/Captures/original.mp4".into()),
+                defaults("/Captures", "original"),
+            ),
         );
-        assert!(view.can_replace());
+        // Shipping's footer names the original, and Save overwrites it.
+        assert!(view.can_replace() && !view.saving_copy());
+        assert_eq!(view.destination(), PathBuf::from("/Captures/original.mp4"));
         view.gif = true;
         assert!(!view.can_replace());
         view.gif = false;
-        view.begin_replace();
-        assert!(jobs.try_recv().is_err());
-        assert_eq!(
-            view.confirm_replace.as_ref().unwrap().path,
-            PathBuf::from("original.mp4")
-        );
+        view.webm = true;
+        assert!(!view.replace_supported() && view.saving_copy());
+        view.webm = false;
+        view.save(&tx);
+        assert!(matches!(jobs.recv().unwrap(), Job::Replace(_)));
+        assert!(view.busy && view.cancel.is_some());
         view.request_playback(&tx);
         view.request_comparison(&ctx, &tx);
         view.request_estimate(&tx);
         view.request_thumbnails(&tx);
-        assert!(jobs.try_recv().is_err() && view.cancel.is_none());
-        for change in 0..3 {
-            view.confirm_replace = None;
-            view.begin_replace();
-            match change {
-                0 => view.presented.as_mut().unwrap().revision += 1,
-                1 => view.original_path = Some("different.mp4".into()),
-                _ => view.presented.as_mut().unwrap().export.quality = QualityPreset::Tiny,
-            }
-            view.confirm_replacement(&tx);
-            assert!(jobs.try_recv().is_err(), "stale confirmation {change}");
-        }
-        view.presented.as_mut().unwrap().export.quality = QualityPreset::Preserve;
-        view.begin_replace();
-        view.confirm_replacement(&tx);
-        assert!(matches!(jobs.recv().unwrap(), Job::Replace(_)));
-        assert!(view.busy && view.cancel.is_some() && view.confirm_replace.is_none());
+        view.save(&tx);
+        assert!(jobs.try_recv().is_err());
         view.request_close();
         assert!(!view.closed, "replacement teardown gates close");
+    }
+
+    #[test]
+    fn save_as_new_file_and_formats_follow_shipping_names() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        let mut view = opened();
+        view.receive(
+            &ctx,
+            Event::Opened(
+                opened().presented.unwrap(),
+                Some("/Captures/clip.mp4".into()),
+                defaults("/Captures", "clip"),
+            ),
+        );
+        view.set_save_as_new(true);
+        assert_eq!(
+            view.destination(),
+            PathBuf::from("/Captures/clip-edited.mp4")
+        );
+        view.set_save_as_new(false);
+        assert_eq!(view.destination(), PathBuf::from("/Captures/clip.mp4"));
+        // A renamed copy keeps its name when the switch changes.
+        view.stem = "mine".into();
+        view.set_save_as_new(true);
+        view.set_save_as_new(false);
+        assert_eq!(view.stem, "mine");
+        view.stem = "clip".into();
+        view.directory = "/elsewhere".into();
+        // Another format forces a new `-edited` file beside the original.
+        view.set_format(false, true);
+        assert!(view.save_as_new && view.saving_copy() && !view.replace_supported());
+        assert_eq!(
+            view.destination(),
+            PathBuf::from("/Captures/clip-edited.webm")
+        );
+        assert!(!view.unapplied(), "WebM keeps the accepted MP4 preview");
+        assert_eq!(view.estimate_label(), "—");
+        view.save(&tx);
+        assert_eq!(
+            view.error.as_deref(),
+            Some(recording_editor_ui::WEBM_EXPORT_ERROR)
+        );
+        assert!(jobs.try_recv().is_err() && !view.busy);
+        view.set_format(true, false);
+        assert!(!view.webm && view.gif && view.quality != QualityPreset::Preserve);
+        assert_eq!(
+            view.destination(),
+            PathBuf::from("/Captures/clip-edited.gif")
+        );
     }
 
     #[test]
@@ -4173,6 +4444,10 @@ mod tests {
         assert!(
             view.estimate.is_none() && view.source_texture.is_none() && view.thumbnails.is_none()
         );
+        // Shipping's save toast, Show in Folder, and a disabled Save until
+        // something changes.
+        assert_eq!(view.saved_path, Some(PathBuf::from("original.gif")));
+        assert!(view.already_saved() && !view.can_save());
         assert!(view.output_size.is_none() && !view.maximum_size && view.cancel.is_none());
         assert!(!view.preview_loop.load(Ordering::Relaxed));
         assert_eq!((view.start_ms, view.end_ms, view.position_ms), (0, 1500, 0));
@@ -4188,15 +4463,9 @@ mod tests {
         let (tx, jobs) = mpsc::channel();
         view.request_thumbnails(&tx);
         assert!(matches!(jobs.recv().unwrap(), Job::Thumbnails(_)));
-        assert_eq!(
-            view.status.as_deref(),
-            Some("Replaced original: original.gif")
-        );
+        assert_eq!(view.status.as_deref(), Some("GIF saved — 40 B."));
         view.receive(&ctx, Event::Thumbnails(Err("cancelled".into())));
-        assert_eq!(
-            view.status.as_deref(),
-            Some("Replaced original: original.gif")
-        );
+        assert_eq!(view.status.as_deref(), Some("GIF saved — 40 B."));
         view.request_playback(&tx);
         assert!(matches!(jobs.recv().unwrap(), Job::Play(0, true, _)));
         view.busy = false;
@@ -4256,7 +4525,7 @@ mod tests {
     }
 
     #[test]
-    fn replacement_confirmation_and_save_actions_fit_minimum_window() {
+    fn save_actions_fit_minimum_window_without_apply_or_confirmation() {
         for (name, tokens) in crate::tokens::load() {
             let ctx = egui::Context::default();
             tokens.apply(&ctx, name.contains("light"));
@@ -4264,70 +4533,65 @@ mod tests {
             view.original_path = Some("/recordings/original.mp4".into());
             let (tx, jobs) = mpsc::channel();
             let (events, _) = mpsc::channel();
-            for confirming in [false, true] {
-                if confirming {
-                    view.begin_replace();
-                }
-                let mut render = || {
-                    let mut output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(760., 580.),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
-                    );
-                    output.textures_delta.clear();
-                    output
-                };
-                render();
-                let output = render();
-                let labels = if confirming {
-                    vec![
-                        "Replace the original recording?",
-                        "/recordings/original.mp4",
-                        "Cancel replacement",
-                        "Replace original",
-                    ]
-                } else {
-                    vec![
-                        "Filename",
-                        "Saving to",
-                        "Change…",
-                        "Save as new file",
-                        "Apply edits",
-                        "Save",
-                    ]
-                };
-                let mut rects = Vec::new();
-                for label in labels {
-                    let rect = output
-                        .shapes
+            let mut render = || {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 580.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, &mut view, &tx, &events, egui::ViewportId::ROOT),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            render();
+            let output = render();
+            let mut rects = Vec::new();
+            for label in [
+                "Filename",
+                "Saving to",
+                "Change…",
+                "Save as new file",
+                "Save",
+            ] {
+                let rect = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == label => {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{name}: missing {label}"));
+                assert!(
+                    rect.min.x >= 0.
+                        && rect.min.y >= 0.
+                        && rect.max.x <= 760.
+                        && rect.max.y <= 580.,
+                    "{label}: {rect:?}"
+                );
+                assert!(
+                    rects
                         .iter()
-                        .find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.job.text == label => {
-                                Some(text.galley.rect.translate(text.pos.to_vec2()))
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| panic!("{name}: missing {label}"));
-                    assert!(
-                        rect.min.x >= 0.
-                            && rect.min.y >= 0.
-                            && rect.max.x <= 760.
-                            && rect.max.y <= 580.,
-                        "{label}: {rect:?}"
-                    );
-                    assert!(
-                        rects
-                            .iter()
-                            .all(|other: &egui::Rect| !other.intersects(rect)),
-                        "overlapping {label}"
-                    );
-                    rects.push(rect);
-                }
+                        .all(|other: &egui::Rect| !other.intersects(rect)),
+                    "overlapping {label}"
+                );
+                rects.push(rect);
+            }
+            for removed in [
+                "Apply edits",
+                "Estimate size",
+                "Replace the original recording?",
+            ] {
+                assert!(
+                    !output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.job.text == removed)),
+                    "{name}: {removed}"
+                );
             }
             assert!(jobs.try_recv().is_err());
         }
@@ -4727,7 +4991,7 @@ mod tests {
     }
 
     #[test]
-    fn save_as_new_file_switches_save_between_confirmed_replacement_and_a_new_copy() {
+    fn save_as_new_file_switches_save_between_replacement_and_a_new_copy() {
         let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
         let ctx = egui::Context::default();
         let mut view = opened();
@@ -4750,12 +5014,17 @@ mod tests {
                 probe_frame_with(&ctx, &tokens, view, &tx, &sender, size, events);
             }
         };
-        // Shipping's default: Save replaces a same-format original, after
-        // the exact-path confirmation.
+        // Shipping's default: Save replaces a same-format original at once.
         assert!(view.replace_supported() && !view.saving_copy());
         click(&mut view, "Save");
-        assert!(view.confirm_replace.is_some() && jobs.try_recv().is_err());
-        view.confirm_replace = None;
+        assert!(matches!(jobs.try_recv(), Ok(Job::Replace(_))));
+        view.receive(
+            &ctx,
+            Event::Replaced(Err(ReplaceOriginalError {
+                message: "cancelled before commit".into(),
+                requires_reopen: false,
+            })),
+        );
         click(&mut view, "Save as new file");
         assert!(view.save_as_new && view.saving_copy());
         click(&mut view, "Save new copy");
@@ -4763,17 +5032,13 @@ mod tests {
             panic!("new copy")
         };
         assert_eq!(request.destination, view.destination());
-        assert!(view.confirm_replace.is_none());
         view.receive(&ctx, Event::Saved(Err("stopped".into())));
         // Another format always saves a new file; the switch stays on.
         view.save_as_new = false;
-        view.gif = true;
-        view.save_as_new |= view
-            .presented
-            .as_ref()
-            .is_some_and(|p| (p.source.mime_type == "image/gif") != view.gif);
+        view.set_format(true, false);
         assert!(view.save_as_new);
-        view.gif = false;
+        view.set_format(false, false);
+        assert!(view.save_as_new);
         view.save_as_new = false;
         view.original_path = None;
         assert!(
@@ -4836,7 +5101,7 @@ mod tests {
             exact: true,
         });
         view.receive(&ctx, Event::Presented(Ok(accepted)));
-        assert!(!view.unapplied() && view.dirty() && view.estimate.is_none());
+        assert!(!view.unapplied() && view.dirty());
         assert_eq!(view.estimate_label(), "≤ 100 KB");
         view.request_estimate(&tx);
         assert!(
@@ -5113,8 +5378,8 @@ mod tests {
         let p = opened().presented.unwrap();
         view.receive(&ctx, Event::Presented(Ok(p)));
         assert!(
-            !view.adjusting_crop && view.source_texture.is_some(),
-            "same-position Apply retains source pixels"
+            view.adjusting_crop && view.source_texture.is_some(),
+            "a same-position live edit keeps Adjust crop on its source pixels"
         );
         let mut p = opened().presented.unwrap();
         p.position_ms = 1337;
@@ -5555,7 +5820,7 @@ mod tests {
             &view.presented.as_ref().unwrap().frame
         ));
         assert!(!view.busy && !view.history_changed);
-        assert_eq!(view.estimate_label(), "Apply edits to estimate");
+        assert_eq!(view.estimate_label(), "—");
     }
 
     #[test]
@@ -5731,18 +5996,14 @@ mod tests {
         );
         let (tx, jobs) = mpsc::channel();
         view.gif = true;
-        assert_eq!(view.estimate_label(), "Apply edits to estimate");
-        view.request_estimate(&tx);
-        assert!(jobs.try_recv().is_err() && !view.busy);
-        view.receive(&ctx, Event::Presented(Err("bad format preview".into())));
-        assert_eq!(view.estimate_label(), "Apply edits to estimate");
-        view.gif = false;
         assert_eq!(
             view.estimate_label(),
             "12.3 KB · −38%",
-            "reverting staged edits restores the matching result"
+            "shipping keeps the last estimate until a newer one arrives"
         );
-        view.gif = true;
+        view.request_estimate(&tx);
+        view.drive_estimate(&ctx, &tx);
+        assert!(jobs.try_recv().is_err() && !view.busy && view.estimate_due.is_none());
         let p = view.presented.as_ref().unwrap();
         view.receive(
             &ctx,
@@ -5757,19 +6018,23 @@ mod tests {
                 dropped_frames: 0,
             })),
         );
-        assert!(
-            view.estimate.is_none(),
-            "accepting different settings invalidates the old result"
-        );
-        view.request_estimate(&tx);
+        assert!(!view.unapplied());
+        assert_eq!(view.estimate_label(), "12.3 KB · −38%");
+        // Shipping's debounce, then one background estimate per identity.
+        view.drive_estimate(&ctx, &tx);
+        assert!(jobs.try_recv().is_err() && view.estimate_due.is_some());
+        view.estimate_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_estimate(&ctx, &tx);
         assert!(matches!(jobs.try_recv(), Ok(Job::Estimate(_))));
+        assert!(view.busy && view.estimating && view.cancel.is_none() && !view.blocked());
+        assert_eq!(view.estimate_label(), "12.3 KB", "pending keeps the value");
+        assert!(view.estimate_presentation().muted);
         view.request_estimate(&tx);
+        view.drive_estimate(&ctx, &tx);
         assert!(
             jobs.try_recv().is_err(),
             "only one worker operation is accepted"
         );
-        view.request_close();
-        assert!(!view.closed && !view.confirm_close);
         view.receive(
             &ctx,
             Event::Estimated(Ok(ExportEstimate {
@@ -5778,12 +6043,23 @@ mod tests {
             })),
         );
         assert_eq!(view.estimate_label(), "≈ 67.9 KB · +239%");
-        assert!(!view.busy && !view.estimating && view.cancel.is_none() && view.error.is_none());
+        assert!(!view.busy && !view.estimating && view.estimate_cancel.is_none());
+        view.error = None;
+        view.drive_estimate(&ctx, &tx);
+        assert!(jobs.try_recv().is_err() && view.estimate_due.is_none());
         assert!(
             view.dirty() && !view.history_changed,
             "estimating does not save edits"
         );
         assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        // A failure shows shipping's placeholder, not an error.
+        view.estimate_attempt = None;
+        view.estimate_due = Some((view.estimate_key().unwrap(), Instant::now()));
+        view.drive_estimate(&ctx, &tx);
+        assert!(matches!(jobs.try_recv(), Ok(Job::Estimate(_))));
+        view.receive(&ctx, Event::Estimated(Err("encoder failed".into())));
+        assert_eq!(view.estimate_label(), "—");
+        assert!(view.error.is_none() && view.status.is_none());
     }
 
     #[test]
@@ -5812,19 +6088,17 @@ mod tests {
             view.estimate.as_mut().unwrap().exact = false;
             assert_eq!(view.estimate_label(), format!("≈ {size_bytes} B{suffix}"));
             view.estimating = true;
-            assert_eq!(view.estimate_label(), "Estimating…");
+            assert_eq!(view.estimate_label(), format!("≈ {size_bytes} B"));
             view.estimating = false;
             view.maximum_size = true;
             view.maximum_value.clear();
-            assert!(
-                !view.estimate_label().contains('%'),
+            assert_eq!(
+                view.estimate_label(),
+                "—",
                 "invalid Maximum never advertises a reduction"
             );
             view.maximum_value = "10".into();
-            assert!(
-                !view.estimate_label().contains('%'),
-                "staged cap is not an estimate"
-            );
+            assert_eq!(view.estimate_label(), "≤ 10.0 MB", "shipping shows the cap");
             view.presented.as_mut().unwrap().export = view.export_spec();
             assert_eq!(view.estimate_label(), "≤ 10.0 MB");
             view.receive(&ctx, Event::Estimated(Err("cancelled".into())));
@@ -6276,29 +6550,116 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_estimate_preserves_frame_and_can_be_retried() {
+    fn superseded_estimate_is_silent_and_queued_work_runs_after_it() {
+        let ctx = egui::Context::default();
         let mut view = opened();
+        view.estimate = Some(ExportEstimate {
+            size_bytes: 5,
+            exact: true,
+        });
         let frame = view.presented.as_ref().unwrap().frame.clone();
         let (tx, jobs) = mpsc::channel();
         view.request_estimate(&tx);
         let Job::Estimate(cancel) = jobs.recv().unwrap() else {
             panic!("estimate queued")
         };
-        view.cancel.as_ref().unwrap().cancel();
-        assert!(cancel.is_cancelled() && view.busy && view.estimating);
-        view.receive(
-            &egui::Context::default(),
-            Event::Estimated(Err("cancelled".into())),
+        assert!(view.busy && view.estimating && view.cancel.is_none() && !view.blocked());
+        // A seek supersedes the background estimate and waits for the worker.
+        view.send(
+            &tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 1000 }),
         );
-        assert!(!view.busy && !view.estimating && view.cancel.is_none() && view.estimate.is_none());
-        assert_eq!(view.error.as_deref(), Some("cancelled"));
+        assert!(cancel.is_cancelled() && view.blocked() && jobs.try_recv().is_err());
+        view.receive(&ctx, Event::Estimated(Err("cancelled".into())));
+        assert!(!view.busy && !view.estimating && view.estimate_cancel.is_none());
+        assert_eq!(view.estimate.as_ref().unwrap().size_bytes, 5);
+        assert!(view.error.is_none() && view.estimate_attempt.is_none());
         assert!(!view.dirty() && !view.history_changed);
         assert!(Arc::ptr_eq(&frame, &view.presented.as_ref().unwrap().frame));
+        let job = view.queued.take().unwrap();
+        view.send(&tx, job);
+        assert!(matches!(
+            jobs.try_recv(),
+            Ok(Job::Apply(RecordingEditorRequest::Seek {
+                position_ms: 1000
+            }))
+        ));
+        // Closing also supersedes an estimate, then closes once it stops.
+        view.receive(&ctx, Event::Presented(Err("seek failed".into())));
         view.request_estimate(&tx);
-        let Job::Estimate(retry) = jobs.recv().unwrap() else {
-            panic!("retry queued")
+        let Job::Estimate(cancel) = jobs.recv().unwrap() else {
+            panic!("estimate queued")
         };
-        assert!(!retry.is_cancelled() && view.error.is_none());
+        view.request_close();
+        assert!(cancel.is_cancelled() && !view.closed);
+        view.receive(&ctx, Event::Estimated(Err("cancelled".into())));
+        assert!(view.closed);
+    }
+
+    #[test]
+    fn live_edits_apply_after_settling_and_never_retry_a_failure() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let (tx, jobs) = mpsc::channel();
+        view.request_estimate(&tx);
+        let Job::Estimate(cancel) = jobs.recv().unwrap() else {
+            panic!("estimate queued")
+        };
+        view.start_ms = 300;
+        view.drive_apply(&ctx, &tx, false);
+        assert!(cancel.is_cancelled() && view.apply_due.is_some());
+        assert!(jobs.try_recv().is_err());
+        view.receive(&ctx, Event::Estimated(Err("cancelled".into())));
+        // A held pointer (slider, crop or trim drag) keeps waiting.
+        view.apply_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_apply(&ctx, &tx, true);
+        assert!(jobs.try_recv().is_err());
+        view.apply_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_apply(&ctx, &tx, false);
+        let Ok(Job::Apply(RecordingEditorRequest::UpdatePreview { edit, .. })) = jobs.try_recv()
+        else {
+            panic!("live apply")
+        };
+        assert_eq!(edit.trim_start_ms, 300);
+        assert!(view.busy && view.blocked() && view.apply_due.is_none());
+        // A failure keeps the staged value and is not retried until edited.
+        view.receive(&ctx, Event::Presented(Err("bad trim".into())));
+        assert_eq!(view.start_ms, 300);
+        assert_eq!(view.error.as_deref(), Some("bad trim"));
+        view.drive_apply(&ctx, &tx, false);
+        assert!(view.apply_due.is_none() && jobs.try_recv().is_err());
+        view.start_ms = 400;
+        view.drive_apply(&ctx, &tx, false);
+        view.apply_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_apply(&ctx, &tx, false);
+        let Ok(Job::Apply(RecordingEditorRequest::UpdatePreview { edit, export })) =
+            jobs.try_recv()
+        else {
+            panic!("edited retry")
+        };
+        let p = view.presented.as_ref().unwrap();
+        view.receive(
+            &ctx,
+            Event::Presented(Ok(Presented {
+                revision: p.revision + 1,
+                preview_export: export.clone(),
+                source: p.source.clone(),
+                edit,
+                export,
+                position_ms: p.position_ms,
+                frame: p.frame.clone(),
+                dropped_frames: 0,
+            })),
+        );
+        assert!(!view.unapplied() && view.dirty() && view.apply_failed.is_none());
+        view.drive_apply(&ctx, &tx, false);
+        assert!(view.apply_due.is_none() && jobs.try_recv().is_err());
+        // Invalid Maximum text never applies.
+        view.maximum_size = true;
+        view.maximum_value = "0.01".into();
+        view.drive_apply(&ctx, &tx, false);
+        assert!(view.apply_due.is_none());
+        assert_eq!(view.estimate_label(), "—");
     }
 
     #[test]
@@ -6341,7 +6702,6 @@ mod tests {
                             "100%",
                             "Show in Folder",
                             "Save as new file",
-                            "Apply edits",
                             "Save",
                         ][..],
                         580.,
@@ -6353,7 +6713,6 @@ mod tests {
                             "Retry thumbnails",
                             "Est. size",
                             "Est. size delta",
-                            "Estimate size",
                         ][..],
                         1800.,
                     ),
@@ -6944,7 +7303,7 @@ mod tests {
             jobs.try_recv().is_err(),
             "staged FPS gates estimate and playback"
         );
-        assert_eq!(view.estimate_label(), "Apply edits to estimate");
+        assert!(view.estimate_label().starts_with("1.2 KB"));
         let export = view.export_spec();
         assert_eq!(export.format, ExportFormat::Gif);
         assert_eq!(export.frames_per_second, Some(8));
@@ -6964,7 +7323,7 @@ mod tests {
         p.edit = edit;
         p.export = export;
         view.receive(&ctx, Event::Presented(Ok(p)));
-        assert!(!view.unapplied() && view.dirty() && view.estimate.is_none());
+        assert!(!view.unapplied() && view.dirty() && view.estimate_key().is_some());
         view.receive(
             &ctx,
             Event::Saved(Ok(SavedRecording::SavedWithoutHistory {
@@ -7174,18 +7533,14 @@ mod tests {
     #[test]
     fn error_and_cancel_render_in_every_theme_and_cancel_keeps_work_pending() {
         for (name, tokens) in crate::tokens::load() {
-            for estimating in [false, true] {
+            // Shipping's background estimate has no Cancel; exports do.
+            {
                 let ctx = egui::Context::default();
                 tokens.apply(&ctx, name.contains("light"));
                 let mut view = opened();
                 view.error = Some("Export cannot replace an existing recording.".into());
                 view.busy = true;
-                view.estimating = estimating;
-                let cancel_label = if estimating {
-                    "Cancel estimate"
-                } else {
-                    "Cancel export"
-                };
+                let cancel_label = "Cancel export";
                 let cancel = CancelToken::default();
                 view.cancel = Some(cancel.clone());
                 let (tx, jobs) = mpsc::channel();
