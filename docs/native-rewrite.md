@@ -53,8 +53,9 @@ gone: captures start from the tray, shortcuts and the New Capture menu (which ow
 display switching), Preferences opens from the tray and app reactivation, and the
 filter counts replace the "N of M captures" line. History reloads after every change
 it makes, as shipping does on `capture-history-changed`, so Refresh is gone too;
-AppKit relists displays on screen-parameter changes and wgpu relists them when the
-pointer is on an unknown display. Permission recovery moved to the denied capture,
+AppKit relists displays on screen-parameter changes, and both hosts list them again
+for a capture when the list is empty or lacks the display under the pointer (see
+the Screenshot Display slice below). Permission recovery moved to the denied capture,
 where shipping shows its dialog: AppKit keeps Restart & Retry and opens the
 permission cards only when that prompt is unavailable; wgpu opens its recovery
 dialog. X11 smokes drive captures through the shortcuts and open recovery with
@@ -193,6 +194,29 @@ like the shipping `capture_display_at_point`: wgpu resolves it through the share
 `XcapBackend::display_id_at_point` and AppKit through `NSEvent.mouseLocation`. When the pointer position is unavailable
 (Wayland) the current display is kept. Multi-monitor and mixed-DPI physical
 acceptance remains open.
+
+Screenshot Display, capture failures and display recovery now match shipping on
+both hosts. The display shortcut and tray "Screenshot Display" open the capture
+menu in Screenshot mode on Full screen, with its display picker, instead of
+capturing at once (`open_capture_controls_with_target`). Opening on Full screen
+never auto-starts; only choosing it or another display does. While a recording
+session is active they keep the direct display-under-pointer path, as shipping
+does; neither host takes a screenshot during a recording from that path yet, so it
+stays refused. A failed tray, shortcut or menu capture shows shipping's
+`report_capture_error` dialog, titled "Captures" with one OK button (copy in
+`captures_app::capture_error`, exposed to AppKit through the settings ABI). AppKit
+uses a sheet over History; wgpu draws the dialog in its own window, so it shows
+while History is hidden (shipping's stock dialog needs `zenity` on Linux). wgpu
+recording flows that end before a take use the shipping "Captures Recording"
+title. The History error card now only shows History load and delete failures;
+capture, shortcut and startup display-list failures no longer land there. Each
+capture resolves its display fresh, like shipping's per-capture monitor lookup:
+when the list is empty or lacks the display under the pointer, the host lists
+again before starting, so a failed first list recovers without a relaunch. X11
+smokes open the menu from the display shortcut and the tray, confirm the
+preselected Full screen target, and check the failure dialog, the untouched
+History card and recovery in both appearances. macOS is covered by XCTest only;
+Windows, Wayland and multi-monitor acceptance remain open.
 
 Development login items are now explicit, OS-authoritative Preferences controls:
 per-profile macOS LaunchAgents, Windows HKCU Run values and Linux XDG autostart

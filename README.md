@@ -247,7 +247,10 @@ New Capture and region/window/display screenshot and recording global shortcuts.
 Screenshot and Record controls for Region, Window and Full screen, retaining selections when
 switching targets with the toolbar. While these controls are open, the configured
 region/window/display shortcuts switch mode and target in the same session; keyboard
-Full screen does not auto-start capture. Focused Preferences and capture
+Full screen does not auto-start capture. As in the shipping app, the display
+screenshot shortcut and tray Screenshot Display open these controls on Full screen
+with its display picker, and a failed capture shows a "Captures" error dialog
+instead of a History error. Focused Preferences and capture
 preparation/countdown and active recording suppress those shortcuts. While recording controls are hidden, only the
 configured New Capture shortcut remains active so it can restore the same take. Native Preferences can edit all seven capture
 and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
