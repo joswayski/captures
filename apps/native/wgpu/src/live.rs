@@ -572,6 +572,11 @@ enum SelectorMessage {
         generation: u64,
         target: capture_controls::Target,
     },
+    /// The menu first shows Record: enumerate microphones (shipping
+    /// `loadAudioDevices`).
+    ListMicrophones {
+        generation: u64,
+    },
     PauseRecording {
         generation: u64,
     },
@@ -1394,6 +1399,9 @@ pub struct Live {
     card_restoring: Option<PreviewGuard>,
     /// Shipping "✓ Restored" feedback, shown for `ACTION_FEEDBACK_MS`.
     card_restored: Option<(String, Instant)>,
+    /// Shipping `HistoryCard` errors (`.history-card-error`) from a failed
+    /// Restore or Edit restore, by artifact, until that card acts again.
+    card_errors: HashMap<String, String>,
     /// The latest progress message, for tests and diagnostics. Shipping
     /// History has no status line; failures show in `error` (`.history-error`).
     status: String,
@@ -1457,6 +1465,14 @@ pub struct Live {
     /// The menu is preparing another display the user chose. Only that
     /// auto-starts Full screen; opening on Full screen waits for a choice.
     controls_switching_display: bool,
+    /// The menu being replaced by a display switch, which stays up showing
+    /// "Switching…" until the new display is ready (shipping
+    /// `select_capture_display`).
+    controls_switch_from: Option<(
+        CaptureTarget,
+        Arc<WindowSession>,
+        Option<egui::TextureHandle>,
+    )>,
     controls_countdown_seconds: u8,
     recording_worker: recording::Worker,
     recording_toolchain_ready: bool,
@@ -1747,6 +1763,7 @@ impl Live {
             card_busy: None,
             card_restoring: None,
             card_restored: None,
+            card_errors: HashMap::new(),
             status: "Loading capture workspace…".into(),
             error: None,
             pending: 0,
@@ -1797,6 +1814,7 @@ impl Live {
             controls_freeze: false,
             controls_auto_start: false,
             controls_switching_display: false,
+            controls_switch_from: None,
             controls_countdown_seconds: 0,
             recording_worker: recording::Worker::new(ctx.clone()),
             recording_toolchain_ready: false,
@@ -2195,6 +2213,7 @@ impl Live {
         self.controls_freeze = settings.freeze_screen;
         self.controls_auto_start = settings.auto_start_on_selection;
         self.controls_switching_display = false;
+        self.controls_switch_from = None;
         self.controls_countdown_seconds = settings.screenshot_countdown_seconds;
         self.include_recording_controls = settings.include_recording_controls_in_captures;
         let mut controls = self.controls.lock().unwrap();
@@ -2225,8 +2244,6 @@ impl Live {
             .generation();
         self.recording_worker
             .send(recording::Command::VerifyToolchain { generation });
-        self.recording_worker
-            .send(recording::Command::ListMicrophones { generation });
     }
 
     /// What is open or in flight for `capture_error::busy_route`.
@@ -2317,7 +2334,9 @@ impl Live {
                     .unwrap()
                     .apply_target_shortcut(shortcut);
                 self.menu_screenshot_target = (!record).then_some(target);
-                ctx.request_repaint_of(egui::ViewportId::from_hash_of("capture-controls"));
+                if let Some(target) = self.countdown_target {
+                    ctx.request_repaint_of(capture_controls_viewport(target.monitor));
+                }
             }
             BusyRoute::RecaptureSelector(target) => {
                 self.requested_recapture = Some(Recapture::Selector(selector_kind(target)));
@@ -3143,6 +3162,9 @@ impl Live {
                             Some(self.recording_toolchain_error.clone().unwrap_or_else(|| {
                                 "FFmpeg and ffprobe verification is still in progress.".into()
                             }));
+                        self.controls.lock().unwrap().end_in_flight();
+                        self.selector_scope_generation
+                            .store(generation, Ordering::Release);
                         continue;
                     }
                     let Some(display) = self
@@ -3170,6 +3192,8 @@ impl Live {
                             continue;
                         }
                     };
+                    // The menu stays up showing "Starting…" while the take prepares,
+                    // as shipping's selector does until `start_recording` hides it.
                     self.selector_scope_generation.store(0, Ordering::Release);
                     self.capture_phase = Some(CapturePhase::RecordingPreparing { target });
                     self.recording_worker.send(recording::Command::Prepare {
@@ -3377,6 +3401,7 @@ impl Live {
                             .store(generation, Ordering::Release);
                         self.controls_error =
                             Some("The selected display is no longer available.".into());
+                        self.controls.lock().unwrap().end_in_flight();
                         continue;
                     }
                     self.display_id = Some(display_id);
@@ -3389,10 +3414,15 @@ impl Live {
                         );
                         continue;
                     };
+                    // The old menu stays up showing "Switching…" until the new
+                    // display's session is ready (shipping `switchDisplay`).
+                    self.controls_switch_from = self
+                        .countdown_target
+                        .zip(self.window_session.take())
+                        .map(|(from, session)| (from, session, self.window_texture.take()));
                     self.countdown_target = Some(target);
                     self.previews.capture_target = Some(target);
                     self.selector_scope_generation.store(0, Ordering::Release);
-                    self.controls.lock().unwrap().reset_for_display_change();
                     self.controls_switching_display = true;
                     self.window_session = None;
                     self.window_texture = None;
@@ -3401,9 +3431,16 @@ impl Live {
                     request_hidden_root_paint(ctx);
                     self.begin_root_hide(ctx);
                 }
+                SelectorMessage::ListMicrophones { generation }
+                    if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation) =>
+                {
+                    self.recording_worker
+                        .send(recording::Command::ListMicrophones { generation });
+                }
                 SelectorMessage::ConfirmRegion { .. }
                 | SelectorMessage::ConfirmWindow { .. }
                 | SelectorMessage::ConfirmControls { .. }
+                | SelectorMessage::ListMicrophones { .. }
                 | SelectorMessage::StartRecording { .. }
                 | SelectorMessage::PauseRecording { .. }
                 | SelectorMessage::ResumeRecording { .. }
@@ -4774,7 +4811,7 @@ impl Live {
                         if !self.begin_recaptured(pending) {
                             continue;
                         }
-                        request_recaptured_viewports(ctx, generation);
+                        request_recaptured_viewports(ctx, generation, self.displays.len());
                     }
                     let recording_screenshot =
                         self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
@@ -4925,7 +4962,7 @@ impl Live {
                         if !self.begin_recaptured(pending) {
                             continue;
                         }
-                        request_recaptured_viewports(ctx, generation);
+                        request_recaptured_viewports(ctx, generation, self.displays.len());
                     }
                     let recording_screenshot =
                         self.recording_screenshot_flow.as_ref().is_some_and(|flow| {
@@ -5013,6 +5050,12 @@ impl Live {
                             });
                             self.window_session = Some(session);
                             if controls {
+                                self.controls_switch_from = None;
+                                if self.controls_switching_display {
+                                    let mut menu = self.controls.lock().unwrap();
+                                    menu.reset_for_display_change();
+                                    menu.end_in_flight();
+                                }
                                 // Shipping auto-starts after choosing another
                                 // Full screen display, not when the menu opens on it.
                                 let auto_capture_display = self.controls_auto_start
@@ -5162,9 +5205,13 @@ impl Live {
                         ctx.request_repaint();
                     }
                     Err(error) => {
-                        self.finish_restore(&artifact_id, generation, false);
+                        let message = format!("Could not load mini preview: {error}");
+                        if self.finish_restore(&artifact_id, generation, false) {
+                            self.card_errors.insert(artifact_id.clone(), message);
+                        } else {
+                            self.error = Some(message);
+                        }
                         self.previews.dismiss(&artifact_id, generation);
-                        self.error = Some(format!("Could not load mini preview: {error}"));
                     }
                 },
                 // A card dismissed before it decoded ends its Restore quietly.
@@ -5172,7 +5219,9 @@ impl Live {
                     generation,
                     artifact_id,
                     ..
-                } => self.finish_restore(&artifact_id, generation, false),
+                } => {
+                    self.finish_restore(&artifact_id, generation, false);
+                }
             }
         }
         self.start_next_media();
@@ -5603,6 +5652,7 @@ impl Live {
         self.region_selector.lock().unwrap().reset();
         self.window_session = None;
         self.window_texture = None;
+        self.controls_switch_from = None;
         self.window_selector.lock().unwrap().reset();
         self.controls.lock().unwrap().reset();
         self.workspace_hidden = false;
@@ -7095,24 +7145,31 @@ impl Live {
                 );
             }
         }
-        if self.capture_phase == Some(CapturePhase::ControlsSelecting) {
+        // The menu stays up while a start or display switch it sent is in
+        // flight ("Starting…", "Switching…"), as shipping's selector does
+        // until `start_recording` or `select_capture_display` returns.
+        let selecting = self.capture_phase == Some(CapturePhase::ControlsSelecting);
+        let menu = match self.capture_phase {
+            Some(CapturePhase::ControlsSelecting | CapturePhase::RecordingPreparing { .. }) => self
+                .countdown_target
+                .zip(self.window_session.clone())
+                .map(|(target, session)| (target, session, self.window_texture.clone())),
+            Some(CapturePhase::ControlsPreparing) => self.controls_switch_from.clone(),
+            _ => None,
+        };
+        if let Some((target, session, texture)) = menu
+            && let Some(generation) = self.flow.as_ref().map(CaptureFlow::generation)
+        {
             let t = t.clone();
-            let generation = self
-                .flow
-                .as_ref()
-                .expect("capture controls own flow")
-                .generation();
             // Publish selector shortcut scope only in the UI pass that declares
             // the child, never during an earlier hidden-root logic-only pass.
-            self.selector_scope_generation
-                .store(generation, Ordering::Release);
-            let target = self
-                .countdown_target
-                .expect("capture-controls target validated");
+            if selecting {
+                self.selector_scope_generation
+                    .store(generation, Ordering::Release);
+            }
             let controls = Arc::clone(&self.controls);
             let selector_scope_generation = Arc::clone(&self.selector_scope_generation);
             let sender = self.selector_tx.clone();
-            let texture = self.window_texture.clone();
             let auto_start = self.controls_auto_start;
             let controls_error = self.controls_error.clone();
             let displays = self.displays.clone();
@@ -7121,13 +7178,8 @@ impl Live {
                     .clone()
                     .unwrap_or_else(|| "Checking FFmpeg and ffprobe availability…".to_owned())
             });
-            let session = Arc::clone(
-                self.window_session
-                    .as_ref()
-                    .expect("capture controls own window session"),
-            );
             ctx.show_viewport_deferred(
-                egui::ViewportId::from_hash_of("capture-controls"),
+                capture_controls_viewport(target.monitor),
                 capture_viewport(
                     "Captures Capture Controls",
                     target.monitor,
@@ -7146,23 +7198,50 @@ impl Live {
                         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                         return;
                     }
-                    let action = controls.lock().unwrap().show(
-                        ui,
-                        &t,
-                        capture_controls::View {
-                            panel_id: egui::Id::unique(("capture-controls-toolbar", generation)),
-                            frozen: texture.as_ref(),
-                            display: session.display(),
-                            displays: &displays,
-                            windows: session.windows(),
-                            auto_start,
-                            recording_available: recording_unavailable_reason.is_none(),
-                            recording_unavailable_reason: recording_unavailable_reason.as_deref(),
-                            error: controls_error.as_deref(),
-                        },
-                        |point| session.hit_test(point),
-                    );
-                    if let Some(action) = action {
+                    let (action, in_flight, list_microphones) = {
+                        let mut controls = controls.lock().unwrap();
+                        let action = controls.show(
+                            ui,
+                            &t,
+                            capture_controls::View {
+                                panel_id: egui::Id::unique((
+                                    "capture-controls-toolbar",
+                                    generation,
+                                )),
+                                frozen: texture.as_ref(),
+                                display: session.display(),
+                                displays: &displays,
+                                windows: session.windows(),
+                                auto_start,
+                                recording_available: recording_unavailable_reason.is_none(),
+                                recording_unavailable_reason: recording_unavailable_reason
+                                    .as_deref(),
+                                error: controls_error.as_deref(),
+                            },
+                            |point| session.hit_test(point),
+                        );
+                        (
+                            action,
+                            controls.in_flight(),
+                            controls.take_microphone_request(),
+                        )
+                    };
+                    if list_microphones {
+                        let _ = sender.send(SelectorMessage::ListMicrophones { generation });
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    }
+                    if action == Some(capture_controls::Action::Cancel) && in_flight.is_some() {
+                        // The host no longer takes menu actions once a start or
+                        // switch is in flight; cancel its flow like Close does.
+                        let _ = selector_scope_generation.compare_exchange(
+                            generation,
+                            0,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        );
+                        captures_app::capture_flow::cancel(generation);
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    } else if let Some(action) = action {
                         let _ = selector_scope_generation.compare_exchange(
                             generation,
                             0,
@@ -7724,6 +7803,7 @@ impl Live {
                                     }),
                                 done: (restored.as_deref() == Some(id))
                                     .then_some(captures_app::history_view::CardAction::Restore),
+                                error: self.card_errors.get(id).map(String::as_str),
                             }
                         })
                         .collect();
@@ -7935,6 +8015,8 @@ impl Live {
             return;
         };
         let recording = entry.kind.is_recording();
+        // Shipping clears a card's error when it starts another action.
+        self.card_errors.remove(id);
         match action {
             CardAction::Copy => self.copy(id),
             CardAction::ShowInFolder => {
@@ -7957,7 +8039,8 @@ impl Live {
                     // (`restore_history_artifact`) before opening the editor;
                     // a failed restore opens nothing.
                     let target = capture_target(frame, &self.displays, self.display_id.as_deref());
-                    if !self.restore_for_edit(ctx, id, &settings, target) {
+                    if let Err(error) = self.restore_for_edit(ctx, id, &settings, target) {
+                        self.card_errors.insert(id.to_owned(), error);
                         return;
                     }
                     let mode = entry.mode.unwrap_or(captures_capture::CaptureMode::Region);
@@ -7968,6 +8051,9 @@ impl Live {
                         mode,
                     );
                 }
+                Err(error) if !recording => {
+                    self.card_errors.insert(id.to_owned(), error);
+                }
                 Err(error) => self.error = Some(error),
             },
             CardAction::Restore => match settings {
@@ -7975,7 +8061,9 @@ impl Live {
                     let target = capture_target(frame, &self.displays, self.display_id.as_deref());
                     self.restore(ctx, &entry.id, &settings, target);
                 }
-                Err(error) => self.error = Some(error),
+                Err(error) => {
+                    self.card_errors.insert(id.to_owned(), error);
+                }
             },
             CardAction::SaveImage | CardAction::SaveFile => match settings {
                 Ok(settings) => {
@@ -8016,7 +8104,7 @@ impl Live {
         if artifact.entry.kind.is_recording() {
             return;
         }
-        self.error = None;
+        self.card_errors.remove(id);
         self.card_restored = None;
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
         match self
@@ -8034,14 +8122,16 @@ impl Live {
                 });
                 self.card_restoring = Some(guard);
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                self.card_errors.insert(id.to_owned(), error);
+            }
         }
         request_hidden_root_paint(ctx);
         ctx.request_repaint();
     }
 
     /// History Edit's restore: the same stack insertion as Restore, without
-    /// its busy state or "Restored" feedback. Returns whether the editor may
+    /// its busy state or "Restored" feedback. Succeeds when the editor may
     /// open (the card is showing, decoding, or already in the stack).
     fn restore_for_edit(
         &mut self,
@@ -8049,9 +8139,9 @@ impl Live {
         id: &str,
         settings: &AppSettings,
         target: Option<CaptureTarget>,
-    ) -> bool {
+    ) -> Result<(), String> {
         let Some(index) = self.artifact_index(id) else {
-            return false;
+            return Err("The screenshot is no longer in Capture History.".into());
         };
         let artifact = &self.artifacts[index];
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
@@ -8059,7 +8149,7 @@ impl Live {
             .previews
             .restore_artifact(artifact, settings, target, editor_open)
         {
-            Ok(RestoreStart::AlreadyShowing) => true,
+            Ok(RestoreStart::AlreadyShowing) => Ok(()),
             Ok(RestoreStart::Decode(guard, path)) => {
                 let _ = self.tx.send(Job::DecodePreview {
                     generation: guard.generation,
@@ -8068,27 +8158,25 @@ impl Live {
                 });
                 request_hidden_root_paint(ctx);
                 ctx.request_repaint();
-                true
+                Ok(())
             }
-            Err(error) => {
-                self.error = Some(error);
-                false
-            }
+            Err(error) => Err(error),
         }
     }
 
-    /// A preview decode finished; end the matching Restore.
-    fn finish_restore(&mut self, artifact_id: &str, generation: u64, shown: bool) {
-        if self
-            .card_restoring
-            .as_ref()
-            .is_some_and(|guard| guard.artifact_id == artifact_id && guard.generation == generation)
-        {
+    /// A preview decode finished; end the matching Restore. Returns whether
+    /// it belonged to a card's Restore.
+    fn finish_restore(&mut self, artifact_id: &str, generation: u64, shown: bool) -> bool {
+        let restoring = self.card_restoring.as_ref().is_some_and(|guard| {
+            guard.artifact_id == artifact_id && guard.generation == generation
+        });
+        if restoring {
             self.card_restoring = None;
             if shown {
                 self.card_restored = Some((artifact_id.to_owned(), Instant::now()));
             }
         }
+        restoring
     }
 
     fn copy(&mut self, id: &str) {
@@ -8443,16 +8531,24 @@ fn recording_hud_state(
 /// where Screenshot Display goes (`capture_error::display_route`).
 /// A recaptured selector or menu reuses its viewport, which egui repaints
 /// only on request: paint the new snapshot as soon as it is in place.
-fn request_recaptured_viewports(ctx: &egui::Context, generation: u64) {
+fn request_recaptured_viewports(ctx: &egui::Context, generation: u64, monitors: usize) {
     for id in [
         egui::ViewportId::from_hash_of("region-selector"),
         egui::ViewportId::from_hash_of("window-selector"),
-        egui::ViewportId::from_hash_of("capture-controls"),
         egui::ViewportId::from_hash_of(("recording-screenshot-selector", generation)),
         egui::ViewportId::from_hash_of(("recording-screenshot-window-selector", generation)),
-    ] {
+    ]
+    .into_iter()
+    .chain((0..monitors.max(1)).map(capture_controls_viewport))
+    {
         ctx.request_repaint_of(id);
     }
+}
+
+/// The capture menu's viewport on `monitor`. A display switch declares the
+/// new display's menu as the old one closes, instead of moving one window.
+fn capture_controls_viewport(monitor: usize) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("capture-controls", monitor))
 }
 
 /// What is open or in flight for `capture_error::busy_route`. `beside` is the
@@ -10958,14 +11054,15 @@ mod tests {
         // Recordings are never restored (shipping rejects them).
         live.restore(&ctx, "recording", &settings, Some(preview_target()));
         assert!(live.previews.stack.ids().is_empty());
-        // An empty stack needs a display to open on.
+        // An empty stack needs a display to open on. Like shipping, the error
+        // shows on the card (`.history-card-error`), not the status line.
         live.restore(&ctx, &id, &settings, None);
         assert!(live.previews.stack.ids().is_empty());
-        assert!(live.error.is_some());
+        assert!(live.card_errors.contains_key(&id) && live.error.is_none());
         assert!(requests.try_recv().is_err());
 
         live.restore(&ctx, &id, &settings, Some(preview_target()));
-        assert!(live.error.is_none());
+        assert!(live.card_errors.is_empty(), "the next restore clears it");
         assert_eq!(live.previews.stack.ids(), std::slice::from_ref(&id));
         let (generation, artifact_id) = decode_job();
         assert_eq!(artifact_id, id);
@@ -11020,10 +11117,11 @@ mod tests {
         assert!(live.card_restoring.is_none() && live.card_restored.is_none());
         assert!(live.previews.stack.ids().is_empty());
         assert!(
-            live.error
-                .as_deref()
+            live.card_errors
+                .get(&id)
                 .is_some_and(|error| error.contains("unreadable"))
         );
+        assert!(live.error.is_none());
         live.flush();
     }
 
@@ -11062,12 +11160,12 @@ mod tests {
             Ok(settings.clone()),
             &frame,
         );
-        assert!(live.editors.is_empty() && live.error.is_some());
+        assert!(live.editors.is_empty() && live.card_errors.contains_key(&edited_id));
+        assert!(live.error.is_none());
         assert!(live.previews.stack.ids().is_empty());
 
         // With a pile on screen, Edit brings the capture back as the front
         // card, then opens its editor, without Restore's busy state.
-        live.error = None;
         assert!(matches!(
             live.previews.restore_artifact(
                 &live.artifacts[0],
@@ -11091,6 +11189,10 @@ mod tests {
         ));
         assert!(live.editors.contains_key(&edited_id));
         assert!(live.card_restoring.is_none() && live.card_restored.is_none());
+        assert!(
+            live.card_errors.is_empty(),
+            "acting on the card clears its error"
+        );
 
         // Editing again neither duplicates nor reorders the card.
         live.card_action(&ctx, &edited_id, CardAction::Edit, Ok(settings), &frame);

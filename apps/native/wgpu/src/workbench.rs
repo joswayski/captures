@@ -195,6 +195,7 @@ impl Workbench {
         );
         if options.live && options.screenshot.is_none() {
             preferences_state.refresh_motion_preference();
+            preferences_state.watch_motion_preference(&cc.egui_ctx);
         }
         if options.live && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             preferences_state.connect_login_item(

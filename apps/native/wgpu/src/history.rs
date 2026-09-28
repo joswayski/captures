@@ -25,6 +25,8 @@ pub struct Item<'a> {
     pub busy: Option<CardAction>,
     /// An action showing its shipping success label ("✓ Restored").
     pub done: Option<CardAction>,
+    /// Shipping `.history-card-error` under the actions (a failed Restore).
+    pub error: Option<&'a str>,
 }
 
 /// Card input, by index into the rendered item slice.
@@ -400,19 +402,35 @@ pub fn grid(
         |ui, viewport| {
             width = f64::from(ui.available_width());
             let layout = shared::grid_in_window(width, compact);
-            ui.set_height(layout.content_height(items.len()) as f32);
+            // A card error grows its row, as shipping's CSS grid rows fit the
+            // tallest card.
+            let mut extras = shared::RowExtras::default();
+            for (index, item) in items.iter().enumerate() {
+                if let Some(error) = item.error {
+                    let text = error_galley(ui, t, error, layout.card_width as f32);
+                    extras.grow(
+                        index / layout.columns,
+                        shared::card_error_extra(f64::from(text.size().y)),
+                    );
+                }
+            }
+            ui.set_height(layout.content_height_with(items.len(), &extras) as f32);
             let origin = ui.max_rect().min;
             let rect_for = |index: usize| {
-                let (x, y) = layout.origin(index);
+                let (x, y) = layout.origin_with(index, &extras);
                 Rect::from_min_size(
                     origin + Vec2::new(x as f32, y as f32),
-                    Vec2::new(layout.card_width as f32, layout.card_height as f32),
+                    Vec2::new(
+                        layout.card_width as f32,
+                        layout.row_card_height(index / layout.columns, &extras) as f32,
+                    ),
                 )
             };
-            let rows = layout.visible_rows(
+            let rows = layout.visible_rows_with(
                 items.len(),
                 f64::from(viewport.min.y),
                 f64::from(viewport.height()),
+                &extras,
             );
             visible = (rows.start * layout.columns).min(items.len())
                 ..(rows.end * layout.columns).min(items.len());
@@ -445,6 +463,26 @@ pub fn grid(
         width,
         compact,
     }
+}
+
+/// The wrapped `.history-card-error` text for a card `card_width` wide.
+fn error_galley(
+    ui: &egui::Ui,
+    t: &Tokens,
+    error: &str,
+    card_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let width = card_width - 2. * (t.number("s-5") + shared::CARD_ERROR_PADDING_X as f32);
+    let size = t.number("text-xs");
+    let mut job = LayoutJob::simple(
+        error.to_owned(),
+        FontId::proportional(size),
+        t.color("danger-text"),
+        width.max(1.),
+    );
+    job.first_row_min_height = size * 1.35;
+    job.sections[0].format.line_height = Some(size * 1.35);
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
 }
 
 /// Eased 0...1 hover progress for one card. egui animates linearly and stops
@@ -613,12 +651,11 @@ fn card(
     let gap = t.number("s-3");
     let height = t.number("h-md");
     let width = (inner - gap) / 2.;
+    // Stretched cards in a grown row keep their actions in place.
+    let actions_top = rect.top() + shared::CARD_ACTIONS_TOP as f32;
     for (slot, action) in card.actions.iter().copied().enumerate() {
         let button_rect = Rect::from_min_size(
-            Pos2::new(
-                rect.left() + pad + slot as f32 * (width + gap),
-                rect.bottom() - pad - height,
-            ),
+            Pos2::new(rect.left() + pad + slot as f32 * (width + gap), actions_top),
             Vec2::new(width, height),
         );
         let done = item
@@ -652,6 +689,25 @@ fn card(
         if response.clicked() {
             events.push(Event::Action(index, action));
         }
+    }
+
+    if let Some(error) = item.error {
+        let text = error_galley(ui, t, error, rect.width());
+        let padding = Vec2::new(
+            shared::CARD_ERROR_PADDING_X as f32,
+            shared::CARD_ERROR_PADDING_Y as f32,
+        );
+        let box_rect = Rect::from_min_size(
+            Pos2::new(
+                rect.left() + pad,
+                actions_top + height + shared::CARD_ERROR_MARGIN as f32,
+            ),
+            Vec2::new(inner, text.size().y + 2. * padding.y),
+        );
+        painter.rect_filled(box_rect, t.number("r-sm") as u8, t.color("danger-surface"));
+        let alert = ui.interact(box_rect, id.with("error"), Sense::hover());
+        alert.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, error));
+        painter.galley(box_rect.min + padding, text, t.color("danger-text"));
     }
 
     let trash_rect = Rect::from_min_size(

@@ -28,6 +28,24 @@ pub const CARD_DIVIDER: f64 = 1.0;
 /// and 12 px padding. Every card reserves the warning line so rows stay aligned.
 pub const CARD_BODY_HEIGHT: f64 = 120.0;
 pub const CARD_HEIGHT: f64 = CARD_IMAGE_HEIGHT + CARD_DIVIDER + CARD_BODY_HEIGHT;
+/// Top of a card's action row. Cards in a grown row stretch (CSS grid rows fit
+/// their tallest card) but keep their actions here, like shipping.
+pub const CARD_ACTIONS_TOP: f64 = CARD_HEIGHT - 12.0 - 32.0;
+/// `.history-card-error` under the actions: `margin-top: var(--s-3)` and
+/// `padding: var(--s-3) var(--s-4)` around `--text-xs` / `--leading-snug` text.
+pub const CARD_ERROR_MARGIN: f64 = 6.0;
+pub const CARD_ERROR_PADDING_Y: f64 = 6.0;
+pub const CARD_ERROR_PADDING_X: f64 = 8.0;
+
+/// Height a card's `.history-card-error` adds for wrapped text `text_height`
+/// points tall; the body's bottom padding stays below it.
+pub fn card_error_extra(text_height: f64) -> f64 {
+    if text_height.is_finite() && text_height > 0.0 {
+        CARD_ERROR_MARGIN + 2.0 * CARD_ERROR_PADDING_Y + text_height
+    } else {
+        0.0
+    }
+}
 
 /// Window copy. Field names are stable ABI keys for AppKit.
 #[derive(Clone, Debug, Serialize)]
@@ -429,6 +447,61 @@ impl Grid {
         (column < self.columns && inside && index < count).then_some(index)
     }
 
+    /// Top of `row` when `extras` rows have grown.
+    pub fn row_top(&self, row: usize, extras: &RowExtras) -> f64 {
+        row as f64 * self.row_stride() + extras.before(row)
+    }
+
+    /// Card height in `row`: every card in a grown row stretches to it.
+    pub fn row_card_height(&self, row: usize, extras: &RowExtras) -> f64 {
+        self.card_height + extras.of(row)
+    }
+
+    /// [`Self::content_height`] with grown rows.
+    pub fn content_height_with(&self, count: usize, extras: &RowExtras) -> f64 {
+        let rows = self.rows(count);
+        self.content_height(count) + extras.before(rows)
+    }
+
+    /// [`Self::origin`] with grown rows.
+    pub fn origin_with(&self, index: usize, extras: &RowExtras) -> (f64, f64) {
+        let (x, _) = self.origin(index);
+        (x, self.row_top(index / self.columns, extras))
+    }
+
+    /// [`Self::visible_rows`] with grown rows.
+    pub fn visible_rows_with(
+        &self,
+        count: usize,
+        scroll_top: f64,
+        viewport_height: f64,
+        extras: &RowExtras,
+    ) -> Range<usize> {
+        if extras.is_empty() {
+            return self.visible_rows(count, scroll_top, viewport_height);
+        }
+        let rows = self.rows(count);
+        if rows == 0 || !scroll_top.is_finite() || !viewport_height.is_finite() {
+            return 0..0;
+        }
+        let top = scroll_top.max(0.0);
+        let bottom = top + viewport_height.max(0.0);
+        // The last row starting at or above `y` (row tops only increase).
+        let row_at = |y: f64| {
+            let (mut low, mut high) = (0, rows);
+            while high - low > 1 {
+                let middle = (low + high) / 2;
+                if self.row_top(middle, extras) <= y {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            low
+        };
+        row_at(top)..(row_at(bottom) + 1).min(rows)
+    }
+
     /// Keyboard navigation: the card `delta_columns`/`delta_rows` away, clamped.
     pub fn step(
         &self,
@@ -442,6 +515,43 @@ impl Grid {
         }
         let target = index as isize + delta_columns + delta_rows * self.columns as isize;
         target.clamp(0, count as isize - 1) as usize
+    }
+}
+
+/// Rows grown by a card's `.history-card-error`, as (row, extra height),
+/// keeping each row's tallest card.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RowExtras(Vec<(usize, f64)>);
+
+impl RowExtras {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn grow(&mut self, row: usize, extra: f64) {
+        if !(extra.is_finite() && extra > 0.0) {
+            return;
+        }
+        match self.0.binary_search_by_key(&row, |(grown, _)| *grown) {
+            Ok(index) => self.0[index].1 = self.0[index].1.max(extra),
+            Err(index) => self.0.insert(index, (row, extra)),
+        }
+    }
+
+    /// Extra height of `row`.
+    pub fn of(&self, row: usize) -> f64 {
+        self.0
+            .binary_search_by_key(&row, |(grown, _)| *grown)
+            .map_or(0.0, |index| self.0[index].1)
+    }
+
+    /// Total extra height of the rows above `row`.
+    pub fn before(&self, row: usize) -> f64 {
+        self.0
+            .iter()
+            .take_while(|(grown, _)| *grown < row)
+            .map(|(_, extra)| extra)
+            .sum()
     }
 }
 
@@ -584,6 +694,53 @@ mod tests {
         assert_eq!((compact.columns, compact.card_width), (1, 588.0));
         assert_eq!(grid_in_window(952.0, false), grid(952.0));
         assert_eq!(grid_in_window(f64::NAN, true).card_width, 0.0);
+    }
+
+    #[test]
+    fn card_errors_grow_their_row_like_a_css_grid() {
+        let wide = grid(952.0);
+        assert_eq!(card_error_extra(0.0), 0.0);
+        assert_eq!(card_error_extra(f64::NAN), 0.0);
+        let extra = card_error_extra(15.0);
+        assert_eq!(extra, 6.0 + 12.0 + 15.0);
+        assert_eq!(CARD_ACTIONS_TOP + 32.0 + 12.0, CARD_HEIGHT);
+        let mut extras = RowExtras::default();
+        assert!(extras.is_empty());
+        extras.grow(1, extra);
+        extras.grow(1, 10.0);
+        extras.grow(3, -4.0);
+        assert_eq!(extras.of(1), extra, "a row keeps its tallest card");
+        assert_eq!(extras.of(0), 0.0);
+        assert_eq!(extras.before(1), 0.0);
+        assert_eq!(extras.before(2), extra);
+        assert_eq!(wide.row_card_height(1, &extras), CARD_HEIGHT + extra);
+        assert_eq!(wide.row_card_height(2, &extras), CARD_HEIGHT);
+        assert_eq!(wide.origin_with(4, &extras), wide.origin(4));
+        assert_eq!(
+            wide.origin_with(7, &extras),
+            (wide.card_width + GRID_GAP, 2.0 * wide.row_stride() + extra)
+        );
+        assert_eq!(
+            wide.content_height_with(7, &extras),
+            wide.content_height(7) + extra
+        );
+        assert_eq!(wide.content_height_with(3, &extras), wide.content_height(3));
+        let stride = wide.row_stride();
+        assert_eq!(wide.visible_rows_with(100, 0.0, 10.0, &extras), 0..1);
+        assert_eq!(
+            wide.visible_rows_with(100, 2.0 * stride + 1.0, 10.0, &extras),
+            1..2,
+            "row 1 now reaches past its unextended bottom"
+        );
+        assert_eq!(
+            wide.visible_rows_with(100, 2.0 * stride + extra + 1.0, 10.0, &extras),
+            2..3
+        );
+        assert_eq!(wide.visible_rows_with(0, 0.0, 10.0, &extras), 0..0);
+        assert_eq!(
+            wide.visible_rows_with(100, 10.5 * stride, 10.0, &RowExtras::default()),
+            wide.visible_rows(100, 10.5 * stride, 10.0)
+        );
     }
 
     #[test]
