@@ -1276,6 +1276,9 @@ pub struct Live {
     selector_scope_generation: Arc<AtomicU64>,
     controls_freeze: bool,
     controls_auto_start: bool,
+    /// The menu is preparing another display the user chose. Only that
+    /// auto-starts Full screen; opening on Full screen waits for a choice.
+    controls_switching_display: bool,
     controls_countdown_seconds: u8,
     recording_worker: recording::Worker,
     recording_toolchain_ready: bool,
@@ -1578,6 +1581,7 @@ impl Live {
             selector_scope_generation: Arc::new(AtomicU64::new(0)),
             controls_freeze: false,
             controls_auto_start: false,
+            controls_switching_display: false,
             controls_countdown_seconds: 0,
             recording_worker: recording::Worker::new(ctx.clone()),
             recording_toolchain_ready: false,
@@ -2010,6 +2014,7 @@ impl Live {
                 self.controls_error = None;
                 self.controls_freeze = settings.freeze_screen;
                 self.controls_auto_start = settings.auto_start_on_selection;
+                self.controls_switching_display = false;
                 self.controls_countdown_seconds = settings.screenshot_countdown_seconds;
                 self.include_recording_controls = settings.include_recording_controls_in_captures;
                 let mut controls = self.controls.lock().unwrap();
@@ -2733,6 +2738,7 @@ impl Live {
                     self.previews.capture_target = Some(target);
                     self.selector_scope_generation.store(0, Ordering::Release);
                     self.controls.lock().unwrap().reset_for_display_change();
+                    self.controls_switching_display = true;
                     self.window_session = None;
                     self.window_texture = None;
                     self.capture_phase = Some(CapturePhase::ControlsPreparing);
@@ -4167,7 +4173,10 @@ impl Live {
                             });
                             self.window_session = Some(session);
                             if controls {
+                                // Shipping auto-starts after choosing another
+                                // Full screen display, not when the menu opens on it.
                                 let auto_capture_display = self.controls_auto_start
+                                    && std::mem::take(&mut self.controls_switching_display)
                                     && self.controls.lock().unwrap().mode()
                                         == capture_controls::TargetMode::Display;
                                 if auto_capture_display {

@@ -591,6 +591,9 @@ def failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb,
     window (visible while History is hidden), never the History error card,
     and the next capture recovers. Checked in both appearances."""
     for appearance in ("dark", "light"):
+        # Shipping auto-starts Full screen only after the user picks it or
+        # another display, never because the menu opened on it.
+        auto_start = appearance == "light"
         prefix = f"failure-dialog-{appearance}"
         history = output / prefix / "history"
         history.mkdir(parents=True)
@@ -603,7 +606,7 @@ def failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb,
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
             "display_shortcut": "Ctrl+Shift+F9",
             "launch_at_login": False, "auto_copy_to_clipboard": False,
-            "auto_start_on_selection": False, "freeze_screen": True,
+            "auto_start_on_selection": auto_start, "freeze_screen": True,
             "show_cursor_in_screenshots": False, "screenshot_countdown_seconds": 0,
         }))
         background(0)
@@ -625,6 +628,9 @@ def failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb,
             wait(lambda: int(run("import", "-window", menu, "-crop", "1280x96+0+804",
                                  "-format", "%k", "info:")) > 16, "capture menu paint")
             assert not windows("Capture History"), "capture menu did not hide History"
+            time.sleep(.5)
+            assert windows("Captures Capture Controls") == [menu] and not entries(), \
+                "opening the menu on Full screen captured without a choice"
             run("xdotool", "windowfocus", "--sync", menu, "key", "Return")
 
         # History publishes into this root; a file in its place makes the
