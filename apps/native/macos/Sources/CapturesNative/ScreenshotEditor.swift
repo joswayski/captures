@@ -5044,7 +5044,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func textFieldsMatch(_ style: NativeTextStyle) -> Bool {
         let shadowMatches = textShadow.state != .on || (style.shadowStyle.map { shadow in
-            textShadowSettings.map { $0.shadow == Self.shadowFieldsValue(shadow) } ?? true
+            textShadowSettings.map { $0.shadowValue == Self.shadowFieldsValue(shadow) } ?? true
         } ?? true)
         return shadowMatches && textEditor.string == style.text && textSize.stringValue == format(style.fontSize)
             && (textFamily.selectedItem?.representedObject as? String) == style.fontFamily
