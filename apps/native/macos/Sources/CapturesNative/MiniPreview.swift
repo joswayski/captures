@@ -87,6 +87,30 @@ final class MiniPreviewButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { ticker?.invalidate() }
+
+    /// The CSS `box-shadow` token under this control: `shadow-sm` on
+    /// `.icon-button`s, `shadow-md` on the main actions and
+    /// `thumbnail-card-shadow` on the stack toolbar.
+    var boxShadowToken: String? { didSet { refreshBoxShadow() } }
+    var boxShadowLayerCount: Int { layer?.sublayers?.filter { $0.name == BoxShadowLayers.layerName }.count ?? 0 }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        refreshBoxShadow()
+    }
+
+    /// Rebuild the shadow for the current size. The present editor pill keeps
+    /// its own accent glow (the button layer's shadow) instead.
+    private func refreshBoxShadow() {
+        guard let token = boxShadowToken, !(kind == .edit && editorPresent) else {
+            BoxShadowLayers.remove(from: layer)
+            return
+        }
+        wantsLayer = true
+        guard let layer else { return }
+        BoxShadowLayers.install(tokens.shadow(token), on: layer, bounds: bounds, radius: tokens.number("r-md"))
+    }
+
     @objc private func activate() {
         if kind == .edit { editorJustOpened = true; needsDisplay = true }
         actionBlock()
@@ -166,6 +190,7 @@ final class MiniPreviewButton: NSButton {
         layer?.shadowRadius = 7
         layer?.shadowOffset = .zero
         layer?.shadowOpacity = editorPresent ? 0.2 : 0
+        refreshBoxShadow()
         let morph = NativeMotion.transition("preview_editor_morph", tokens: tokens)
         if animated, window?.isVisible == true, morph.duration > 0, frame != next {
             NSAnimationContext.runAnimationGroup { context in
@@ -428,6 +453,11 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// `.thumbnail-editor-active` ring outside the card edge.
     private let editorRing = CALayer()
     private let depthShade = NSView()
+    /// The hovered pile's `0 0 0 1px rgba(accent, .55), 0 0 22px rgba(accent, .28)`.
+    private let pileGlow = CALayer()
+    /// Rear pile media blur radius (`pose × 1.15px`, `× 0.75px` fanned).
+    private(set) var depthBlurRadius: Double = 0
+    var pileGlowOpacity: Float { pileGlow.opacity }
     /// `thumbnail-capture-highlight`: the accent outline a new card fades out.
     private let highlightRing = CALayer()
     private let dimensions: NSTextField
@@ -596,6 +626,30 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         highlightRing.shadowOffset = .zero
         highlightRing.opacity = 0
         layer?.addSublayer(highlightRing)
+        if let layer {
+            // `--thumbnail-card-shadow`, under everything the card draws.
+            BoxShadowLayers.install(tokens.shadow("thumbnail-card-shadow"), on: layer, bounds: bounds, radius: radius)
+            pileGlow.frame = bounds.insetBy(dx: -1, dy: -1)
+            pileGlow.cornerRadius = radius + 1
+            pileGlow.borderWidth = 1
+            pileGlow.borderColor = accent.withAlphaComponent(0.55).cgColor
+            let glowBounds = CGRect(x: 1, y: 1, width: bounds.width, height: bounds.height)
+            pileGlow.shadowPath = BoxShadowLayers.roundedPath(glowBounds, radius: radius)
+            pileGlow.shadowColor = accent.cgColor
+            pileGlow.shadowOpacity = 0.28
+            pileGlow.shadowRadius = 11
+            pileGlow.shadowOffset = .zero
+            let outside = CAShapeLayer()
+            let cutout = CGMutablePath()
+            cutout.addRect(pileGlow.bounds.insetBy(dx: -48, dy: -48))
+            cutout.addPath(BoxShadowLayers.roundedPath(glowBounds, radius: radius))
+            outside.frame = pileGlow.bounds
+            outside.path = cutout
+            outside.fillRule = .evenOdd
+            pileGlow.mask = outside
+            pileGlow.opacity = 0
+            layer.insertSublayer(pileGlow, at: 0)
+        }
         setAccessibilityRole(.group); setAccessibilityLabel("Screenshot mini preview")
     }
 
@@ -703,6 +757,42 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         fade.fillMode = .forwards
         fade.isRemovedOnCompletion = false
         layer.add(fade, forKey: "preview-dust-source")
+    }
+
+    /// Shipping `.thumbnail-stack-minimized .thumbnail-media { filter: blur() }`
+    /// on a compact card, through the media's Core Image Gaussian.
+    func setDepthBlur(_ radius: Double, from start: Double? = nil, duration: Double = 0,
+                      timing: CAMediaTimingFunction? = nil) {
+        guard let layer = imageView.layer else { return }
+        let from = start ?? (layer.presentation()?.value(forKeyPath: "filters.blur.inputRadius") as? Double)
+            ?? depthBlurRadius
+        depthBlurRadius = radius
+        layer.setValue(radius, forKeyPath: "filters.blur.inputRadius")
+        guard duration > 0, window?.isVisible == true, from != radius else {
+            layer.removeAnimation(forKey: "preview-depth-blur")
+            return
+        }
+        let blur = CABasicAnimation(keyPath: "filters.blur.inputRadius")
+        blur.fromValue = from; blur.toValue = radius
+        blur.duration = duration
+        blur.timingFunction = timing ?? CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(blur, forKey: "preview-depth-blur")
+    }
+
+    /// The hovered pile's accent ring and glow, easing with the fan.
+    func setPileGlow(_ visible: Bool, duration: Double) {
+        let target: Float = visible ? 1 : 0
+        if duration > 0, window?.isVisible == true, pileGlow.opacity != target {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = (pileGlow.presentation() ?? pileGlow).opacity
+            fade.toValue = target
+            fade.duration = duration
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pileGlow.add(fade, forKey: "preview-pile-glow")
+        }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        pileGlow.opacity = target
+        CATransaction.commit()
     }
 
     /// The compact depth shade eases with the stack's flight.
@@ -868,12 +958,17 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         editorRing.opacity = !compact && editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) ? 1 : 0
         CATransaction.commit()
         setMediaHovered(!compact && chromeVisible, animated: false)
+        if !compact {
+            if depthBlurRadius != 0 { setDepthBlur(0) }
+            setPileGlow(false, duration: 0)
+        }
         updateWarning()
     }
 
     @discardableResult private func addButton(_ title: String, _ kind: MiniPreviewButtonKind, x: CGFloat,
         y: CGFloat, width: CGFloat = 28, primary: Bool = false, action: @escaping () -> Void) -> MiniPreviewButton {
         let button = MiniPreviewButton(title, kind: kind, frame: NSRect(x: x, y: y, width: width, height: kind == .copy || kind == .save || kind == .folder ? 32 : 28), tokens: tokens, primary: primary, action: action)
+        button.boxShadowToken = kind == .copy || kind == .save || kind == .folder ? "shadow-md" : "shadow-sm"
         addSubview(button); actionButtons.append(button); return button
     }
 
@@ -1064,6 +1159,13 @@ final class MiniPreviewOverflowCue: NSButton {
         target = self; self.action = #selector(activate)
         // Named for accessibility; shipping cues carry no tooltip.
         setAccessibilityLabel(label)
+        // `box-shadow: var(--glass-shadow)`; the square corners sit on the
+        // window edge, so a uniformly rounded shadow differs only off-screen.
+        wantsLayer = true
+        if let layer {
+            BoxShadowLayers.install(tokens.shadow("glass-shadow"), on: layer, bounds: bounds,
+                                    radius: tokens.number("r-lg"))
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock() }
@@ -1319,6 +1421,7 @@ final class MiniPreviewView: NSView {
             }
             collapse.growsFromTrailingEdge = rightAnchor
             collapse.hoverLabel = "Show less"
+            clear.boxShadowToken = "thumbnail-card-shadow"; collapse.boxShadowToken = "thumbnail-card-shadow"
             addSubview(collapse); addSubview(clear)
             collapseButton = collapse; clearButton = clear
         }
@@ -1452,6 +1555,10 @@ final class MiniPreviewView: NSView {
             let pile = NSRect(origin: local.origin, size: laid.size)
             card.setCompact(true, depth: depths[id] ?? 0)
             card.setDepthShade(visible: !collapsing, animated: false)
+            // The rest blur rides the flight: in while collapsing, out while expanding.
+            let rest = captures_preview_pile_media_blur_v1(depths[id] ?? 0, false)
+            card.setDepthBlur(collapsing ? rest : 0, from: collapsing ? 0 : rest,
+                              duration: fly.duration, timing: fly.timing)
             if !collapsing { card.frame = pile }
             moves.append((card, collapsing ? pile : laid))
         }
@@ -1725,18 +1832,33 @@ final class MiniPreviewView: NSView {
                        y: CGFloat(layout.y) + CGFloat(pose?.slot_dy ?? 0))
     }
 
-    /// Spin and depth scale about the card centre. The shipping `rotateX`
-    /// tilt has no 3D card transform here; the shared pose flattens it into
-    /// `scale_y` (vertical foreshortening).
-    static func pileTransform(_ pose: CapturesPreviewPilePose, size: CGSize, anchorPoint: CGPoint,
+    /// Shipping rear-card 3D pose (`captures_preview_pile_projection_v1`).
+    func pileProjection(for id: String, depth: Int, hovered: Bool) -> [Double]? {
+        guard depth > 0 else { return nil }
+        var matrix = [Double](repeating: 0, count: 9)
+        let ok = id.withCString { name in
+            matrix.withUnsafeMutableBufferPointer {
+                captures_preview_pile_projection_v1(name, depth, hovered, pileGravity, anchoredAtTop, $0.baseAddress)
+            }
+        }
+        return ok ? matrix : nil
+    }
+
+    /// The shared pose's projective map (row-major 3×3 on card-centre points,
+    /// y down) as a layer transform about the card centre. Core Animation
+    /// divides by w, so the `rotateX` tilt keeps its keystone.
+    static func pileTransform(projection m: [Double], size: CGSize, anchorPoint: CGPoint,
                               flipped: Bool) -> CATransform3D {
+        guard m.count == 9 else { return CATransform3DIdentity }
         let centre = CGPoint(x: (0.5 - anchorPoint.x) * size.width, y: (0.5 - anchorPoint.y) * size.height)
-        // Clockwise like CSS `rotateZ`: y grows downward in a flipped document.
-        let angle = CGFloat(pose.rotation_deg) * .pi / 180 * (flipped ? 1 : -1)
+        // A y-up layer sees the y-down map conjugated by a y flip.
+        let f: Double = flipped ? 1 : -1
+        var map = CATransform3DIdentity
+        map.m11 = CGFloat(m[0]); map.m21 = CGFloat(m[1] * f); map.m41 = CGFloat(m[2])
+        map.m12 = CGFloat(m[3] * f); map.m22 = CGFloat(m[4]); map.m42 = CGFloat(m[5] * f)
+        map.m14 = CGFloat(m[6]); map.m24 = CGFloat(m[7] * f); map.m44 = CGFloat(m[8])
         var transform = CATransform3DMakeTranslation(-centre.x, -centre.y, 0)
-        transform = CATransform3DConcat(transform,
-            CATransform3DMakeScale(CGFloat(pose.scale_x), CGFloat(pose.scale_y), 1))
-        transform = CATransform3DConcat(transform, CATransform3DMakeRotation(angle, 0, 0, 1))
+        transform = CATransform3DConcat(transform, map)
         return CATransform3DConcat(transform, CATransform3DMakeTranslation(centre.x, centre.y, 0))
     }
 
@@ -1745,10 +1867,12 @@ final class MiniPreviewView: NSView {
         for (id, card) in cards {
             guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]),
                   let layer = card.layer else { continue }
-            let target = pilePose(for: id, depth: layout.depth, hovered: hovered).map {
-                Self.pileTransform($0, size: card.bounds.size, anchorPoint: layer.anchorPoint,
+            let target = pileProjection(for: id, depth: layout.depth, hovered: hovered).map {
+                Self.pileTransform(projection: $0, size: card.bounds.size, anchorPoint: layer.anchorPoint,
                                    flipped: document.isFlipped)
             } ?? CATransform3DIdentity
+            card.setDepthBlur(captures_preview_pile_media_blur_v1(layout.depth, hovered), duration: duration)
+            card.setPileGlow(hovered, duration: duration)
             if duration > 0 {
                 let animation = CABasicAnimation(keyPath: "transform")
                 animation.fromValue = NSValue(caTransform3D: layer.presentation()?.transform ?? layer.transform)

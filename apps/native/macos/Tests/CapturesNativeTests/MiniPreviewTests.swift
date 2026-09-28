@@ -126,6 +126,8 @@ final class MiniPreviewTests: XCTestCase {
         try waitUntil { abs(rear.frame.minY - (restY + CGFloat(fan.dy - rest.dy))) < 0.001 }
         XCTAssertEqual(front.frame, frontFrame)
         XCTAssertEqual(panel.frame, windowFrame)
+        XCTAssertEqual(rear.pileGlowOpacity, 1, "the hovered pile takes its accent ring and glow")
+        XCTAssertEqual(rear.depthBlurRadius, captures_preview_pile_media_blur_v1(1, true), accuracy: 1e-9)
         try write(render(panel), name: "mini-preview-stack-hovered.png")
         button.mouseDown(with: try event(.leftMouseDown, point))
         button.mouseExited(with: try event(.leftMouseDragged, point))
@@ -175,7 +177,14 @@ final class MiniPreviewTests: XCTestCase {
                 XCTAssertEqual(card.frame.midY - front.frame.midY, CGFloat(pose.dy), accuracy: 0.001)
                 XCTAssertGreaterThan(offset, 0)
                 XCTAssertFalse(CATransform3DIsIdentity(try XCTUnwrap(card.layer).transform))
+                XCTAssertEqual(card.depthBlurRadius, captures_preview_pile_media_blur_v1(depth, false),
+                               accuracy: 1e-9, "rear media blurs with depth")
+                let projection = try XCTUnwrap(view.pileProjection(for: id, depth: depth, hovered: false))
+                XCTAssertNotEqual(projection[7], 0, "the rotateX tilt keeps its keystone")
             }
+            XCTAssertEqual(front.depthBlurRadius, 0)
+            XCTAssertEqual(front.layer?.sublayers?.filter { $0.name == BoxShadowLayers.layerName }.count, 2,
+                           "--thumbnail-card-shadow has two layers")
             view.updatePileGravity(0)
             let middle = try XCTUnwrap(view.pilePose(for: "middle", depth: 1, hovered: false))
             XCTAssertGreaterThanOrEqual(abs(middle.rotation_deg), 2.7)
@@ -183,21 +192,29 @@ final class MiniPreviewTests: XCTestCase {
         }
     }
 
-    func testPileTransformScalesAndSpinsAboutTheCardCentre() {
-        var pose = CapturesPreviewPilePose()
-        pose.scale_x = 0.5; pose.scale_y = 0.5; pose.rotation_deg = 90
+    func testPileTransformAppliesTheProjectionAboutTheCardCentre() {
+        // Homogeneous row-vector product, as Core Animation applies it.
+        func mapped(_ t: CATransform3D, _ p: CGPoint) -> CGPoint {
+            let w = p.x * t.m14 + p.y * t.m24 + t.m44
+            return CGPoint(x: (p.x * t.m11 + p.y * t.m21 + t.m41) / w, y: (p.x * t.m12 + p.y * t.m22 + t.m42) / w)
+        }
         let size = CGSize(width: 200, height: 100)
-        let transform = MiniPreviewView.pileTransform(pose, size: size, anchorPoint: .zero, flipped: true)
-        // The centre stays put; the right edge midpoint turns clockwise (down in y-down space).
-        let affine = CATransform3DGetAffineTransform(transform)
-        let centre = CGPoint(x: 100, y: 50).applying(affine)
+        // Half scale, a quarter turn clockwise in y-down space.
+        let spin = MiniPreviewView.pileTransform(projection: [0, -0.5, 0, 0.5, 0, 0, 0, 0, 1], size: size,
+                                                 anchorPoint: .zero, flipped: true)
+        let centre = mapped(spin, CGPoint(x: 100, y: 50))
         XCTAssertEqual(centre.x, 100, accuracy: 1e-9); XCTAssertEqual(centre.y, 50, accuracy: 1e-9)
-        let edge = CGPoint(x: 200, y: 50).applying(affine)
+        let edge = mapped(spin, CGPoint(x: 200, y: 50))
         XCTAssertEqual(edge.x, 100, accuracy: 1e-9); XCTAssertEqual(edge.y, 100, accuracy: 1e-9)
-        let identity = MiniPreviewView.pileTransform(CapturesPreviewPilePose(dx: 0, dy: 0, slot_dy: 0,
-            rotation_deg: 0, scale_x: 1, scale_y: 1), size: size, anchorPoint: CGPoint(x: 0.5, y: 0.5),
-            flipped: false)
-        XCTAssertTrue(CATransform3DIsIdentity(identity))
+        // A tilt's w row narrows one edge and widens the other.
+        let tilt = MiniPreviewView.pileTransform(projection: [1, 0, 0, 0, 1, 0, 0, -0.001, 1], size: size,
+                                                 anchorPoint: CGPoint(x: 0.5, y: 0.5), flipped: true)
+        let top = mapped(tilt, CGPoint(x: 100, y: -50)).x - mapped(tilt, CGPoint(x: -100, y: -50)).x
+        let bottom = mapped(tilt, CGPoint(x: 100, y: 50)).x - mapped(tilt, CGPoint(x: -100, y: 50)).x
+        XCTAssertGreaterThan(top, bottom)
+        XCTAssertTrue(CATransform3DIsIdentity(MiniPreviewView.pileTransform(
+            projection: [1, 0, 0, 0, 1, 0, 0, 0, 1], size: size, anchorPoint: CGPoint(x: 0.5, y: 0.5),
+            flipped: false)))
     }
 
     func testCardControlsFollowShippingTabOrderAndFocusRevealsThem() throws {

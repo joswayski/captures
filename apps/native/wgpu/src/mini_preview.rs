@@ -1194,15 +1194,13 @@ fn editor_control(
         if phase.present() {
             let offers_action = action_hover && !just_opened;
             let accent = tokens.color("theme-accent");
-            ui.painter().add(
-                egui::Shadow {
-                    offset: [0, 0],
-                    blur: 14,
-                    spread: 0,
-                    color: accent.gamma_multiply(0.2),
-                }
-                .as_shape(rect, rect.height() / 2.),
-            );
+            // `box-shadow: var(--shadow-sm), 0 0 14px rgba(accent, .2)`.
+            let mut shadows = tokens.shadow("shadow-sm").to_vec();
+            shadows.push(crate::effects::BoxShadow::glow(
+                14.,
+                accent.gamma_multiply(0.2),
+            ));
+            crate::effects::paint_box_shadows(ui.painter(), rect, rect.height() / 2., &shadows, 1.);
             let (fill, border, color) = if offers_action {
                 (
                     accent,
@@ -1247,6 +1245,13 @@ fn editor_control(
                 .with_clip_rect(rect.shrink(1.))
                 .galley(text, label, color);
         } else {
+            crate::effects::paint_box_shadows(
+                ui.painter(),
+                rect,
+                tokens.number("r-md"),
+                tokens.shadow("shadow-sm"),
+                1.,
+            );
             ui.painter().rect(
                 rect,
                 tokens.number("r-md"),
@@ -1583,6 +1588,14 @@ fn stack_button_at(
     } else {
         ("glass-strong-solid", "glass-border")
     };
+    // `.thumbnail-stack-control { box-shadow: var(--thumbnail-card-shadow) }`.
+    crate::effects::paint_box_shadows(
+        ui.painter(),
+        paint,
+        tokens.number("r-md"),
+        tokens.shadow("thumbnail-card-shadow"),
+        1.,
+    );
     ui.painter().rect(
         paint,
         tokens.number("r-md"),
@@ -1657,6 +1670,15 @@ pub fn show_overflow_cues(
         } else {
             rect
         };
+        // `--glass-shadow`; the mask rounds all four corners, which only
+        // differs inside the window edge the square corners sit against.
+        crate::effects::paint_box_shadows(
+            ui.painter(),
+            paint_rect,
+            radius,
+            tokens.shadow("glass-shadow"),
+            1.,
+        );
         ui.painter().rect(
             paint_rect,
             corners,
@@ -1738,6 +1760,19 @@ fn control(
         } else {
             tokens.color("glass-strong")
         };
+        // `.icon-button` carries `--shadow-sm`, `.thumbnail-main-actions
+        // button` `--shadow-md`.
+        crate::effects::paint_box_shadows(
+            ui.painter(),
+            rect,
+            tokens.number("r-md"),
+            tokens.shadow(if tooltip.is_some() {
+                "shadow-sm"
+            } else {
+                "shadow-md"
+            }),
+            1.,
+        );
         ui.painter().rect(
             rect,
             tokens.number("r-md"),

@@ -347,6 +347,11 @@ final class CaptureGuidanceChip: NSView {
             height: titleLabel.frame.height)
         hintLabel.frame = NSRect(x: padX, y: titleLabel.frame.maxY + gap, width: chipWidth - padX * 2,
             height: hintLabel.frame.height)
+        // `box-shadow: var(--glass-shadow)`, rebuilt for the new size.
+        if let layer {
+            BoxShadowLayers.install(tokens.shadow("glass-shadow"), on: layer, bounds: bounds,
+                                    radius: tokens.number("r-xl"))
+        }
     }
 
     /// Mount or unmount. Mounting (again) plays the entrance once the chip is
