@@ -716,19 +716,21 @@ loupe beside the crosshair magnifies the image pixels and shows the sampled hex.
 the original image pixels, and supports undo/redo and draft restore. The original
 History capture remains unchanged. The Tolerance slider runs from 0 to 120 like
 Tauri's. **Erase** and **Restore** use brush Size and Softness sliders; Restore
-paints from the retained original image. The brush
-ring shows size while shared-renderer pixels preview the stroke during dragging.
+paints from the retained original image. As in the shipping editor, a ring
+the brush's size replaces the pointer over an image (dashed for Restore; elsewhere
+the pointer shows not-allowed) while shared-renderer pixels preview the stroke during dragging.
 Release commits one undo step; Escape, focus loss or changing tools cancels the
 preview without editing. Properties shows a stroke or brush preview for drawing
-tools and Erase/Restore, and Apply crop pulses while a crop is staged. The shipping brush cursor design and physical-platform
-input acceptance remain parity work.
+tools and Erase/Restore, and Apply crop pulses while a crop is staged. Physical-platform
+input acceptance remains parity work.
 Text controls support multiline content, pinned font families (listed as Sans serif,
 Serif, Monospace and Rounded), size, bold/italic and alignment buttons, swatch-row
 text and background colors, square/rounded background plates, outlines and a Drop
 shadow toggle. New-text and drawing default colors use the same swatch rows.
 Changes apply as you make them; a typing burst in one field is one undo step.
 Custom shadows and pinned-font named styles are connected, including style/size/color
-choices for new text. Font import and physical input/IME/accessibility acceptance
+choices for new text; new text also takes the drawing defaults' Drop shadow, as in
+the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
 Like the shipping app, the native Capture History window shows only its header,
 filters and grid; captures start from the tray, shortcuts and New Capture menu. A

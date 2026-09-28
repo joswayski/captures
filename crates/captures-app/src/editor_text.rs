@@ -324,11 +324,30 @@ fn estimate(text: &str, size: f64) -> Result<f64, String> {
 
 /// Project text onto the shared annotation shadow rules. `size` may be the
 /// candidate font size during a resize, rather than the authored size.
+/// Shipping `textDropShadowReferenceSize`: the stroke width that scales a
+/// text label's default shadow from its type size until customized.
+#[must_use]
+pub fn drop_shadow_reference_size(font_size: f64) -> f64 {
+    (font_size * 0.22).max(4.)
+}
+
+/// Shipping `textDropShadowStyle` for the new-text defaults: the drawing
+/// defaults' shadow toggle and custom style, with defaults scaled from type size.
+#[must_use]
+pub fn new_text_shadow_style(defaults: &ElementStyle, font_size: f64) -> ElementStyle {
+    ElementStyle {
+        fill: None,
+        stroke_width: drop_shadow_reference_size(font_size),
+        stroke_enabled: None,
+        ..defaults.clone()
+    }
+}
+
 pub fn shadow_style(element: &TextElement, size: f64) -> ElementStyle {
     ElementStyle {
         color: element.color.clone(),
         fill: None,
-        stroke_width: (size * 0.22).max(4.),
+        stroke_width: drop_shadow_reference_size(size),
         stroke_enabled: None,
         drop_shadow: element.drop_shadow,
         drop_shadow_style: element.drop_shadow_style.clone(),

@@ -661,6 +661,13 @@ struct NativeDrawingStyle: Equatable {
         dropShadow = shadow
     }
 
+    /// Untouched new-text shadow defaults scaled from the new text size
+    /// (`editor_text::new_text_shadow_style`), as shipping's `textDropShadowStyle`.
+    static func textDefaultShadow(fontSize: Double) -> NativeTextShadowStyle? {
+        (EditorChrome.request(["operation": "text_default_shadow", "font_size": fontSize])
+            as? [String: Any]).flatMap(NativeTextShadowStyle.init)
+    }
+
     static func defaultShadow(strokeWidth: Double) throws -> NativeTextShadowStyle {
         guard let response = captures_editor_default_shadow_v1(strokeWidth) else {
             throw AppBridgeError.invalidResponse

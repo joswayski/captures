@@ -4975,6 +4975,39 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try swatchRow("Color", in: fresh.root).selectedHex, "#ff3b5c")
     }
 
+    func testNewTextSharesTheDrawingDefaultsDropShadowLikeShipping() throws {
+        _ = NSApplication.shared
+        let fonts = ["sans": "Liberation Sans"]
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", initialTextSize: 50, fonts: fonts))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        let tool = DrawToolChoice(controller)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
+        let shadow = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing drop shadow" })
+        XCTAssertFalse(shadow.isHidden, "shipping's new-text section offers Drop shadow")
+        shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
+        let blur = try field("New drawing shadow blur", in: controller.root)
+        XCTAssertFalse(blur.isHidden)
+        // Untouched defaults scale from the 50 pt text: max(6, max(4, 50 × 0.22) × 0.85).
+        XCTAssertEqual(Double(blur.stringValue)!, 9.35, accuracy: 0.001)
+        XCTAssertTrue(worker.requests.isEmpty, "shadow defaults are not a document command")
+        // A customized shadow is the drawing defaults' shadow too.
+        let offset = try field("New drawing shadow offsetY", in: controller.root)
+        offset.stringValue = "17"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: offset))
+        let click = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        worker.failOperation = "begin_text_input"
+        controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
+        let create = try XCTUnwrap((worker.requests.last?["target"] as? [String: Any])?["create"] as? [String: Any])
+        XCTAssertEqual(create["dropShadow"] as? Bool, true)
+        let style = try XCTUnwrap(create["dropShadowStyle"] as? [String: Any])
+        XCTAssertEqual(style["offsetY"] as? Double, 17)
+        XCTAssertEqual(try XCTUnwrap(style["blur"] as? Double), 9.35, accuracy: 0.001)
+    }
+
     func testRoundedBoxCreationDefaultRequiresOfferedFontAndRetainsUserChoice() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -6127,6 +6160,48 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.begin(at: NSPoint(x: 60, y: 55)); overlay.cancelGesture()
         overlay.end(at: NSPoint(x: 100, y: 55))
         XCTAssertEqual(strokes.count, count, "off-image starts and cancellation never edit")
+    }
+
+    func testBrushRingFollowsShippingHoverRulesAndPaintsPastTheImage() throws {
+        _ = NSApplication.shared
+        XCTAssertEqual(NativeBrushRing.diameter(size: 28, scale: 0.5), 14)
+        XCTAssertEqual(NativeBrushRing.diameter(size: 4, scale: 0.1), 1)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: false, stroking: false, panning: false), .notAllowed)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: false, stroking: true, panning: false), .ring)
+        XCTAssertEqual(NativeBrushRing.hover(overImage: true, stroking: false, panning: true), .pan)
+        let overlay = EditorDrawOverlay(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+        overlay.canvasSize = NSSize(width: 640, height: 360); overlay.drawingEnabled = true
+        overlay.imageRect = { NSRect(x: 20, y: 10, width: 160, height: 90) }
+        overlay.shape = .erase
+        var sampled: [NSPoint] = []
+        // Only the left half of the canvas holds a visible image.
+        overlay.brushOverImage = { point in sampled.append(point); return point.x < 320 }
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 60, y: 55)), .ring)
+        XCTAssertEqual(sampled.last, NSPoint(x: 160, y: 180))
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 140, y: 55)), .notAllowed)
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 5, y: 5)), .notAllowed)
+        overlay.begin(at: NSPoint(x: 60, y: 55))
+        XCTAssertEqual(overlay.brushHover(at: NSPoint(x: 5, y: 5)), .ring, "a stroke keeps the ring")
+
+        // A 50 pt ring (200 document px at 0.25×) past the image's right edge:
+        // shipping's fixed ring is not clipped to the image.
+        overlay.brushDiameter = 200
+        overlay.drag(to: NSPoint(x: 175, y: 55))
+        let bitmap = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: bitmap)
+        let factor = CGFloat(bitmap.pixelsWide) / overlay.bounds.width
+        func brightest(_ xs: ClosedRange<CGFloat>, y: CGFloat) -> CGFloat {
+            stride(from: xs.lowerBound, through: xs.upperBound, by: 0.5).map { x -> CGFloat in
+                guard let color = bitmap.colorAt(x: Int(x * factor), y: Int(y * factor))?
+                        .usingColorSpace(.sRGB) else { return 0 }
+                return min(color.redComponent, color.greenComponent, color.blueComponent) * color.alphaComponent
+            }.max() ?? 0
+        }
+        XCTAssertGreaterThan(brightest(197...199.5, y: 55), 0.75, "white border outside the image")
+        XCTAssertGreaterThan(brightest(150...152.5, y: 55), 0.75, "white border on the left")
+        overlay.cancelGesture()
+        overlay.shape = .rectangle
+        XCTAssertNil(overlay.brushHover(at: NSPoint(x: 60, y: 55)))
     }
 
     func testBackgroundBrushOptionsIssueOneRetryableSerializedCommand() throws {
