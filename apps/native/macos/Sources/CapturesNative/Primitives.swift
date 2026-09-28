@@ -222,7 +222,18 @@ final class ClosurePopUpButton: NSPopUpButton {
         let padding = tokens.number(selectStyle == .inline ? "s-3" : "s-4")
         let text = titleOfSelectedItem ?? title
         let size = (text as NSString).size(withAttributes: attributes)
-        let textX = selectStyle == .inline ? tokens.number("s-4") : padding
+        var textX = selectStyle == .inline ? tokens.number("s-4") : padding
+        // Shipping `.screenshot-text-style-trigger`: the selected item's
+        // preview chip, centred in an 82 pt column, then the label.
+        if !pullsDown, let image = selectedItem?.image {
+            let slot = max(82, image.size.width)
+            let chip = NSRect(x: textX + (slot - image.size.width) / 2,
+                              y: (bounds.height - image.size.height) / 2,
+                              width: image.size.width, height: image.size.height)
+            image.draw(in: chip, from: .zero, operation: .sourceOver, fraction: alpha,
+                       respectFlipped: true, hints: nil)
+            textX += slot + tokens.number("s-4")
+        }
         let textRect = NSRect(x: textX, y: (bounds.height - size.height) / 2,
             width: max(0, bounds.width - textX - padding - 14 - tokens.number("s-3")), height: size.height)
         (text as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],

@@ -4,7 +4,7 @@ use captures_app::{
     editor::{Element, Rect, TextElement},
     editor_text::{
         FONT_FAMILY_LABELS, TEXT_STYLE_PRESETS, fit_auto_width, font_family_options,
-        inline_editor_layout, layout, resize, selection_bounds,
+        inline_editor_layout, layout, resize, selection_bounds, text_style_preset_id,
     },
 };
 use captures_image::text::{TextRenderer, TextStyle};
@@ -62,6 +62,30 @@ fn named_style_labels_match_shipping_menu_copy() {
             "Rounded Box"
         ]
     );
+}
+
+#[test]
+fn text_style_picker_value_matches_shipping_text_style_preset() {
+    // Each preset's own treatment reads back as that preset.
+    for preset in TEXT_STYLE_PRESETS {
+        assert_eq!(
+            text_style_preset_id(
+                preset.font_family,
+                preset.background.is_some(),
+                preset.outlined,
+                preset.rounded_background,
+            ),
+            preset.id
+        );
+    }
+    // Shipping precedence for mixed treatments.
+    assert_eq!(
+        text_style_preset_id("serif", false, false, false),
+        "standard"
+    );
+    assert_eq!(text_style_preset_id("mono", false, true, false), "outlined");
+    assert_eq!(text_style_preset_id("rounded", true, true, false), "box");
+    assert_eq!(text_style_preset_id("serif", true, false, true), "box");
 }
 
 #[test]

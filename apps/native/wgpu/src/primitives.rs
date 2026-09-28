@@ -915,12 +915,12 @@ impl<'a> NumberInput<'a> {
             egui::Sense::hover(),
         );
         let focused_before = ui.memory(|memory| memory.has_focus(text_id));
-        let mut buffer = if focused_before {
-            ui.data(|data| data.get_temp::<String>(buffer_id))
-                .unwrap_or_else(|| number_text(*value, self.step))
-        } else {
-            number_text(*value, self.step)
-        };
+        // The typed text lives until the frame after focus leaves (it is
+        // dropped below once unfocused), so the losing-focus commit parses
+        // what was typed (37.5), not its step-formatted display (38).
+        let mut buffer = ui
+            .data(|data| data.get_temp::<String>(buffer_id))
+            .unwrap_or_else(|| number_text(*value, self.step));
         let mut changed = false;
         let mut set = |value: &mut N, next: f64| {
             let next = N::from_f64(next);
@@ -1012,7 +1012,9 @@ impl<'a> NumberInput<'a> {
                 );
             });
             focus_ring(ui, t, rect, radius);
-        } else {
+        } else if !focused_before {
+            // Kept for one frame after focus leaves: egui reports
+            // `lost_focus` on the following frame.
             ui.data_mut(|data| data.remove::<String>(buffer_id));
         }
 
@@ -1670,6 +1672,48 @@ mod tests {
         run(vec![key(egui::Key::ArrowDown)], &mut value);
         run(vec![key(egui::Key::ArrowDown)], &mut value);
         assert_eq!(value, 8, "ArrowDown steps the focused field");
+    }
+
+    #[test]
+    fn number_input_keeps_a_typed_decimal_when_focus_leaves() {
+        let (ctx, t) = setup();
+        let mut value = 24.;
+        let run = |events: Vec<egui::Event>, value: &mut f64| {
+            let mut field = Rect::NOTHING;
+            frame(&ctx, events, |ui| {
+                field = NumberInput::new("test-decimal", "New text size", 120.)
+                    .range(8. ..=512.)
+                    .show(ui, &t, value)
+                    .rect;
+            });
+            field
+        };
+        let field = run(vec![], &mut value);
+        let text = egui::pos2(field.left() + 20., field.center().y);
+        run(
+            vec![egui::Event::PointerMoved(text), press(text, true)],
+            &mut value,
+        );
+        run(vec![press(text, false)], &mut value);
+        run(
+            vec![
+                // End, then clear "24" and type the decimal.
+                key(egui::Key::End),
+                key(egui::Key::Backspace),
+                key(egui::Key::Backspace),
+                egui::Event::Text("37.5".into()),
+            ],
+            &mut value,
+        );
+        assert_eq!(value, 37.5);
+        run(vec![key(egui::Key::Enter)], &mut value);
+        for _ in 0..3 {
+            run(vec![], &mut value);
+        }
+        assert_eq!(
+            value, 37.5,
+            "committing on blur parses the typed text, not the step-rounded display"
+        );
     }
 
     #[test]

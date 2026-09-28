@@ -1419,8 +1419,8 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try button("Draw crop", in: controller.root).performClick(nil)
             let aspect = try popup("Crop aspect", in: controller.root)
-            XCTAssertEqual(aspect.itemTitles, ["Free", "1:1", "4:3", "3:2", "16:9"])
-            aspect.selectItem(withTitle: "4:3"); _ = aspect.sendAction(aspect.action, to: aspect.target)
+            XCTAssertEqual(aspect.itemTitles, ["Free", "1 : 1", "4 : 3", "3 : 2", "16 : 9"])
+            aspect.selectItem(withTitle: "4 : 3"); _ = aspect.sendAction(aspect.action, to: aspect.target)
             let image = controller.presentedImageRect
             controller.cropOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.1, y: image.minY + image.height * 0.2))
             controller.cropOverlay.drag(to: NSPoint(x: image.minX + image.width * 0.5, y: image.minY + image.height * 0.6))
@@ -4917,10 +4917,17 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(preset.titleOfSelectedItem, "Standard")
         preset.selectItem(withTitle: "Mono Box")
         let size = try field("New text size", in: controller.root)
+        XCTAssertFalse(descendants(in: controller.root).compactMap { $0 as? ColorSwatchRow }
+            .contains { !$0.isHiddenOrHasHiddenAncestor && $0.fieldLabel == "Color" },
+            "shipping's Text section has no Color row: new text takes the drawing Color")
         let color = try swatchRow("Color", in: controller.root)
         XCTAssertEqual(size.stringValue, "39", "use shared capture size, not the restored canvas")
         size.stringValue = "48,5"
+        // The one shared drawing Color, chosen with a drawing tool.
+        tool.selectItem(withTitle: "Pen"); _ = tool.sendAction(tool.action, to: tool.target)
         try swatchButton("Color: #2d9cff", in: controller.root).performClick(nil)
+        tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+        XCTAssertEqual(preset.titleOfSelectedItem, "Mono Box")
         XCTAssertTrue(worker.requests.isEmpty)
         RunLoop.current.run(until: Date().addingTimeInterval(0.4))
         XCTAssertNotNil(controller.compareView.afterImage,
@@ -4972,6 +4979,8 @@ final class ScreenshotEditorTests: XCTestCase {
         fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
         XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Standard")
         XCTAssertEqual(try field("New text size", in: fresh.root).stringValue, "24")
+        let freshTool = DrawToolChoice(fresh)
+        freshTool.selectItem(withTitle: "Text"); _ = freshTool.sendAction(freshTool.action, to: freshTool.target)
         XCTAssertEqual(try swatchRow("Color", in: fresh.root).selectedHex, "#ff3b5c")
     }
 
@@ -5029,10 +5038,12 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-text-default-rounded-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            let scroll = try XCTUnwrap(color.enclosingScrollView)
+            let scroll = try XCTUnwrap(size.enclosingScrollView)
             // Layers keeps its 188pt row, so the 82pt Properties area scrolls
-            // to each default in turn, like shipping's sidebar.
-            for control in [preset, size, color] as [NSView] {
+            // to each default in turn, like shipping's sidebar. New text has
+            // no Color row: it shares the (hidden) drawing Color.
+            XCTAssertTrue(color.isHiddenOrHasHiddenAncestor)
+            for control in [preset, size] as [NSView] {
                 control.scrollToVisible(control.bounds)
                 controller.root.layoutSubtreeIfNeeded()
                 XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
@@ -5051,8 +5062,8 @@ final class ScreenshotEditorTests: XCTestCase {
 
             preset.selectItem(withTitle: "Standard")
             size.stringValue = "52"
-            // Like the preset and size above, set the choice directly: the
-            // swatch row is disabled while the failed creation is unresolved.
+            // Like the preset and size above, set the shared drawing Color
+            // directly while the failed creation is unresolved.
             color.selectedHex = "#2d9cff"
             worker.failOperation = nil
             worker.response = { request in
@@ -5621,10 +5632,12 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(family.titleOfSelectedItem, "Serif")
         XCTAssertFalse(family.itemTitles.contains { $0.hasPrefix("Liberation") || $0 == "Nunito" })
         let styles = try popup("Text style preset", in: controller.root)
-        XCTAssertEqual(styles.itemTitles, ["Style…", "Standard", "Rounded", "Outlined", "Mono", "Box",
+        XCTAssertEqual(styles.itemTitles, ["Standard", "Rounded", "Outlined", "Mono", "Box",
                                            "Mono Box", "Rounded Box"])
-        XCTAssertNil(styles.item(at: 0)?.image, "the pull-down title has no chip")
-        for item in styles.itemArray.dropFirst() {
+        XCTAssertEqual(styles.titleOfSelectedItem, "Standard",
+                       "like shipping's TextStylePicker, the trigger shows the layer's treatment")
+        XCTAssertTrue(styles is ClosurePopUpButton, "a token select, not a stock pop-up")
+        for item in styles.itemArray {
             XCTAssertEqual(item.image?.size, TextStyleChip.size, item.title)
             XCTAssertEqual(item.image?.accessibilityDescription, item.title)
         }
@@ -5692,7 +5705,7 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
         let picker = try popup("Text style preset", in: controller.root)
-        XCTAssertEqual(picker.itemTitles, ["Style…", "Standard", "Outlined", "Mono", "Box", "Mono Box"])
+        XCTAssertEqual(picker.itemTitles, ["Standard", "Outlined", "Mono", "Box", "Mono Box"])
         func choose(_ name: String) {
             picker.selectItem(withTitle: name); _ = picker.sendAction(picker.action, to: picker.target)
         }
@@ -5758,9 +5771,12 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            let scroll = try XCTUnwrap(futureColor.enclosingScrollView)
+            let scroll = try XCTUnwrap(future.enclosingScrollView)
             // The 82pt Properties area below Layers scrolls to each carried value.
-            for control in [future, futureSize, futureColor] as [NSView] {
+            // Shipping's Text section has no Color row: new text takes the
+            // drawing Color, which keeps its value while hidden.
+            XCTAssertEqual(futureColor.selectedHex, "#ff3b5c")
+            for control in [future, futureSize] as [NSView] {
                 XCTAssertFalse(control.isHiddenOrHasHiddenAncestor)
                 control.scrollToVisible(control.bounds)
                 controller.root.layoutSubtreeIfNeeded()
@@ -5993,31 +6009,30 @@ final class ScreenshotEditorTests: XCTestCase {
                        ["dropShadowStyle": ["blur": 7.25]] as NSDictionary)
     }
 
-    func testTextOutlineAppliesLiveAndKeepsFailedInput() throws {
+    func testTextBackgroundMatchesShippingAndOutlineIsAStyle() throws {
         _ = NSApplication.shared
-        let original = textLayer(id: "copy", text: "accepted")
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        var original = textLayer(id: "copy", text: "accepted")
+        original["outlined"] = true
+        // Style presets are offered only for pinned font families.
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original],
+            fonts: ["sans": "Liberation Sans"]))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
-        let outline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
-            .first { $0.accessibilityLabel() == "Text outline" })
-        XCTAssertEqual(outline.state, .off)
+        let buttons = descendants(in: controller.root).compactMap { $0 as? NSButton }
+        XCTAssertNil(buttons.first { $0.accessibilityLabel() == "Text outline" && !$0.isHiddenOrHasHiddenAncestor },
+                     "shipping has no Outline control; the Outlined style sets it")
+        XCTAssertEqual(try popup("Text style preset", in: controller.root).titleOfSelectedItem, "Outlined")
+        let background = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Text background" })
+        XCTAssertEqual(background.state, .off)
         worker.failOperation = "edit_text"
-        outline.performClick(nil)
-        XCTAssertEqual(worker.requests.last?["patch"] as? [String: Bool], ["outlined": true])
-        XCTAssertEqual(outline.state, .on)
-        XCTAssertFalse(controller.state.snapshot?.layers.first?.textStyle?.outlined ?? true)
-        worker.failOperation = nil
-        worker.response = { _ in
-            var accepted = original; accepted["outlined"] = true
-            return self.snapshot(id: "shot", unsaved: true, layers: [accepted])
-        }
-        outline.performClick(nil)
-        outline.performClick(nil)
-        XCTAssertTrue(controller.state.snapshot?.layers.first?.textStyle?.outlined == true)
-        XCTAssertEqual(outline.state, .on)
+        background.performClick(nil)
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["background": "#111318", "outlined": false] as NSDictionary,
+                       "a new plate is #111318 and clears the outline, like shipping")
+        XCTAssertEqual(background.state, .on, "a rejected edit keeps the staged toggle")
+        XCTAssertEqual(try swatchRow("Background color", in: controller.root).selectedHex, "#111318")
     }
 
     func testTextControlsRenderedAtNormalAndMinimumSizes() throws {

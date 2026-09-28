@@ -79,6 +79,26 @@ pub const TEXT_STYLE_PRESETS: [TextStylePreset; 7] = [
     },
 ];
 
+/// Shipping `textStylePreset`: the named treatment a text layer's Text style
+/// picker shows for its family, plate and outline.
+#[must_use]
+pub fn text_style_preset_id(
+    font_family: &str,
+    has_background: bool,
+    outlined: bool,
+    rounded_background: bool,
+) -> &'static str {
+    match (font_family, has_background) {
+        _ if outlined && !has_background => "outlined",
+        ("rounded", true) if rounded_background => "rounded-box",
+        ("mono", true) => "mono-box",
+        (_, true) => "box",
+        ("rounded", false) => "rounded",
+        ("mono", false) => "mono",
+        _ => "standard",
+    }
+}
+
 /// Shipping font family select (`ScreenshotEditor.tsx` text properties):
 /// draft font keys in menu order with their visible labels. Pinned asset names
 /// such as "Liberation Sans" are never shown for these keys.

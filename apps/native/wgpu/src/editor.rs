@@ -52,6 +52,7 @@ use crate::tokens::Tokens;
 mod canvas;
 mod chrome;
 mod drawing_preview;
+mod inspector;
 mod layers;
 mod pickers;
 mod text_input;
@@ -276,10 +277,10 @@ impl DrawShape {
 
 const CROP_ASPECTS: [(&str, Option<f64>); 5] = [
     ("Free", None),
-    ("1:1", Some(1.)),
-    ("4:3", Some(4. / 3.)),
-    ("3:2", Some(3. / 2.)),
-    ("16:9", Some(16. / 9.)),
+    ("1 : 1", Some(1.)),
+    ("4 : 3", Some(4. / 3.)),
+    ("3 : 2", Some(3. / 2.)),
+    ("16 : 9", Some(16. / 9.)),
 ];
 
 fn output_preset(options: &ExportOptions) -> Option<&'static str> {
@@ -460,6 +461,9 @@ struct View {
     drawing_preview: Option<drawing_preview::State>,
     crop: [f64; 4],
     crop_previous: Option<[f64; 4]>,
+    /// The rail's Crop tool is active: like shipping, a new selection can be
+    /// dragged again after Apply crop, Clear or Escape.
+    crop_tool: bool,
     crop_drag: Option<CropDrag>,
     crop_aspect: usize,
     draw_shape: DrawShape,
@@ -468,7 +472,6 @@ struct View {
     rotation_snap_degrees: f64,
     new_text_preset: Option<String>,
     new_text_size: f64,
-    new_text_color: String,
     new_annotation_style: ElementStyle,
     new_annotation_opacity: f64,
     wand_tolerance: f64,
@@ -595,6 +598,7 @@ impl Default for View {
             drawing_preview: None,
             crop: [0., 0., 1., 1.],
             crop_previous: None,
+            crop_tool: false,
             crop_drag: None,
             crop_aspect: 0,
             draw_shape: DrawShape::Rectangle,
@@ -603,7 +607,6 @@ impl Default for View {
             rotation_snap_degrees: DEFAULT_ROTATION_SNAP_DEGREES,
             new_text_preset: None,
             new_text_size: 24.,
-            new_text_color: "#ff3b5c".into(),
             new_annotation_style: ElementStyle::default(),
             new_annotation_opacity: 100.,
             wand_tolerance: 36.,
@@ -715,6 +718,7 @@ impl View {
         self.cancel_crop();
         self.viewport_pan = None;
         self.section = section;
+        self.crop_tool = section == Section::Geometry && shape.is_none();
         if let Some(shape) = shape {
             self.draw_shape = shape;
             if shape.is_grouped() {
@@ -2137,6 +2141,8 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     .auto_shrink([false, false]),
                 |ui| {
                     ui.add_enabled_ui(enabled, |ui| {
+                        // Sections space their own items (`inspector::section`).
+                        ui.spacing_mut().item_spacing.y = 0.;
                         chrome::properties_heading(ui, tokens, view);
                         match view.section {
                             Section::Layers => show_layer_properties(ui, tokens, view, tx),
@@ -2264,12 +2270,16 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
 /// Shipping Properties for drawing tools. The rail picks the tool; the
 /// Eraser rail tool picks Wand, Erase or Restore here (`Eraser mode`).
 fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
+    inspector::section(ui, tokens, |ui| draw_section(ui, tokens, view));
+}
+
+fn draw_section(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
     let previous_tool = view.draw_shape;
     if matches!(
         view.draw_shape,
         DrawShape::Wand | DrawShape::Erase | DrawShape::Restore
     ) {
-        ui.label(captures_app::editor_chrome::eraser::INTRO);
+        inspector::hint(ui, tokens, captures_app::editor_chrome::eraser::INTRO);
         // Shipping `.screenshot-format-buttons-3`: three equal toggle buttons.
         let gap = tokens.number("s-2");
         let (row, _) = ui.allocate_exact_size(
@@ -2295,33 +2305,43 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
                 egui::Sense::click(),
             );
             let active = view.draw_shape == shape;
-            let fill = if active {
-                tokens.color("surface-selected")
-            } else if response.hovered() {
-                tokens.color("control-hover")
+            // `.screenshot-format-buttons button`, accent-filled when active.
+            let (fill, border, ink) = if active {
+                (
+                    tokens.color("theme-accent"),
+                    tokens.color("theme-accent"),
+                    tokens.color("theme-accent-ink"),
+                )
             } else {
-                tokens.color("control")
+                (
+                    tokens.color(if response.hovered() {
+                        "control-hover"
+                    } else {
+                        "control"
+                    }),
+                    tokens.color("border-subtle"),
+                    tokens.color("text-muted"),
+                )
             };
             ui.painter().rect(
                 rect,
-                tokens.number("r-md"),
+                tokens.number("r-sm"),
                 fill,
-                egui::Stroke::new(
-                    1.,
-                    tokens.color(if active {
-                        "theme-accent"
-                    } else {
-                        "border-subtle"
-                    }),
-                ),
+                egui::Stroke::new(1., border),
                 egui::StrokeKind::Inside,
             );
+            if response.has_focus() {
+                crate::primitives::focus_ring(ui, tokens, rect, tokens.number("r-sm"));
+            }
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
-                egui::FontId::proportional(tokens.number("text-sm")),
-                tokens.color(if active { "text" } else { "text-muted" }),
+                egui::FontId::new(
+                    tokens.number("text-sm"),
+                    egui::FontFamily::Name(crate::ui_fonts::SEMIBOLD.into()),
+                ),
+                ink,
             );
             response.widget_info(|| {
                 egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label)
@@ -2366,8 +2386,8 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             .marks(&marks),
             &mut view.wand_tolerance,
         );
-        ui.checkbox(&mut view.wand_contiguous, e::CONTIGUOUS);
-        ui.label(e::wand_hint(view.wand_contiguous));
+        inspector::check_row(ui, tokens, &mut view.wand_contiguous, e::CONTIGUOUS);
+        inspector::hint(ui, tokens, e::wand_hint(view.wand_contiguous));
     } else if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
         use captures_app::editor_chrome::eraser as e;
         chrome::draw_tool_preview(
@@ -2412,31 +2432,39 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             .marks(&softness_marks),
             &mut view.brush_softness,
         );
-        ui.label(if view.draw_shape == DrawShape::Erase {
-            e::ERASE_HINT
-        } else {
-            e::RESTORE_HINT
-        });
+        inspector::hint(
+            ui,
+            tokens,
+            if view.draw_shape == DrawShape::Erase {
+                e::ERASE_HINT
+            } else {
+                e::RESTORE_HINT
+            },
+        );
     } else if view.draw_shape == DrawShape::Text {
-        ui.label("New text style");
+        // Shipping: New text style, New text size, then the drawing defaults'
+        // Drop shadow. New text takes the drawing Color; there is no Color row.
         if let Some(presented) = &view.presented {
-            pickers::text_style_picker(
-                ui,
-                tokens,
-                "New text style",
-                &presented.text_style_presets,
-                &mut view.new_text_preset,
-            );
+            inspector::labelled(ui, tokens, "New text style", |ui| {
+                pickers::text_style_picker(
+                    ui,
+                    tokens,
+                    "New text style",
+                    &presented.text_style_presets,
+                    &mut view.new_text_preset,
+                    true,
+                );
+            });
         }
-        ui.horizontal(|ui| {
-            ui.label("Size");
-            ui.add(
-                egui::DragValue::new(&mut view.new_text_size)
-                    .range(8. ..=512.)
-                    .speed(1.),
-            );
+        inspector::labelled(ui, tokens, "New text size", |ui| {
+            crate::primitives::NumberInput::new(
+                "new-text-size",
+                "New text size",
+                ui.available_width(),
+            )
+            .range(8. ..=512.)
+            .show(ui, tokens, &mut view.new_text_size);
         });
-        swatch_color(ui, tokens, colors::COLOR, &mut view.new_text_color);
         // Shipping shares the drawing defaults' shadow with new text, showing
         // defaults scaled from the new text size until customized.
         let reference = captures_app::editor_text::new_text_shadow_style(
@@ -2445,23 +2473,19 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
         );
         let style = &mut view.new_annotation_style;
         let mut enabled = style.has_drop_shadow();
-        if ui.checkbox(&mut enabled, "Drop shadow").changed() {
+        let mut shadow = reference.resolved_drop_shadow_style();
+        let before = shadow.clone();
+        if drop_shadow_fields(ui, tokens, "new-text", &mut enabled, &mut shadow) {
             style.drop_shadow = Some(enabled);
         }
-        if enabled {
-            let mut shadow = reference.resolved_drop_shadow_style();
-            let before = shadow.clone();
-            shadow_fields(ui, None, &mut shadow);
-            if shadow != before {
-                style.drop_shadow_style = Some(shadow);
-            }
+        if shadow != before {
+            style.drop_shadow_style = Some(shadow);
         }
-        ui.label("Click to type on the canvas, or click existing text to edit it.");
-        ui.small(
-            "These defaults apply only to new text in this editor. Box styles center on the click.",
-        );
     } else {
         let closed = view.draw_shape.closed_kind().is_some();
+        if view.draw_shape.is_grouped() {
+            chrome::shape_picker(ui, tokens, view);
+        }
         let style = &view.new_annotation_style;
         chrome::draw_tool_preview(
             ui,
@@ -2485,7 +2509,7 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
         let style = &mut view.new_annotation_style;
         if closed {
             let mut stroke = style.has_stroke();
-            if ui.checkbox(&mut stroke, "Stroke").changed() {
+            if inspector::check_row(ui, tokens, &mut stroke, "Stroke").changed() {
                 style.stroke_enabled = Some(stroke);
             }
         }
@@ -2500,28 +2524,39 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
                 },
                 &mut style.color,
             );
-            ui.horizontal(|ui| {
-                ui.label("Size");
-                ui.add(
-                    egui::DragValue::new(&mut style.stroke_width)
-                        .range(2. ..=40.)
-                        .speed(1.)
-                        .suffix(" px"),
-                );
-            });
-        }
-        ui.horizontal(|ui| {
-            ui.label("Opacity");
-            ui.add(
-                egui::DragValue::new(&mut view.new_annotation_opacity)
-                    .range(0. ..=100.)
-                    .speed(1.)
-                    .suffix("%"),
+            let text = format!("{} px", style.stroke_width.round());
+            labelled_slider(
+                ui,
+                tokens,
+                "Size",
+                crate::primitives::RangeSlider::new(
+                    "new-stroke-width",
+                    "Stroke width",
+                    ui.available_width(),
+                    2. ..=40.,
+                    text,
+                ),
+                &mut style.stroke_width,
             );
-        });
+        }
+        let text = format!("{}%", view.new_annotation_opacity.round());
+        labelled_slider(
+            ui,
+            tokens,
+            "Opacity",
+            crate::primitives::RangeSlider::new(
+                "new-opacity",
+                "Opacity",
+                ui.available_width(),
+                0. ..=100.,
+                text,
+            ),
+            &mut view.new_annotation_opacity,
+        );
+        let style = &mut view.new_annotation_style;
         if closed {
             let mut filled = style.fill.is_some();
-            if ui.checkbox(&mut filled, "Filled shape").changed() {
+            if inspector::check_row(ui, tokens, &mut filled, "Filled shape").changed() {
                 style.fill = filled.then(|| style.color.clone());
             }
             if let Some(fill) = &mut style.fill {
@@ -2529,88 +2564,110 @@ fn show_draw_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             }
         }
         let mut enabled = style.has_drop_shadow();
-        if ui.checkbox(&mut enabled, "Drop shadow").changed() {
+        let mut shadow = style
+            .drop_shadow_style
+            .clone()
+            .unwrap_or_else(|| style.resolved_drop_shadow_style());
+        let before = shadow.clone();
+        if drop_shadow_fields(ui, tokens, "new-drawing", &mut enabled, &mut shadow) {
             style.drop_shadow = Some(enabled);
         }
-        if enabled {
-            let mut shadow = style
-                .drop_shadow_style
-                .clone()
-                .unwrap_or_else(|| style.resolved_drop_shadow_style());
-            let before = shadow.clone();
-            shadow_fields(ui, None, &mut shadow);
-            if shadow != before {
-                style.drop_shadow_style = Some(shadow);
-            }
-            ui.small("Drawing pixels update in the background while dragging.");
+        if shadow != before {
+            style.drop_shadow_style = Some(shadow);
         }
-        ui.label("Drag to draw. Release to add one layer. Escape cancels the current drag.");
-        ui.small("These defaults apply to new shapes in this editor. Change position and ordering in Layers.");
     }
 }
 
-/// Shipping Crop properties: coordinates, Apply crop and the aspect menu.
+/// Shipping Crop properties: the Aspect ratio select, then the staged
+/// selection's size with Clear and Apply crop, or the drag hint.
 fn show_crop_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
-    ui.label("Coordinates in image pixels");
-    egui::Grid::new("crop-fields").show(ui, |ui| {
-        for (label, value) in ["X", "Y", "Width", "Height"]
-            .into_iter()
-            .zip(&mut view.crop)
-        {
-            ui.label(label);
-            ui.add(egui::DragValue::new(value).range(0. ..=32768.).speed(1.));
-            ui.end_row();
-        }
-    });
-    ui.horizontal(|ui| {
-        // Shipping pulses the primary Apply crop while a crop is staged.
-        let staged = view.crop_previous.is_some();
-        if chrome::primary_action(ui, tokens, "Apply crop", !view.pending, staged).clicked() {
-            let [x, y, width, height] = view.crop;
-            view.crop_previous = None;
-            view.crop_drag = None;
-            view.submit(
-                tx,
-                Request::Crop {
-                    rect: Rect {
-                        x,
-                        y,
+    // Like shipping's Crop tool, a new selection can be dragged again.
+    if view.crop_tool && view.crop_previous.is_none() && !view.pending {
+        view.crop_previous = Some(view.crop);
+    }
+    inspector::section(ui, tokens, |ui| {
+        inspector::labelled(ui, tokens, "Aspect ratio", |ui| {
+            let options: Vec<_> = CROP_ASPECTS
+                .iter()
+                .enumerate()
+                .map(|(index, (label, _))| crate::primitives::SelectOption::new(index, label))
+                .collect();
+            if let Some(index) =
+                crate::primitives::Select::new("crop-aspect", "Aspect ratio", ui.available_width())
+                    .show(ui, tokens, &options, &view.crop_aspect)
+                    .chosen
+            {
+                view.crop_aspect = index;
+            }
+        });
+        let staged = view
+            .crop_previous
+            .is_some_and(|previous| previous != view.crop);
+        if staged {
+            inspector::pair(ui, tokens, |ui, column, width| {
+                let (label, name, value) = if column == 0 {
+                    ("Width", "Crop width", view.crop[2])
+                } else {
+                    ("Height", "Crop height", view.crop[3])
+                };
+                inspector::labelled(ui, tokens, label, |ui| {
+                    let mut value = value.round();
+                    ui.add_enabled_ui(false, |ui| {
+                        crate::primitives::NumberInput::new(("crop-size", column), name, width)
+                            .show(ui, tokens, &mut value);
+                    });
+                });
+            });
+            let mut clear = false;
+            let mut apply = false;
+            inspector::columns(ui, tokens.number("s-3"), |ui, column, width| {
+                if column == 0 {
+                    clear = inspector::action_button(ui, tokens, "Clear", width, !view.pending)
+                        .clicked();
+                } else {
+                    apply = chrome::primary_action(
+                        ui,
+                        tokens,
+                        "Apply crop",
                         width,
-                        height,
+                        !view.pending,
+                        true,
+                    )
+                    .clicked();
+                }
+            });
+            if clear {
+                view.cancel_crop();
+            }
+            if apply {
+                let [x, y, width, height] = view.crop;
+                view.crop_previous = None;
+                view.crop_drag = None;
+                view.submit(
+                    tx,
+                    Request::Crop {
+                        rect: Rect {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
                     },
-                },
+                );
+            }
+            inspector::hint(
+                ui,
+                tokens,
+                "Hold Shift while dragging to keep this aspect ratio.",
+            );
+        } else {
+            inspector::hint(
+                ui,
+                tokens,
+                "Drag over the area you want to keep. Start from outside the canvas to crop to an edge. Hold Shift to lock the current aspect ratio.",
             );
         }
-        if ui
-            .button(if view.crop_previous.is_some() {
-                "Cancel"
-            } else {
-                "Draw crop"
-            })
-            .clicked()
-        {
-            if view.crop_previous.is_some() {
-                view.cancel_crop();
-            } else {
-                view.crop_previous = Some(view.crop);
-            }
-        }
     });
-    if view.crop_previous.is_some() {
-        ui.horizontal(|ui| {
-            ui.label("Aspect");
-            egui::ComboBox::from_id_salt("crop-aspect")
-                .selected_text(CROP_ASPECTS[view.crop_aspect].0)
-                .show_ui(ui, |ui| {
-                    for (index, (label, _)) in CROP_ASPECTS.iter().enumerate() {
-                        ui.selectable_value(&mut view.crop_aspect, index, *label);
-                    }
-                });
-        });
-        ui.small(
-            "Drag on the canvas. Hold Shift to lock the ratio. Escape cancels; Apply crop commits.",
-        );
-    }
 }
 
 fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
@@ -3762,7 +3819,8 @@ fn show_shape(
                                     .map(|(key, _)| key.clone())
                             })
                             .unwrap_or_else(|| "sans".into()),
-                        color: view.new_text_color.clone(),
+                        // Shipping places new text in the drawing Color.
+                        color: view.new_annotation_style.color.clone(),
                         style_preset: view.new_text_preset.clone(),
                         drop_shadow: view.new_annotation_style.drop_shadow,
                         drop_shadow_style: view.new_annotation_style.drop_shadow_style.clone(),
@@ -4278,8 +4336,13 @@ fn show_crop(
     );
     let aspect = CROP_ASPECTS[view.crop_aspect].1;
     let shift = ui.input(|input| input.modifiers.shift);
+    // A selection starts once the press is decidedly a drag, so a click (on
+    // the comparison's Hide, say) never leaves a 1 px crop behind while the
+    // Crop tool stays ready for the next selection.
     if !viewport_intercepted
-        && response.drag_started_by(egui::PointerButton::Primary)
+        && view.crop_drag.is_none()
+        && response.dragged_by(egui::PointerButton::Primary)
+        && ui.input(|input| input.pointer.is_decidedly_dragging())
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
     {
         view.crop_drag = Some(CropDrag::new(
@@ -4661,32 +4724,28 @@ fn show_export_row(
                 .as_ref()
                 .is_some_and(|presented| presented.document.background.is_none());
             let suffix = bar.map_or_else(|| ".png".to_owned(), |bar| bar.suffix.clone());
-            egui::ComboBox::from_id_salt("export-format")
-                .selected_text(&suffix)
-                .width(EXPORT_SUFFIX_WIDTH)
-                .height(height * 4.)
-                .show_ui(ui, |ui| {
-                    for (format, label) in [
-                        (ExportFormat::Png, "PNG"),
-                        (ExportFormat::Jpeg, "JPEG"),
-                        (ExportFormat::Webp, "WebP"),
-                    ] {
-                        let response =
-                            ui.selectable_value(&mut view.export_options.format, format, label);
-                        if format == ExportFormat::Jpeg && transparent {
-                            response.on_hover_text("Fills in transparent areas.");
-                        }
-                    }
-                })
-                .response
-                .on_hover_text("Format")
-                .widget_info(|| {
-                    egui::WidgetInfo::labeled(
-                        egui::WidgetType::ComboBox,
-                        true,
-                        format!("Format: {suffix}"),
-                    )
-                });
+            // Shipping `.filename-format-select`: the suffix trigger over a
+            // token listbox; JPEG explains that it fills transparent areas.
+            let jpeg_note = if transparent {
+                "Fills in transparent areas."
+            } else {
+                ""
+            };
+            let options = [
+                crate::primitives::SelectOption::new(ExportFormat::Png, "PNG"),
+                crate::primitives::SelectOption::new(ExportFormat::Jpeg, "JPEG")
+                    .description(jpeg_note),
+                crate::primitives::SelectOption::new(ExportFormat::Webp, "WebP"),
+            ];
+            let format =
+                crate::primitives::Select::new("export-format", "Format", EXPORT_SUFFIX_WIDTH)
+                    .height(height)
+                    .trigger_text(&suffix)
+                    .show(ui, tokens, &options, &view.export_options.format);
+            format.response.on_hover_text("Format");
+            if let Some(chosen) = format.chosen {
+                view.export_options.format = chosen;
+            }
             if view.export_options.format != previous {
                 view.invalidate_output();
                 view.export_target_changed();
@@ -5062,31 +5121,39 @@ fn show_export_group(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, group:
             caption(ui, "Output size");
             ui.horizontal(|ui| {
                 let options = &mut view.export_options;
-                egui::ComboBox::from_id_salt("output-size")
-                    .selected_text(match options.size {
-                        ExportSize::Original => "Original",
-                        ExportSize::Percent { percent: 75 } => "75%",
-                        ExportSize::Percent { .. } => "50%",
-                        ExportSize::Custom { .. } => "Custom",
-                    })
-                    .width(108.)
-                    .show_ui(ui, |ui| {
-                        for (size, label) in [
-                            (ExportSize::Original, "Original"),
-                            (ExportSize::Percent { percent: 75 }, "75%"),
-                            (ExportSize::Percent { percent: 50 }, "50%"),
-                        ] {
-                            ui.selectable_value(&mut options.size, size, label);
-                        }
-                        let custom = matches!(options.size, ExportSize::Custom { .. });
-                        if ui.selectable_label(custom, "Custom").clicked() && !custom {
-                            view.custom_export_size = [source_size.0, source_size.1];
-                            options.size = ExportSize::Custom {
-                                width: source_size.0,
-                                height: source_size.1,
-                            };
-                        }
-                    });
+                // Shipping `CustomSelect` with each size's description.
+                let selected = match options.size {
+                    ExportSize::Original => 0,
+                    ExportSize::Percent { percent: 75 } => 1,
+                    ExportSize::Percent { .. } => 2,
+                    ExportSize::Custom { .. } => 3,
+                };
+                let choices = [
+                    crate::primitives::SelectOption::new(0, "Original")
+                        .description("Keep the capture’s pixel dimensions."),
+                    crate::primitives::SelectOption::new(1, "75%")
+                        .description("Save at 75% of the pixel width and height."),
+                    crate::primitives::SelectOption::new(2, "50%")
+                        .description("Save at half the pixel width and height."),
+                    crate::primitives::SelectOption::new(3, "Custom")
+                        .description("Choose exact pixel dimensions."),
+                ];
+                match crate::primitives::Select::new("output-size", "Output size", 108.)
+                    .show(ui, tokens, &choices, &selected)
+                    .chosen
+                {
+                    Some(0) => options.size = ExportSize::Original,
+                    Some(1) => options.size = ExportSize::Percent { percent: 75 },
+                    Some(2) => options.size = ExportSize::Percent { percent: 50 },
+                    Some(_) => {
+                        view.custom_export_size = [source_size.0, source_size.1];
+                        options.size = ExportSize::Custom {
+                            width: source_size.0,
+                            height: source_size.1,
+                        };
+                    }
+                    None => {}
+                }
                 let dimensions = match options.size.dimensions(source_size.0, source_size.1) {
                     Ok((width, height)) => RichText::new(format!("{width} × {height}"))
                         .monospace()
@@ -5432,10 +5499,11 @@ fn layer_context_menu(
     }
 }
 
-/// Shipping Properties for the selected layer under Select: live text
-/// fields, image Width/Height/X/Y, annotation style and curve controls, then
-/// the Shift rotation snap. Visibility, lock, rename, blend, opacity,
-/// transforms, arrange and combine live in the Layers rows and their ⋯ menu.
+/// Shipping Properties for the selected layer under Select: the Shift
+/// rotation snap section, then the live text fields, image
+/// Width/Height/X/Y, or annotation style and curve controls. Visibility,
+/// lock, rename, blend, opacity, transforms, arrange and combine live in the
+/// Layers rows and their ⋯ menu.
 fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let Some(presented) = &view.presented else {
         return;
@@ -5447,11 +5515,38 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
         .find(|element| Some(&element.base().id) == view.selected_layer.as_ref())
     else {
         if document.elements.is_empty() {
-            ui.label("No layers. Undo to restore a deleted layer.");
+            inspector::section(ui, tokens, |ui| {
+                inspector::hint(ui, tokens, "No layers. Undo to restore a deleted layer.");
+            });
         }
         return;
     };
-    match element {
+    inspector::section(ui, tokens, |ui| {
+        inspector::labelled(ui, tokens, "Shift rotation snap", |ui| {
+            let mut degrees = view.rotation_snap_degrees;
+            if crate::primitives::NumberInput::new(
+                "rotation-snap",
+                "Shift rotation snap",
+                ui.available_width(),
+            )
+            .range(1. ..=180.)
+            .show(ui, tokens, &mut degrees)
+            .changed()
+            {
+                view.rotation_snap_degrees = degrees.round().clamp(1., 180.);
+                view.layer_gesture = None;
+            }
+        });
+        inspector::hint(
+            ui,
+            tokens,
+            &format!(
+                "Hold Shift while dragging the rotate handle to snap in {}° increments.",
+                view.rotation_snap_degrees
+            ),
+        );
+    });
+    inspector::section(ui, tokens, |ui| match element {
         Element::Text(_) => show_text(ui, tokens, view, tx),
         Element::Image(image) => show_image_geometry(ui, tokens, view, tx, image),
         // Style fields stay live while an edit applies; their edits queue.
@@ -5470,6 +5565,7 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
             );
             if !shape.base.locked {
                 ui.add_enabled_ui(!view.pending, |ui| {
+                    ui.spacing_mut().item_spacing.y = tokens.number("s-5");
                     canvas::show_curve_controls(ui, tokens, view, tx, shape);
                 });
             }
@@ -5477,26 +5573,7 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
         Element::Path(path) => {
             show_annotation(ui, tokens, view, tx, &path.base.id, &path.style, false);
         }
-    }
-    ui.add_space(tokens.number("s-5"));
-    ui.label("Shift rotation snap");
-    let mut degrees = view.rotation_snap_degrees;
-    if crate::primitives::NumberInput::new(
-        "rotation-snap",
-        "Shift rotation snap",
-        ui.available_width(),
-    )
-    .range(1. ..=180.)
-    .show(ui, tokens, &mut degrees)
-    .changed()
-    {
-        view.rotation_snap_degrees = degrees.round().clamp(1., 180.);
-        view.layer_gesture = None;
-    }
-    ui.small(format!(
-        "Hold Shift while dragging the rotate handle to snap in {}° increments.",
-        view.rotation_snap_degrees
-    ));
+    });
 }
 
 /// Shipping image Width/Height/X/Y (`.screenshot-number-pair`): live
@@ -5510,8 +5587,6 @@ fn show_image_geometry(
 ) {
     use captures_app::editor_layers::{self as shared, geometry as copy};
     let locked = image.base.locked;
-    let gap = tokens.number("s-4");
-    let width = ((ui.available_width() - gap) / 2.).floor();
     let fields = [
         (copy::WIDTH, copy::WIDTH_LABEL),
         (copy::HEIGHT, copy::HEIGHT_LABEL),
@@ -5519,126 +5594,158 @@ fn show_image_geometry(
         ("Y", copy::Y_LABEL),
     ];
     ui.add_enabled_ui(!locked, |ui| {
+        // One grid of four cells: `--s-4` between rows and columns.
+        ui.spacing_mut().item_spacing.y = tokens.number("s-4");
         for row in 0..2 {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for index in [row * 2, row * 2 + 1] {
-                    let (title, label) = fields[index];
-                    ui.vertical(|ui| {
-                        ui.set_width(width);
-                        ui.label(title);
-                        let mut value = view.layer_geometry[index].round();
-                        let mut input = crate::primitives::NumberInput::new(
-                            ("layer-geometry", index),
-                            label,
-                            width,
-                        );
-                        if index < 2 {
-                            input = input.range(1. ..=copy::MAX_SIZE);
-                        }
-                        let response = input.show(ui, tokens, &mut value);
-                        let response = if locked {
-                            response.on_disabled_hover_text(copy::LOCKED)
-                        } else if index < 2 {
-                            response.on_hover_text(copy::KEEPS_ASPECT)
-                        } else {
-                            response
-                        };
-                        if response.changed() {
-                            view.layer_geometry[index] = value;
-                            let (mut x, mut y, mut w, mut h) = (None, None, None, None);
-                            match index {
-                                0 => {
-                                    w = Some(value);
-                                    let size = shared::image_size_at_width(image, value);
-                                    view.layer_geometry[1] = size.1;
-                                }
-                                1 => {
-                                    h = Some(value);
-                                    let size = shared::image_size_at_height(image, value);
-                                    view.layer_geometry[0] = size.0;
-                                }
-                                2 => x = Some(value),
-                                _ => y = Some(value),
+            inspector::pair(ui, tokens, |ui, column, width| {
+                let index = row * 2 + column;
+                let (title, label) = fields[index];
+                inspector::labelled(ui, tokens, title, |ui| {
+                    let mut value = view.layer_geometry[index].round();
+                    let mut input = crate::primitives::NumberInput::new(
+                        ("layer-geometry", index),
+                        label,
+                        width,
+                    );
+                    if index < 2 {
+                        input = input.range(1. ..=copy::MAX_SIZE);
+                    }
+                    let response = input.show(ui, tokens, &mut value);
+                    let response = if locked {
+                        response.on_disabled_hover_text(copy::LOCKED)
+                    } else if index < 2 {
+                        response.on_hover_text(copy::KEEPS_ASPECT)
+                    } else {
+                        response
+                    };
+                    if response.changed() {
+                        view.layer_geometry[index] = value;
+                        let (mut x, mut y, mut w, mut h) = (None, None, None, None);
+                        match index {
+                            0 => {
+                                w = Some(value);
+                                let size = shared::image_size_at_width(image, value);
+                                view.layer_geometry[1] = size.1;
                             }
-                            view.live_edit(
-                                tx,
-                                format!("geometry:{}:{index}", image.base.id),
-                                Request::Layer {
-                                    id: image.base.id.clone(),
-                                    edit: LayerEdit::Geometry {
-                                        x,
-                                        y,
-                                        width: w,
-                                        height: h,
-                                    },
-                                },
-                            );
+                            1 => {
+                                h = Some(value);
+                                let size = shared::image_size_at_height(image, value);
+                                view.layer_geometry[0] = size.0;
+                            }
+                            2 => x = Some(value),
+                            _ => y = Some(value),
                         }
-                    });
-                }
+                        view.live_edit(
+                            tx,
+                            format!("geometry:{}:{index}", image.base.id),
+                            Request::Layer {
+                                id: image.base.id.clone(),
+                                edit: LayerEdit::Geometry {
+                                    x,
+                                    y,
+                                    width: w,
+                                    height: h,
+                                },
+                            },
+                        );
+                    }
+                });
             });
         }
     });
-    ui.small(if locked {
-        copy::LOCKED
-    } else {
-        copy::PROPORTIONAL
-    });
+    inspector::hint(
+        ui,
+        tokens,
+        if locked {
+            copy::LOCKED
+        } else {
+            copy::PROPORTIONAL
+        },
+    );
 }
 
+/// Shipping selected-text properties: Text style, Text, Font and Size, the
+/// format buttons, Text color, Text background (and its color), then Drop
+/// shadow.
 fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let Some(fields) = &mut view.text else {
         return;
     };
-    ui.horizontal(|ui| {
-        ui.menu_button("Style…", |ui| {
-            if let Some(presented) = &view.presented {
-                // Shipping `TextStylePicker` rows: preview chip, then label.
-                ui.spacing_mut().item_spacing.y = 2.;
-                for preset in &presented.text_style_presets {
-                    if pickers::text_style_row(ui, tokens, Some(preset), preset.label, false)
-                        .clicked()
-                    {
-                        fields.staged.apply_preset(preset);
-                        view.new_text_preset = Some(preset.id.into());
-                        ui.close();
-                    }
-                }
-            }
-        });
-    });
     if let Some(presented) = &view.presented {
-        ui.label("Font");
-        // Shipping labels and order ("Sans serif", …), never pinned asset names.
-        let options = font_family_options(&presented.font_families);
-        let selected = options
-            .iter()
-            .find(|(key, _)| *key == fields.staged.font_family)
-            .map_or(fields.staged.font_family.clone(), |(_, label)| {
-                label.clone()
-            });
-        egui::ComboBox::from_id_salt("text-font-family")
-            .selected_text(selected)
-            .width(190.)
-            .show_ui(ui, |ui| {
-                for (key, label) in options {
-                    ui.selectable_value(&mut fields.staged.font_family, key, label);
+        // Shipping `TextStylePicker` shows the layer's current treatment.
+        let current = captures_app::editor_text::text_style_preset_id(
+            &fields.staged.font_family,
+            fields.staged.background.is_some(),
+            fields.staged.outlined,
+            fields.staged.rounded_background,
+        );
+        let mut value = Some(current.to_owned());
+        let changed = inspector::labelled(ui, tokens, "Text style", |ui| {
+            pickers::text_style_picker(
+                ui,
+                tokens,
+                "Text style",
+                &presented.text_style_presets,
+                &mut value,
+                false,
+            )
+        });
+        if changed
+            && let Some(preset) = presented
+                .text_style_presets
+                .iter()
+                .find(|preset| Some(preset.id) == value.as_deref())
+        {
+            fields.staged.apply_preset(preset);
+            view.new_text_preset = Some(preset.id.into());
+        }
+    }
+    inspector::labelled(ui, tokens, "Text", |ui| {
+        ui.add(
+            egui::TextEdit::multiline(&mut fields.staged.text)
+                .desired_width(f32::INFINITY)
+                .desired_rows(4),
+        )
+    });
+    let options = view
+        .presented
+        .as_ref()
+        .map(|presented| font_family_options(&presented.font_families))
+        .unwrap_or_default();
+    inspector::pair(ui, tokens, |ui, column, width| {
+        if column == 0 {
+            inspector::labelled(ui, tokens, "Font", |ui| {
+                // Shipping labels and order ("Sans serif", …), never pinned asset names.
+                let mut choices: Vec<_> = options
+                    .iter()
+                    .map(|(key, label)| {
+                        crate::primitives::SelectOption::new(key.clone(), label.as_str())
+                    })
+                    .collect();
+                if !options
+                    .iter()
+                    .any(|(key, _)| *key == fields.staged.font_family)
+                {
+                    choices.push(crate::primitives::SelectOption::new(
+                        fields.staged.font_family.clone(),
+                        fields.staged.font_family.as_str(),
+                    ));
+                }
+                let chosen = crate::primitives::Select::new("text-font-family", "Font", width)
+                    .show(ui, tokens, &choices, &fields.staged.font_family)
+                    .chosen;
+                drop(choices);
+                if let Some(family) = chosen {
+                    fields.staged.font_family = family;
                 }
             });
-    }
-    let label = ui.label("Content");
-    ui.add(
-        egui::TextEdit::multiline(&mut fields.staged.text)
-            .desired_width(f32::INFINITY)
-            .desired_rows(4),
-    )
-    .labelled_by(label.id);
-    ui.horizontal(|ui| {
-        ui.label("Size");
-        crate::primitives::NumberInput::new("text-size", "Text size", 96.)
-            .range(8. ..=512.)
-            .show(ui, tokens, &mut fields.staged.font_size);
+        } else {
+            inspector::labelled(ui, tokens, "Size", |ui| {
+                crate::primitives::NumberInput::new("text-size", "Text size", width)
+                    .range(8. ..=512.)
+                    .show(ui, tokens, &mut fields.staged.font_size);
+            });
+        }
     });
     text_format_buttons(
         ui,
@@ -5649,20 +5756,26 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
     );
     swatch_color(ui, tokens, colors::TEXT_COLOR, &mut fields.staged.color);
     let mut plate = fields.staged.background.is_some();
-    if ui.checkbox(&mut plate, "Background plate").changed() {
-        fields.staged.background = plate.then(|| "#f7f7f5".into());
+    if inspector::check_row(ui, tokens, &mut plate, "Text background").changed() {
+        // Shipping: a new plate is `#111318` and clears outline and rounding.
+        if plate {
+            fields.staged.background = Some("#111318".into());
+            fields.staged.outlined = false;
+            fields.staged.rounded_background = false;
+        } else {
+            fields.staged.background = None;
+        }
     }
     if let Some(background) = &mut fields.staged.background {
         swatch_color(ui, tokens, colors::BACKGROUND, background);
-        ui.checkbox(&mut fields.staged.rounded_background, "Rounded plate");
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.checkbox(&mut fields.staged.drop_shadow, "Drop shadow");
-        ui.checkbox(&mut fields.staged.outlined, "Outline");
-    });
-    if fields.staged.drop_shadow {
-        shadow_fields(ui, None, &mut fields.staged.shadow);
-    }
+    drop_shadow_fields(
+        ui,
+        tokens,
+        "text",
+        &mut fields.staged.drop_shadow,
+        &mut fields.staged.shadow,
+    );
     let invalid_color = egui::Color32::from_hex(&fields.staged.color).is_err()
         || (fields.staged.drop_shadow
             && egui::Color32::from_hex(&fields.staged.shadow.color).is_err())
@@ -5671,7 +5784,6 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
             .background
             .as_deref()
             .is_some_and(|color| egui::Color32::from_hex(color).is_err());
-    ui.small("Changes apply as you edit. Font choices come from this draft's pinned fonts.");
     // Shipping applies text edits live. A typing burst in one field is one
     // undo step; toggles and menu choices are each their own.
     let patch = fields.staged.patch(&fields.accepted);
@@ -5688,27 +5800,6 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
         None => view.live_once("text"),
     };
     view.live_edit(tx, key, Request::EditText { id, patch });
-}
-
-fn annotation_color(ui: &mut egui::Ui, label: &str, value: &mut String) {
-    ui.push_id(label, |ui| {
-        let label = ui.label(label);
-        ui.horizontal(|ui| {
-            let [red, green, blue, _] = egui::Color32::from_hex(value)
-                .unwrap_or(egui::Color32::BLACK)
-                .to_srgba_unmultiplied();
-            let mut rgb = [red, green, blue];
-            if ui
-                .color_edit_button_srgb(&mut rgb)
-                .labelled_by(label.id)
-                .changed()
-            {
-                *value = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
-            }
-            ui.add(egui::TextEdit::singleline(value).desired_width(132.))
-                .labelled_by(label.id);
-        });
-    });
 }
 
 /// Shipping `.screenshot-format-buttons`: B, I and the three alignment icons
@@ -5823,12 +5914,9 @@ fn labelled_slider(
     slider: crate::primitives::RangeSlider,
     value: &mut f64,
 ) -> bool {
-    ui.label(
-        RichText::new(label)
-            .size(tokens.number("text-sm"))
-            .color(tokens.color("text-muted")),
-    );
-    slider.show(ui, tokens, value).changed()
+    inspector::labelled(ui, tokens, label, |ui| {
+        slider.show(ui, tokens, value).changed()
+    })
 }
 
 /// Shipping `ColorField` swatches for a staged annotation color.
@@ -5838,29 +5926,75 @@ fn swatch_color(ui: &mut egui::Ui, tokens: &Tokens, label: &str, value: &mut Str
     }
 }
 
-/// `swatches` gives the shadow color the shipping swatch row; text and draw
-/// defaults keep their explicit color field.
-fn shadow_fields(ui: &mut egui::Ui, swatches: Option<&Tokens>, shadow: &mut DropShadowStyle) {
-    match swatches {
-        Some(tokens) => swatch_color(ui, tokens, colors::SHADOW_COLOR, &mut shadow.color),
-        None => annotation_color(ui, "Shadow color", &mut shadow.color),
-    }
-    for (label, value, range) in [
-        ("Shadow opacity", &mut shadow.opacity, 0. ..=100.),
-        ("Blur", &mut shadow.blur, 0. ..=100.),
-        ("X offset", &mut shadow.offset_x, -500. ..=500.),
-        ("Y offset", &mut shadow.offset_y, -500. ..=500.),
-    ] {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.add(
-                egui::DragValue::new(value)
-                    .range(range)
-                    .clamp_existing_to_range(false)
-                    .speed(1.),
-            );
+/// Shipping `DropShadowFields`: the Drop shadow check row and, while on, the
+/// indented Shadow color, Opacity and Blur sliders and the X/Y offset pair.
+/// Returns whether the toggle changed; compare `shadow` for field edits.
+fn drop_shadow_fields(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    id: &str,
+    enabled: &mut bool,
+    shadow: &mut DropShadowStyle,
+) -> bool {
+    let toggled = inspector::check_row(ui, tokens, enabled, "Drop shadow").changed();
+    if *enabled {
+        ui.push_id(("drop-shadow", id), |ui| {
+            inspector::indented(ui, tokens, |ui| {
+                swatch_color(ui, tokens, colors::SHADOW_COLOR, &mut shadow.color);
+                let text = format!("{}%", shadow.opacity.round());
+                labelled_slider(
+                    ui,
+                    tokens,
+                    "Opacity",
+                    crate::primitives::RangeSlider::new(
+                        "shadow-opacity",
+                        "Shadow opacity",
+                        ui.available_width(),
+                        0. ..=100.,
+                        text,
+                    ),
+                    &mut shadow.opacity,
+                );
+                let text = format!("{} px", shadow.blur.round());
+                labelled_slider(
+                    ui,
+                    tokens,
+                    "Blur",
+                    crate::primitives::RangeSlider::new(
+                        "shadow-blur",
+                        "Shadow blur",
+                        ui.available_width(),
+                        0. ..=100.,
+                        text,
+                    ),
+                    &mut shadow.blur,
+                );
+                inspector::pair(ui, tokens, |ui, column, width| {
+                    let (label, name, value) = if column == 0 {
+                        ("X offset", "Shadow X offset", &mut shadow.offset_x)
+                    } else {
+                        ("Y offset", "Shadow Y offset", &mut shadow.offset_y)
+                    };
+                    inspector::labelled(ui, tokens, label, |ui| {
+                        let mut offset = *value;
+                        if crate::primitives::NumberInput::new(
+                            ("shadow-offset", column),
+                            name,
+                            width,
+                        )
+                        .range(-500. ..=500.)
+                        .commit_on_enter()
+                        .show(ui, tokens, &mut offset)
+                        .changed()
+                        {
+                            *value = offset.round();
+                        }
+                    });
+                });
+            });
         });
     }
+    toggled
 }
 
 /// Shipping applies stroke, opacity, fill and shadow changes as they are made
@@ -5879,43 +6013,44 @@ fn show_annotation(
         return;
     };
     let before = fields.clone();
-    ui.separator();
-    ui.heading("Annotation style");
     let style = &mut fields.style;
     if closed {
         let mut stroke = style.has_stroke();
-        if ui.checkbox(&mut stroke, "Stroke").changed() {
+        if inspector::check_row(ui, tokens, &mut stroke, "Stroke").changed() {
             style.stroke_enabled = Some(stroke);
         }
     }
     if !closed || style.has_stroke() {
         swatch_color(ui, tokens, colors::STROKE_COLOR, &mut style.color);
-        ui.horizontal(|ui| {
-            ui.label("Stroke width");
-            ui.add(
-                egui::DragValue::new(&mut style.stroke_width)
-                    .range(2. ..=40.)
-                    .clamp_existing_to_range(false)
-                    .speed(1.),
-            );
-        });
+        let text = format!("{} px", style.stroke_width.round());
+        labelled_slider(
+            ui,
+            tokens,
+            "Stroke width",
+            crate::primitives::RangeSlider::new(
+                "annotation-stroke-width",
+                "Stroke width",
+                ui.available_width(),
+                2. ..=40.,
+                text,
+            ),
+            &mut style.stroke_width,
+        );
     }
     let mut opacity = view.layer_opacity;
-    let changed = ui
-        .horizontal(|ui| {
-            ui.label(captures_app::editor_layers::menu::OPACITY);
-            let width = ui.available_width().min(200.);
-            crate::primitives::RangeSlider::new(
-                "annotation-opacity",
-                captures_app::editor_layers::menu::OPACITY,
-                width,
-                0. ..=100.,
-                format!("{}%", opacity.round()),
-            )
-            .show(ui, tokens, &mut opacity)
-            .changed()
-        })
-        .inner;
+    let changed = labelled_slider(
+        ui,
+        tokens,
+        captures_app::editor_layers::menu::OPACITY,
+        crate::primitives::RangeSlider::new(
+            "annotation-opacity",
+            captures_app::editor_layers::menu::OPACITY,
+            ui.available_width(),
+            0. ..=100.,
+            format!("{}%", opacity.round()),
+        ),
+        &mut opacity,
+    );
     if changed {
         let id = id.to_owned();
         view.layer_opacity = opacity;
@@ -5931,24 +6066,21 @@ fn show_annotation(
     let Some(fields) = &mut view.annotation else {
         return;
     };
+    // Shipping order: Drop shadow, then Filled shape and Fill color.
+    let mut shadow = fields.style.has_drop_shadow();
+    if drop_shadow_fields(ui, tokens, "annotation", &mut shadow, &mut fields.shadow) {
+        fields.style.drop_shadow = Some(shadow);
+    }
     let style = &mut fields.style;
     if closed {
         let mut filled = style.fill.is_some();
-        if ui.checkbox(&mut filled, "Filled shape").changed() {
+        if inspector::check_row(ui, tokens, &mut filled, "Filled shape").changed() {
             style.fill = filled.then(|| style.color.clone());
         }
         if let Some(fill) = &mut style.fill {
             swatch_color(ui, tokens, colors::FILL_COLOR, fill);
         }
     }
-    let mut shadow = style.has_drop_shadow();
-    if ui.checkbox(&mut shadow, "Drop shadow").changed() {
-        style.drop_shadow = Some(shadow);
-    }
-    if shadow {
-        shadow_fields(ui, Some(tokens), &mut fields.shadow);
-    }
-    ui.small("Changes apply as you edit. Hidden and locked annotations remain editable.");
     if *fields == before {
         return;
     }
@@ -8418,7 +8550,7 @@ mod tests {
         let mut initial = presented_text("old", "Label");
         initial.initial_text_size = 39.;
         view.receive(&ctx, Ok(initial));
-        view.new_text_color = "#2367ab".into();
+        view.new_annotation_style.color = "#2367ab".into();
         let fields = view.text.as_mut().unwrap();
         fields.accepted.font_size = 83.;
         fields.accepted.color = "#abcdef".into();
@@ -8469,11 +8601,25 @@ mod tests {
                 );
             }
         };
+        // Shipping `TextStylePicker`: the trigger sits under its "Text style"
+        // legend and shows the current treatment; the menu lists every style.
         let choose_mono = |view: &mut View| {
             let output = frame(view, vec![]);
-            click(view, position(&output, "Style…"));
+            click(view, position(&output, "Text style") + egui::vec2(20., 32.));
             let output = frame(view, vec![]);
-            click(view, position(&output, "Mono Box"));
+            let row = output
+                .shapes
+                .iter()
+                .rev()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "Mono Box" => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .next()
+                .expect("the open menu lists Mono Box");
+            click(view, row);
         };
         choose_mono(&mut view);
         assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
@@ -8483,7 +8629,7 @@ mod tests {
         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Text(text) if text.galley.job.text.starts_with("Liberation"))));
         assert_eq!(view.new_text_size, 39.);
-        assert_eq!(view.new_text_color, "#2367ab");
+        assert_eq!(view.new_annotation_style.color, "#2367ab");
         assert_eq!(view.text.as_ref().unwrap().staged.font_size, 83.);
         // Shipping applies the preset at once: one live edit, its own undo step.
         let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
@@ -8508,7 +8654,7 @@ mod tests {
         view.receive(&ctx, Ok(presented_text("other", "Other label")));
         assert_eq!(view.new_text_preset.as_deref(), Some("outlined"));
         assert_eq!(view.new_text_size, 39.);
-        assert_eq!(view.new_text_color, "#2367ab");
+        assert_eq!(view.new_annotation_style.color, "#2367ab");
     }
 
     #[test]
@@ -8558,7 +8704,7 @@ mod tests {
         view.draw_shape = DrawShape::Text;
         view.new_text_preset = Some("mono-box".into());
         view.new_text_size = 37.5;
-        view.new_text_color = "#2367ab".into();
+        view.new_annotation_style.color = "#2367ab".into();
         // Shipping places text with the drawing defaults' shadow.
         let custom = DropShadowStyle {
             color: "#123456".into(),
@@ -8639,15 +8785,15 @@ mod tests {
         view.receive(&ctx, Ok(initial));
         assert_eq!(view.new_text_preset.as_deref(), Some("rounded-box"));
         assert_eq!(view.new_text_size, 39.);
-        assert_eq!(view.new_text_color, "#ff3b5c");
+        assert_eq!(view.new_annotation_style.color, "#ff3b5c");
         view.new_text_preset = Some("mono-box".into());
         view.new_text_size = 37.5;
-        view.new_text_color = "invalid input".into();
+        view.new_annotation_style.color = "invalid input".into();
         view.receive(&ctx, Err("Invalid color".into()));
         view.receive(&ctx, Ok(presented_text("old", "accepted")));
         assert_eq!(view.new_text_preset.as_deref(), Some("mono-box"));
         assert_eq!(view.new_text_size, 37.5);
-        assert_eq!(view.new_text_color, "invalid input");
+        assert_eq!(view.new_annotation_style.color, "invalid input");
         assert_eq!(view.text.as_ref().unwrap().accepted.text, "accepted");
         let mut legacy = presented_text("old", "accepted");
         legacy.font_families.remove("rounded");
@@ -8663,7 +8809,7 @@ mod tests {
         reopened.receive(&ctx, Ok(plain));
         assert_eq!(reopened.new_text_preset, None);
         assert_eq!(reopened.new_text_size, 24.);
-        assert_eq!(reopened.new_text_color, "#ff3b5c");
+        assert_eq!(reopened.new_annotation_style.color, "#ff3b5c");
     }
 
     fn layer_frame(
@@ -10666,6 +10812,16 @@ mod tests {
         let start = egui::pos2(500., 300.);
         let end = egui::pos2(200., 150.);
         frame(&mut view, vec![], false);
+        // A click (on the comparison's Hide, say) is not a selection.
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(start), button(start, true, false)],
+            false,
+        );
+        frame(&mut view, vec![button(start, false, false)], false);
+        frame(&mut view, vec![], false);
+        assert!(view.crop_drag.is_none());
+        assert_eq!(view.crop, [0., 0., 1280., 640.]);
         frame(
             &mut view,
             vec![egui::Event::PointerMoved(start), button(start, true, false)],
