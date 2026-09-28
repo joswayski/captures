@@ -4770,7 +4770,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// The customized drawing-defaults shadow, or nil for an unusable color.
     private func customDrawingShadow() -> [String: Any]? {
-        guard let shadow = drawingShadowSettings?.shadow,
+        guard let shadow = drawingShadowSettings?.shadowValue,
               let color = PreferencesController.normalizeHex(shadow.color) else { return nil }
         return ["color": color, "opacity": shadow.opacity, "blur": shadow.blur,
                 "offsetX": shadow.offsetX, "offsetY": shadow.offsetY]
@@ -5213,7 +5213,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if rounded != style.roundedBackground { patch["roundedBackground"] = rounded }
         if (textShadow.state == .on) != style.dropShadow { patch["dropShadow"] = textShadow.state == .on }
         if (textOutline.state == .on) != style.outlined { patch["outlined"] = textOutline.state == .on }
-        if textShadow.state == .on, let shadow = style.shadowStyle, let staged = textShadowSettings?.shadow {
+        if textShadow.state == .on, let shadow = style.shadowStyle, let staged = textShadowSettings?.shadowValue {
             // Only changed settings enter the patch, so authored precision survives.
             var shadowPatch: [String: Any] = [:]
             if staged.color != shadow.color {

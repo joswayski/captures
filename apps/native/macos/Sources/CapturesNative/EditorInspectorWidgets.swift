@@ -585,8 +585,8 @@ final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
     let offsetYField = TokenNumberField()
     private let formatter: NumberFormatter
     /// The shown shadow. Controls update it before reporting `changed`.
-    private(set) var shadow = Value(color: "#000000", opacity: 35, blur: 12, offsetX: 0, offsetY: 8)
-    /// A control changed `shadow`: "color", "opacity", "blur", "offsetX" or "offsetY".
+    private(set) var shadowValue = Value(color: "#000000", opacity: 35, blur: 12, offsetX: 0, offsetY: 8)
+    /// A control changed `shadowValue`: "color", "opacity", "blur", "offsetX" or "offsetY".
     var changed: (String) -> Void = { _ in }
     var tokens: Tokens {
         didSet {
@@ -633,15 +633,15 @@ final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
         addSubview(swatches); addSubview(opacitySlider); addSubview(blurSlider)
         swatches.changed = { [weak self] color in
             guard let self, self.isEnabled else { return }
-            self.shadow.color = color; self.changed("color")
+            self.shadowValue.color = color; self.changed("color")
         }
         opacitySlider.changed = { [weak self] opacity in
             guard let self else { return }
-            self.shadow.opacity = opacity; self.changed("opacity")
+            self.shadowValue.opacity = opacity; self.changed("opacity")
         }
         blurSlider.changed = { [weak self] blur in
             guard let self else { return }
-            self.shadow.blur = blur; self.changed("blur")
+            self.shadowValue.blur = blur; self.changed("blur")
         }
         for (field, axis) in [(offsetXField, "X"), (offsetYField, "Y")] {
             field.setAccessibilityLabel(accessible("Shadow \(axis) offset"))
@@ -657,15 +657,15 @@ final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
             addSubview(field)
         }
         restyle()
-        show(shadow)
+        show(shadowValue)
         setFrameSize(NSSize(width: 229, height: Self.height(width: 229, tokens: tokens)))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Show `shadow` without reporting a change; a field being typed in keeps its text.
+    /// Show `shadowValue` without reporting a change; a field being typed in keeps its text.
     func show(_ value: Value) {
-        shadow = value
+        shadowValue = value
         swatches.selectedHex = value.color
         opacitySlider.value = value.opacity
         blurSlider.value = value.blur
@@ -742,14 +742,14 @@ final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
     private func commitOffset(_ field: TokenNumberField) {
         guard isEnabled else { return }
         let axisX = field === offsetXField
-        let current = axisX ? shadow.offsetX : shadow.offsetY
+        let current = axisX ? shadowValue.offsetX : shadowValue.offsetY
         guard let parsed = parse(field.currentEditor()?.string ?? field.stringValue) else {
             show(format(current), in: field); return
         }
         let offset = min(Self.offsetMaximum, max(-Self.offsetMaximum, parsed.rounded()))
         show(format(offset), in: field)
         guard offset != current else { return }
-        if axisX { shadow.offsetX = offset } else { shadow.offsetY = offset }
+        if axisX { shadowValue.offsetX = offset } else { shadowValue.offsetY = offset }
         changed(axisX ? "offsetX" : "offsetY")
     }
 

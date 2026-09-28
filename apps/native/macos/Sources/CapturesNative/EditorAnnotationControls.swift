@@ -71,7 +71,7 @@ final class EditorAnnotationControls: NSView {
         opacitySlider.changed = { [weak self] value in self?.opacityChanged(value) }
         shadowFields.changed = { [weak self] key in
             guard let self else { return }
-            let shadow = self.shadowFields.shadow
+            let shadow = self.shadowFields.shadowValue
             switch key {
             case "color": self.stage(field: "shadow-color") { $0.shadowColor = shadow.color }
             case "opacity": self.stage(field: "shadow-opacity") { $0.shadowOpacity = shadow.opacity }
