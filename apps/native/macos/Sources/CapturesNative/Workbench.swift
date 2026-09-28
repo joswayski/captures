@@ -926,8 +926,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         rebuildRenderedLiveWorkspaceIfNeeded()
     }
 
-    private func showPermissions() {
-        guard onboardingReady, !terminating, !captureBusy, window.attachedSheet == nil else { return }
+    /// The setup permission cards over Capture History. Shipping has no
+    /// standalone entry: a denied capture opens it when the Restart & Retry
+    /// dialog cannot be offered. Returns whether the sheet opened.
+    @discardableResult private func showPermissions() -> Bool {
+        guard onboardingReady, !terminating, !captureBusy, window.attachedSheet == nil else { return false }
         do {
             // Use a separate controller: a completed profile must not run the
             // first-run completion/restart callbacks when checking revoked access.
@@ -944,8 +947,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             if !window.isVisible || window.isMiniaturized { showHistory() }
             window.beginSheet(sheet)
             permissionController?.check()
+            return true
         } catch {
             presentHostError(title: "Permissions Unavailable", message: error.localizedDescription)
+            return false
         }
     }
 
@@ -1044,12 +1049,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     /// Shipping `report_capture_error` on macOS: a denied capture offers
     /// "Restart & Retry" when access was requested this launch, otherwise
-    /// "Reset, Restart & Retry". Returns false to fall back to the plain error.
+    /// "Reset, Restart & Retry". Without a prompt it opens the permission
+    /// cards. Returns false to fall back to the plain error.
     private func offerScreenPermissionRecovery(kind: StillCaptureKind, message: String) -> Bool {
         guard options.live, !terminating,
               let recovery = try? CapturePermissionRecovery(settingsPath: options.settingsFile),
-              recovery.isPermissionDenied(message),
-              let prompt = try? recovery.prompt() else { return false }
+              recovery.isPermissionDenied(message) else { return false }
+        guard let prompt = try? recovery.prompt() else { return showPermissions() }
         guard window.attachedSheet == nil else {
             Metrics.write(["event": "permission-recovery", "detail": "sheet busy"])
             return true
@@ -1280,12 +1286,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.presentHostError(title: "Capture Failed", message: message)
                 }, screenPermissionDenied: { [weak self] kind, message in
                     self?.offerScreenPermissionRecovery(kind: kind, message: message) ?? false
-                }, showPermissions: { [weak self] in self?.showPermissions() },
-                showPreferenceSetting: { [weak self] setting in
+                }, showPreferenceSetting: { [weak self] setting in
                     self?.showPreferences(revealing: setting)
-                }) { [weak self] in
-                    self?.showPreferences()
-                }
+                })
             liveController?.workspaceHidden = { [weak self] hidden in
                 self?.setCompanionWindowsHidden(hidden)
             }

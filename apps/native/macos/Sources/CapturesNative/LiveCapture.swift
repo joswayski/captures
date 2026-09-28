@@ -79,9 +79,7 @@ final class LiveCaptureController: NSObject {
     static let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
     private let historyRootOverride: String?
     private let settingsPath: String?
-    private let showPreferences: () -> Void
     private let showPreferenceSetting: (String) -> Void
-    private let showPermissions: () -> Void
     private var permissionsVisible = false
     private let captureStateChanged: (Bool) -> Void
     private let selectorGenerationChanged: (UInt64?) -> Void
@@ -200,8 +198,10 @@ final class LiveCaptureController: NSObject {
             }
         }
     }
-    private var displayMenu: ClosurePopUpButton!
-    private var refreshButton: CaptureButton!
+    /// The display a capture starts on. Shipping has no display picker in
+    /// History: every capture starts on the display under the pointer, and the
+    /// capture menu switches displays.
+    private var selectedDisplayIndex = 0
     private let historyCopy = HistoryCopy.current
     private static let thumbnailQueue = DispatchQueue(label: "es.captures.native.history-thumbnails", qos: .utility)
     private var grid: HistoryGridView!
@@ -235,18 +235,17 @@ final class LiveCaptureController: NSObject {
     private var recoveryStatus: NSTextField!
     private var recoveryCancelButton: CaptureButton!
     private var recoveryRetryButton: CaptureButton!
+    /// Shipping `.history-error`: the latest progress or error message, shown
+    /// only while it is an error (`statusAlert`), between the filters and the
+    /// grid. Shipping History has no status line.
     private var status: NSTextField!
-    private var captureButton: CaptureButton!
-    private var regionButton: CaptureButton!
-    private var windowButton: CaptureButton!
-    private var newCaptureButton: CaptureButton!
+    private var statusBackground: Surface!
+    private var statusAlert = false
     private var eyebrowLabel: NSTextField!
     private var headingLabel: NSTextField!
     private var ledeLabel: NSTextField!
-    private var preferencesHeaderButton: CaptureButton!
-    private var screenAccessButton: CaptureButton!
-    /// Top of the filters row, below the header, capture row and status.
-    private var contentTop: CGFloat = 192
+    /// Top of the filters row, `s-6` below the header (shipping `.history-shell` gap).
+    private var contentTop: CGFloat = 136
     private var renderedRecoveryWidth: CGFloat = 0
     /// Called with true when a capture hides this window and false when the
     /// capture ends, so the host can hide its other windows too.
@@ -262,14 +261,11 @@ final class LiveCaptureController: NSObject {
          recordingControlsVisibilityChanged: @escaping (Bool) -> Void = { _ in },
          reportError: @escaping (String) -> Void = { _ in },
          screenPermissionDenied: @escaping (StillCaptureKind, String) -> Bool = { _, _ in false },
-         showPermissions: @escaping () -> Void = {},
-         showPreferenceSetting: @escaping (String) -> Void = { _ in },
-         showPreferences: @escaping () -> Void) {
+         showPreferenceSetting: @escaping (String) -> Void = { _ in }) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport
-        self.recoveryWorker = recoveryWorker; self.showPreferences = showPreferences
+        self.recoveryWorker = recoveryWorker
         self.showPreferenceSetting = showPreferenceSetting
-        self.showPermissions = showPermissions
         self.settingsPath = settingsPath; self.miniPreviews = miniPreviews
         self.miniPreviewActions = miniPreviewActions
         self.initialSelectionID = initialSelectionID
@@ -279,6 +275,15 @@ final class LiveCaptureController: NSObject {
         self.reportError = reportError
         self.screenPermissionDenied = screenPermissionDenied
         super.init(); build(); loadInitial()
+        // Shipping History has no Refresh: History reloads after every change
+        // it makes, and the display list follows display changes.
+        NotificationCenter.default.addObserver(self, selector: #selector(displaysChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    }
+
+    @objc private func displaysChanged() {
+        guard !capturing, !historyRoot.isEmpty else { return }
+        loadDisplays()
     }
 
     private func build() {
@@ -294,10 +299,6 @@ final class LiveCaptureController: NSObject {
                          size: tokens.number("text-md"))
         lede.textColor = tokens.color("text-subtle")
         ledeLabel = lede
-        newCaptureButton = button("New Capture…", frame: NSRect(x: 708, y: 24, width: 126, height: 34)) { [weak self] in self?.newCapture() }
-        newCaptureButton.primary = true
-        preferencesHeaderButton = button("Preferences", frame: NSRect(x: 846, y: 24, width: 126, height: 34),
-                                         action: showPreferences)
         deleteAllButton = HistoryButton(copy.deleteAll, frame: .zero, tokens: tokens, style: .danger,
                                         glyph: .trash) { [weak self] in self?.deleteAllHistory() }
         deleteAllCancelButton = HistoryButton(copy.cancel, frame: .zero, tokens: tokens, style: .ghost) {
@@ -306,22 +307,15 @@ final class LiveCaptureController: NSObject {
         deleteAllCancelButton.setAccessibilityLabel(copy.cancelLabel)
         root.addSubview(deleteAllCancelButton); root.addSubview(deleteAllButton)
 
-        displayMenu = ClosurePopUpButton(frame: NSRect(x: 28, y: 118, width: 300, height: 34), pullsDown: false)
-        displayMenu.tokens = tokens; displayMenu.setAccessibilityLabel("Display to capture")
-        displayMenu.change = { _ in }; displayMenu.target = displayMenu; displayMenu.action = #selector(ClosurePopUpButton.selectedValue)
-        root.addSubview(displayMenu)
-        refreshButton = button("Refresh", frame: NSRect(x: 340, y: 118, width: 90, height: 34)) {
-            [weak self] in self?.loadHistory(); self?.loadDisplays()
-        }
-        screenAccessButton = button("Screen access", frame: NSRect(x: 442, y: 118, width: 148, height: 34)) { [weak self] in self?.requestPermission() }
-        captureButton = button("Capture display", frame: NSRect(x: 602, y: 118, width: 116, height: 34)) { [weak self] in self?.capture(.display) }
-        captureButton.selected = true
-        regionButton = button("Capture region", frame: NSRect(x: 730, y: 118, width: 116, height: 34)) { [weak self] in self?.capture(.region) }
-        windowButton = button("Capture window", frame: NSRect(x: 858, y: 118, width: 114, height: 34)) { [weak self] in self?.capture(.window) }
-        status = title("Loading capture history…", frame: NSRect(x: 28, y: 160, width: 944, height: 18),
-                       size: tokens.number("text-sm"), muted: true)
-        status.maximumNumberOfLines = 1
-        status.lineBreakMode = .byTruncatingTail
+        // Shipping `.history-error`: danger text on a `danger-surface` card.
+        statusBackground = Surface(frame: .zero)
+        statusBackground.wantsLayer = true
+        statusBackground.layer?.backgroundColor = tokens.color("danger-surface").cgColor
+        statusBackground.layer?.cornerRadius = tokens.number("r-md")
+        statusBackground.isHidden = true
+        root.addSubview(statusBackground)
+        status = title("Loading capture history…", frame: .zero, size: tokens.number("text-sm"), muted: true)
+        status.isHidden = true
 
         for filter in CaptureHistoryFilter.allCases {
             let control = HistoryFilterPill(label: filter.title, tokens: tokens) { [weak self] in
@@ -425,10 +419,9 @@ final class LiveCaptureController: NSObject {
         }
     }
 
-    /// Shipping DOM order for the controls both windows share: Cancel before
-    /// Delete all, the filters, interrupted recordings, then the grid. The
-    /// native capture controls follow the header in reading order. The grid
-    /// starts focused so its arrow keys work without a click.
+    /// Shipping DOM order: Cancel before Delete all, the filters, interrupted
+    /// recordings, then the grid. The grid starts focused so its arrow keys
+    /// work without a click.
     private func installKeyViewLoop() {
         guard let grid, let historyScroll, let recoveryPanel else { return }
         var order = root.subviews.filter { $0 !== recoveryPanel }
@@ -436,7 +429,7 @@ final class LiveCaptureController: NSObject {
         KeyViewLoop.install(order, window: window, initial: grid)
     }
 
-    /// Stack the toolbar, recovery section and grid from the current root size.
+    /// Stack the toolbar, error, recovery section and grid from the current root size.
     private func layoutHistory() {
         guard let historyScroll, let grid else { return }
         let width = root.bounds.width - 56
@@ -451,6 +444,16 @@ final class LiveCaptureController: NSObject {
         toolbarDivider.frame = NSRect(x: 28, y: contentTop + tokens.number("h-sm") + tokens.number("s-5"),
                                       width: width, height: 1)
         var y: CGFloat = showToolbar ? toolbarDivider.frame.maxY + tokens.number("s-6") : contentTop
+        statusBackground.isHidden = !statusAlert
+        status.isHidden = !statusAlert
+        if statusAlert, let font = status.font {
+            let insetX = tokens.number("s-5"), insetY = tokens.number("s-4")
+            let textWidth = max(0, width - 2 * insetX)
+            let height = textHeight(status.stringValue, font: font, width: textWidth)
+            statusBackground.frame = NSRect(x: 28, y: y, width: width, height: height + 2 * insetY)
+            status.frame = NSRect(x: 28 + insetX, y: y + insetY, width: textWidth, height: height)
+            y = statusBackground.frame.maxY + tokens.number("s-6")
+        }
         if !recoveryPanel.isHidden {
             recoveryPanel.frame.origin = NSPoint(x: 28, y: y)
             y = recoveryPanel.frame.maxY + tokens.number("s-6")
@@ -465,8 +468,7 @@ final class LiveCaptureController: NSObject {
 
     /// Delete all sits at the header's bottom right, with Cancel while armed;
     /// a compact window stacks it under the heading (shipping
-    /// `@media (max-width: 720px)`). The capture row wraps to the width and
-    /// everything below follows it.
+    /// `@media (max-width: 720px)`). Everything below follows the header.
     private func layoutHeaderActions() {
         guard let deleteAllButton else { return }
         let copy = historyCopy
@@ -487,10 +489,7 @@ final class LiveCaptureController: NSObject {
         let cancelWidth = width(copy.cancel) + 2 * tokens.number("s-5")
         let gap = tokens.number("s-3")
 
-        // Native New Capture and Preferences sit at the top right.
-        preferencesHeaderButton?.frame = NSRect(x: right - 126, y: 24, width: 126, height: 34)
-        newCaptureButton?.frame = NSRect(x: right - 264, y: 24, width: 126, height: 34)
-        let headingWidth = max(0, min(420, right - 264 - 12 - left))
+        let headingWidth = max(0, min(420, right - left))
         eyebrowLabel?.frame = NSRect(x: left, y: 24, width: headingWidth, height: 14)
         headingLabel?.frame = NSRect(x: left, y: 40, width: headingWidth, height: 36)
 
@@ -522,23 +521,7 @@ final class LiveCaptureController: NSObject {
             headerBottom = max(80 + ledeHeight, deleteAllButton.isHidden ? 0 : 70 + height)
         }
 
-        // The capture row wraps within the window, 12 pt apart like before.
-        var x = left
-        var y = max(118, headerBottom + 16)
-        var rowBottom = y
-        let row: [NSView?] = [displayMenu, refreshButton, screenAccessButton, captureButton, regionButton, windowButton]
-        for case let control? in row {
-            var controlWidth = control.frame.width
-            if control === displayMenu { controlWidth = min(300, right - left) }
-            if x > left && x + controlWidth > right {
-                x = left; y = rowBottom + 12
-            }
-            control.frame = NSRect(x: x, y: y, width: controlWidth, height: 34)
-            x += controlWidth + 12
-            rowBottom = y + 34
-        }
-        status?.frame = NSRect(x: left, y: rowBottom + 8, width: max(0, right - left), height: 18)
-        let top = rowBottom + 8 + 18 + 14
+        let top = headerBottom + tokens.number("s-6")
         if top != contentTop {
             contentTop = top
             layoutHistory()
@@ -550,9 +533,6 @@ final class LiveCaptureController: NSObject {
         let label = NSTextField(wrappingLabelWithString: text); label.frame = frame
         label.font = .systemFont(ofSize: size, weight: weight); label.textColor = tokens.color(muted ? "text-muted" : "text")
         root.addSubview(label); return label
-    }
-    @discardableResult private func button(_ title: String, frame: NSRect, action: @escaping () -> Void) -> CaptureButton {
-        let value = CaptureButton(title, frame: frame, tokens: tokens, action: action); root.addSubview(value); return value
     }
 
     private func loadInitial() {
@@ -585,8 +565,12 @@ final class LiveCaptureController: NSObject {
         }) { [weak self] result in
             guard let self else { return }
             switch result { case .success(let values):
-                self.displays = values; self.displayMenu.removeAllItems(); self.displayMenu.addItems(withTitles: values.map(\.title))
-                self.status.stringValue = values.isEmpty ? "No displays are available. Screen access may be required." : self.historyStatus()
+                let selectedID = self.displays.indices.contains(self.selectedDisplayIndex)
+                    ? self.displays[self.selectedDisplayIndex].id : nil
+                self.displays = values
+                self.selectedDisplayIndex = values.firstIndex { $0.id == selectedID } ?? 0
+                self.status.stringValue = values.isEmpty
+                    ? "No displays are available. Screen access may be required." : "Displays refreshed."
             case .failure(let error):
                 if let retry = self.pendingRetryKind {
                     // The relaunched retry fails here, as shipping's retried capture would.
@@ -853,14 +837,8 @@ final class LiveCaptureController: NSObject {
         // Like shipping, loading or filtering never selects a card on the
         // user's behalf; an explicit selection that is still visible survives.
         selectedIndex = historyRows.first { artifacts[$0].id == previousID }
-        status.stringValue = historyStatus(); updateActions()
+        updateActions()
         layoutHistory()
-    }
-
-    private func historyStatus() -> String {
-        if artifacts.isEmpty { return "No captures yet. Choose New Capture to begin." }
-        if historyRows.isEmpty { return historyCopy.filteredEmpty }
-        return "\(historyRows.count) of \(artifacts.count) captures · \(historyFilter.title)"
     }
 
     /// Render History cards from the current rows, presentation and thumbnails.
@@ -943,6 +921,11 @@ final class LiveCaptureController: NSObject {
         capturing || clearingHistory || recoveryBusy
             || recordingRetiring || externalOpenPending || permissionsVisible
     }
+    /// No capture or History operation holds the workspace.
+    var historyIdle: Bool { !historyBusy }
+    /// Tray, shortcut and New Capture actions can start: idle, with a display
+    /// list and a History root.
+    var captureReady: Bool { historyIdle && !displays.isEmpty && !historyRoot.isEmpty }
 
     private func performCard(row: Int, action: HistoryCardAction) {
         guard historyRows.indices.contains(row), !historyBusy, cardBusy == nil else { return }
@@ -990,7 +973,7 @@ final class LiveCaptureController: NSObject {
     /// Shared by Restore and Edit; `completion` runs on the main queue.
     private func restore(_ artifact: CaptureArtifact, with previews: MiniPreviewController,
                          completion: @escaping (MiniPreviewRestoreOutcome) -> Void) {
-        let index = displayMenu.indexOfSelectedItem
+        let index = selectedDisplayIndex
         let screenID = displays.indices.contains(index)
             ? displays[index].id : window.screen.flatMap(MiniPreviewController.displayID(for:))
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak previews] result in
@@ -1057,12 +1040,6 @@ final class LiveCaptureController: NSObject {
         updateActions()
     }
 
-    private func requestPermission() {
-        guard !capturing, !recoveryBusy, !recordingRetiring,
-              !clearingHistory, !externalOpenPending, !permissionsVisible else { return }
-        showPermissions()
-    }
-
     func setPermissionsVisible(_ visible: Bool) {
         permissionsVisible = visible
         captureStateChanged(capturing || visible)
@@ -1071,19 +1048,19 @@ final class LiveCaptureController: NSObject {
     }
 
     /// Shipping shortcut, tray and New Capture flows start on the display under
-    /// the pointer. The picker follows so the workspace shows the same display.
+    /// the pointer.
     private func selectDisplayUnderPointer() {
         let location = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(location, $0.frame, false) }),
               let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue,
               let index = displays.firstIndex(where: { $0.id == id }) else { return }
-        displayMenu.selectItem(at: index)
+        selectedDisplayIndex = index
     }
 
     @discardableResult func capture(_ kind: StillCaptureKind) -> Bool {
         recordingSavedNotice.dismiss()
         if !capturing { selectDisplayUnderPointer() }
-        let index = displayMenu.indexOfSelectedItem
+        let index = selectedDisplayIndex
         guard !capturing, !recoveryBusy, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
@@ -1131,7 +1108,7 @@ final class LiveCaptureController: NSObject {
     @discardableResult func newCapture(recordingTarget: UnifiedCaptureTarget? = nil) -> Bool {
         recordingSavedNotice.dismiss()
         if !capturing { selectDisplayUnderPointer() }
-        let index = displayMenu.indexOfSelectedItem
+        let index = selectedDisplayIndex
         guard !capturing, !recoveryBusy, !recordingRetiring,
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
@@ -2435,13 +2412,19 @@ final class LiveCaptureController: NSObject {
         else { processNextOpenImage() }
     }
     func showShortcutError(_ error: Error) {
-        status.stringValue = "Capture shortcuts unavailable: \(error.localizedDescription)"
+        showAlert("Capture shortcuts unavailable: \(error.localizedDescription)")
+    }
+    /// Shipping `.history-error` (`role="alert"`) below the filters.
+    private func showAlert(_ message: String, detail: String? = nil) {
+        status.stringValue = message
+        status.toolTip = detail
         status.textColor = tokens.color("danger-text")
+        statusAlert = true
+        layoutHistory()
     }
     private func showError(_ context: String, _ error: Error) {
         let message = "\(context): \(error.localizedDescription)"
-        status.stringValue = message
-        status.textColor = tokens.color("danger-text")
+        showAlert(message)
         if let kind = captureAttemptKind, screenPermissionDenied(kind, message) {
             captureAttemptKind = nil
             return
@@ -2458,14 +2441,9 @@ final class LiveCaptureController: NSObject {
     }
     private func updateActions() {
         let busy = historyBusy
-        refreshButton?.isEnabled = !busy
         for (filter, button) in historyFilterButtons {
             button.isEnabled = !busy && (filter == .all || artifacts.contains(where: filter.matches))
         }
-        captureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
-        regionButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
-        windowButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
-        newCaptureButton?.isEnabled = !busy && !displays.isEmpty && !historyRoot.isEmpty
         renderRecovery()
         layoutHeaderActions()
         refreshGrid(busy: busy)
@@ -2645,10 +2623,8 @@ final class LiveCaptureController: NSObject {
         guard !pendingOpenImages.isEmpty else {
             if !externalOpenErrors.isEmpty {
                 let message = externalOpenErrors.joined(separator: "\n")
-                status.stringValue = externalOpenErrors.count == 1
-                    ? message : "Couldn’t open \(externalOpenErrors.count) files. See details."
-                status.toolTip = message
-                status.textColor = tokens.color("danger-text")
+                showAlert(externalOpenErrors.count == 1
+                    ? message : "Couldn’t open \(externalOpenErrors.count) files. See details.", detail: message)
                 reportError("Couldn’t open external media: \(message)")
                 externalOpenErrors.removeAll()
             }
@@ -2763,7 +2739,9 @@ final class LiveCaptureController: NSObject {
     }
 
     private func run<T>(_ work: @escaping () throws -> T, completion: @escaping (Result<T, Error>) -> Void) {
+        // Like shipping, starting an operation clears the previous error.
         status.textColor = tokens.color("text-muted")
+        if statusAlert { statusAlert = false; layoutHistory() }
         Self.queue.async { let result = Result(catching: work); DispatchQueue.main.async { completion(result) } }
     }
 

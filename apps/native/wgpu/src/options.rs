@@ -292,10 +292,10 @@ impl Options {
         if !options.open_media.is_empty() && !options.live {
             return Err("--open-media/--open-image requires --live".into());
         }
-        if options.permission_dialog.is_some() && (!options.live || options.screenshot.is_none()) {
-            return Err(
-                "--permission-dialog requires a --live --screenshot rendering probe".into(),
-            );
+        // Opens permission recovery as a denied capture would, for rendering
+        // probes and interactive smokes (History has no permissions button).
+        if options.permission_dialog.is_some() && !options.live {
+            return Err("--permission-dialog requires --live".into());
         }
         if options.screenshot.is_some() {
             let deadline = options
@@ -350,6 +350,15 @@ mod tests {
         assert!(parse(&["--", "file.png"]).is_err());
         assert!(parse(&["--live", "--", ""]).is_err());
         assert!(parse(&["--live", "--typo"]).is_err());
+        assert_eq!(
+            parse(&["--live", "--permission-dialog", "ready"])
+                .unwrap()
+                .permission_dialog
+                .as_deref(),
+            Some("ready")
+        );
+        assert!(parse(&["--permission-dialog", "ready"]).is_err());
+        assert!(parse(&["--live", "--permission-dialog", "other"]).is_err());
         assert!(parse(&["--live", "--"]).unwrap().open_media.is_empty());
     }
 
