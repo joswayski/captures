@@ -485,13 +485,14 @@ when one is enabled. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Typed commands create plain or preset text and edit
 content, type, alignment, color and plates transactionally. Both native hosts now
-connect a basic **Text** tool. Selected text's properties, including outlines and
+connect a basic **Text** tool. Selected text's properties, including its style and
 shadow color, opacity, blur and offsets, apply as you edit, as in the shipping
 editor; typing in one field is one undo step. Before placement, choose a
-named style, size and color; boxed styles center on the click. These defaults last
-only for that editor. Both hosts start at Rounded Box when its pinned font is
-offered, otherwise Standard, then Plain. New text starts in the annotation red,
-with an initial size scaled to the original capture (24–72). The bundle includes
+named style and size; boxed styles center on the click. As in the shipping editor,
+new text takes the drawing Color (annotation red until you change it). These
+defaults last only for that editor. Both hosts start at Rounded Box when its pinned
+font is offered, otherwise Standard, then Plain, with an initial size scaled to the
+original capture (24–72). The bundle includes
 Nunito and Liberation Sans, Serif and Mono (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
@@ -688,7 +689,8 @@ Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual
 scale and preserves the viewport-center image point when dragged.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
-The native editor's inspector still differs from the shipping Tauri editor design.
+The inspector follows the shipping sections, labels and spacing; the macOS host
+still keeps some native field rows, and neither host matches its 320 px width yet.
 Native cloud sharing is not implemented. Its required flow starts from a mini-preview
 Share icon and opens a native upload/settings popup, including native sign-in and OS
 credential storage. The [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
@@ -723,12 +725,13 @@ Release commits one undo step; Escape, focus loss or changing tools cancels the
 preview without editing. Properties shows a stroke or brush preview for drawing
 tools and Erase/Restore, and Apply crop pulses while a crop is staged. Physical-platform
 input acceptance remains parity work.
-Text controls support multiline content, pinned font families (listed as Sans serif,
-Serif, Monospace and Rounded), size, bold/italic and alignment buttons, swatch-row
-text and background colors, square/rounded background plates, outlines and a Drop
-shadow toggle. New-text and drawing default colors use the same swatch rows.
+Text controls support a style picker, multiline content, pinned font families (listed
+as Sans serif, Serif, Monospace and Rounded), size, bold/italic and alignment buttons,
+swatch-row text and background colors, a Text background plate and a Drop shadow
+toggle; outlined and rounded plates come from the Outlined and Rounded Box styles.
+Drawing default colors use the same swatch rows.
 Changes apply as you make them; a typing burst in one field is one undo step.
-Custom shadows and pinned-font named styles are connected, including style/size/color
+Custom shadows and pinned-font named styles are connected, including style/size
 choices for new text; new text also takes the drawing defaults' Drop shadow, as in
 the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
