@@ -23,7 +23,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects, physical setup/login and installed Open With acceptance, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, basic Text with bundled fonts, copy and save-new-copy | Broader text/font controls, remaining viewport/output controls and Tauri design parity; remaining recording controls |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts and shared new-text drop shadow, the shipping Erase/Restore brush ring, copy and save-new-copy | Remaining text/font parity (explicit font migration, OS/imported fonts, IME), remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
 Development package staging now supplies macOS Editor/Alternate document types,
@@ -442,7 +442,7 @@ Images retain D4 orientation; arrows scale controls and stroke, while paths reta
 their stroke width. Preview outlines and guides do not modify pixels or drafts.
 A release after three view points submits one worker transaction; cancellation,
 clicks and failures preserve the document, and fully outside content expands the
-canvas. Text resize still requires native font layout and is unsupported.
+canvas. Text layers use the text resize rules described with the text slices below.
 Canvas movement also retains immutable original geometry and snaps painted world
 bounds to canvas and visible-layer edges, including locked and zero-opacity layers
 but excluding hidden layers. Shared Rust matches Tauri's strict ten-view-point
@@ -624,7 +624,18 @@ cancel without editing. Pan and clipped/off-image initial presses never paint.
 X11 tests cover cancellation, actual feathered alpha, erase/restore, undo/redo, drafts
 and clipboard; AppKit has input/bridge tests and minimum light/dark/error fixtures.
 Windows/Wayland presentation and physical AppKit input remain unverified; sampling
-cadence and the Tauri brush cursor/layout remain parity work.
+cadence remains parity work (the brush ring is described below).
+Both hosts now draw shipping's `.screenshot-brush-cursor` from
+`editor_chrome::brush_cursor`: over a visible image (and for a whole stroke once one
+starts) the system cursor hides behind a ring sized `max(1, size × display scale)`,
+a 1.5 pt white border with a dark halo outside and a faint dark line inside over a
+4% white fill; Restore dashes the border over an 8% accent fill. Elsewhere on the
+canvas the cursor is `not-allowed`; pan-ready (Cmd/Ctrl) or panning hides the ring,
+and the ring is not clipped to the image. AppKit tests image cover with snapshot
+selection outlines, as shipping's `hitTestImageElement`. wgpu has unit coverage and
+the private-X11 brush smoke checks the ring's border and halo pixels; AppKit is covered
+by XCTest only (macOS CI is its first compile). The dash pattern approximates CSS
+`dashed`; physical cursor behaviour on macOS, Windows and Wayland is unverified.
 Both hosts connect Geometry → Trim edges through a shared `trim_canvas` command.
 It fits visible layer geometry, including locked/zero-opacity and off-canvas layers,
 rounds bounds outward, and translates every layer including hidden siblings. Empty,
@@ -795,6 +806,13 @@ The basic Text tool is implemented in AppKit and wgpu; host verification is reco
 per slice, not inferred from shared tests. Additional font import and OS acquisition,
 inline input and physical input/IME/accessibility remain open.
 Both hosts now offer new-text style, size (8–512) and color before placement.
+Like shipping, the Text section also shows the drawing defaults' Drop shadow:
+one shared toggle and custom style, whose untouched fields scale from the new text
+size (`editor_text::new_text_shadow_style`, `text_default_shadow` on the AppKit
+chrome ABI). `TextCreate` carries `dropShadow`/`dropShadowStyle`, clamped by the
+shared resolver, so each placement copies them as `createPlacedTextElement` does.
+Shipping takes new-text color from the drawing Color; the native new-text Color
+remains a separate per-editor choice.
 Choices are per-editor UI state, not document/draft/undo; accepted responses and
 failed creation retain them. Both hosts' new editors start at Rounded Box when the
 snapshot offers it, otherwise Standard, then Plain. Both start at annotation red. Shared Rust
