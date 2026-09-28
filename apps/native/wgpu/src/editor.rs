@@ -57,6 +57,9 @@ mod pickers;
 mod text_input;
 
 type CompareReply = (u64, Result<(RgbaImage, u64), String>);
+/// Shows a saved file in the file manager (`crate::reveal::reveal` in
+/// editor windows; tests record the request instead).
+type RevealFile = Arc<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>;
 
 enum Job {
     Apply(Request),
@@ -522,6 +525,11 @@ struct View {
     pixels_revision: u64,
     original_bytes: Option<u64>,
     last_saved: Option<PathBuf>,
+    /// Save reveals the saved file's folder, as shipping does after every
+    /// Save; a detached view (unit tests) without one never opens anything.
+    reveal_file: Option<RevealFile>,
+    /// The after-Save reveal in flight: the saved path and whether it opened.
+    reveal_rx: Option<Receiver<(PathBuf, bool)>>,
     notice_until: Option<Instant>,
     copied_until: Option<Instant>,
     export_error: Option<String>,
@@ -647,6 +655,8 @@ impl Default for View {
             pixels_revision: 0,
             original_bytes: None,
             last_saved: None,
+            reveal_file: None,
+            reveal_rx: None,
             notice_until: None,
             copied_until: None,
             export_error: None,
@@ -926,6 +936,7 @@ impl View {
                     let (SavedExport::Saved { path, .. }
                     | SavedExport::SavedWithoutHistory { path, .. }) = &saved;
                     self.last_saved = Some(path.clone());
+                    self.reveal_after_save(ctx, path.clone());
                     if let SavedExport::Saved { artifact, .. } = &saved {
                         self.history_changed = true;
                         // The saved file becomes the original, as in the shipping app.
@@ -1163,6 +1174,43 @@ impl View {
                 eprintln!("Couldn’t show the saved file: {error}");
             }
         });
+    }
+
+    /// Shipping `saveEditedImage` reveals the saved file after every Save
+    /// (overwrite or new file); the file manager handoff stays off the UI
+    /// thread like Show in Folder.
+    fn reveal_after_save(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let Some(reveal) = self.reveal_file.clone() else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.reveal_rx = Some(rx);
+        let ctx = ctx.clone();
+        let viewport = ctx.viewport_id();
+        thread::spawn(move || {
+            let revealed = reveal(&path).is_ok();
+            let _ = tx.send((path, revealed));
+            ctx.request_repaint_of(viewport);
+        });
+    }
+
+    /// The file is on disk either way; only a failed handoff changes the
+    /// notice, and only while it still describes that save.
+    fn drive_reveal(&mut self) {
+        let Some(rx) = &self.reveal_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((path, revealed)) => {
+                self.reveal_rx = None;
+                if !revealed && self.last_saved.as_ref() == Some(&path) {
+                    self.output_notice = Some(export::reveal_failed_notice(&path));
+                    self.notice_until = Some(Instant::now() + EXPORT_CONFIRMATION);
+                }
+            }
+            Err(mpsc::TryRecvError::Disconnected) => self.reveal_rx = None,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
     }
 
     /// Re-encode the export in the background after edits or option changes
@@ -1869,6 +1917,10 @@ impl Editor {
                 original_bytes,
                 drawing_preview: Some(drawing_preview::State::new(ctx.clone(), viewport)),
                 autosaves: true,
+                // Unit tests open real editors; they never hand files to a
+                // file manager unless a test installs its own recorder.
+                reveal_file: (!cfg!(test))
+                    .then(|| Arc::new(|path: &Path| crate::reveal::reveal(path)) as RevealFile),
                 ..View::default()
             })),
             tx,
@@ -2054,6 +2106,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     {
         view.cancel_layer_gesture();
     }
+    view.drive_reveal();
     view.drive_estimate(ui.ctx());
     view.drive_compare(ui.ctx());
     show_export_bar(ui, tokens, view, tx);
@@ -12035,6 +12088,86 @@ mod tests {
             view.original_bytes,
             Some(fs::metadata(&destination).unwrap().len())
         );
+    }
+
+    #[test]
+    fn every_save_reveals_the_saved_file_and_a_failed_handoff_names_it() {
+        let (data, id) = fixture();
+        let ctx = egui::Context::default();
+        let root = data.path().join("history");
+        let editor = Editor::open(
+            &ctx,
+            root,
+            id,
+            data.path().join("exports"),
+            CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
+        );
+        receive(&editor, &ctx);
+        let revealed = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
+        let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let (revealed, fail) = (revealed.clone(), fail.clone());
+            editor.view.lock().unwrap().reveal_file = Some(Arc::new(move |path: &Path| {
+                revealed.lock().unwrap().push(path.to_owned());
+                if fail.load(std::sync::atomic::Ordering::SeqCst) {
+                    Err(std::io::Error::other("no file manager"))
+                } else {
+                    Ok(())
+                }
+            }));
+        }
+        let settle = |editor: &Editor| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut view = editor.view.lock().unwrap();
+                view.drive_reveal();
+                if view.reveal_rx.is_none() {
+                    break;
+                }
+                drop(view);
+                assert!(Instant::now() < deadline, "reveal never finished");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        editor.view.lock().unwrap().submit(&editor.tx, crop());
+        receive(&editor, &ctx);
+        let destination = data.path().join("exports").join("edited.png");
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.update_export_target(|target, _| target.set_stem("edited"));
+            assert!(view.reveal_rx.is_none(), "editing never reveals anything");
+            view.save(&editor.tx);
+        }
+        receive(&editor, &ctx);
+        settle(&editor);
+        // A new file: its folder opens and the notice stays as saved.
+        assert_eq!(
+            revealed.lock().unwrap().as_slice(),
+            std::slice::from_ref(&destination)
+        );
+        assert_eq!(
+            editor.view.lock().unwrap().output_notice.as_deref(),
+            Some(format!("Saved {}", destination.display()).as_str())
+        );
+        // The adopted file is overwritten next; a failed handoff keeps the
+        // file and says the folder could not be opened.
+        fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        editor.view.lock().unwrap().save(&editor.tx);
+        receive(&editor, &ctx);
+        settle(&editor);
+        assert_eq!(
+            *revealed.lock().unwrap(),
+            [destination.clone(), destination.clone()]
+        );
+        assert!(destination.is_file());
+        let view = editor.view.lock().unwrap();
+        assert_eq!(
+            view.output_notice.as_deref(),
+            Some(export::reveal_failed_notice(&destination).as_str())
+        );
+        assert!(view.export_error.is_none());
+        assert_eq!(view.last_saved.as_deref(), Some(destination.as_path()));
     }
 
     #[test]

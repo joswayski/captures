@@ -17,6 +17,7 @@ import select
 import subprocess
 import threading
 import time
+from urllib.parse import unquote, urlparse
 
 import dbus
 import dbus.service
@@ -65,6 +66,19 @@ class FileChooser(dbus.service.Object):
         })
         self.pending = None
         return False
+
+
+class FileManager(dbus.service.Object):
+    """Record Save's folder reveal without launching a real file manager."""
+
+    def __init__(self, bus):
+        self.name = dbus.service.BusName("org.freedesktop.FileManager1", bus=bus, do_not_queue=True)
+        super().__init__(self.name, "/org/freedesktop/FileManager1")
+        self.revealed = []
+
+    @dbus.service.method("org.freedesktop.FileManager1", in_signature="ass", out_signature="")
+    def ShowItems(self, uris, startup_id):
+        self.revealed.extend(Path(unquote(urlparse(str(uri)).path)) for uri in uris)
 
 
 def main():
@@ -124,6 +138,16 @@ def main():
         path = output / name
         path.mkdir(mode=0o700)
         env[variable] = str(path)
+    # Save reveals its file through FileManager1 (below); a stub xdg-open
+    # records the folder fallback instead of opening anything.
+    opened_folders = output / "opened-folders.jsonl"
+    tools = output / "tools"
+    tools.mkdir()
+    (tools / "xdg-open").write_text("#!/usr/bin/python3\nimport json, sys\n"
+        f"with open({str(opened_folders)!r}, 'a') as stream:\n"
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n")
+    (tools / "xdg-open").chmod(0o755)
+    env["PATH"] = f"{tools}:{env['PATH']}"
     children, logs = [], []
     loop = None
     editor = None
@@ -767,6 +791,7 @@ def main():
         saver = ScreenSaver(name, "/org/freedesktop/ScreenSaver")
         imported_path = output / "Imported sample é.png"
         chooser = FileChooser(bus, imported_path)
+        file_manager = FileManager(bus)
         loop = GLib.MainLoop()
         thread = threading.Thread(target=loop.run, daemon=True)
         thread.start()
@@ -1459,6 +1484,8 @@ def main():
             export_click("save")
             wait(lambda: source_export.read_bytes() != original, "original file replaced")
             wait(lambda: (artifact / "capture.png").read_bytes() != original, "same History image replaced")
+            # As in shipping, every Save then shows the saved file in its folder.
+            wait(lambda: file_manager.revealed == [source_export], "overwrite reveals the saved file")
             shot(editor, "overwrite-saved")
             for path in [source_export, artifact / "capture.png"]:
                 assert run("identify", "-format", "%wx%h", str(path)) == b"640x360"
@@ -1482,6 +1509,7 @@ def main():
             export_click("save")
             copy_path = output / "original-edited.png"
             wait(copy_path.exists, "new file beside the original")
+            wait(lambda: file_manager.revealed == [source_export, copy_path], "new file revealed")
             assert source_export.read_bytes() == replaced
             entries = [json.loads(path.read_text()) for path in history.glob("*/metadata.json")]
             assert len(entries) == 2
@@ -1494,6 +1522,9 @@ def main():
             copied_before = copy_path.read_bytes()
             export_click("save")
             wait(lambda: copy_path.read_bytes() != copied_before, "adopted copy overwritten")
+            wait(lambda: file_manager.revealed == [source_export, copy_path, copy_path],
+                 "adopted overwrite revealed")
+            assert not opened_folders.exists(), "ShowItems selected the file; no folder fallback"
             assert run("convert", str(copy_path), "-crop", "1x1+162+221", "-depth", "8", "rgb:-") == bytes((40, 110, 166))
             assert source_export.read_bytes() == replaced
             entries = {json.loads(path.read_text())["id"] for path in history.glob("*/metadata.json")}
@@ -1517,7 +1548,8 @@ def main():
                 "checks": ["source-name-and-folder-default", "save-overwrites-source",
                            "exact-file-pixels", "same-history-id-date", "draft-preserved",
                            "undo-redo-preserved", "save-as-new-file-keeps-source",
-                           "saved-copy-becomes-overwrite-target", "minimum-controls",
+                           "saved-copy-becomes-overwrite-target", "every-save-reveals-file",
+                           "minimum-controls",
                            "editable-draft-reopen"],
             }, indent=2) + "\n")
             print("PASS native overwrite: default overwrite, same History, new-file switch, adopted copy, draft and undo")
@@ -2029,6 +2061,7 @@ def main():
             assert run("xclip", "-selection", "clipboard", "-o").decode() == "tiny"
             export_click("save")
             wait(tiny.exists, "Tiny PNG saved")
+            wait(lambda: file_manager.revealed == [tiny], "Save reveals the new file")
             shot(editor, "output-preset-tiny")
             assert int(run("identify", "-format", "%k", str(artifact / "capture.png"))) > 256
             assert int(run("identify", "-format", "%k", str(tiny))) <= 32
@@ -2045,6 +2078,7 @@ def main():
             export_filename("highest")
             export_click("save")
             wait(highest.exists, "Highest PNG saved")
+            wait(lambda: file_manager.revealed == [tiny, highest], "Save reveals each new file")
             shot(editor, "output-preset-highest")
             assert tiny.exists(), "a new filename never replaces the previous save"
             assert run("convert", str(highest), "-depth", "8", "rgba:-") == run(
@@ -2072,7 +2106,7 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["quality-and-preset-descriptions", "automatic-compare",
-                           "tiny-saved-png-32-colors", "compare-hide-and-show",
+                           "tiny-saved-png-32-colors", "save-reveals-file", "compare-hide-and-show",
                            "highest-saved-png-exact-pixels", "maximum-size-units",
                            "maximum-size-floor-disables-save", "no-draft-or-original-write",
                            "minimum-controls-and-menu"],

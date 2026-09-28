@@ -438,6 +438,12 @@ pub fn saved_notice(plan: &SavePlan, saved: &SavedExport) -> String {
     }
 }
 
+/// Shipping replaces the saved notice with this when the file manager could
+/// not show the folder Save reveals; the file itself is on disk.
+pub fn reveal_failed_notice(path: &Path) -> String {
+    format!("Saved {} — its folder could not be opened", path.display())
+}
+
 pub const fn format_label(format: ExportFormat) -> &'static str {
     match format {
         ExportFormat::Png => "PNG",
@@ -1161,6 +1167,14 @@ mod tests {
         assert_eq!(
             saved_notice(&overwrite, &replaced),
             "Saved changes to the original"
+        );
+        // Save then reveals the folder; a failed handoff names the file instead.
+        assert_eq!(
+            reveal_failed_notice(overwrite.path()),
+            format!(
+                "Saved {} — its folder could not be opened",
+                exports.path().join("edited.png").display()
+            )
         );
         assert_eq!(
             image::open(exports.path().join("edited.png"))

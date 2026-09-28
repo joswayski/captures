@@ -3,6 +3,24 @@ import XCTest
 @testable import CapturesNative
 
 final class ScreenshotEditorTests: XCTestCase {
+    /// Files Save revealed through editors that use the default Finder reveal.
+    private var defaultRevealed: [URL] = []
+    private var finderReveal: (([URL]) -> Void)?
+
+    override func setUp() {
+        super.setUp()
+        // Save reveals every saved file, as shipping does; never open Finder here.
+        finderReveal = ScreenshotEditorController.defaultRevealFiles
+        ScreenshotEditorController.defaultRevealFiles = { [weak self] urls in
+            self?.defaultRevealed.append(contentsOf: urls)
+        }
+    }
+
+    override func tearDown() {
+        if let finderReveal { ScreenshotEditorController.defaultRevealFiles = finderReveal }
+        super.tearDown()
+    }
+
     func testDrawingPixelsCoalesceAndRejectResultsAfterCancellationCommitAndClose() throws {
         _ = NSApplication.shared
         let original = snapshot(id: "shot")
@@ -417,9 +435,11 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.exportSaveResult = .success(EditorExportSaved(path: original.path, artifactID: "shot",
                 sizeBytes: 321, warning: nil, notice: "Saved changes to the original"))
             var replaced: [String] = [], copies = 0
+            var revealed: [URL] = []
             let controller = ScreenshotEditorController(
                 tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker,
-                didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) })
+                didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) },
+                revealFiles: { revealed.append(contentsOf: $0) })
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot", mode: "window"), historyRoot: "/native/History",
                                outputDirectory: "/exports")
@@ -444,6 +464,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual((request["options"] as? [String: Any])?["format"] as? String, "png")
             XCTAssertEqual(replaced, ["shot"]); XCTAssertEqual(copies, 0)
             XCTAssertTrue(labels(in: controller.root).contains("Saved changes to the original"))
+            XCTAssertEqual(revealed.map(\.path), [original.path],
+                           "like shipping, Save reveals the overwritten file in its folder")
             let reveal = try button("Show in Folder", in: controller.root)
             XCTAssertFalse(reveal.isHidden)
             XCTAssertEqual(controller.lastSavedPath, original.path)
@@ -466,7 +488,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(
             tokens: Tokens.variants["light-mustard"]!, worker: worker,
             didSaveCopy: { copies += 1 }, didReplaceOriginal: { replaced.append($0) },
-            revealFiles: { revealed = $0 })
+            revealFiles: { revealed.append(contentsOf: $0) })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         let filename = try field("Saved filename", in: controller.root)
@@ -486,8 +508,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(copies, 1); XCTAssertTrue(replaced.isEmpty)
         XCTAssertEqual(newFile.state, .off, "the saved copy becomes the file Save overwrites")
         XCTAssertEqual(filename.stringValue, "Shot-edited")
+        XCTAssertEqual(revealed.map(\.path), [copyURL.path], "Save reveals the new file")
         try button("Show in Folder", in: controller.root).performClick(nil)
-        XCTAssertEqual(revealed.map(\.path), [copyURL.path])
+        XCTAssertEqual(revealed.map(\.path), [copyURL.path, copyURL.path])
         worker.exportSaveResult = .success(EditorExportSaved(path: copyURL.path, artifactID: "copy-id",
             sizeBytes: 9, warning: nil, notice: "Saved changes to the original"))
         try button("Save", in: controller.root).performClick(nil)
@@ -495,6 +518,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(plan["kind"] as? String, "overwrite")
         XCTAssertEqual(plan["artifact_id"] as? String, "copy-id")
         XCTAssertEqual(replaced, ["copy-id"])
+        XCTAssertEqual(revealed.map(\.path), [copyURL.path, copyURL.path, copyURL.path],
+                       "overwriting the adopted copy reveals it too")
 
         filename.stringValue = "Renamed"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
@@ -534,6 +559,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History entry changed") })
             XCTAssertTrue(replaced.isEmpty, "failed publication must not notify")
             XCTAssertTrue(try button("Show in Folder", in: controller.root).isHidden)
+            XCTAssertTrue(defaultRevealed.isEmpty, "a failed Save reveals nothing")
             try render(controller.root, name: "screenshot-editor-save-error-\(appearance)")
 
             worker.exportSaveResult = .success(EditorExportSaved(path: original.path, artifactID: nil,
@@ -541,6 +567,9 @@ final class ScreenshotEditorTests: XCTestCase {
                 notice: "Saved \(original.path). History was not updated: database locked"))
             try button("Save", in: controller.root).performClick(nil)
             XCTAssertEqual(replaced, ["shot"], "partial publication still notifies the replaced artifact")
+            XCTAssertEqual(defaultRevealed.map(\.path), [original.path],
+                           "the file is on disk, so Save still reveals it")
+            defaultRevealed.removeAll()
             XCTAssertTrue(errors.last?.contains("couldn’t update History: database locked") == true)
             XCTAssertTrue(labels(in: controller.root).contains { $0.contains("History was not updated") })
             XCTAssertFalse(try button("Show in Folder", in: controller.root).isHidden)
