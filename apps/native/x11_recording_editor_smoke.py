@@ -1532,6 +1532,9 @@ def main():
             motion_click()
             wait(playing, "loop playback starts")
             loop_click()  # Turn on while already playing, not only before Play.
+            # The previous EOF still shows blue; see this run's green first so
+            # blue and then red prove a real wrap, not the replay's start.
+            wait(lambda: motion_color(1, "loop-first-middle"), "loop plays the green middle")
             wait(lambda: motion_color(2, "loop-first-end"), "loop reaches blue trim end")
             wait(lambda: motion_color(0, "loop-restart"), "loop returns to red accepted trim start")
             assert playing(), "loop must retain worker ownership across EOF"

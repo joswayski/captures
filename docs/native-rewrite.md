@@ -973,7 +973,8 @@ one output device, ring buffer and audio clock across laps; the next lap's PCM f
 with 4 ms fade-out/fade-in edges at the loop point, so neither an underrun gap nor a
 waveform step clicks, and lap lengths (and A/V sync) are unchanged. The private-X11
 `--sound` smoke measures consecutive lap onsets on the virtual sink (lap plus gap) and
-`--playback` measures the recorded trim-end run before the wrap. Sound survives edits/Seek/Pause/errors but
+`--playback` measures the recorded 500 ms trim-end run before a real wrap (locally 0 ms
+audio gap; 467–600 ms trim end at the 15 fps capture's resolution). Sound survives edits/Seek/Pause/errors but
 does not change edits, estimates, dirty identity, exports or History. Private-X11
 checks capture real CPAL output through an isolated PulseAudio sink, not physical
 speakers. AppKit host tests exercise the same v2 metadata and lifecycle contract;
