@@ -2583,6 +2583,21 @@ def main():
                       f"1x1+{inspector_x(115)}+{properties_top() + ERASER_MODE_ROW + 16 + 12 + 44}",
                       "-depth", "8", "rgb:-")
             assert (min(dab) >= 200) if args.appearance == "dark" else (max(dab) <= 60), dab
+            # Shipping `.screenshot-brush-cursor`: over the image the system
+            # cursor hides behind a white ring of the brush's displayed size,
+            # with a dark halo just outside it.
+            ring_x, ring_y = fixture_point((108, 189))
+            run("xdotool", "mousemove", "--window", editor, str(ring_x), str(ring_y), "sleep", ".3")
+            shot(editor, "brush-ring")
+            radius = 28 * fit_geometry(document_size(), window_size())[2] / 2
+            def ring_rgb(offset):
+                return run("convert", str(output / "brush-ring.png"), "-crop",
+                           f"1x1+{round(ring_x + offset)}+{ring_y}", "-depth", "8", "rgb:-")
+            border = max((ring_rgb(radius - inset) for inset in (0.5, 1, 1.5)), key=min)
+            # The fixture is (229, 179, 68): only the white border lifts blue this far.
+            assert min(border) >= 190, ("brush ring border", border)
+            halo = min((ring_rgb(radius + outset) for outset in (0.5, 1)), key=max)
+            assert halo[0] <= 190, ("brush ring halo darkens the fixture", halo)
             before = draft_bytes()
             brush_start = fixture_point((108, 189))
             brush_end = fixture_point((208, 229))
@@ -2657,7 +2672,7 @@ def main():
             close(root)
             wait(lambda: app.poll() is not None, "brush suite quits")
             assert app.returncode == 0
-            checks = ["brush-draw-tool-preview", "restore-missing-original-retry",
+            checks = ["brush-draw-tool-preview", "brush-hover-ring", "restore-missing-original-retry",
                       "brush-preview-no-write-and-cancel",
                       "erase-locked-image-interpolated-pixels", "brush-feathered-alpha",
                       "brush-single-undo-redo", "restore-retained-original", "brush-minimum-draft-reopen",
