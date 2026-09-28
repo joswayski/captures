@@ -794,9 +794,12 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
  * from the shipping Tauri editor. JSON operations: title {mime_type} ->
  * {title}; trim_summary {start_ms, end_ms, duration_ms} -> {range, selected};
  * time {ms, duration_ms} -> {label}; file_size {bytes} -> {label}; estimate
- * {estimating?, unapplied?, invalid_maximum?, maximum_bytes?, estimate_bytes?,
+ * {estimating?, webm?, maximum?, maximum_bytes?, estimate_bytes?,
  * estimate_exact?, original_bytes?} -> {label, muted, delta: null|{percent,
- * label, smaller}}; stage {stage: "preparing"|"encoding"|"verifying"|
+ * label, smaller}}; save_defaults {saved_path?, path?, created_at?,
+ * output_directory?} -> {directory, stem}; edited_stem {stem} -> {stem};
+ * live_timing {} -> {estimate_debounce_ms, apply_delay_ms, webm_export_error};
+ * stage {stage: "preparing"|"encoding"|"verifying"|
  * "complete"|"cancelled"|"failed"} -> {label}; saved {gif, size_bytes} ->
  * {message}; filename_error {stem} -> {error: null|string}; dropped_frames
  * {count} -> {warning: null|string}; menus {gif, base_width, base_height} ->

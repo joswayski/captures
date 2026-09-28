@@ -50,6 +50,20 @@ enum Request {
         base_width: u32,
         base_height: u32,
     },
+    SaveDefaults {
+        #[serde(default)]
+        saved_path: Option<String>,
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        created_at: String,
+        #[serde(default)]
+        output_directory: String,
+    },
+    EditedStem {
+        stem: String,
+    },
+    LiveTiming,
     CompressionCompare {
         before_bytes: Option<u64>,
         after_bytes: Option<u64>,
@@ -108,6 +122,25 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
                 base_width,
                 base_height,
             } => json!(recording_editor_ui::menus(gif, base_width, base_height)),
+            Request::SaveDefaults {
+                saved_path,
+                path,
+                created_at,
+                output_directory,
+            } => json!(recording_editor_ui::save_defaults(
+                saved_path.as_deref(),
+                &path,
+                &created_at,
+                &output_directory
+            )),
+            Request::EditedStem { stem } => {
+                json!({"stem": recording_editor_ui::edited_file_stem(&stem)})
+            }
+            Request::LiveTiming => json!({
+                "estimate_debounce_ms": recording_editor_ui::ESTIMATE_DEBOUNCE_MS,
+                "apply_delay_ms": recording_editor_ui::LIVE_APPLY_DELAY_MS,
+                "webm_export_error": recording_editor_ui::WEBM_EXPORT_ERROR,
+            }),
             Request::CompressionCompare {
                 before_bytes,
                 after_bytes,
@@ -182,6 +215,24 @@ mod tests {
         let pending = call(json!({"operation":"estimate","estimating":true}));
         assert_eq!(pending["result"]["label"], "Estimating…");
         assert!(pending["result"]["delta"].is_null());
+        let webm = call(json!({"operation":"estimate","webm":true,"estimate_bytes":7}));
+        assert_eq!(webm["result"]["label"], "—");
+        let defaults = call(json!({"operation":"save_defaults",
+            "saved_path":"/Captures/clip.mp4","path":"/h/a/media.mp4",
+            "created_at":"2026-01-02T03:04:05Z","output_directory":"/out"}));
+        assert_eq!(defaults["result"]["directory"], "/Captures");
+        assert_eq!(defaults["result"]["stem"], "clip");
+        assert_eq!(
+            call(json!({"operation":"edited_stem","stem":"clip"}))["result"]["stem"],
+            "clip-edited"
+        );
+        let timing = call(json!({"operation":"live_timing"}));
+        assert_eq!(timing["result"]["estimate_debounce_ms"], 600);
+        assert_eq!(timing["result"]["apply_delay_ms"], 250);
+        assert_eq!(
+            timing["result"]["webm_export_error"],
+            recording_editor_ui::WEBM_EXPORT_ERROR
+        );
         assert_eq!(
             call(json!({"operation":"stage","stage":"verifying"}))["result"]["label"],
             "Checking file size…"

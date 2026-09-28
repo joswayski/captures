@@ -398,6 +398,21 @@ impl RecordingEditorSession {
         self.source_entry.saved_path.as_deref().map(Path::new)
     }
 
+    /// Shipping's initial footer folder and filename for this recording
+    /// (`recordingUserFacingDefaults`): the permanent save, never recovery media.
+    #[must_use]
+    pub fn save_defaults(
+        &self,
+        output_directory: &Path,
+    ) -> crate::recording_editor_ui::SaveDefaults {
+        crate::recording_editor_ui::save_defaults(
+            self.source_entry.saved_path.as_deref(),
+            &self.source_path.to_string_lossy(),
+            &self.source_entry.created_at,
+            &output_directory.to_string_lossy(),
+        )
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> RecordingEditorSnapshot<'_> {
         RecordingEditorSnapshot {
