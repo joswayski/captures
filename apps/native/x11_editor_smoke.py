@@ -250,10 +250,17 @@ def main():
             "sleep", ".15", "mouseup", "1", "sleep", ".2")
 
     # Keep the four coordinate spaces explicit. Toolbar coordinates are window-local,
-    # inspector coordinates are local to the fixed 230px right panel, document points
+    # inspector coordinates are local to the fixed right panel (shipping's 320px
+    # sidebar column, INSPECTOR_WIDTH), document points
     # are authored in image pixels, and exported-image pixels never pass through these
     # helpers. A few visual fixtures use the historical screenshot coordinates whose
     # document origin was (8, 89); fixture_to_document names that conversion directly.
+    # Shipping's `.screenshot-sidebar` column. Rows were authored for the former
+    # 230px panel; its 8px inner margins leave INSPECTOR_CONTENT for controls.
+    INSPECTOR_WIDTH = 320
+    INSPECTOR_GROWTH = INSPECTOR_WIDTH - 230
+    INSPECTOR_CONTENT = INSPECTOR_WIDTH - 16
+
     def window_size():
         geometry = run("xdotool", "getwindowgeometry", "--shell", editor).decode()
         return tuple(int(re.search(rf"^{axis}=(\d+)$", geometry, re.MULTILINE).group(1))
@@ -275,7 +282,7 @@ def main():
     def fit_geometry(size=None, window=None):
         width, height = window or window_size()
         image_width, image_height = size or document_size()
-        available = (64., 60., width - 238., height - 8. - export_bar_height())
+        available = (64., 60., width - INSPECTOR_WIDTH - 8., height - 8. - export_bar_height())
         scale = min(1., max(.02, (available[2] - available[0]) / image_width),
                     max(.02, (available[3] - available[1]) / image_height))
         center = ((available[0] + available[2]) / 2, (available[1] + available[3]) / 2)
@@ -308,18 +315,25 @@ def main():
         # pixel keeps those authored heights' Fit origin on an integer pixel.
         if height > 540:
             height += 80 + 1
+        # They also predate shipping's 320px sidebar: widen the window by the
+        # inspector's growth so the canvas keeps its historical width.
+        if width > 760:
+            width += INSPECTOR_GROWTH
         run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
 
     def resize_inspector_fixture(width, height, *tail):
         # Inspector-authored fixtures keep their historical inspector height:
         # the export bar replaces the old 80px footer below the inspector.
+        # Like resize_editor, the window grows with the 320px sidebar.
+        if width > 760:
+            width += INSPECTOR_GROWTH
         run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
 
     def fixture_to_document(point):
         return point[0] - 8, point[1] - 89
 
     def inspector_x(x):
-        return editor_width() - 230 + x
+        return editor_width() - INSPECTOR_WIDTH + x
 
     # Inspector rows were authored below the former two-row workbench toolbar.
     # The shipping 52px header ends 29px higher; bottom-clamped rows (bottom())
@@ -341,7 +355,9 @@ def main():
         return inspector_x(100), round(sidebar_geometry()[0] + 95 + 58 * index)
 
     def layer_quick(index, action):
-        return inspector_x({"eye": 149, "lock": 176, "more": 203}[action]), layer_row(index)[1]
+        # Quick actions are right-aligned in the row.
+        offset = {"eye": 81, "lock": 54, "more": 27}[action]
+        return inspector_x(INSPECTOR_WIDTH - offset), layer_row(index)[1]
 
     def layer_click(index, action=None):
         click(editor, *(layer_quick(index, action) if action else layer_row(index)))
@@ -372,7 +388,7 @@ def main():
         dx, dy = LAYER_MENU[item]
         if not image and dy > 300:
             dy -= 132
-        return editor_width() - 518 + dx, top + dy
+        return editor_width() - INSPECTOR_WIDTH - 288 + dx, top + dy
 
     def layer_menu_click(index, item, image=True):
         click(editor, *layer_menu_point(index, item, image))
@@ -404,22 +420,29 @@ def main():
     # at 68; a label and its control are 20 px apart and items 12 px apart.
     TEXT_DEFAULTS = {"style": 106, "standard": 191, "mono-box": 391, "size": 174, "shadow": 216}
     # Grouped shapes open with the 88 px shape picker and the 88 px preview.
-    # A ColorField adds 138 px, a labelled RangeSlider 69 px.
-    CLOSED_DRAW_ROWS = {"stroke": 278, "color": 348, "size": 487, "opacity": 556,
-                        "fill": 664, "shadow": 770}
-    OPEN_DRAW_ROWS = {"color": 308, "size": 448, "opacity": 516, "shadow": 554,
-                      "shadow-color": 624, "shadow-opacity": 763, "shadow-blur": 832,
-                      "shadow-offset": 892}
+    # In the 320px column a ColorField's two swatch rows add 106 px, a
+    # labelled RangeSlider 69 px.
+    CLOSED_DRAW_ROWS = {"stroke": 278, "color": 348, "size": 455, "opacity": 524,
+                        "fill": 632, "shadow": 706}
+    OPEN_DRAW_ROWS = {"color": 308, "size": 416, "opacity": 484, "shadow": 522,
+                      "shadow-color": 592, "shadow-opacity": 699, "shadow-blur": 768,
+                      "shadow-offset": 828}
     # DropShadowFields align with the "Drop shadow" label: 15 px box + 8 px gap.
     SHADOW_INDENT = 23
 
+    def swatch_grid(width):
+        # Shipping ColorField: `repeat(auto-fill, minmax(44px, 1fr))` for eight
+        # swatches and the custom tile; auto-fill keeps empty tracks.
+        fit = max(1, int(width // 44))
+        return min(fit, len(SWATCHES) + 1), width / fit
+
     def prop_swatch(first_row, color, indent=0):
-        # ColorField swatches in Properties: four columns across the column,
-        # 24 px tiles on a 32 px row pitch, then the custom tile. first_row is
-        # the offset of the first tile row's centres from properties_top().
+        # ColorField swatches in Properties across the column, 24 px tiles on a
+        # 32 px row pitch, then the custom tile. first_row is the offset of the
+        # first tile row's centres from properties_top().
         index = SWATCHES.index(color) if color in SWATCHES else len(SWATCHES)
-        pitch = (214 - indent) / 4
-        prop_click(round(8 + indent + (index % 4 + .5) * pitch), first_row + index // 4 * 32)
+        columns, pitch = swatch_grid(INSPECTOR_CONTENT - indent)
+        prop_click(round(8 + indent + (index % columns + .5) * pitch), first_row + index // columns * 32)
 
     def properties_end():
         # Wheel Properties until it clamps at the end of its content.
@@ -457,7 +480,9 @@ def main():
     # A selected layer opens with the Shift rotation snap section; image
     # Width/Height/X/Y follow in the next section as two number pairs.
     ROTATION_SNAP = 104
-    IMAGE_FIELDS = {"width": (50, 234), "height": (160, 234), "x": (50, 294), "y": (160, 294)}
+    # The 320px column fits the snap hint on two lines and puts the pair's
+    # second column 164px in.
+    IMAGE_FIELDS = {"width": (50, 220), "height": (240, 220), "x": (50, 280), "y": (240, 280)}
 
     def image_field(name, value):
         x, offset = IMAGE_FIELDS[name]
@@ -636,9 +661,11 @@ def main():
     # (offsets from properties_top()): with Stroke off, Fill on and no
     # shadow. Stroke adds its color swatches and width slider; Drop shadow
     # its indented fields; `end` is where each state's content ends.
-    ANNOTATION = {"stroke": 212, "stroke-row": 282, "stroke-width": 421, "shadow": 320,
-                  "filled": 360, "fill-row": 430, "end": 524, "stroke-rows": 207,
-                  "shadow-rows": 340, "check-end": 27}
+    # In shipping's 320px column the rotation snap hint takes two lines and
+    # each ColorField two rows of six swatches.
+    ANNOTATION = {"stroke": 198, "stroke-row": 268, "stroke-width": 375, "shadow": 306,
+                  "filled": 346, "fill-row": 416, "end": 478, "stroke-rows": 175,
+                  "shadow-rows": 308, "check-end": 27}
 
     def header_controls(width):
         compact = width <= 1040
@@ -805,7 +832,7 @@ def main():
         points, _ = header_controls(editor_width())
         if name == "recenter":
             # Shipping's floating pill at the top of the canvas viewport.
-            click(editor, 64 + (editor_width() - 238 - 64) // 2, 60 + 12 + 14)
+            click(editor, 64 + (editor_width() - INSPECTOR_WIDTH - 8 - 64) // 2, 60 + 12 + 14)
         else:
             click(editor, points[name], HEADER_Y)
 
@@ -847,7 +874,8 @@ def main():
 
     try:
         env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0",
-            "1280x1600x24" if args.text_only or args.drawing_defaults_only else "1280x1200x24",
+            # Wide enough for the 1200px fixtures plus shipping's wider sidebar.
+            "1400x1600x24" if args.text_only or args.drawing_defaults_only else "1400x1200x24",
             "-dpi", "96", "-nolisten", "tcp"], True)
         address = spawn("dbus", ["dbus-daemon", "--session", "--nofork", "--print-address=1"], True)
         env["DBUS_SESSION_BUS_ADDRESS"] = env["DBUS_SYSTEM_BUS_ADDRESS"] = address
@@ -992,11 +1020,12 @@ def main():
             run("xdotool", "key", "Return", "sleep", ".2")
 
         def swatch_at(first_row, color):
-            # Shipping ColorField swatch row: four 53.5 px columns across the
-            # inspector, 24 px tiles on a 32 px row pitch, then the custom tile.
-            # first_row is the inspector y of the first tile row's centres.
+            # Shipping ColorField swatch row across the inspector, 24 px tiles on
+            # a 32 px row pitch, then the custom tile. first_row is the
+            # inspector y of the first tile row's centres.
             index = SWATCHES.index(color) if color in SWATCHES else len(SWATCHES)
-            inspector_click(round(8 + (index % 4 + .5) * 53.5), first_row + index // 4 * 32)
+            columns, pitch = swatch_grid(INSPECTOR_CONTENT)
+            inspector_click(round(8 + (index % columns + .5) * pitch), first_row + index // columns * 32)
 
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
 
@@ -1762,8 +1791,8 @@ def main():
             prop_swatch(OPEN_DRAW_ROWS["shadow-color"], "#ffd22e", indent=SHADOW_INDENT)
             prop_slider(OPEN_DRAW_ROWS["shadow-opacity"], "End")
             prop_slider(OPEN_DRAW_ROWS["shadow-blur"], "Home")
-            prop_field(OPEN_DRAW_ROWS["shadow-offset"], "-23", x=70)
-            prop_field(OPEN_DRAW_ROWS["shadow-offset"], "31", x=175)
+            prop_field(OPEN_DRAW_ROWS["shadow-offset"], "-23", x=100)
+            prop_field(OPEN_DRAW_ROWS["shadow-offset"], "31", x=240)
             shot(editor, "drawing-shadow-custom-controls")
             assert draft_bytes() == before, "shadow defaults alone wrote a draft"
             start, end = document_point((250, 70)), document_point((370, 70))
@@ -2449,22 +2478,24 @@ def main():
         if args.text_only:
             # Shipping selected-text Properties, below the Shift rotation snap
             # section: offsets of control centres from properties_top().
-            TEXT = {"style": 236, "text": 320, "font": 400, "size": 400, "format": 444,
-                    "color": 516, "background": 624, "shadow": 664}
+            # The 320px column fits the snap hint on two lines and each
+            # ColorField on two swatch rows.
+            TEXT = {"style": 222, "text": 306, "font": 386, "size": 386, "format": 430,
+                    "color": 502, "background": 578, "shadow": 618}
             # The style menu lists the seven shipping styles (no Plain) on a
             # 40 px pitch below the trigger.
             TEXT_STYLE_ROWS = {name: TEXT["style"] + 45 + 40 * index for index, name in enumerate(
                 ["standard", "rounded", "outlined", "mono", "box", "mono-box", "rounded-box"])}
             # A plate adds its Background color swatches above Drop shadow.
-            PLATE_ROWS = 138
+            PLATE_ROWS = 106
             # With the shadow open and Properties scrolled to its end, rows
             # measured up from the bottom of the Properties area.
             TEXT_SHADOW_END = {"blur": 85, "offset": 27}
 
             def shadow_rows(plated):
                 check = TEXT["shadow"] + (PLATE_ROWS if plated else 0)
-                return {"check": check, "color": check + 70, "opacity": check + 209,
-                        "blur": check + 278, "offset": check + 338}
+                return {"check": check, "color": check + 70, "opacity": check + 177,
+                        "blur": check + 246, "offset": check + 306}
 
             resize_editor(1000, 1501)
             toolbar_click("draw")  # Draw.
@@ -2498,8 +2529,8 @@ def main():
             time.sleep(.2)
             save_layers(lambda values: values[-1]["text"] == "Readable native text"
                         and values[-1]["fontFamily"] == "serif", "plain text applied")
-            prop_click(28, TEXT["format"])   # Bold: the first of five format buttons.
-            prop_click(73, TEXT["format"])   # Italic.
+            prop_click(37, TEXT["format"])   # Bold: the first of five format buttons.
+            prop_click(98, TEXT["format"])   # Italic.
             save_layers(lambda values: values[-1]["bold"] and values[-1]["italic"], "traits applied")
             shot(editor, "text-without-shadow")
             rows = shadow_rows(False)
@@ -2512,8 +2543,8 @@ def main():
             properties_end()
             shot(editor, "text-shadow-scrolled")
             end_slider(TEXT_SHADOW_END["blur"], "Home", *["Right"] * 3)  # 3 px.
-            end_field(TEXT_SHADOW_END["offset"], "17", x=70)
-            end_field(TEXT_SHADOW_END["offset"], "-8", x=175)
+            end_field(TEXT_SHADOW_END["offset"], "17", x=100)
+            end_field(TEXT_SHADOW_END["offset"], "-8", x=240)
             custom_shadow = {"color": "#2d9cff", "opacity": 65, "blur": 3,
                              "offsetX": 17, "offsetY": -8}
             save_layers(lambda values: values[-1].get("dropShadowStyle") == custom_shadow,
@@ -3095,7 +3126,9 @@ def main():
             print("PASS native canvas backgrounds: live swatches, transparency, undo/redo, draft, clipboard alpha")
             return
 
-        resize_editor(886, 700)
+        # 896 (986 with the wider sidebar) keeps the header clear of its
+        # font-measured label threshold.
+        resize_editor(896, 700)
         # Viewport state is host-only. Exercise anchored wheel zoom and an
         # ordered middle-button pan before the coordinate-sensitive fixtures.
         shot(editor, f"viewport-before-{args.appearance}")
@@ -3132,7 +3165,7 @@ def main():
                 "mousemove", "--sync", "--window", editor, "620", "660",
                 "mouseup", "2", "sleep", ".3")
         shot(editor, f"viewport-offscreen-{args.appearance}")
-        viewport_center = (64 + (editor_width() - 238 - 64) // 2, 376)
+        viewport_center = (64 + (editor_width() - INSPECTOR_WIDTH - 8 - 64) // 2, 376)
         pixel(f"viewport-offscreen-{args.appearance}", *viewport_center,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         topbar_click("recenter")
@@ -3167,13 +3200,13 @@ def main():
         topbar_click("zoom")
         click(editor, zoom_menu_x(), 108)  # 50% preset.
         shot(editor, "viewport-preset-50")
-        # 640×360 at 50% is 320×180, centered in the 584×603 viewport.
+        # 640×360 at 50% is 320×180, centered in the 594×603 viewport.
         # The 56px rail moves the viewport center right by 28px.
-        pixel("viewport-preset-50", 198, 310, (40, 110, 166))
-        pixel("viewport-preset-50", 253, 340, (229, 179, 68))
-        pixel("viewport-preset-50", 191, 310,
+        pixel("viewport-preset-50", 203, 310, (40, 110, 166))
+        pixel("viewport-preset-50", 258, 340, (229, 179, 68))
+        pixel("viewport-preset-50", 196, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
-        pixel("viewport-preset-50", 516, 310,
+        pixel("viewport-preset-50", 521, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         topbar_click("zoom")
         click(editor, zoom_menu_x(), 196)  # 200% preset.
@@ -3398,9 +3431,9 @@ def main():
 
         def annotation_swatch(first_row, color, end, indent=0):
             index = SWATCHES.index(color) if color in SWATCHES else len(SWATCHES)
-            pitch = (214 - indent) / 4
-            annotation_click(round(8 + indent + (index % 4 + .5) * pitch),
-                             first_row + index // 4 * 32, end)
+            columns, pitch = swatch_grid(INSPECTOR_CONTENT - indent)
+            annotation_click(round(8 + indent + (index % columns + .5) * pitch),
+                             first_row + index // columns * 32, end)
 
         def annotation_slider(offset, end, *keys):
             annotation_click(100, offset, end)
@@ -3452,10 +3485,11 @@ def main():
         shadowed = stroked + A["shadow-rows"]
         shadow = A["shadow"] + A["stroke-rows"]
         annotation_swatch(shadow + 70, "#ff8a22", shadowed, indent=SHADOW_INDENT)
-        annotation_slider(shadow + 209, shadowed, "End", "Next", "Next")  # 80%.
-        annotation_slider(shadow + 278, shadowed, "Home")  # 0 px blur.
-        annotation_field(shadow + 338, shadowed, "25", 70)
-        annotation_field(shadow + 338, shadowed, "-12", 175)
+        # Two swatch rows put Opacity, Blur and the offsets 32px higher.
+        annotation_slider(shadow + 177, shadowed, "End", "Next", "Next")  # 80%.
+        annotation_slider(shadow + 246, shadowed, "Home")  # 0 px blur.
+        annotation_field(shadow + 306, shadowed, "25", 100)
+        annotation_field(shadow + 306, shadowed, "-12", 240)
         styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}) == {"color": "#ff8a22", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}, "custom annotation shadow")[-1]
         assert styled["id"] == annotation["id"] and styled["locked"]
         assert styled["style"]["fill"] == "#36c96b" and styled["style"]["strokeWidth"] == 12
