@@ -1141,6 +1141,34 @@ pub(crate) struct GuidanceState {
     /// Shipping's feedback attempt (`selectionFeedback`); a change re-keys
     /// the chip.
     feedback: u32,
+    /// When the overlay first painted, for the shade's fade-in.
+    shade_since: Option<f64>,
+}
+
+impl GuidanceState {
+    /// A state whose shade has already faded in, for paint tests.
+    #[cfg(test)]
+    pub(crate) fn revealed() -> Self {
+        Self {
+            shade_since: Some(f64::NEG_INFINITY),
+            ..Self::default()
+        }
+    }
+
+    /// Opacity of the overlay's dim now: shipping fades the region shade
+    /// (and New Capture's region and window shades) in over `--dur-4`
+    /// `ease-in-out` once the overlay is revealed; the frozen snapshot under
+    /// it is opaque from the first frame.
+    pub(crate) fn shade_opacity(&mut self, ui: &egui::Ui, tokens: &Tokens) -> f32 {
+        let now = ui.input(|input| input.time) * 1000.;
+        let since = *self.shade_since.get_or_insert(now);
+        let fade = tokens.transition(captures_app::motion::Transition::CaptureShadeFade);
+        let reduced = crate::motion::reduced(ui.ctx());
+        if fade.running(now - since, reduced) {
+            ui.ctx().request_repaint();
+        }
+        fade.progress(now - since, reduced) as f32
+    }
 }
 
 /// The chip's resting frame: centred, its top edge 16% down the overlay.
@@ -1315,11 +1343,20 @@ fn segment(
     label: &str,
     glyph: SegmentGlyph,
 ) -> egui::Response {
-    let color = tokens.color(if selected {
-        "glass-text"
-    } else {
-        "glass-text-muted"
-    });
+    // `.on-media` segments: muted, lit when active or hovered, over
+    // `color var(--dur-3) var(--ease-standard)`. Hover is last frame's, since
+    // the label colour is set before the button lays out.
+    let hover_id = ui.scope_id().with(("capture-segment-hover", label));
+    let hovered = enabled && ui.data(|data| data.get_temp::<bool>(hover_id).unwrap_or(false));
+    let lit = crate::motion::eased_bool(
+        ui.ctx(),
+        hover_id.with("colour"),
+        selected || hovered,
+        &tokens.transition(captures_app::motion::Transition::SegmentLabel),
+    );
+    let color = tokens
+        .color("glass-text-muted")
+        .lerp_to_gamma(tokens.color("glass-text"), lit);
     let id = egui::IdSalt::new("capture-segment-glyph");
     let side = match glyph {
         SegmentGlyph::Icon(_) => 15.,
@@ -1346,6 +1383,11 @@ fn segment(
                     );
                 }
             }
+        }
+        let hovered = shown.response.hovered();
+        if ui.data(|data| data.get_temp::<bool>(hover_id)) != Some(hovered) {
+            ui.data_mut(|data| data.insert_temp(hover_id, hovered));
+            ui.ctx().request_repaint();
         }
         shown.response
     })

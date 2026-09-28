@@ -1271,6 +1271,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private let targets: [WindowSelectionTarget]
     private let hitTest: HitTest
     private let canvas = UnifiedCaptureCanvas()
+    private let shade: CaptureShadeView
     private(set) var region: RegionSelection
     private(set) var selectedWindowIndex: Int64?
     private(set) var hoveredWindowIndex: Int64 = -1
@@ -1314,6 +1315,7 @@ final class UnifiedCaptureSelectionView: NSView {
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
         self.changeDisplay = changeDisplay; self.displayIdentity = displayIdentity
         guidance = CaptureGuidanceChip(tokens: tokens)
+        shade = CaptureShadeView(frame: NSRect(origin: .zero, size: frame.size), tokens: tokens)
         identityIcon = DisplayIdentityIcon(tokens: tokens)
         currentDisplayTitle = displayTitles.indices.contains(selectedDisplay)
             ? displayTitles[selectedDisplay] : "Full screen"
@@ -1333,6 +1335,10 @@ final class UnifiedCaptureSelectionView: NSView {
             background.imageScaling = .scaleAxesIndependently
             background.setAccessibilityElement(false); addSubview(background)
         }
+        shade.drawShade = { [weak self] in self?.drawShade() }
+        shade.fadesOnReveal = { [weak self] in self?.target != .display }
+        addSubview(shade)
+        shade.fadeInOnReveal()
         canvas.frame = bounds; canvas.selector = self; canvas.setAccessibilityElement(false)
         addSubview(canvas)
         addSubview(guidance)
@@ -1581,7 +1587,8 @@ final class UnifiedCaptureSelectionView: NSView {
                 width: width, height: height)
         }
         selectionLabel.setAccessibilityLabel(label)
-        canvas.needsDisplay = true; canvas.discardCursorRects(); canvas.resetCursorRects()
+        canvas.needsDisplay = true; shade.needsDisplay = true
+        canvas.discardCursorRects(); canvas.resetCursorRects()
     }
 
     /// Shipping Full screen identity: display name, then W × H and Record FPS.
@@ -1614,18 +1621,19 @@ final class UnifiedCaptureSelectionView: NSView {
         identityDetail.setAccessibilityElement(false)
     }
 
-    fileprivate func drawSelection() {
-        let selectedRect: NSRect?
-        let radius: CGFloat
+    private var selectionShape: (rect: NSRect?, radius: CGFloat) {
         switch target {
-        case .region: selectedRect = region.capturable ? region.nsRect : nil; radius = 0
+        case .region: return (region.capturable ? region.nsRect : nil, 0)
         case .window:
             let active = hoveredWindowIndex >= 0 ? hoveredWindowIndex : selectedWindowIndex ?? -1
-            if active >= 0, active < Int64(targets.count) {
-                selectedRect = targets[Int(active)].rect; radius = targets[Int(active)].cornerRadius
-            } else { selectedRect = nil; radius = 0 }
-        case .display: selectedRect = bounds.insetBy(dx: 2, dy: 2); radius = 0
+            guard active >= 0, active < Int64(targets.count) else { return (nil, 0) }
+            return (targets[Int(active)].rect, targets[Int(active)].cornerRadius)
+        case .display: return (bounds.insetBy(dx: 2, dy: 2), 0)
         }
+    }
+
+    fileprivate func drawShade() {
+        let (selectedRect, radius) = selectionShape
         let veil = NSBezierPath(rect: bounds)
         if let selectedRect {
             veil.append(NSBezierPath(roundedRect: selectedRect, xRadius: radius, yRadius: radius))
@@ -1633,6 +1641,13 @@ final class UnifiedCaptureSelectionView: NSView {
         // Shipping `CaptureDim`: the window target waits under the stronger shade.
         veil.windingRule = .evenOdd
         tokens.color(target == .window ? "capture-shade-window" : "capture-shade").setFill(); veil.fill()
+    }
+
+    /// The reveal fade of the dim, for tests.
+    var isShadeFading: Bool { shade.isFading }
+
+    fileprivate func drawSelection() {
+        let (selectedRect, radius) = selectionShape
         guard let selectedRect else { return }
         if target == .region {
             // `.recording-selection-frame`: 2 pt corners, hairlines and four handles.

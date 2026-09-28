@@ -44,6 +44,24 @@ pub fn with_pose<R>(
     .inner
 }
 
+/// A shipping boolean `transition` (a hover or selection colour, say):
+/// eased 0…1 progress toward `on`, keyed by `id`. egui animates linearly and
+/// stops requesting frames once settled; the shipping curve applies on top.
+pub fn eased_bool(
+    ctx: &egui::Context,
+    id: egui::Id,
+    on: bool,
+    tween: &captures_app::motion::Tween,
+) -> f32 {
+    let seconds = if reduced(ctx) {
+        0.
+    } else {
+        (tween.duration_ms / 1000.) as f32
+    };
+    let linear = ctx.animate_bool_with_time(id, on, seconds);
+    tween.easing.ease(f64::from(linear)) as f32
+}
+
 fn reduced_id() -> egui::Id {
     egui::Id::unique("captures-reduced-motion")
 }

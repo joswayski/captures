@@ -463,11 +463,16 @@ final class HistoryCardView: NSView {
     var onDelete: () -> Void = {}
     private var hovered = false
     private var tracking: NSTrackingArea?
+    /// `--shadow-sm` at rest and `--shadow-md` on hover, cross-faded.
+    private var restShadows: [CALayer] = []
+    private var hoverShadows: [CALayer] = []
+    private var shadowBounds: CGRect = .null
 
     init(tokens: Tokens) {
         self.tokens = tokens
         thumbnail = HistoryThumbnailView(tokens: tokens)
         super.init(frame: .zero)
+        wantsLayer = true
         addSubview(thumbnail)
         thumbnail.onOpen = { [weak self] in self?.onOpen() }
         for (label, size, color) in [(dateLabel, "text-md", "text"), (detailsLabel, "text-sm", "text-subtle"),
@@ -573,6 +578,7 @@ final class HistoryCardView: NSView {
 
     override func layout() {
         super.layout()
+        installShadows()
         let imageHeight: CGFloat = 168
         thumbnail.frame = NSRect(x: 0, y: 0, width: bounds.width, height: imageHeight)
         let chipWidth = ceil(missingLabel.intrinsicContentSize.width) + 2 * tokens.number("s-4")
@@ -635,13 +641,50 @@ final class HistoryCardView: NSView {
     override func mouseExited(with event: NSEvent) { setHovered(false) }
     override func mouseDown(with event: NSEvent) { requestSelection() }
 
-    /// Shipping `.history-card:hover`: the card lifts 2 pt over `--dur-3`
-    /// `--ease-standard` (instantly under Reduce Motion) as its border strengthens.
+    /// `.history-card { box-shadow: var(--shadow-sm) }`, becoming
+    /// `var(--shadow-md)` on hover. Both token shadows stay installed and
+    /// cross-fade with the lift.
+    private func installShadows() {
+        guard let layer, bounds.size != shadowBounds.size else { return }
+        shadowBounds = bounds
+        let rest = tokens.shadow("shadow-sm"), hover = tokens.shadow("shadow-md")
+        let lifted = hovered && enabled
+        // `install` inserts the last shadow lowest: the hover layers come first.
+        let layers = BoxShadowLayers.install(rest + hover, on: layer, bounds: bounds,
+                                             radius: tokens.number("r-xl"))
+        hoverShadows = Array(layers.prefix(hover.count))
+        restShadows = Array(layers.dropFirst(hover.count))
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        hoverShadows.forEach { $0.opacity = lifted ? 1 : 0 }
+        restShadows.forEach { $0.opacity = lifted ? 0 : 1 }
+        CATransaction.commit()
+    }
+
+    /// Hover shadow opacity (0 at rest, 1 lifted), for tests.
+    var hoverShadowOpacity: Float { hoverShadows.first?.opacity ?? 0 }
+
+    /// Shipping `.history-card:hover`: the card lifts 2 pt and its shadow
+    /// deepens over `--dur-3` `--ease-standard` (instantly under Reduce
+    /// Motion) as its border strengthens.
     private func setHovered(_ value: Bool) {
         hovered = value
         needsDisplay = true
         wantsLayer = true
         guard let layer else { return }
+        let lifted: Float = value && enabled ? 1 : 0
+        let tween = NativeMotion.transition("history_card_hover", tokens: tokens)
+        let live = tween.duration > 0 && window?.isVisible == true
+        for (shadow, target) in hoverShadows.map({ ($0, lifted) }) + restShadows.map({ ($0, 1 - lifted) }) {
+            let from = (shadow.presentation() ?? shadow).opacity
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            shadow.opacity = target
+            CATransaction.commit()
+            guard live, from != target else { continue }
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = from; fade.toValue = target
+            fade.duration = tween.duration; fade.timingFunction = tween.timing
+            shadow.add(fade, forKey: "history-card-shadow")
+        }
         let down: CGFloat = (layer.superlayer?.contentsAreFlipped() ?? superview?.isFlipped ?? true) ? 1 : -1
         let target = value && enabled ? CATransform3DMakeTranslation(0, -2 * down, 0) : CATransform3DIdentity
         let from = layer.presentation()?.transform ?? layer.transform
@@ -649,8 +692,7 @@ final class HistoryCardView: NSView {
         CATransaction.setDisableActions(true)
         layer.transform = target
         CATransaction.commit()
-        let tween = NativeMotion.transition("history_card_hover", tokens: tokens)
-        guard tween.duration > 0, window?.isVisible == true else { return }
+        guard live else { return }
         let animation = CABasicAnimation(keyPath: "transform")
         animation.fromValue = NSValue(caTransform3D: from)
         animation.toValue = NSValue(caTransform3D: target)

@@ -36,6 +36,14 @@ final class NativePreviewStack {
         return id.withCString { captures_preview_stack_remove_v1(handle, $0) }
     }
 
+    /// Put a removed card back at `index` (clamped), as a failed exit action does.
+    @discardableResult
+    func restore(_ id: String, at index: Int) -> Bool {
+        precondition(Thread.isMainThread)
+        guard !id.utf8.contains(0), index >= 0 else { return false }
+        return id.withCString { captures_preview_stack_restore_v1(handle, $0, index) }
+    }
+
     /// Remove only the caller's snapshot; later arrivals survive.
     @discardableResult
     func removeAll(_ ids: [String]) -> Int {

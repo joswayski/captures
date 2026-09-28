@@ -219,6 +219,9 @@ final class RegionSelectionTests: XCTestCase {
         let view = RegionSelectionView(frame: frame, image: nil, tokens: Tokens.variants["dark-mustard"]!,
             autoStart: true, confirm: { _ in }, cancel: {})
         window.contentView = view
+        // `.capture-region .capture-shade` fades in on reveal; the model (and
+        // so the rendered bitmap below) rests at full shade.
+        XCTAssertEqual(view.isShadeFading, !NativeMotion.reduceMotion)
         view.begin(NSPoint(x: 100, y: 80)); view.drag(NSPoint(x: 420, y: 260))
         window.display(); view.layoutSubtreeIfNeeded()
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))

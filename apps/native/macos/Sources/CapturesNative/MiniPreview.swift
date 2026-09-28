@@ -710,6 +710,27 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         layer.add(blur, forKey: "preview-dismiss-streak-blur")
     }
 
+    /// `thumbnail-arrive`'s `filter: blur(3px → 0)` on the media, through a
+    /// second Core Image Gaussian so the hover and depth blur keep their own
+    /// radius. The filter is added for the arrival and removed once it lands.
+    @discardableResult func playArrivalBlur(reduced: Bool = NativeMotion.reduceMotion) -> Bool {
+        guard !reduced, let layer = imageView.layer,
+              let arrive = CIFilter(name: "CIGaussianBlur") else { return false }
+        arrive.setDefaults(); arrive.setValue(0, forKey: kCIInputRadiusKey); arrive.name = "arrive"
+        let others = (layer.filters ?? []).filter { ($0 as? CIFilter)?.name != "arrive" }
+        layer.filters = others + [arrive]
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak layer] in
+            guard let layer, layer.animation(forKey: "preview-arrive-blur") == nil else { return }
+            layer.filters = (layer.filters ?? []).filter { ($0 as? CIFilter)?.name != "arrive" }
+        }
+        let seconds = NativeMotion.playBlur("preview_card_arrive", onLayer: layer, filter: "arrive",
+                                            tokens: tokens, key: "preview-arrive-blur", reduced: false)
+        CATransaction.commit()
+        if seconds == 0 { layer.filters = others }
+        return seconds > 0
+    }
+
     /// The media as a dust source: cover-cropped to the card in its rounded
     /// rect, unfiltered (the chips carry the hover blur and brightness).
     func dustSource(scale: CGFloat) -> CGImage? {
@@ -762,10 +783,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// Shipping `.thumbnail-stack-minimized .thumbnail-media { filter: blur() }`
     /// on a compact card, through the media's Core Image Gaussian.
     func setDepthBlur(_ radius: Double, from start: Double? = nil, duration: Double = 0,
-                      timing: CAMediaTimingFunction? = nil) {
+                      timing: CAMediaTimingFunction? = nil, delay: Double = 0) {
         guard let layer = imageView.layer else { return }
-        let from = start ?? (layer.presentation()?.value(forKeyPath: "filters.blur.inputRadius") as? Double)
-            ?? depthBlurRadius
+        let from = start ?? currentDepthBlur
         depthBlurRadius = radius
         layer.setValue(radius, forKeyPath: "filters.blur.inputRadius")
         guard duration > 0, window?.isVisible == true, from != radius else {
@@ -776,18 +796,30 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         blur.fromValue = from; blur.toValue = radius
         blur.duration = duration
         blur.timingFunction = timing ?? CAMediaTimingFunction(name: .easeInEaseOut)
+        // A staggered fan layer holds its old radius until its turn.
+        blur.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay
+        blur.fillMode = .backwards
         layer.add(blur, forKey: "preview-depth-blur")
     }
 
+    /// The media blur on screen now, mid-transition included.
+    var currentDepthBlur: Double {
+        (imageView.layer?.presentation()?.value(forKeyPath: "filters.blur.inputRadius") as? Double)
+            ?? depthBlurRadius
+    }
+
     /// The hovered pile's accent ring and glow, easing with the fan.
-    func setPileGlow(_ visible: Bool, duration: Double) {
+    func setPileGlow(_ visible: Bool, duration: Double, timing: CAMediaTimingFunction? = nil,
+                     delay: Double = 0) {
         let target: Float = visible ? 1 : 0
         if duration > 0, window?.isVisible == true, pileGlow.opacity != target {
             let fade = CABasicAnimation(keyPath: "opacity")
             fade.fromValue = (pileGlow.presentation() ?? pileGlow).opacity
             fade.toValue = target
             fade.duration = duration
-            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            fade.timingFunction = timing ?? CAMediaTimingFunction(name: .easeInEaseOut)
+            fade.beginTime = pileGlow.convertTime(CACurrentMediaTime(), from: nil) + delay
+            fade.fillMode = .backwards
             pileGlow.add(fade, forKey: "preview-pile-glow")
         }
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -1096,12 +1128,14 @@ private final class MiniPreviewExpandButton: NSButton {
     private var frameOrigin = NSPoint.zero
     private var dragging = false
     private let fan: (Bool) -> Void
+    /// The carried pile's desktop pointer, nil when the carry ends.
+    private let carry: (NSPoint?) -> Void
     private var tracking: NSTrackingArea?
 
     init(frame: NSRect, count: Int, move: @escaping (NSPoint) -> Void,
-         fan: @escaping (Bool) -> Void,
+         fan: @escaping (Bool) -> Void, carry: @escaping (NSPoint?) -> Void = { _ in },
          action: @escaping () -> Void) {
-        actionBlock = action; self.move = move; self.fan = fan
+        actionBlock = action; self.move = move; self.fan = fan; self.carry = carry
         super.init(frame: frame)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
@@ -1133,9 +1167,11 @@ private final class MiniPreviewExpandButton: NSButton {
         guard dragging || max(abs(delta.width), abs(delta.height)) >= 4 else { return }
         dragging = true
         move(NSPoint(x: frameOrigin.x + delta.width, y: frameOrigin.y + delta.height))
+        carry(current)
     }
     override func mouseUp(with event: NSEvent) {
         let clicked = press != nil && !dragging && bounds.contains(convert(event.locationInWindow, from: nil))
+        if dragging { carry(nil) }
         press = nil; dragging = false
         fan(bounds.contains(convert(event.locationInWindow, from: nil)))
         if clicked { actionBlock() }
@@ -1349,7 +1385,8 @@ final class MiniPreviewView: NSView {
             layouts[id].map { (id, $0) }
         }).first(where: { $0.1.interactive }), let card = cards[front.0] {
             let expand = MiniPreviewExpandButton(frame: card.frame, count: ids.count, move: move,
-                fan: { [weak self] hovered in self?.setPileHovered(hovered) }) {
+                fan: { [weak self] hovered in self?.setPileHovered(hovered) },
+                carry: { [weak self] point in self?.carryPile(at: point) }) {
                 setCollapsed(false)
             }
             document.addSubview(expand); pileExpandButton = expand
@@ -1439,6 +1476,7 @@ final class MiniPreviewView: NSView {
         setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "\(ids.count) screenshot mini previews")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { carryTimer?.invalidate() }
 
     func setStatus(_ value: String, detail: String? = nil, for artifactID: String) {
         cards[artifactID]?.setStatus(value, detail: detail)
@@ -1539,12 +1577,17 @@ final class MiniPreviewView: NSView {
         return cards.mapValues { window.convertToScreen($0.convert($0.bounds, to: nil)) }
     }
 
+    /// Each card's media blur on screen, carried across a rebuild so expand
+    /// starts from the pile's live blur.
+    func cardMediaBlurs() -> [String: Double] { cards.mapValues(\.currentDepthBlur) }
+
     /// Shipping `thumbnail-card-expand` / minimize run: cards fly between the
     /// list and the pile with the compact look (chrome hidden, depth shade
     /// easing) over the shipping 0.52 s. Collapsing flies from the laid-out
     /// frames to `screenFrames`; expanding flies from them. Returns seconds.
     @discardableResult
-    func playFly(_ screenFrames: [String: NSRect], collapsing: Bool, depths: [String: Int]) -> Double {
+    func playFly(_ screenFrames: [String: NSRect], collapsing: Bool, depths: [String: Int],
+                 blurs: [String: Double] = [:]) -> Double {
         let fly = NativeMotion.transition("preview_stack_fly", tokens: tokens)
         guard let window, window.isVisible, fly.duration > 0 else { return 0 }
         overflowCues.forEach { $0.isHidden = true }
@@ -1556,9 +1599,12 @@ final class MiniPreviewView: NSView {
             let pile = NSRect(origin: local.origin, size: laid.size)
             card.setCompact(true, depth: depths[id] ?? 0)
             card.setDepthShade(visible: !collapsing, animated: false)
-            // The rest blur rides the flight: in while collapsing, out while expanding.
+            // The rest blur rides the flight in while collapsing. Expanding
+            // clears the blur each card had on screen (shipping
+            // `thumbnail-card-expand-blur` from `--thumbnail-stack-expand-blur-from`,
+            // usually the fanned pile's), else the rest blur.
             let rest = captures_preview_pile_media_blur_v1(depths[id] ?? 0, false)
-            card.setDepthBlur(collapsing ? rest : 0, from: collapsing ? 0 : rest,
+            card.setDepthBlur(collapsing ? rest : 0, from: collapsing ? 0 : blurs[id] ?? rest,
                               duration: fly.duration, timing: fly.timing)
             // Expanding drops the hovered pile's glow over `--dur-4`.
             if !collapsing { card.setPileGlow(false, duration: Double(tokens.number("dur-4")) / 1000) }
@@ -1762,10 +1808,11 @@ final class MiniPreviewView: NSView {
 
     func rejectDrop(for artifactID: String) { cards[artifactID]?.rejectDrop() }
 
-    /// Shipping `thumbnail-arrive`: a newly decoded card rises and fades in
-    /// (the 3 px blur is omitted). Presentation-only; skipped under Reduce Motion.
+    /// Shipping `thumbnail-arrive`: a newly decoded card rises, fades in and
+    /// sharpens from its 3 px blur. Presentation-only; skipped under Reduce Motion.
     @discardableResult func playArrival(for artifactID: String) -> Bool {
         guard let card = cards[artifactID] else { return false }
+        card.playArrivalBlur()
         return NativeMotion.play("preview_card_arrive", on: card, tokens: tokens) > 0
     }
 
@@ -1793,17 +1840,36 @@ final class MiniPreviewView: NSView {
         guard hovered != pileHovered else { return }
         pileHovered = hovered
         setSparkling(hovered)
-        let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            ? 0 : Double(tokens.number("dur-3")) / 1000
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            for (id, card) in cards {
-                guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]) else { continue }
-                card.animator().setFrameOrigin(pileOrigin(id, layout: layout, hovered: hovered))
+        animatePile(hovered: hovered)
+    }
+
+    /// Ease every card to its rest or fanned pose from where it is now over
+    /// `--stack-fan-dur` / `--stack-fan-ease`, each layer 16 ms later per
+    /// depth: the lift cascades instead of moving as a slab.
+    private func animatePile(hovered: Bool) {
+        let fan = NativeMotion.transition("preview_stack_fan", tokens: tokens)
+        for (id, card) in cards {
+            guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]) else { continue }
+            let origin = pileOrigin(id, layout: layout, hovered: hovered)
+            guard fan.duration > 0, window?.isVisible == true, let layer = card.layer else {
+                card.setFrameOrigin(origin)
+                continue
             }
+            let from = (layer.presentation() ?? layer).position
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            card.setFrameOrigin(origin)
+            CATransaction.commit()
+            let move = CABasicAnimation(keyPath: "position")
+            move.fromValue = NSValue(point: from)
+            move.toValue = NSValue(point: layer.position)
+            move.duration = fan.duration
+            move.timingFunction = fan.timing
+            move.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil)
+                + captures_preview_fan_delay_ms_v1(layout.depth, false) / 1000
+            move.fillMode = .backwards
+            layer.add(move, forKey: "pile-fan-position")
         }
-        applyPilePoses(hovered: hovered, duration: duration)
+        applyPilePoses(hovered: hovered, duration: fan.duration, timing: fan.timing)
     }
 
     /// Dragging the pile re-derives gravity (shipping updates it per move),
@@ -1816,6 +1882,89 @@ final class MiniPreviewView: NSView {
             card.setFrameOrigin(pileOrigin(id, layout: layout, hovered: pileHovered))
         }
         applyPilePoses(hovered: pileHovered, duration: 0)
+        if carryReady { applyCarryPoses() }
+    }
+
+    // Shipping drag sway (`.thumbnail-stack-drag-sway`): once a carry has
+    // held the fan open for its gather (`thumbnailStackFanCollapseMs`), the
+    // rear cards lean with the pointer's velocity through the shared spring;
+    // dropping eases them back over the fan's staggered transition.
+    private var carryStarted: CFTimeInterval?
+    private var carryReady = false
+    private var carrySway = CapturesDragSway()
+    private var carryPointer: NSPoint?
+    private var carrySample: (point: NSPoint, time: CFTimeInterval)?
+    private var carryTimer: Timer?
+    /// The carried pile's lean now, in points (y down), for tests.
+    var pileLean: (x: Double, y: Double) { (carrySway.position_x, carrySway.position_y) }
+
+    /// A carry's desktop pointer (screen points), or nil when it ends.
+    func carryPile(at point: NSPoint?) {
+        guard stackCollapsed else { return }
+        guard let point else { endCarry(); return }
+        carryPointer = point
+        if carryStarted == nil {
+            carryStarted = CACurrentMediaTime(); carryReady = false
+            carrySway = CapturesDragSway(); carrySample = nil
+        }
+        guard !NativeMotion.reduceMotion, carryTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.stepCarry() }
+        RunLoop.main.add(timer, forMode: .common)
+        carryTimer = timer
+    }
+
+    /// One display frame of the carry: wait out the gather, then tick the
+    /// lean with the pointer's step since the last frame.
+    func stepCarry(now: CFTimeInterval = CACurrentMediaTime()) {
+        guard let started = carryStarted, let pointer = carryPointer else { stopCarryTimer(); return }
+        if !carryReady {
+            let fan = NativeMotion.transition("preview_stack_fan", tokens: tokens)
+            let deepest = restLayouts.values.map(\.depth).max() ?? 0
+            guard now - started >= fan.duration + captures_preview_fan_delay_ms_v1(deepest, false) / 1000
+            else { return }
+            carryReady = true; carrySway = CapturesDragSway(); carrySample = (point: pointer, time: now)
+        }
+        let last = carrySample ?? (point: pointer, time: now - 0.016)
+        // Screen y points up; the shipping lean's y points down.
+        let settled = captures_preview_drag_sway_tick_v1(&carrySway, Double(pointer.x - last.point.x),
+            Double(last.point.y - pointer.y), (now - last.time) * 1000, NativeMotion.reduceMotion)
+        carrySample = (point: pointer, time: now)
+        applyCarryPoses()
+        // A still pointer lets the timer stop; the next sample restarts it.
+        if settled { stopCarryTimer() }
+    }
+
+    private func stopCarryTimer() { carryTimer?.invalidate(); carryTimer = nil }
+
+    private func endCarry() {
+        let leaned = carryReady && (carrySway.position_x != 0 || carrySway.position_y != 0)
+        stopCarryTimer()
+        carryStarted = nil; carryReady = false; carrySway = CapturesDragSway()
+        carrySample = nil; carryPointer = nil
+        if leaned { animatePile(hovered: pileHovered) }
+    }
+
+    /// The fanned pile with the current lean, applied at once.
+    private func applyCarryPoses() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        for (id, card) in cards {
+            guard let layout = hoverLayouts[id], layout.depth > 0, let layer = card.layer else { continue }
+            var pose = CapturesPreviewPilePose()
+            var matrix = [Double](repeating: 0, count: 9)
+            let ok = id.withCString { name in
+                matrix.withUnsafeMutableBufferPointer {
+                    captures_preview_pile_sway_pose_v1(name, layout.depth, pileGravity, anchoredAtTop,
+                        carrySway.position_x, carrySway.position_y, &pose, $0.baseAddress)
+                }
+            }
+            guard ok else { continue }
+            layer.removeAnimation(forKey: "pile-pose"); layer.removeAnimation(forKey: "pile-fan-position")
+            card.setFrameOrigin(NSPoint(x: CGFloat(geometry.padding) + CGFloat(pose.dx),
+                                        y: CGFloat(layout.y) + CGFloat(pose.slot_dy)))
+            layer.transform = Self.pileTransform(projection: matrix, size: card.bounds.size,
+                                                 anchorPoint: layer.anchorPoint, flipped: document.isFlipped)
+        }
     }
 
     /// Shipping rear-card pile pose (`captures_preview_pile_pose_v1`).
@@ -1865,7 +2014,8 @@ final class MiniPreviewView: NSView {
         return CATransform3DConcat(transform, CATransform3DMakeTranslation(centre.x, centre.y, 0))
     }
 
-    private func applyPilePoses(hovered: Bool, duration: CFTimeInterval) {
+    private func applyPilePoses(hovered: Bool, duration: CFTimeInterval,
+                                timing: CAMediaTimingFunction? = nil) {
         guard stackCollapsed else { return }
         for (id, card) in cards {
             guard let layout = (hovered ? hoverLayouts[id] : restLayouts[id]),
@@ -1874,14 +2024,18 @@ final class MiniPreviewView: NSView {
                 Self.pileTransform(projection: $0, size: card.bounds.size, anchorPoint: layer.anchorPoint,
                                    flipped: document.isFlipped)
             } ?? CATransform3DIdentity
-            card.setDepthBlur(captures_preview_pile_media_blur_v1(layout.depth, hovered), duration: duration)
-            card.setPileGlow(hovered, duration: duration)
+            let delay = captures_preview_fan_delay_ms_v1(layout.depth, false) / 1000
+            card.setDepthBlur(captures_preview_pile_media_blur_v1(layout.depth, hovered), duration: duration,
+                              timing: timing, delay: captures_preview_fan_delay_ms_v1(layout.depth, true) / 1000)
+            card.setPileGlow(hovered, duration: duration, timing: timing, delay: delay)
             if duration > 0 {
                 let animation = CABasicAnimation(keyPath: "transform")
                 animation.fromValue = NSValue(caTransform3D: layer.presentation()?.transform ?? layer.transform)
                 animation.toValue = NSValue(caTransform3D: target)
                 animation.duration = duration
-                animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                animation.timingFunction = timing ?? CAMediaTimingFunction(name: .easeInEaseOut)
+                animation.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay
+                animation.fillMode = .backwards
                 layer.add(animation, forKey: "pile-pose")
             }
             layer.transform = target
@@ -1989,6 +2143,10 @@ final class MiniPreviewController {
     private var copyFailures: Set<String> = []
     /// One dust renderer per preview surface, made on the first Delete.
     private lazy var dustTextures: DustTextures? = try? DustTextures()
+    /// Saved cards whose Delete dissolved before their export moves to the
+    /// Trash (shipping's order); a failed Trash puts them back in their slot.
+    private var trashing: [String: (resource: MiniPreviewResource, index: Int, generation: Int?,
+                                    screenID: String?, origin: CapturesPreviewOrigin?)] = [:]
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
@@ -2318,10 +2476,11 @@ final class MiniPreviewController {
     /// the card's slot while older cards settle into it; the stack rebuilds
     /// once the exit ends. `exit: nil` (a drag onto another app, a replaced
     /// original) removes it at once.
-    func dismiss(_ artifactID: String, exit: MiniPreviewExitKind? = .dismiss) {
+    @discardableResult
+    func dismiss(_ artifactID: String, exit: MiniPreviewExitKind? = .dismiss) -> Double {
         precondition(Thread.isMainThread)
         let liveBefore = stack.ids.count
-        guard stack.remove(artifactID) else { return }
+        guard stack.remove(artifactID) else { return 0 }
         pendingDecodes[artifactID] = nil
         if visibilityPendingArtifactID == artifactID, policy.stopWaiting() {
             visibilityPendingArtifactID = nil
@@ -2338,9 +2497,46 @@ final class MiniPreviewController {
             view.settleSurvivors(into: artifactID, after: played.settleDelay)
             if stack.ids.isEmpty { screenID = nil; stackOrigin = nil }
             scheduleRebuild(after: played.hold)
-            return
+            return played.hold
         }
         finishView()
+        return 0
+    }
+
+    /// A saved card's Delete: shipping dissolves the card first and moves its
+    /// export to the Trash once the dust has played and the stack settled.
+    /// Returns the seconds to wait before the Trash request, or nil when the
+    /// card is not in the stack.
+    func beginTrash(_ artifactID: String) -> Double? {
+        precondition(Thread.isMainThread)
+        guard let resource = resources[artifactID],
+              let index = stack.ids.firstIndex(of: artifactID) else { return nil }
+        trashing[artifactID] = (resource, index, cardGenerations[artifactID], screenID, stackOrigin)
+        return dismiss(artifactID, exit: .dust)
+    }
+
+    /// The export is in the Trash: forget the dissolved card.
+    func finishTrash(_ artifactID: String) {
+        precondition(Thread.isMainThread)
+        trashing[artifactID] = nil
+    }
+
+    /// The Trash failed: like shipping's unlocked card, it returns to its
+    /// slot with the error, ready to retry. A card presented again under the
+    /// same ID in the meantime stays as it is.
+    @discardableResult
+    func restoreTrashed(_ artifactID: String, status: String, detail: String? = nil) -> Bool {
+        precondition(Thread.isMainThread)
+        guard let pending = trashing.removeValue(forKey: artifactID), resources[artifactID] == nil,
+              stack.restore(artifactID, at: pending.index) else { return false }
+        resources[artifactID] = pending.resource
+        cardGenerations[artifactID] = pending.generation
+        if screenID == nil { screenID = pending.screenID }
+        if stackOrigin == nil { stackOrigin = pending.origin }
+        if viewTransition != nil { settleTransitions() } else { finishView() }
+        prepareFileDrag(for: pending.resource.artifact)
+        setStatus(status, detail: detail, for: artifactID)
+        return true
     }
 
     /// Clear all: every card streaks out, bottom first, without settling, and
@@ -2382,6 +2578,7 @@ final class MiniPreviewController {
         guard stack.isCollapsed != collapsed else { return }
         settleTransitions()
         let before = panel?.isVisible == true ? panel?.previewView.cardScreenFrames() ?? [:] : [:]
+        let blurs = panel?.isVisible == true ? panel?.previewView.cardMediaBlurs() ?? [:] : [:]
         stack.setCollapsed(collapsed)
         let depths = cardDepths()
         if collapsed, let view = panel?.previewView, let pile = pileScreenFrames(),
@@ -2392,7 +2589,7 @@ final class MiniPreviewController {
         }
         makePanel(); updateVisibility()
         if !collapsed, !before.isEmpty, let view = panel?.previewView,
-           view.playFly(before, collapsing: false, depths: depths) > 0 {
+           view.playFly(before, collapsing: false, depths: depths, blurs: blurs) > 0 {
             view.playToolbar("preview_toolbar_in", holdEnd: false)
         }
         // Expanding leaves the pointer over a card it never hovered.
@@ -2744,8 +2941,10 @@ final class MiniPreviewActions {
             previews?.setStatus("Trash unavailable", for: artifact.id)
             return
         }
-        previews?.setStatus("Moving to Trash…", for: artifact.id)
-        LiveCaptureController.queue.async { [weak self] in
+        // Shipping dissolves the card first and moves the export to the Trash
+        // once the dust has played; a failure brings the card back.
+        let wait = boundToPreviews ? previews?.beginTrash(artifact.id) ?? 0 : 0
+        LiveCaptureController.queue.asyncAfter(deadline: .now() + wait) { [weak self] in
             guard let self else { return }
             let result = Result { () throws -> Void in
                 let response = try self.transport.request(["operation": "trash_preview",
@@ -2759,14 +2958,12 @@ final class MiniPreviewActions {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight.remove(artifact.id)
-                guard !self.boundToPreviews
-                        || self.previews?.contains(artifact, savedPath: savedPath) == true else { return }
+                guard self.boundToPreviews else { return }
                 switch result {
-                // A saved card's Delete dissolves once its export is in the Trash.
-                case .success: self.previews?.dismiss(artifact.id, exit: .dust)
+                case .success: self.previews?.finishTrash(artifact.id)
                 case .failure(let error):
-                    self.previews?.setStatus("Trash failed", detail: error.localizedDescription,
-                                             for: artifact.id)
+                    self.previews?.restoreTrashed(artifact.id, status: "Trash failed",
+                                                  detail: error.localizedDescription)
                 }
             }
         }

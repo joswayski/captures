@@ -223,11 +223,15 @@ pub fn segmented(
         if active {
             active_segment = Some(segment);
         }
-        let color = t.color(if active || response.hovered() {
-            "text"
-        } else {
-            "text-subtle"
-        });
+        // `color var(--dur-3) var(--ease-standard)` toward the hovered or
+        // active label colour.
+        let lit = crate::motion::eased_bool(
+            ui.ctx(),
+            ui.scope_id().with((label, *value, "label-colour")),
+            active || response.hovered(),
+            &t.transition(captures_app::motion::Transition::SegmentLabel),
+        );
+        let color = t.color("text-subtle").lerp_to_gamma(t.color("text"), lit);
         ui.painter()
             .galley(segment.center() - galley.size() / 2., galley, color);
         if response.has_focus() {

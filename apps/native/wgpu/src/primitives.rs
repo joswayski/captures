@@ -338,6 +338,8 @@ pub struct SelectOutput<T> {
 struct SelectMemory {
     state: captures_app::controls::select::State,
     menu: egui::Vec2,
+    /// When the listbox opened (`input.time`), for its pop-in.
+    opened_at: Option<f64>,
 }
 
 /// Whether a raw pointer press at `pos` belongs to gestures drawn in `ui`:
@@ -660,160 +662,180 @@ impl<'a> Select<'a> {
             let menu_width = layout.width as f32;
             let origin = viewport.min + egui::vec2(layout.left as f32, layout.top as f32);
             let dark = ui.visuals().dark_mode;
+            // `.custom-select-listbox { animation: ui-pop-in var(--dur-2)
+            // var(--ease-out) }`, about the listbox's centre.
+            let now = ui.input(|input| input.time);
+            let opened = *memory.opened_at.get_or_insert(now);
+            let pop = t.motion(captures_app::motion::Motion::PopoverIn);
+            let elapsed = (now - opened) * 1000.;
+            let reduced = crate::motion::reduced(ui.ctx());
+            let pose = pop.pose_at(elapsed, reduced);
+            let pivot = egui::Rect::from_min_size(
+                origin,
+                if memory.menu == egui::Vec2::ZERO {
+                    egui::vec2(menu_width, layout.max_height as f32)
+                } else {
+                    memory.menu
+                },
+            );
             let area = egui::Area::new(id.with("listbox"))
                 .order(egui::Order::Foreground)
                 .fixed_pos(origin)
                 .constrain(false)
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::new()
-                        .fill(t.color(if glass {
-                            "glass-raised"
-                        } else {
-                            "surface-overlay"
-                        }))
-                        .stroke(Stroke::new(
-                            1.,
-                            t.color(if glass { "glass-border" } else { "border" }),
-                        ))
-                        .corner_radius(t.number("r-lg"))
-                        .shadow(shadow_lg(dark))
-                        .inner_margin(pad)
-                        .show(ui, |ui| {
-                            let inner = menu_width - pad * 2. - 2.;
-                            ui.set_width(inner);
-                            let area = egui::ScrollArea::vertical()
-                                .id_salt(id.with("listbox-scroll"))
-                                .max_height((layout.max_height as f32 - pad * 2. - 2.).max(1.));
-                            scrolled(ui, t, glass, |ui, content| {
-                                area.show(ui, |ui: &mut egui::Ui| {
-                                    content.add(ui, |ui| {
-                                        ui.spacing_mut().item_spacing.y = 0.;
-                                        list_clip = ui.clip_rect();
-                                        for (index, option) in options.iter().enumerate() {
-                                            let is_selected = index == selected_index
-                                                && options[index].value == *selected;
-                                            let copy_width = inner - row_x * 2. - gap - check_width;
-                                            let label = ui.fonts_mut(|fonts| {
-                                                fonts.layout(
-                                                    option.label.to_owned(),
-                                                    label_font.clone(),
-                                                    Color32::PLACEHOLDER,
-                                                    copy_width,
-                                                )
-                                            });
-                                            let small =
-                                                (!option.description.is_empty()).then(|| {
-                                                    ui.fonts_mut(|fonts| {
-                                                        fonts.layout(
-                                                            option.description.to_owned(),
-                                                            small_font.clone(),
-                                                            Color32::PLACEHOLDER,
-                                                            copy_width,
-                                                        )
-                                                    })
+                    crate::motion::with_pose(ui, pose, pivot, |ui| {
+                        egui::Frame::new()
+                            .fill(t.color(if glass {
+                                "glass-raised"
+                            } else {
+                                "surface-overlay"
+                            }))
+                            .stroke(Stroke::new(
+                                1.,
+                                t.color(if glass { "glass-border" } else { "border" }),
+                            ))
+                            .corner_radius(t.number("r-lg"))
+                            .shadow(shadow_lg(dark))
+                            .inner_margin(pad)
+                            .show(ui, |ui| {
+                                let inner = menu_width - pad * 2. - 2.;
+                                ui.set_width(inner);
+                                let area = egui::ScrollArea::vertical()
+                                    .id_salt(id.with("listbox-scroll"))
+                                    .max_height((layout.max_height as f32 - pad * 2. - 2.).max(1.));
+                                scrolled(ui, t, glass, |ui, content| {
+                                    area.show(ui, |ui: &mut egui::Ui| {
+                                        content.add(ui, |ui| {
+                                            ui.spacing_mut().item_spacing.y = 0.;
+                                            list_clip = ui.clip_rect();
+                                            for (index, option) in options.iter().enumerate() {
+                                                let is_selected = index == selected_index
+                                                    && options[index].value == *selected;
+                                                let copy_width =
+                                                    inner - row_x * 2. - gap - check_width;
+                                                let label = ui.fonts_mut(|fonts| {
+                                                    fonts.layout(
+                                                        option.label.to_owned(),
+                                                        label_font.clone(),
+                                                        Color32::PLACEHOLDER,
+                                                        copy_width,
+                                                    )
                                                 });
-                                            let copy_height = label.size().y
-                                                + small
-                                                    .as_ref()
-                                                    .map_or(0., |small| small.size().y + 2.);
-                                            let row_height =
-                                                (copy_height + row_y * 2.).max(t.number("h-sm"));
-                                            let (row, row_response) = ui.allocate_exact_size(
-                                                egui::vec2(inner, row_height),
-                                                if option.disabled {
-                                                    egui::Sense::hover()
-                                                } else {
-                                                    egui::Sense::click()
-                                                },
-                                            );
-                                            row_response.widget_info(|| {
-                                                egui::WidgetInfo::selected(
-                                                    egui::WidgetType::SelectableLabel,
-                                                    !option.disabled,
-                                                    is_selected,
-                                                    option.label,
-                                                )
-                                            });
-                                            if !option.disabled && row_response.hovered() {
-                                                state.active = index;
-                                            }
-                                            if row_response.clicked() {
-                                                chosen = Some(index);
-                                            }
-                                            let active = state.active == index && !option.disabled;
-                                            if active {
-                                                ui.painter().rect_filled(
-                                                    row,
-                                                    t.number("r-sm"),
-                                                    t.color(if glass {
-                                                        "glass-hover"
+                                                let small =
+                                                    (!option.description.is_empty()).then(|| {
+                                                        ui.fonts_mut(|fonts| {
+                                                            fonts.layout(
+                                                                option.description.to_owned(),
+                                                                small_font.clone(),
+                                                                Color32::PLACEHOLDER,
+                                                                copy_width,
+                                                            )
+                                                        })
+                                                    });
+                                                let copy_height = label.size().y
+                                                    + small
+                                                        .as_ref()
+                                                        .map_or(0., |small| small.size().y + 2.);
+                                                let row_height = (copy_height + row_y * 2.)
+                                                    .max(t.number("h-sm"));
+                                                let (row, row_response) = ui.allocate_exact_size(
+                                                    egui::vec2(inner, row_height),
+                                                    if option.disabled {
+                                                        egui::Sense::hover()
                                                     } else {
-                                                        "surface-hover"
-                                                    }),
+                                                        egui::Sense::click()
+                                                    },
                                                 );
-                                            }
-                                            let color = t.color(
-                                                match (
-                                                    glass,
-                                                    option.disabled,
-                                                    active || is_selected,
-                                                ) {
-                                                    (false, true, _) => "text-faint",
-                                                    (true, true, _) => "glass-text-subtle",
-                                                    (false, false, true) => "text",
-                                                    (true, false, true) => "glass-text",
-                                                    (false, false, false) => "text-muted",
-                                                    (true, false, false) => "glass-text-muted",
-                                                },
-                                            );
-                                            let top = row.center().y - copy_height / 2.;
-                                            let label_height = label.size().y;
-                                            ui.painter().galley(
-                                                egui::pos2(row.left() + row_x, top),
-                                                label,
-                                                color,
-                                            );
-                                            if let Some(small) = small {
+                                                row_response.widget_info(|| {
+                                                    egui::WidgetInfo::selected(
+                                                        egui::WidgetType::SelectableLabel,
+                                                        !option.disabled,
+                                                        is_selected,
+                                                        option.label,
+                                                    )
+                                                });
+                                                if !option.disabled && row_response.hovered() {
+                                                    state.active = index;
+                                                }
+                                                if row_response.clicked() {
+                                                    chosen = Some(index);
+                                                }
+                                                let active =
+                                                    state.active == index && !option.disabled;
+                                                if active {
+                                                    ui.painter().rect_filled(
+                                                        row,
+                                                        t.number("r-sm"),
+                                                        t.color(if glass {
+                                                            "glass-hover"
+                                                        } else {
+                                                            "surface-hover"
+                                                        }),
+                                                    );
+                                                }
+                                                let color = t.color(
+                                                    match (
+                                                        glass,
+                                                        option.disabled,
+                                                        active || is_selected,
+                                                    ) {
+                                                        (false, true, _) => "text-faint",
+                                                        (true, true, _) => "glass-text-subtle",
+                                                        (false, false, true) => "text",
+                                                        (true, false, true) => "glass-text",
+                                                        (false, false, false) => "text-muted",
+                                                        (true, false, false) => "glass-text-muted",
+                                                    },
+                                                );
+                                                let top = row.center().y - copy_height / 2.;
+                                                let label_height = label.size().y;
                                                 ui.painter().galley(
-                                                    egui::pos2(
-                                                        row.left() + row_x,
-                                                        top + label_height + 2.,
-                                                    ),
-                                                    small,
-                                                    t.color(if glass {
-                                                        "glass-text-subtle"
-                                                    } else {
-                                                        "text-faint"
-                                                    }),
+                                                    egui::pos2(row.left() + row_x, top),
+                                                    label,
+                                                    color,
                                                 );
-                                            }
-                                            if is_selected {
-                                                let check = t.color(if glass {
-                                                    "glass-text"
-                                                } else if dark {
-                                                    "theme-accent"
-                                                } else {
-                                                    "theme-accent-readable"
-                                                });
-                                                crate::preferences_widgets::icon(
-                                                    ui.painter(),
-                                                    "check",
-                                                    Rect::from_center_size(
+                                                if let Some(small) = small {
+                                                    ui.painter().galley(
                                                         egui::pos2(
-                                                            row.right() - row_x - 6.,
-                                                            row.center().y,
+                                                            row.left() + row_x,
+                                                            top + label_height + 2.,
                                                         ),
-                                                        egui::Vec2::splat(12.),
-                                                    ),
-                                                    check,
-                                                );
+                                                        small,
+                                                        t.color(if glass {
+                                                            "glass-text-subtle"
+                                                        } else {
+                                                            "text-faint"
+                                                        }),
+                                                    );
+                                                }
+                                                if is_selected {
+                                                    let check = t.color(if glass {
+                                                        "glass-text"
+                                                    } else if dark {
+                                                        "theme-accent"
+                                                    } else {
+                                                        "theme-accent-readable"
+                                                    });
+                                                    crate::preferences_widgets::icon(
+                                                        ui.painter(),
+                                                        "check",
+                                                        Rect::from_center_size(
+                                                            egui::pos2(
+                                                                row.right() - row_x - 6.,
+                                                                row.center().y,
+                                                            ),
+                                                            egui::Vec2::splat(12.),
+                                                        ),
+                                                        check,
+                                                    );
+                                                }
+                                                rows.push(row);
                                             }
-                                            rows.push(row);
-                                        }
-                                    })
+                                        })
+                                    });
                                 });
-                            });
-                        });
+                            })
+                    })
                 });
             memory.menu = area.response.rect.size();
             // A press outside the trigger and the listbox closes it.
@@ -839,6 +861,7 @@ impl<'a> Select<'a> {
         }
         if !state.open {
             memory.menu = egui::Vec2::ZERO;
+            memory.opened_at = None;
         }
         // The listbox is our own foreground area, so mirror it into egui's popup
         // slot: surfaces that gate pointer gestures and shortcuts on

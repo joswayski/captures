@@ -258,11 +258,126 @@ pub unsafe extern "C" fn captures_preview_pile_projection_v1(
     true
 }
 
+/// A carried pile's rear-card pose with shipping's drag lean
+/// (`.thumbnail-stack-drag-sway`): the fanned pose, `sway` points of lean
+/// (see `captures_preview_drag_sway_tick_v1`). Writes the flattened pose and
+/// the projective map like `captures_preview_pile_pose_v1` and
+/// `captures_preview_pile_projection_v1`.
+///
+/// # Safety
+/// `id` is a readable NUL-terminated UTF-8 string, `pose` aligned writable
+/// storage and `projection` aligned writable storage for nine doubles during
+/// this call. False leaves both unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_pile_sway_pose_v1(
+    id: *const c_char,
+    depth: usize,
+    gravity: f64,
+    top_anchor: bool,
+    sway_x: f64,
+    sway_y: f64,
+    pose: *mut CapturesPreviewPilePose,
+    projection: *mut [f64; 9],
+) -> bool {
+    if id.is_null() || pose.is_null() || projection.is_null() {
+        return false;
+    }
+    // SAFETY: Caller guarantees a readable terminated string.
+    let Ok(id) = unsafe { CStr::from_ptr(id) }.to_str() else {
+        return false;
+    };
+    let swayed =
+        preview::collapsed_card_sway_pose(id, depth, gravity, top_anchor, (sway_x, sway_y));
+    // SAFETY: Validated writable outputs.
+    unsafe {
+        pose.write(CapturesPreviewPilePose {
+            dx: swayed.dx,
+            dy: swayed.dy,
+            slot_dy: swayed.slot_dy,
+            rotation_deg: swayed.rotation_deg,
+            scale_x: swayed.scale_x,
+            scale_y: swayed.scale_y,
+        });
+        projection.write(swayed.projection);
+    }
+    true
+}
+
+/// Shipping's carried-pile lean state: position (the lean in points),
+/// velocity and drive per axis. Zeroed is at rest.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesDragSway {
+    pub position_x: f64,
+    pub position_y: f64,
+    pub velocity_x: f64,
+    pub velocity_y: f64,
+    pub drive_x: f64,
+    pub drive_y: f64,
+}
+
+/// Advance a carried pile's lean by a pointer step of `(dx, dy)` points
+/// (y down) over `dt_ms`. Returns whether it has settled (then zeroed).
+///
+/// # Safety
+/// `sway` is null or aligned readable/writable storage during this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_drag_sway_tick_v1(
+    sway: *mut CapturesDragSway,
+    dx: f64,
+    dy: f64,
+    dt_ms: f64,
+    reduced_motion: bool,
+) -> bool {
+    // SAFETY: Caller guarantees null or exclusive aligned storage.
+    let Some(sway) = (unsafe { sway.as_mut() }) else {
+        return true;
+    };
+    let mut state = preview_motion::DragSway::from_state([
+        sway.position_x,
+        sway.position_y,
+        sway.velocity_x,
+        sway.velocity_y,
+        sway.drive_x,
+        sway.drive_y,
+    ]);
+    state.tick(dx, dy, dt_ms, reduced_motion);
+    let [
+        position_x,
+        position_y,
+        velocity_x,
+        velocity_y,
+        drive_x,
+        drive_y,
+    ] = state.state();
+    *sway = CapturesDragSway {
+        position_x,
+        position_y,
+        velocity_x,
+        velocity_y,
+        drive_x,
+        drive_y,
+    };
+    state.settled()
+}
+
 /// Shipping rear-card media blur radius in points (`pose * 1.15px`, or
 /// `* 0.75px` while the pile fans on hover). Zero for the front card.
 #[unsafe(no_mangle)]
 pub extern "C" fn captures_preview_pile_media_blur_v1(depth: usize, hovered: bool) -> f64 {
     preview::collapsed_media_blur(depth, hovered)
+}
+
+/// Shipping hover-fan transition delay in milliseconds for a pile card at
+/// `depth`: 16 ms per pose depth for its transform, shade and glow, or per
+/// slot depth for its media blur (`media`).
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_fan_delay_ms_v1(depth: usize, media: bool) -> f64 {
+    if media {
+        captures_app::preview_motion::fan_media_delay_ms(depth)
+    } else {
+        captures_app::preview_motion::fan_delay_ms(depth)
+    }
 }
 
 /// Opaque, single-owner policy. Calls on one handle must never overlap.
@@ -474,6 +589,29 @@ pub unsafe extern "C" fn captures_preview_stack_insert_v1(
         return false;
     };
     handle.0.insert(id.to_owned())
+}
+
+/// Put a removed ID back at `index` (clamped), as a failed exit action does.
+/// False for a present/invalid ID.
+/// # Safety
+/// Same handle/string contract as captures_preview_stack_insert_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_restore_v1(
+    handle: *mut CapturesPreviewStack,
+    id: *const c_char,
+    index: usize,
+) -> bool {
+    if id.is_null() {
+        return false;
+    }
+    // SAFETY: Non-null pointers satisfy the documented handle/string contract.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    let Ok(id) = (unsafe { CStr::from_ptr(id) }).to_str() else {
+        return false;
+    };
+    handle.0.restore(id.to_owned(), index)
 }
 
 /// Remove membership only, never files/history. False for an absent/invalid ID.
@@ -1101,6 +1239,39 @@ mod tests {
                 captures_preview_pile_media_blur_v1(3, true),
                 preview::collapsed_media_blur(3, true)
             );
+            assert_eq!(captures_preview_fan_delay_ms_v1(0, false), 0.);
+            assert_eq!(
+                captures_preview_fan_delay_ms_v1(2, false),
+                preview::stack_pose_depth(2.) * 16.
+            );
+            assert_eq!(captures_preview_fan_delay_ms_v1(2, true), 32.);
+            let mut sway = CapturesDragSway::default();
+            assert!(!captures_preview_drag_sway_tick_v1(
+                &mut sway, 40., 0., 16., false
+            ));
+            assert!(sway.drive_x < 0.);
+            assert!(captures_preview_drag_sway_tick_v1(
+                null_mut(),
+                1.,
+                1.,
+                16.,
+                false
+            ));
+            let mut leaned = CapturesPreviewPilePose::default();
+            let mut projection = [0.; 9];
+            assert!(captures_preview_pile_sway_pose_v1(
+                c"capture-1".as_ptr(),
+                2,
+                1.,
+                false,
+                -3.,
+                1.,
+                &mut leaned,
+                &mut projection
+            ));
+            let expected = preview::collapsed_card_sway_pose("capture-1", 2, 1., false, (-3., 1.));
+            assert_eq!((leaned.dx, leaned.slot_dy), (expected.dx, expected.slot_dy));
+            assert_eq!(projection, expected.projection);
         }
     }
 
@@ -1277,6 +1448,18 @@ mod tests {
             assert!(captures_preview_stack_insert_v1(stack, c"古い".as_ptr()));
             assert!(captures_preview_stack_insert_v1(stack, c"new".as_ptr()));
             assert!(!captures_preview_stack_insert_v1(stack, c"古い".as_ptr()));
+            assert!(captures_preview_stack_remove_v1(stack, c"古い".as_ptr()));
+            assert!(captures_preview_stack_restore_v1(
+                stack,
+                c"古い".as_ptr(),
+                0
+            ));
+            assert!(!captures_preview_stack_restore_v1(
+                stack,
+                c"古い".as_ptr(),
+                0
+            ));
+            assert!(!captures_preview_stack_restore_v1(stack, null(), 0));
             assert_eq!(captures_preview_stack_count_v1(stack), 2);
             assert_eq!(captures_preview_stack_height_v1(stack), 424.);
             let mut id = CapturesPreviewID {

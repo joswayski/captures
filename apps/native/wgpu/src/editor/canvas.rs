@@ -267,12 +267,25 @@ fn bloom_pose(tokens: &Tokens, elapsed: f64, reduced: bool) -> (f64, f32) {
     (pose.opacity, pose.scale as f32)
 }
 
-fn loop_opacity(tokens: &Tokens, motion: Motion, elapsed: f64, reduced: bool) -> f64 {
+/// A looping bar pulse's `(opacity, brightness)`; reduced motion rests on
+/// the element's own style (1, 1).
+fn loop_pulse(tokens: &Tokens, motion: Motion, elapsed: f64, reduced: bool) -> (f64, f32) {
     if reduced {
-        1.
+        (1., 1.)
     } else {
-        tokens.motion(motion).pose_repeating(elapsed, false).opacity
+        let pose = tokens.motion(motion).pose_repeating(elapsed, false);
+        (pose.opacity, pose.brightness as f32)
     }
+}
+
+/// CSS `filter: brightness()`: scale the colour channels, clamped.
+fn brighten(color: Color32, factor: f32) -> Color32 {
+    if factor == 1. {
+        return color;
+    }
+    let [r, g, b, a] = color.to_srgba_unmultiplied();
+    let channel = |value: u8| (f32::from(value) * factor).round().clamp(0., 255.) as u8;
+    Color32::from_rgba_unmultiplied(channel(r), channel(g), channel(b), a)
 }
 
 /// Shipping's accent edge snap (`.screenshot-drop-snap-guide.edge-*` and
@@ -312,7 +325,7 @@ impl EdgeGlow {
             &color,
         );
         let bar = edge_strip(target, edge, canvas::SNAP_EDGE_BAR as f32);
-        let pulse = loop_opacity(tokens, Motion::SnapEdgePulse, elapsed, reduced);
+        let pulse = loop_pulse(tokens, Motion::SnapEdgePulse, elapsed, reduced);
         // `0 0 8px .95, 0 0 20px .65, 0 0 36px .4` around the pill.
         paint_edge_bar(
             painter,
@@ -349,19 +362,25 @@ fn edge_strip(rect: egui::Rect, edge: CanvasEdge, thickness: f32) -> egui::Rect 
     }
 }
 
-/// A pill with layered `(grow, alpha)` glows, all scaled by `opacity`.
+/// A pill with layered `(grow, alpha)` glows, all scaled by the pulse's
+/// opacity and brightened by its `brightness()` (the filter covers the
+/// element's glows too).
 fn paint_edge_bar(
     painter: &egui::Painter,
     strip: egui::Rect,
     halos: &[(f32, f64)],
-    opacity: f64,
+    (opacity, brightness): (f64, f32),
     color: &dyn Fn(f64) -> Color32,
 ) {
     let radius = strip.width().min(strip.height()) / 2.;
     for (grow, alpha) in halos {
-        painter.rect_filled(strip.expand(*grow), radius + grow, color(alpha * opacity));
+        painter.rect_filled(
+            strip.expand(*grow),
+            radius + grow,
+            brighten(color(alpha * opacity), brightness),
+        );
     }
-    painter.rect_filled(strip, radius, color(opacity));
+    painter.rect_filled(strip, radius, brighten(color(opacity), brightness));
 }
 
 /// `DROP_SNAP_PARTICLES` streaming outward from one side of `rect`.
@@ -526,7 +545,7 @@ pub(super) fn show_expand(
             .data_mut(|data| *data.get_temp_mut_or_insert_with(armed_id, || now));
         let elapsed = (now - since) * 1000.;
         let reduced = crate::motion::reduced(ui.ctx());
-        let breathe = loop_opacity(tokens, Motion::ExpandGhostBreathe, elapsed, reduced) as f32;
+        let breathe = loop_pulse(tokens, Motion::ExpandGhostBreathe, elapsed, reduced).0 as f32;
         let ghost = project_rect(preview, bounds, expand.rect);
         let sides = [
             (CanvasEdge::Top, ghost.left_top(), ghost.right_top()),
@@ -923,11 +942,11 @@ pub(super) fn paint_trim_preview(
             tokens.motion(motion).pose_repeating(elapsed, false).opacity
         }
     };
-    let (region, keep_alpha, edge_alpha) = (
+    let (region, keep_alpha) = (
         breathe(Motion::TrimRegionBreathe),
         breathe(Motion::TrimKeepBreathe),
-        breathe(Motion::TrimEdgePulse),
     );
+    let edge_pulse = loop_pulse(tokens, Motion::TrimEdgePulse, elapsed, reduced);
     let painter = ui
         .painter()
         .with_clip_rect(available.intersect(ui.clip_rect()));
@@ -991,7 +1010,7 @@ pub(super) fn paint_trim_preview(
             &painter,
             strip,
             &[(14., 0.06), (8., 0.12), (3., 0.3)],
-            edge_alpha,
+            edge_pulse,
             &trim_color,
         );
         paint_particles(&painter, keep, *edge, elapsed, reduced, &trim_color);
@@ -1305,4 +1324,31 @@ pub(super) fn show_wand_loupe(
             });
         });
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_pulse_brightens_the_bar_like_the_shipping_filter() {
+        let accent = Color32::from_rgb(200, 100, 20);
+        assert_eq!(brighten(accent, 1.), accent);
+        assert_eq!(brighten(accent, 1.15), Color32::from_rgb(230, 115, 23));
+        assert_eq!(
+            brighten(Color32::from_rgb(250, 0, 0), 1.15).r(),
+            255,
+            "channels clamp"
+        );
+        let faded = Color32::from_rgba_unmultiplied(200, 100, 20, 128);
+        assert_eq!(brighten(faded, 1.15).a(), faded.a(), "alpha is untouched");
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let (opacity, brightness) = loop_pulse(&tokens, Motion::SnapEdgePulse, 700., false);
+        assert!((opacity - 0.88).abs() < 1e-6 && (brightness - 1.15).abs() < 1e-6);
+        assert_eq!(
+            loop_pulse(&tokens, Motion::TrimEdgePulse, 700., true),
+            (1., 1.),
+            "reduced motion rests on the element's own style"
+        );
+    }
 }

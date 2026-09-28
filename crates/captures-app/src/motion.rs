@@ -29,6 +29,8 @@ pub struct Pose {
     pub scale: f64,
     pub scale_x: f64,
     pub blur: f64,
+    /// CSS `filter: brightness()` factor (1 leaves colours alone).
+    pub brightness: f64,
 }
 
 impl Pose {
@@ -40,6 +42,7 @@ impl Pose {
         scale: 1.,
         scale_x: 1.,
         blur: 0.,
+        brightness: 1.,
     };
 
     const fn hidden(translate_y: f64, scale: f64) -> Self {
@@ -74,6 +77,7 @@ impl Pose {
             scale: mix(self.scale, other.scale),
             scale_x: mix(self.scale_x, other.scale_x),
             blur: mix(self.blur, other.blur),
+            brightness: mix(self.brightness, other.brightness),
         }
     }
 }
@@ -342,11 +346,17 @@ const TRIM_KEEP_BREATHE: &[Keyframe] = &[
     frame(0.5, Pose::REST),
     frame(1., Pose::with(0.88, 0., 1.)),
 ];
-/// `canvas-trim-edge-pulse`: the cut-edge bar (1 ↔ 0.9; hosts omit the
-/// `brightness(1.12)` filter).
+/// `canvas-trim-edge-pulse`: the cut-edge bar (opacity 1 ↔ 0.9,
+/// `brightness(1 ↔ 1.12)`).
 const TRIM_EDGE_PULSE: &[Keyframe] = &[
     frame(0., Pose::REST),
-    frame(0.5, Pose::with(0.9, 0., 1.)),
+    frame(
+        0.5,
+        Pose {
+            brightness: 1.12,
+            ..Pose::with(0.9, 0., 1.)
+        },
+    ),
     frame(1., Pose::REST),
 ];
 /// `drop-snap-bloom-breathe`: the outward edge bloom of an image-drop snap,
@@ -358,11 +368,16 @@ const SNAP_BLOOM_BREATHE: &[Keyframe] = &[
     frame(1., Pose::with(0.82, 0., 1.)),
 ];
 /// `drop-snap-edge-pulse`: the accent edge bar of an image-drop snap and an
-/// armed Expand canvas edge (1 ↔ 0.88; hosts omit the `brightness(1.15)`
-/// filter).
+/// armed Expand canvas edge (opacity 1 ↔ 0.88, `brightness(1 ↔ 1.15)`).
 const SNAP_EDGE_PULSE: &[Keyframe] = &[
     frame(0., Pose::REST),
-    frame(0.5, Pose::with(0.88, 0., 1.)),
+    frame(
+        0.5,
+        Pose {
+            brightness: 1.15,
+            ..Pose::with(0.88, 0., 1.)
+        },
+    ),
     frame(1., Pose::REST),
 ];
 /// `canvas-expand-ghost-breathe`: the dashed post-expand canvas (0.88 ↔ 1).
@@ -702,6 +717,10 @@ pub enum Transition {
     /// `.history-card`: border, `translateY(-2px)` and shadow over
     /// `var(--dur-3) var(--ease-standard)` on hover.
     HistoryCardHover,
+    /// `.ui-segmented button` (and the capture menu's switches): the label
+    /// `color` over `var(--dur-3) var(--ease-standard)` as a segment is
+    /// hovered or selected.
+    SegmentLabel,
     /// `.recording-tooltip > [role="tooltip"]`: opacity and a 3 pt slide over
     /// `var(--dur-1)`, `var(--ease-standard)`.
     Tooltip,
@@ -736,6 +755,11 @@ pub enum Transition {
     /// `thumbnail-card-expand` and the minimize run: cards fly between the
     /// list and the compact pile over `0.52s var(--ease-standard)`.
     PreviewStackFly,
+    /// `.thumbnail-stack-compact`: the collapsed pile's hover fan, `transform`,
+    /// `opacity`, `box-shadow` and the media `filter` over `--stack-fan-dur`
+    /// (`var(--dur-3)`) `--stack-fan-ease` (`var(--ease-standard)`), each card
+    /// delayed by [`crate::preview_motion::FAN_STAGGER_MS`] per depth.
+    PreviewStackFan,
     /// `thumbnail-delete-frame-fade`: a dissolving card's shadow and outline
     /// leave over `0.5s cubic-bezier(0.22, 0.1, 0.25, 1)`.
     PreviewDeleteFrameFade,
@@ -745,6 +769,11 @@ pub enum Transition {
     /// `.capture-guidance`: `transform var(--dur-3) var(--ease-out)`, the
     /// chip's entrance slide from [`crate::capture_menu::GUIDANCE_ENTER_OFFSET`].
     CaptureGuidanceSlide,
+    /// `.capture-region .capture-shade` and New Capture's
+    /// `.recording-target-region/-window .capture-shade`: the dim fades in
+    /// over `var(--dur-4) cubic-bezier(0.42, 0, 0.58, 1)` once the overlay
+    /// is revealed.
+    CaptureShadeFade,
 }
 
 /// CSS `ease` keyword.
@@ -759,9 +788,10 @@ const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 20] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
+        Self::SegmentLabel,
         Self::Tooltip,
         Self::PreviewMediaFilter,
         Self::PreviewMediaScale,
@@ -774,15 +804,18 @@ impl Transition {
         Self::PreviewMinimizeSwap,
         Self::PreviewStackSettle,
         Self::PreviewStackFly,
+        Self::PreviewStackFan,
         Self::PreviewDeleteFrameFade,
         Self::CaptureGuidanceFade,
         Self::CaptureGuidanceSlide,
+        Self::CaptureShadeFade,
     ];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::SegmentedIndicator => "segmented_indicator",
             Self::HistoryCardHover => "history_card_hover",
+            Self::SegmentLabel => "segment_label",
             Self::Tooltip => "tooltip",
             Self::PreviewMediaFilter => "preview_media_filter",
             Self::PreviewMediaScale => "preview_media_scale",
@@ -795,9 +828,11 @@ impl Transition {
             Self::PreviewMinimizeSwap => "preview_minimize_swap",
             Self::PreviewStackSettle => "preview_stack_settle",
             Self::PreviewStackFly => "preview_stack_fly",
+            Self::PreviewStackFan => "preview_stack_fan",
             Self::PreviewDeleteFrameFade => "preview_delete_frame_fade",
             Self::CaptureGuidanceFade => "capture_guidance_fade",
             Self::CaptureGuidanceSlide => "capture_guidance_slide",
+            Self::CaptureShadeFade => "capture_shade_fade",
         }
     }
 
@@ -805,8 +840,12 @@ impl Transition {
         let token = |duration, easing| (Timing::Token(duration), Easing::Token(easing));
         let (duration, easing) = match self {
             Self::SegmentedIndicator => token("dur-4", "ease-standard"),
-            Self::HistoryCardHover | Self::CaptureGuidanceFade => token("dur-3", "ease-standard"),
+            Self::HistoryCardHover
+            | Self::SegmentLabel
+            | Self::CaptureGuidanceFade
+            | Self::PreviewStackFan => token("dur-3", "ease-standard"),
             Self::CaptureGuidanceSlide => token("dur-3", "ease-out"),
+            Self::CaptureShadeFade => (Timing::Token("dur-4"), CSS_EASE_IN_OUT),
             Self::Tooltip => token("dur-1", "ease-standard"),
             Self::PreviewMediaFilter => (Timing::Millis(180.), CSS_EASE),
             Self::PreviewMediaScale | Self::PreviewEditorRing => (Timing::Millis(220.), CSS_EASE),
@@ -1573,6 +1612,14 @@ mod tests {
         assert_eq!(edge.duration_ms, 1_400.);
         assert!(close(edge.pose_repeating(0., false).opacity, 1.));
         assert!(close(edge.pose_repeating(700., false).opacity, 0.88));
+        assert!(close(edge.pose_repeating(0., false).brightness, 1.));
+        assert!(close(edge.pose_repeating(700., false).brightness, 1.15));
+        let trim = Motion::TrimEdgePulse.resolve(&Shipping).unwrap();
+        assert!(close(trim.pose_repeating(700., false).brightness, 1.12));
+        assert_eq!(
+            catalog()["keyframes"]["snap_edge_pulse"]["frames"][1]["brightness"],
+            1.15
+        );
         let ghost = Motion::ExpandGhostBreathe.resolve(&Shipping).unwrap();
         assert_eq!(ghost.duration_ms, 1_700.);
         assert!(close(ghost.pose_repeating(0., false).opacity, 0.88));

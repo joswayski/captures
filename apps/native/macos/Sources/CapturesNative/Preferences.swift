@@ -431,6 +431,8 @@ final class PreferenceSwitchButton: PreferenceHoverButton {
 /// One segment of the shipping `.ui-segmented` control.
 final class PreferenceSegmentButton: PreferenceHoverButton {
     private let tokens: Tokens
+    /// `color var(--dur-3) var(--ease-standard)` toward the lit label.
+    private lazy var labelTransition = NativeBoolTransition("segment_label", tokens: tokens, view: self)
     var active = false { didSet { setAccessibilityValue(active); needsDisplay = true } }
     /// False when the track's sliding indicator view paints the active fill.
     var paintsActiveFill = true { didSet { needsDisplay = true } }
@@ -448,6 +450,13 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
         return ceil((label as NSString).size(withAttributes: [.font: font]).width) + tokens.number("s-5") * 2
     }
 
+    /// The label ink now: `--text-subtle`, easing to `--text` while hovered or active.
+    var labelColor: NSColor {
+        let lit = CGFloat(labelTransition.progress(toward: active || hovered))
+        let subtle = tokens.color("text-subtle")
+        return subtle.blended(withFraction: lit, of: tokens.color("text")) ?? subtle
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let radius = tokens.number("r-sm")
         if active && paintsActiveFill {
@@ -457,7 +466,7 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
         }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium),
-            .foregroundColor: tokens.color(active || hovered ? "text" : "text-subtle"),
+            .foregroundColor: labelColor,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
         (title as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2,

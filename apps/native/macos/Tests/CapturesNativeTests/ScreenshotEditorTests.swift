@@ -7945,6 +7945,16 @@ extension ScreenshotEditorTests {
         XCTAssertEqual(NativeEdgeEffects.loopOpacity("expand_ghost_breathe", at: 0, tokens: tokens, reduced: false),
                        0.88, accuracy: 0.01)
         XCTAssertEqual(NativeEdgeEffects.loopOpacity("snap_edge_pulse", at: 0.7, tokens: tokens, reduced: true), 1)
+        // The bar pulse's `brightness()` crosses the ABI and brightens the fill.
+        XCTAssertEqual(NativeEdgeEffects.loopBrightness("snap_edge_pulse", at: 0.7, tokens: tokens, reduced: false),
+                       1.15, accuracy: 0.01)
+        XCTAssertEqual(NativeEdgeEffects.loopBrightness("trim_edge_pulse", at: 0.7, tokens: tokens, reduced: false),
+                       1.12, accuracy: 0.01)
+        XCTAssertEqual(NativeEdgeEffects.loopBrightness("snap_edge_pulse", at: 0.7, tokens: tokens, reduced: true), 1)
+        let brightened = NativeEdgeEffects.brighten(NSColor(srgbRed: 0.5, green: 0.9, blue: 0.2, alpha: 0.4), by: 1.15)
+        XCTAssertEqual(brightened.redComponent, 0.575, accuracy: 0.001)
+        XCTAssertEqual(brightened.greenComponent, 1, accuracy: 0.001, "channels clamp")
+        XCTAssertEqual(brightened.alphaComponent, 0.4, accuracy: 0.001)
         XCTAssertEqual(NativeEditorPreviewPaint.snapBloomStops.first?.1 ?? 0, 0.55, accuracy: 0.001)
 
         // The drop guide's bloom overhangs each end by 8 % and scales about its center.
