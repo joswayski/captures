@@ -445,7 +445,9 @@ External recording references cannot replace an original; that requires a privat
 recovery copy and a separate permanent save. **Save as new file** stays locked on.
 Live development hosts now forward subsequent launches to the process using the
 same History directory, preserving file order and sender-relative paths; a launch
-without files restores the native workspace/Preferences or recording controls.
+without files restores hidden recording controls or focuses the open setup, editor,
+History or Preferences window in that order, else opens Preferences. A visible
+native launch opens Preferences (setup on first run), as the shipping app does.
 Native Preferences → About offers explicit **Launch native Captures at login**
 for macOS, Windows and X11 development profiles. It starts that profile hidden;
 relaunch or the tray/menu bar restores it. This uses a separate user-owned login

@@ -314,7 +314,7 @@ def main():
                 "screenshot_countdown_seconds": countdown,
             }))
             background(0)
-            app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
+            app = spawn(prefix, [str(binary), "--live", "--open-history", "--history-root", str(history),
                                  "--settings-file", str(settings), "--quit-after", "90"])
             root = wait(lambda: windows("Capture History"), "capture workspace")[0]
             time.sleep(2)
@@ -610,7 +610,7 @@ def failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb,
             "show_cursor_in_screenshots": False, "screenshot_countdown_seconds": 0,
         }))
         background(0)
-        app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
+        app = spawn(prefix, [str(binary), "--live", "--open-history", "--history-root", str(history),
                              "--settings-file", str(settings), "--quit-after", "90"])
         root = wait(lambda: windows("Capture History"), "capture workspace")[0]
         time.sleep(2)
