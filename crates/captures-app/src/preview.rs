@@ -507,7 +507,7 @@ pub fn collapsed_stack_gravity(
     )
 }
 
-/// A rear card's shipping 3D pile pose, flattened to 2D.
+/// A rear card's shipping 3D pile pose on the 2D screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CollapsedCardPose {
     /// Card centre offset from the front card's centre (y down).
@@ -521,15 +521,42 @@ pub struct CollapsedCardPose {
     pub scale_x: f64,
     /// Includes the `rotateX` tilt, flattened to its vertical foreshortening.
     pub scale_y: f64,
+    /// The whole shipping 3D pose as a 2D projective map (row-major 3×3,
+    /// column vectors): a card point `(u, v, 1)`, relative to the card
+    /// centre with y down, maps to `(x, y, w)`, and `(x / w, y / w)` is its
+    /// offset from the posed centre (`dx`, `dy`). Unlike `scale_y`, this keeps
+    /// the `rotateX` tilt's keystone: the edge away from the anchor leans
+    /// toward the viewer and draws slightly wider.
+    pub projection: [f64; 9],
+    /// [`collapsed_media_blur`] for this depth and fan state.
+    pub media_blur: f64,
+}
+
+/// The identity [`CollapsedCardPose::projection`].
+pub const IDENTITY_PROJECTION: [f64; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
+/// Map a card-local point (from the card centre, y down) through a
+/// [`CollapsedCardPose::projection`] to its offset from the posed centre.
+pub fn project_card_point(projection: &[f64; 9], u: f64, v: f64) -> (f64, f64) {
+    let [a, b, c, d, e, f, g, h, i] = *projection;
+    let w = g * u + h * v + i;
+    ((a * u + b * v + c) / w, (d * u + e * v + f) / w)
+}
+
+/// Shipping rear-card media blur, `.thumbnail-stack-minimized .thumbnail-media
+/// { filter: blur(calc(var(--thumbnail-stack-pose) * 1.15px)) }`, and the
+/// hovered fan's `* 0.75px`. The front card stays sharp.
+pub fn collapsed_media_blur(depth: usize, hovered: bool) -> f64 {
+    stack_pose_depth(depth as f64) * if hovered { 0.75 } else { 1.15 }
 }
 
 /// Shipping `--thumbnail-stack-rest-transform` / `-hover-transform`:
 /// `translate3d(pd·dx, (pd·-peek + jitter)·gravity, pd·z) rotateZ(spin·
 /// proximity) rotateX(pd·tilt) scale(1 - pd·k + pd·proximity·k)` about the
 /// card's anchored edge, seen through `perspective: 900px` centred on the
-/// front card. The tilt becomes a vertical scale (hosts have no 3D card
-/// transform); translation depth and the tilt's depth shift the perspective
-/// scale and position exactly. `pd` is [`stack_pose_depth`].
+/// front card. `projection` carries the whole pose, keystone included;
+/// `scale_x`/`scale_y`/`rotation_deg` remain its flattened affine summary.
+/// `pd` is [`stack_pose_depth`].
 pub fn collapsed_card_pose(
     id: &str,
     depth: usize,
@@ -541,6 +568,7 @@ pub fn collapsed_card_pose(
         return CollapsedCardPose {
             scale_x: 1.0,
             scale_y: 1.0,
+            projection: IDENTITY_PROJECTION,
             ..CollapsedCardPose::default()
         };
     }
@@ -575,6 +603,35 @@ pub fn collapsed_card_pose(
     let projection = STACK_PERSPECTIVE_PX / (STACK_PERSPECTIVE_PX - centre.2);
     let (dx, dy) = (centre.0 * projection, centre.1 * projection);
     let slot = if top_anchor { 1.0 } else { -1.0 } * collapsed_peek(depth + 1, hovered);
+    // Every card point `q` (from the card centre) lands at
+    // `T + origin + Rz·Rx·S·(q - origin)`, then `perspective` divides by
+    // `(P - z) / P`. Rows act on `(u, v, 1)`.
+    let (sin_spin, cos_spin) = spin.sin_cos();
+    let (sin_tilt, cos_tilt) = tilt.sin_cos();
+    let perspective = STACK_PERSPECTIVE_PX;
+    let x_row = [
+        scale * cos_spin,
+        -scale * cos_tilt * sin_spin,
+        tx + scale * cos_tilt * sin_spin * origin_y,
+    ];
+    let y_row = [
+        scale * sin_spin,
+        scale * cos_tilt * cos_spin,
+        origin_y + ty - scale * cos_tilt * cos_spin * origin_y,
+    ];
+    let w_row = [
+        0.0,
+        -scale * sin_tilt / perspective,
+        (perspective - tz + scale * sin_tilt * origin_y) / perspective,
+    ];
+    // Offsets from the posed centre, normalised so the centre has w = 1.
+    let w0 = w_row[2];
+    let mut matrix = [0.0; 9];
+    for column in 0..3 {
+        matrix[column] = (x_row[column] - dx * w_row[column]) / w0;
+        matrix[3 + column] = (y_row[column] - dy * w_row[column]) / w0;
+        matrix[6 + column] = w_row[column] / w0;
+    }
     CollapsedCardPose {
         dx,
         dy,
@@ -582,6 +639,8 @@ pub fn collapsed_card_pose(
         rotation_deg: spin.to_degrees(),
         scale_x: projection * scale,
         scale_y: projection * scale * tilt.cos(),
+        projection: matrix,
+        media_blur: collapsed_media_blur(depth, hovered),
     }
 }
 
@@ -1149,6 +1208,90 @@ mod tests {
         assert!(hover.scale_x > first.scale_x);
         let nan = collapsed_card_pose("card", 1, false, f64::NAN, false);
         assert_eq!(nan, first);
+    }
+
+    /// Straight CSS: `translate3d rotateZ rotateX scale` about the anchored
+    /// edge, then `perspective` about the front card centre (rest pose).
+    fn css_project(
+        depth: usize,
+        spin_deg: f64,
+        gravity: f64,
+        top: bool,
+        u: f64,
+        v: f64,
+    ) -> (f64, f64) {
+        let pd = stack_pose_depth(depth as f64);
+        let sign = if top { -1.0 } else { 1.0 };
+        let proximity = 1.0 - gravity.abs();
+        let tilt = (pd * -0.8 * sign).to_radians();
+        let scale = 1.0 - pd * 0.025 + pd * proximity * 0.025;
+        let spin = spin_deg.to_radians();
+        let oy = sign * THUMBNAIL_CARD_HEIGHT / 2.0;
+        let (x, y, z) = (scale * u, scale * (v - oy), 0.0);
+        let (y, z) = (
+            y * tilt.cos() - z * tilt.sin(),
+            y * tilt.sin() + z * tilt.cos(),
+        );
+        let (x, y) = (
+            x * spin.cos() - y * spin.sin(),
+            x * spin.sin() + y * spin.cos(),
+        );
+        let ty = (pd * -13.0 + stack_peek_jitter(depth)) * gravity;
+        let (x, y, z) = (x + pd * -0.8, y + oy + ty, z + pd * -24.0);
+        let k = STACK_PERSPECTIVE_PX / (STACK_PERSPECTIVE_PX - z);
+        (x * k, y * k)
+    }
+
+    #[test]
+    fn pile_projection_matches_the_css_3d_pose_with_its_keystone() {
+        for (id, depth, gravity, top) in [
+            ("capture-1", 1, 0.0, false),
+            ("card", 3, 1.0, false),
+            ("card", 5, -1.0, true),
+            ("capture-1", 4, 0.4, false),
+        ] {
+            let pose = collapsed_card_pose(id, depth, false, gravity, top);
+            let corners = [
+                (0.0, 0.0),
+                (-142.0, -80.0),
+                (142.0, -80.0),
+                (-142.0, 80.0),
+                (60.0, 20.0),
+            ];
+            for (u, v) in corners {
+                let (x, y) = css_project(depth, pose.rotation_deg, gravity, top, u, v);
+                let (px, py) = project_card_point(&pose.projection, u, v);
+                assert!((pose.dx + px - x).abs() < 1e-9, "{id} {depth} x {u},{v}");
+                assert!((pose.dy + py - y).abs() < 1e-9, "{id} {depth} y {u},{v}");
+            }
+            // The edge away from the anchor tilts toward the viewer and draws wider.
+            let far = if top { 80.0 } else { -80.0 };
+            let width = |v: f64| {
+                project_card_point(&pose.projection, 142.0, v).0
+                    - project_card_point(&pose.projection, -142.0, v).0
+            };
+            if pose.rotation_deg == 0.0 {
+                assert!(width(far) > width(-far) + 0.1, "{id} {depth}");
+            }
+        }
+        let front = collapsed_card_pose("front", 0, true, 1.0, false);
+        assert_eq!(front.projection, IDENTITY_PROJECTION);
+        assert_eq!(
+            project_card_point(&front.projection, 3.0, -4.0),
+            (3.0, -4.0)
+        );
+    }
+
+    #[test]
+    fn rear_media_blur_follows_the_pose_depth() {
+        assert_eq!(collapsed_media_blur(0, false), 0.0);
+        assert_eq!(collapsed_media_blur(0, true), 0.0);
+        let pose = stack_pose_depth(2.0);
+        assert!((collapsed_media_blur(2, false) - pose * 1.15).abs() < 1e-12);
+        assert!((collapsed_media_blur(2, true) - pose * 0.75).abs() < 1e-12);
+        let css = include_str!("../../../apps/desktop/ui/src/styles/mini-preview.css");
+        assert!(css.contains("filter: blur(calc(var(--thumbnail-stack-pose, 0) * 1.15px));"));
+        assert!(css.contains("filter: blur(calc(var(--thumbnail-stack-pose, 0) * 0.75px));"));
     }
 
     fn bounds(

@@ -33,51 +33,72 @@ pub enum Busy {
     Trash,
 }
 
-/// A compact card's shipping depth spin and scale about its centre
-/// (`captures_app::preview::collapsed_card_pose`). The host moves the card's
-/// rect by the pose offset; this paints the rotation and recession.
+/// A compact card's shipping 3D pile pose about its centre
+/// (`captures_app::preview::collapsed_card_pose`): the host moves the card's
+/// rect by the pose offset; this carries the spin, recession and `rotateX`
+/// keystone as a projective map, the rear-card media blur and the hovered
+/// pile's accent glow.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PileTransform {
-    /// Clockwise radians, like CSS `rotateZ`.
-    pub rotation: f32,
-    /// `scale.y` includes the flattened `rotateX` tilt.
-    pub scale: egui::Vec2,
+    /// Row-major 3×3 map from card points (from the centre, y down) to
+    /// offsets from the posed centre.
+    pub projection: [f32; 9],
+    /// Media `filter: blur()` radius in points.
+    pub blur: f32,
+    /// The hovered pile's accent ring and glow, 0…1.
+    pub glow: f32,
 }
 
 impl PileTransform {
     pub const IDENTITY: Self = Self {
-        rotation: 0.,
-        scale: egui::Vec2::splat(1.),
+        projection: [1., 0., 0., 0., 1., 0., 0., 0., 1.],
+        blur: 0.,
+        glow: 0.,
     };
 
     pub fn lerp(self, other: Self, t: f32) -> Self {
+        let mut projection = self.projection;
+        for (value, target) in projection.iter_mut().zip(other.projection) {
+            *value = egui::lerp(*value..=target, t);
+        }
         Self {
-            rotation: egui::lerp(self.rotation..=other.rotation, t),
-            scale: self.scale + (other.scale - self.scale) * t,
+            projection,
+            blur: egui::lerp(self.blur..=other.blur, t),
+            glow: egui::lerp(self.glow..=other.glow, t),
         }
     }
 
-    fn is_identity(self) -> bool {
-        self == Self::IDENTITY
+    fn is_flat(self) -> bool {
+        self.projection == Self::IDENTITY.projection && self.blur == 0.
+    }
+
+    /// Where a card point lands, given the posed card's centre.
+    pub fn map(self, centre: egui::Pos2, point: egui::Pos2) -> egui::Pos2 {
+        let [a, b, c, d, e, f, g, h, i] = self.projection;
+        let (u, v) = (point.x - centre.x, point.y - centre.y);
+        let w = g * u + h * v + i;
+        centre + egui::vec2((a * u + b * v + c) / w, (d * u + e * v + f) / w)
     }
 }
 
 /// Rect offset and paint transform between the rest (`t = 0`) and hover
-/// fan (`t = 1`) poses.
+/// fan (`t = 1`) poses. The accent glow follows the fan.
 pub fn pile_pose_between(
     rest: &captures_app::preview::CollapsedCardPose,
     hover: &captures_app::preview::CollapsedCardPose,
     t: f32,
 ) -> (egui::Vec2, PileTransform) {
     let mix = |a: f64, b: f64| egui::lerp(a as f32..=b as f32, t);
+    let mut projection = [0.; 9];
+    for (index, value) in projection.iter_mut().enumerate() {
+        *value = mix(rest.projection[index], hover.projection[index]);
+    }
     (
         egui::vec2(mix(rest.dx, hover.dx), mix(rest.slot_dy, hover.slot_dy)),
         PileTransform {
-            rotation: mix(rest.rotation_deg, hover.rotation_deg).to_radians(),
-            scale: egui::vec2(
-                mix(rest.scale_x, hover.scale_x),
-                mix(rest.scale_y, hover.scale_y),
-            ),
+            projection,
+            blur: mix(rest.media_blur, hover.media_blur),
+            glow: t,
         },
     )
 }
@@ -126,8 +147,11 @@ pub struct View<'a> {
     /// Multiplier on a compact card's depth shade while the stack flies
     /// between the list and the pile (1 at rest).
     pub depth_shade: f32,
-    /// Compact rear-card depth spin and scale (identity for the front card).
+    /// Compact rear-card depth pose (identity for the front card).
     pub pile: PileTransform,
+    /// Prepared blurred media for the pile's blur radii, `(radius, texture)`
+    /// ascending; see [`crate::effects::blur_levels`].
+    pub depth_blurred: [(f32, Option<&'a egui::TextureHandle>); 2],
 }
 
 pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
@@ -152,11 +176,12 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     let card = card.translate(egui::vec2(view.reject_offset, 0.));
     let radius = tokens.number("thumbnail-card-radius");
 
-    if view.collapsed && view.depth > 0 && !view.pile.is_identity() {
+    if view.collapsed && view.depth > 0 && !view.pile.is_flat() {
         paint_posed_pile_card(ui, tokens, card, radius, &view);
         return None;
     }
     if view.collapsed {
+        paint_card_shadow(ui, tokens, card, radius, view.pile, &|point| point);
         paint_capture_glow(ui, tokens, card, radius, view.highlight);
         ui.painter()
             .rect_filled(card, radius, tokens.color("glass-raised"));
@@ -312,6 +337,14 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             .as_shape(card, radius),
         );
     }
+    paint_card_shadow(
+        ui,
+        tokens,
+        card,
+        radius,
+        PileTransform::IDENTITY,
+        &|point| point,
+    );
     paint_capture_glow(ui, tokens, card, radius, view.highlight);
     ui.painter()
         .rect_filled(card, radius, tokens.color("glass-raised"));
@@ -591,6 +624,8 @@ pub struct ExitView<'a> {
     /// Milliseconds into the exit's own animation (after any Clear all delay).
     pub elapsed_ms: f64,
     pub dust: &'a [captures_app::preview_motion::DustParticle],
+    /// [`streak_blur_images`] for a Close, once prepared.
+    pub streak: &'a [egui::TextureHandle],
     pub right_anchor: bool,
     pub reduced_motion: bool,
 }
@@ -623,6 +658,13 @@ pub fn show_exit(ui: &mut egui::Ui, tokens: &Tokens, card: egui::Rect, view: Exi
                 captures_app::motion::Pose { scale: 1., ..pose }
             };
             crate::motion::with_pose(ui, pose, card, |ui| {
+                crate::effects::paint_box_shadows(
+                    ui.painter(),
+                    card,
+                    radius,
+                    tokens.shadow("thumbnail-card-shadow"),
+                    1.,
+                );
                 ui.painter()
                     .rect_filled(card, radius, tokens.color("glass-raised"));
                 paint_streaked_media(ui, card, radius, &view, streak);
@@ -639,9 +681,9 @@ pub fn show_exit(ui: &mut egui::Ui, tokens: &Tokens, card: egui::Rect, view: Exi
     running
 }
 
-/// The locked hover media, stretched by `streak.scale_x` and smeared into a
-/// horizontal motion blur of `streak.blur` points: equal-weight copies, each
-/// blended at 1/k so the result is their average.
+/// The media, stretched by `streak.scale_x`. Close steps through the
+/// shipping horizontal Gaussian streaks ([`streak_step`]); until the first
+/// step, and for the Delete fallback, it keeps the locked hover look.
 fn paint_streaked_media(
     ui: &egui::Ui,
     card: egui::Rect,
@@ -659,35 +701,29 @@ fn paint_streaked_media(
         ),
     );
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(card));
-    let (texture, uv) = match view.blurred {
-        Some(blurred) => (
-            blurred.id(),
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-        ),
-        None => (
+    let whole = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
+    let stepped = (view.kind == captures_app::preview_motion::ExitKind::Dismiss)
+        .then(|| streak_step(streak.blur))
+        .flatten()
+        .and_then(|step| view.streak.get(step));
+    let (texture, uv, brightness) = match (stepped, view.blurred) {
+        (Some(streaked), _) => (streaked.id(), whole, 1.),
+        (None, Some(blurred)) => (blurred.id(), whole, HOVER_MEDIA_BRIGHTNESS as f32),
+        (None, None) => (
             view.texture.id(),
             cover_uv(view.texture.size_vec2(), card.size()),
+            HOVER_MEDIA_BRIGHTNESS as f32,
         ),
     };
-    let copies = if streak.blur > 2.5 { 7 } else { 1 };
-    let spread = streak.blur as f32;
-    for copy in 0..copies {
-        let offset = if copies == 1 {
-            0.
-        } else {
-            spread * (copy as f32 / (copies - 1) as f32 * 2. - 1.)
-        };
-        let alpha = 1. / (copy + 1) as f32;
-        let value = (HOVER_MEDIA_BRIGHTNESS as f32 * alpha * 255.).round() as u8;
-        painter.add(
-            egui::epaint::RectShape::filled(
-                rect.translate(egui::vec2(offset, 0.)),
-                radius,
-                Color32::from_rgba_premultiplied(value, value, value, (alpha * 255.).round() as u8),
-            )
-            .with_texture(texture, uv),
-        );
-    }
+    let value = (brightness * 255.).round() as u8;
+    painter.add(
+        egui::epaint::RectShape::filled(
+            rect,
+            radius,
+            Color32::from_rgba_premultiplied(value, value, value, 255),
+        )
+        .with_texture(texture, uv),
+    );
 }
 
 /// Shipping dust delete: the frozen hover image fades under a mesh of image
@@ -720,17 +756,14 @@ fn paint_dust(
         let value = (HOVER_MEDIA_BRIGHTNESS as f32 * alpha * 255.).round() as u8;
         Color32::from_rgba_premultiplied(value, value, value, (alpha * 255.).round() as u8)
     };
-    if border > 0. {
-        ui.painter().add(
-            egui::Shadow {
-                offset: [0, 6],
-                blur: 14,
-                spread: 0,
-                color: Color32::from_black_alpha((0.38 * 255. * border) as u8),
-            }
-            .as_shape(card, radius),
-        );
-    }
+    // `thumbnail-delete-frame-fade` fades the whole card shadow.
+    crate::effects::paint_box_shadows(
+        ui.painter(),
+        card,
+        radius,
+        tokens.shadow("thumbnail-card-shadow"),
+        border,
+    );
     if frame.source_opacity > 0. {
         ui.painter()
             .with_clip_rect(ui.clip_rect().intersect(card))
@@ -894,13 +927,55 @@ fn media_hover_progress(
     )
 }
 
-/// Shipping `.thumbnail-media img`: cover-cropped media, clipped to the card.
-/// On hover it takes `blur(2px) brightness(.5) scale(1.015)`. egui has no
-/// per-image blur, so a pre-blurred card-sized copy fades in over the sharp
-/// image while both darken and scale.
+/// `--thumbnail-card-shadow` under a card, plus the hovered pile's
+/// `0 0 0 1px rgba(accent, .55), 0 0 22px rgba(accent, .28)` at `pile.glow`,
+/// all through the card's transform (`map`).
+fn paint_card_shadow(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    card: egui::Rect,
+    radius: f32,
+    pile: PileTransform,
+    map: &dyn Fn(egui::Pos2) -> egui::Pos2,
+) {
+    use crate::effects::{BoxShadow, paint_box_shadows_mapped};
+    let painter = ui.painter();
+    if pile.glow > 0. {
+        let accent = tokens.color("theme-accent");
+        paint_box_shadows_mapped(
+            painter,
+            card,
+            radius,
+            &[BoxShadow::glow(22., accent.gamma_multiply(0.28))],
+            pile.glow,
+            map,
+        );
+        // The 1 px spread ring hugs the card edge outside it.
+        crate::effects::paint_mapped_rect(
+            painter,
+            egui::epaint::RectShape::stroke(
+                card,
+                radius,
+                Stroke::new(1., accent.gamma_multiply(0.55 * pile.glow)),
+                egui::StrokeKind::Outside,
+            ),
+            map,
+        );
+    }
+    paint_box_shadows_mapped(
+        painter,
+        card,
+        radius,
+        tokens.shadow("thumbnail-card-shadow"),
+        1.,
+        map,
+    );
+}
+
 /// A rear compact card under its shipping pile pose. Rear cards never take
-/// input, so this only paints: fill, cover-fit media, depth shade and border,
-/// rotated and scaled about the card centre.
+/// input, so this only paints: shadow, fill, cover-fit media with its depth
+/// blur, depth shade and border, all through the pose's projective map so
+/// the `rotateX` tilt keeps its keystone.
 fn paint_posed_pile_card(
     ui: &egui::Ui,
     tokens: &Tokens,
@@ -909,36 +984,72 @@ fn paint_posed_pile_card(
     view: &View<'_>,
 ) {
     use egui::epaint::RectShape;
-    let posed = egui::Rect::from_center_size(card.center(), card.size() * view.pile.scale);
-    let corners = radius * view.pile.scale.min_elem();
-    let angle = view.pile.rotation;
+    let pile = view.pile;
+    let centre = card.center();
+    let map = move |point: egui::Pos2| pile.map(centre, point);
     let painter = ui.painter();
-    painter.add(RectShape::filled(posed, corners, tokens.color("glass-raised")).with_angle(angle));
-    painter.add(
-        RectShape::filled(posed, corners, Color32::WHITE)
-            .with_texture(
-                view.texture.id(),
-                cover_uv(view.texture.size_vec2(), card.size()),
-            )
-            .with_angle(angle),
+    paint_card_shadow(ui, tokens, card, radius, pile, &map);
+    crate::effects::paint_mapped_rect(
+        painter,
+        RectShape::filled(card, radius, tokens.color("glass-raised")),
+        &map,
     );
+    // `filter: blur(pose × 1.15px)`: the nearest prepared radii, cross-faded.
+    let sharp = (
+        view.texture.id(),
+        cover_uv(view.texture.size_vec2(), card.size()),
+    );
+    let whole = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
+    let mut levels = vec![(0., sharp)];
+    for (radius, texture) in view.depth_blurred {
+        if let Some(texture) = texture
+            && radius > levels.last().map_or(0., |level| level.0)
+        {
+            levels.push((radius, (texture.id(), whole)));
+        }
+    }
+    let radii: Vec<f32> = levels.iter().map(|level| level.0).collect();
+    let (lower, upper, weight) =
+        crate::effects::blur_levels(pile.blur, &radii).unwrap_or((0, 0, 0.));
+    for (index, alpha) in [(lower, 1.), (upper, weight)] {
+        if alpha <= 0. {
+            continue;
+        }
+        let (texture, uv) = levels[index].1;
+        let value = (alpha * 255.).round() as u8;
+        crate::effects::paint_mapped_rect(
+            painter,
+            RectShape::filled(
+                card,
+                radius,
+                Color32::from_rgba_premultiplied(value, value, value, value),
+            )
+            .with_texture(texture, uv),
+            &map,
+        );
+    }
     if view.depth_shade > 0. {
         let shade = tokens.color("glass-strong-solid").gamma_multiply(
             captures_app::preview::collapsed_dim_opacity(view.depth) as f32 * view.depth_shade,
         );
-        painter.add(RectShape::filled(posed, corners, shade).with_angle(angle));
+        crate::effects::paint_mapped_rect(painter, RectShape::filled(card, radius, shade), &map);
     }
-    painter.add(
+    crate::effects::paint_mapped_rect(
+        painter,
         RectShape::stroke(
-            posed,
-            corners,
+            card,
+            radius,
             Stroke::new(1., tokens.color("glass-border")),
             egui::StrokeKind::Inside,
-        )
-        .with_angle(angle),
+        ),
+        &map,
     );
 }
 
+/// Shipping `.thumbnail-media img`: cover-cropped media, clipped to the card.
+/// On hover it takes `blur(2px) brightness(.5) scale(1.015)`. egui has no
+/// per-image blur, so a pre-blurred card-sized copy fades in over the sharp
+/// image while both darken and scale.
 fn paint_media(
     ui: &egui::Ui,
     card: egui::Rect,
@@ -1083,15 +1194,13 @@ fn editor_control(
         if phase.present() {
             let offers_action = action_hover && !just_opened;
             let accent = tokens.color("theme-accent");
-            ui.painter().add(
-                egui::Shadow {
-                    offset: [0, 0],
-                    blur: 14,
-                    spread: 0,
-                    color: accent.gamma_multiply(0.2),
-                }
-                .as_shape(rect, rect.height() / 2.),
-            );
+            // `box-shadow: var(--shadow-sm), 0 0 14px rgba(accent, .2)`.
+            let mut shadows = tokens.shadow("shadow-sm").to_vec();
+            shadows.push(crate::effects::BoxShadow::glow(
+                14.,
+                accent.gamma_multiply(0.2),
+            ));
+            crate::effects::paint_box_shadows(ui.painter(), rect, rect.height() / 2., &shadows, 1.);
             let (fill, border, color) = if offers_action {
                 (
                     accent,
@@ -1136,6 +1245,13 @@ fn editor_control(
                 .with_clip_rect(rect.shrink(1.))
                 .galley(text, label, color);
         } else {
+            crate::effects::paint_box_shadows(
+                ui.painter(),
+                rect,
+                tokens.number("r-md"),
+                tokens.shadow("shadow-sm"),
+                1.,
+            );
             ui.painter().rect(
                 rect,
                 tokens.number("r-md"),
@@ -1472,6 +1588,14 @@ fn stack_button_at(
     } else {
         ("glass-strong-solid", "glass-border")
     };
+    // `.thumbnail-stack-control { box-shadow: var(--thumbnail-card-shadow) }`.
+    crate::effects::paint_box_shadows(
+        ui.painter(),
+        paint,
+        tokens.number("r-md"),
+        tokens.shadow("thumbnail-card-shadow"),
+        1.,
+    );
     ui.painter().rect(
         paint,
         tokens.number("r-md"),
@@ -1546,6 +1670,15 @@ pub fn show_overflow_cues(
         } else {
             rect
         };
+        // `--glass-shadow`; the mask rounds all four corners, which only
+        // differs inside the window edge the square corners sit against.
+        crate::effects::paint_box_shadows(
+            ui.painter(),
+            paint_rect,
+            radius,
+            tokens.shadow("glass-shadow"),
+            1.,
+        );
         ui.painter().rect(
             paint_rect,
             corners,
@@ -1627,6 +1760,19 @@ fn control(
         } else {
             tokens.color("glass-strong")
         };
+        // `.icon-button` carries `--shadow-sm`, `.thumbnail-main-actions
+        // button` `--shadow-md`.
+        crate::effects::paint_box_shadows(
+            ui.painter(),
+            rect,
+            tokens.number("r-md"),
+            tokens.shadow(if tooltip.is_some() {
+                "shadow-sm"
+            } else {
+                "shadow-md"
+            }),
+            1.,
+        );
         ui.painter().rect(
             rect,
             tokens.number("r-md"),
@@ -1832,14 +1978,13 @@ fn paint_icon_with(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color
     }
 }
 
-/// Pixel density of [`hover_blur_image`]: 2× the card, so HiDPI displays
+/// Pixel density of [`card_media_image`]: 2× the card, so HiDPI displays
 /// sample it without upscaling.
-const HOVER_BLUR_DENSITY: f64 = 2.;
+const CARD_MEDIA_DENSITY: f64 = 2.;
 
-/// The card's cover-cropped media, resized to 2× the card and blurred with the
-/// shipping `blur(2px)` standard deviation. Built off the UI thread once per
-/// card; the hover treatment fades it in over the sharp image.
-pub fn hover_blur_image(image: &egui::ColorImage) -> Option<egui::ColorImage> {
+/// The card's cover-cropped media, resized to 2× the card. Built off the UI
+/// thread once per card; every CSS blur of the media starts from it.
+pub fn card_media_image(image: &egui::ColorImage) -> Option<egui::ColorImage> {
     use captures_app::preview::{THUMBNAIL_CARD_HEIGHT, THUMBNAIL_PADDING, THUMBNAIL_WIDTH};
     let [width, height] = image.size;
     if width == 0 || height == 0 {
@@ -1858,8 +2003,8 @@ pub fn hover_blur_image(image: &egui::ColorImage) -> Option<egui::ColorImage> {
     let pixels = image::RgbaImage::from_raw(width as u32, height as u32, image.as_raw().to_vec())?;
     let cropped = image::imageops::crop_imm(&pixels, crop_x, crop_y, crop_width, crop_height);
     let target = [
-        (f64::from(card.x) * HOVER_BLUR_DENSITY) as u32,
-        (f64::from(card.y) * HOVER_BLUR_DENSITY) as u32,
+        (f64::from(card.x) * CARD_MEDIA_DENSITY) as u32,
+        (f64::from(card.y) * CARD_MEDIA_DENSITY) as u32,
     ];
     let resized = image::imageops::resize(
         &*cropped,
@@ -1867,12 +2012,65 @@ pub fn hover_blur_image(image: &egui::ColorImage) -> Option<egui::ColorImage> {
         target[1],
         image::imageops::FilterType::Triangle,
     );
-    let sigma = captures_app::preview_chrome::HOVER_MEDIA_BLUR * HOVER_BLUR_DENSITY;
-    let blurred = image::imageops::fast_blur(&resized, sigma as f32);
     Some(egui::ColorImage::from_rgba_premultiplied(
         [target[0] as usize, target[1] as usize],
-        blurred.as_raw(),
+        resized.as_raw(),
     ))
+}
+
+/// The hover treatment's `blur(2px)`: a real Gaussian of [`card_media_image`]
+/// that fades toward the card's edges like the CSS filter.
+pub fn hover_blur_image(media: &egui::ColorImage) -> egui::ColorImage {
+    blurred_card_media(media, captures_app::preview_chrome::HOVER_MEDIA_BLUR as f32)
+}
+
+/// [`crate::effects::blur_card_media`] over the card's fixed `glass-raised`
+/// fill, so cross-fading it with the sharp image never shows the sharp edge
+/// through the blur's transparent fringe.
+pub fn blurred_card_media(media: &egui::ColorImage, sigma: f32) -> egui::ColorImage {
+    let mut blurred = crate::effects::blur_card_media(media, sigma);
+    crate::effects::composite_over(&mut blurred, card_fill());
+    blurred
+}
+
+/// The fixed media palette's `glass-raised`, identical in every variant.
+fn card_fill() -> Color32 {
+    static FILL: std::sync::OnceLock<Color32> = std::sync::OnceLock::new();
+    *FILL.get_or_init(|| {
+        crate::tokens::load()["dark-mustard"]
+            .color("glass-raised")
+            .to_opaque()
+    })
+}
+
+/// The dismiss streak's stepped `feGaussianBlur stdDeviation="σ 0"` copies
+/// (`thumbnail-motion-blur-a/b/c`), each horizontal only.
+pub fn streak_blur_images(media: &egui::ColorImage) -> Vec<egui::ColorImage> {
+    let half = crate::effects::downsample(media);
+    STREAK_BLURS
+        .iter()
+        .map(|&sigma| crate::effects::gaussian_blur(&half, [sigma, 0.], [0, 0]))
+        .collect()
+}
+
+/// Shipping `thumbnail-motion-blur-{a,b,c}` standard deviations, points.
+pub const STREAK_BLURS: [f32; 3] = [3.5, 8., 14.];
+
+/// Which streak filter shows for the shared pose's interpolated blur. CSS
+/// cannot interpolate `url()` filters, so each keyframe pair flips at its
+/// midpoint: `None` keeps the locked `blur(2px) brightness(.5)` hover look,
+/// `Some(i)` is [`STREAK_BLURS`]`[i]` at full brightness.
+pub fn streak_step(blur: f64) -> Option<usize> {
+    let hover = captures_app::preview_chrome::HOVER_MEDIA_BLUR as f32;
+    let mut previous = hover;
+    let mut step = None;
+    for (index, &sigma) in STREAK_BLURS.iter().enumerate() {
+        if blur as f32 >= (previous + sigma) / 2. {
+            step = Some(index);
+        }
+        previous = sigma;
+    }
+    step
 }
 
 fn cover_uv(image: egui::Vec2, target: egui::Vec2) -> egui::Rect {
@@ -2032,6 +2230,7 @@ mod tests {
                 warning: None,
                 depth_shade: 1.,
                 pile: PileTransform::IDENTITY,
+                depth_blurred: [(0., None); 2],
             },
         );
         let mut output = ctx.end_pass();
@@ -2089,6 +2288,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    depth_blurred: [(0., None); 2],
                 },
             );
             let mut output = ctx.end_pass();
@@ -2182,6 +2382,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    depth_blurred: [(0., None); 2],
                 },
             );
             let mut output = ctx.end_pass();
@@ -2260,6 +2461,7 @@ mod tests {
                         warning: None,
                         depth_shade: 1.,
                         pile: PileTransform::IDENTITY,
+                        depth_blurred: [(0., None); 2],
                     },
                 );
             });
@@ -2337,6 +2539,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    depth_blurred: [(0., None); 2],
                 },
             );
             let mut output = ctx.end_pass();
@@ -2647,6 +2850,7 @@ mod tests {
                 warning: Some(preview_chrome::WARNING_CLIPBOARD_UNAVAILABLE),
                 depth_shade: 1.,
                 pile: PileTransform::IDENTITY,
+                depth_blurred: [(0., None); 2],
             },
         );
         let mut output = ctx.end_pass();
@@ -2674,6 +2878,7 @@ mod tests {
                 &tokens,
                 screen,
                 ExitView {
+                    streak: &[],
                     texture: &texture,
                     blurred: None,
                     kind,
@@ -2686,7 +2891,11 @@ mod tests {
             let mut output = ctx.end_pass();
             assert!(painted_texts(&output).is_empty(), "exits paint no chrome");
             let chips = output.shapes.iter().any(
-                |shape| matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.vertices.len() > 4),
+                // Chips sample the capture; shadow meshes sample their masks.
+                |shape| {
+                    matches!(&shape.shape, egui::Shape::Mesh(mesh)
+                    if mesh.vertices.len() > 4 && mesh.texture_id == texture.id())
+                },
             );
             assert_eq!(chips, mesh, "{kind:?}");
             output.textures_delta.clear();
@@ -2800,6 +3009,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    depth_blurred: [(0., None); 2],
                 },
             );
             let mut output = ctx.end_pass();
@@ -2883,6 +3093,7 @@ mod tests {
                 warning: None,
                 depth_shade: 1.,
                 pile: PileTransform::IDENTITY,
+                depth_blurred: [(0., None); 2],
             },
         );
         let mut output = ctx.end_pass();
@@ -3044,22 +3255,47 @@ mod tests {
     }
 
     #[test]
-    fn hover_blur_copy_is_card_sized_cover_cropped_and_softened() {
+    fn card_media_is_card_sized_cover_cropped_and_blurs_like_css() {
         let mut image = egui::ColorImage::filled([800, 200], Color32::BLACK);
         for y in 0..200 {
             for x in 400..800 {
                 image.pixels[y * 800 + x] = Color32::WHITE;
             }
         }
-        let blurred = hover_blur_image(&image).unwrap();
-        assert_eq!(blurred.size, [568, 320]);
+        let media = card_media_image(&image).unwrap();
+        assert_eq!(media.size, [568, 320]);
+        assert!(card_media_image(&egui::ColorImage::filled([0, 0], Color32::BLACK)).is_none());
+        let blurred = hover_blur_image(&media);
+        assert_eq!(
+            blurred.size,
+            [284, 160],
+            "a 2 pt blur needs only 1 px per point"
+        );
         // The hard black/white edge at the centre is spread across pixels.
-        let row = 160 * 568;
-        let edge = blurred.pixels[row + 284];
+        let row = 80 * 284;
+        let edge = blurred.pixels[row + 142];
         assert!(edge.r() > 20 && edge.r() < 235, "{edge:?}");
-        assert_eq!(blurred.pixels[row].r(), 0);
-        assert_eq!(blurred.pixels[row + 567].r(), 255);
-        assert!(hover_blur_image(&egui::ColorImage::filled([0, 0], Color32::BLACK)).is_none());
+        assert_eq!(blurred.pixels[row + 20].r(), 0);
+        assert_eq!(blurred.pixels[row + 260].r(), 255);
+        // The blur fades past the card edge into the card's fill.
+        assert_eq!(blurred.pixels[row + 283].a(), 255);
+        assert!(blurred.pixels[row + 283].r() < 200);
+        let streaks = streak_blur_images(&media);
+        assert_eq!(streaks.len(), 3);
+        // Horizontal only: rows keep full alpha at the top edge.
+        assert_eq!(streaks[2].pixels[142].a(), 255);
+        assert!(streaks[2].pixels[row + 142].r() > streaks[0].pixels[row + 142].r() / 2);
+    }
+
+    #[test]
+    fn streak_steps_flip_at_each_keyframe_midpoint() {
+        assert_eq!(streak_step(2.), None);
+        assert_eq!(streak_step(2.7), None);
+        assert_eq!(streak_step(2.8), Some(0));
+        assert_eq!(streak_step(5.7), Some(0));
+        assert_eq!(streak_step(5.8), Some(1));
+        assert_eq!(streak_step(11.), Some(2));
+        assert_eq!(streak_step(14.), Some(2));
     }
 
     #[test]

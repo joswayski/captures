@@ -243,6 +243,8 @@ enum Reply {
         result: Result<Decoded, String>,
         /// Card-sized pre-blurred copy for the hover treatment.
         blurred: Option<egui::ColorImage>,
+        /// Card-sized sharp media for later CSS blurs (pile depth, streak).
+        media: Option<egui::ColorImage>,
     },
 }
 
@@ -692,6 +694,10 @@ struct PreviewCard {
     texture: Option<egui::TextureHandle>,
     /// Pre-blurred copy for the shipping hover blur.
     blurred: Option<egui::TextureHandle>,
+    /// Card-sized sharp media at 2 px per point, the source of later blurs.
+    media: Option<std::sync::Arc<egui::ColorImage>>,
+    /// Pile depth blurs by radius (points), rebuilt as depths change.
+    depth_blurred: Vec<(f32, egui::TextureHandle)>,
     size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
@@ -707,17 +713,53 @@ struct PreviewCard {
     copy_failed: bool,
 }
 
+impl PreviewCard {
+    /// Build the pile media blurs for `depth` (fanned and resting radii),
+    /// dropping radii no longer in use.
+    fn prepare_depth_blurs(&mut self, ctx: &egui::Context, depth: usize) {
+        let Some(media) = self.media.clone() else {
+            return;
+        };
+        let radii = [true, false]
+            .map(|hovered| captures_app::preview::collapsed_media_blur(depth, hovered) as f32);
+        self.depth_blurred
+            .retain(|(radius, _)| radii.contains(radius));
+        for radius in radii {
+            if radius > 0. && self.depth_blur(radius).is_none() {
+                let image = crate::mini_preview::blurred_card_media(&media, radius);
+                let texture = ctx.load_texture(
+                    "mini-preview-depth-blur",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.depth_blurred.push((radius, texture));
+            }
+        }
+    }
+
+    fn depth_blur(&self, radius: f32) -> Option<egui::TextureHandle> {
+        self.depth_blurred
+            .iter()
+            .find(|(prepared, _)| *prepared == radius)
+            .map(|(_, texture)| texture.clone())
+    }
+}
+
 /// A card playing its exit animation after leaving the stack.
 struct ExitingCard {
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
     dust: std::sync::Arc<Vec<captures_app::preview_motion::DustParticle>>,
+    media: Option<std::sync::Arc<egui::ColorImage>>,
+    /// The Close streak's stepped blurs, built when the exit first paints.
+    streak: Vec<egui::TextureHandle>,
 }
 
 #[derive(Clone)]
 struct PreviewExitRender {
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
+    streak: Vec<egui::TextureHandle>,
     kind: captures_app::preview_motion::ExitKind,
     elapsed_ms: f64,
     dust: std::sync::Arc<Vec<captures_app::preview_motion::DustParticle>>,
@@ -740,6 +782,8 @@ struct PreviewRenderCard {
     height: u32,
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
+    /// Pile media blurs at the hover and rest radii, ascending.
+    depth_blurred: [(f32, Option<egui::TextureHandle>); 2],
     size_bytes: u64,
     busy: Option<crate::mini_preview::Busy>,
     message: Option<String>,
@@ -904,6 +948,8 @@ impl MiniPreviews {
                 height: artifact.entry.height,
                 texture: None,
                 blurred: None,
+                media: None,
+                depth_blurred: Vec::new(),
                 size_bytes: artifact.entry.size_bytes,
                 busy: None,
                 message: None,
@@ -1052,6 +1098,7 @@ impl MiniPreviews {
             Vec::new()
         };
         let blurred = card.blurred.clone();
+        let media = card.media.clone();
         let live = self.stack.ids().to_vec();
         let now = self.now_ms();
         if self.exits.begin(
@@ -1069,6 +1116,8 @@ impl MiniPreviews {
                     texture,
                     blurred,
                     dust: std::sync::Arc::new(dust),
+                    media,
+                    streak: Vec::new(),
                 },
             );
         }
@@ -1593,14 +1642,16 @@ impl Live {
                         path,
                     } => {
                         let result = decode(&path);
-                        let blurred = result.as_ref().ok().and_then(|decoded| {
-                            crate::mini_preview::hover_blur_image(&decoded.image)
+                        let media = result.as_ref().ok().and_then(|decoded| {
+                            crate::mini_preview::card_media_image(&decoded.image)
                         });
+                        let blurred = media.as_ref().map(crate::mini_preview::hover_blur_image);
                         Reply::PreviewDecoded {
                             generation,
                             artifact_id,
                             result,
                             blurred,
+                            media,
                         }
                     }
                     Job::Copy {
@@ -4721,6 +4772,7 @@ impl Live {
                     artifact_id,
                     result,
                     blurred,
+                    media,
                 } if self.previews.accepts(&artifact_id, generation) => match result {
                     Ok(decoded) => {
                         self.finish_restore(&artifact_id, generation, true);
@@ -4742,6 +4794,8 @@ impl Live {
                                 egui::TextureOptions::LINEAR,
                             )
                         });
+                        card.media = media.map(std::sync::Arc::new);
+                        card.depth_blurred.clear();
                         card.arrived_at = Some(Instant::now());
                         // A card appearing under a resting pointer must not
                         // open its hover chrome until the pointer moves.
@@ -5495,6 +5549,32 @@ impl Live {
             self.previews.visibility.stack_origin(),
             placement,
         );
+        // Rear pile media blurs (`pose × 1.15px`, `× 0.75px` fanned): real
+        // Gaussians of each card's media, built once per radius on the first
+        // compact frame at that depth; settled frames reuse them.
+        if collapsed || fly.is_some() {
+            for (live_index, artifact_id) in live_ids.iter().enumerate() {
+                let Some(depth) = count.checked_sub(live_index + 1) else {
+                    continue;
+                };
+                if let Some(card) = self.previews.cards.get_mut(artifact_id) {
+                    card.prepare_depth_blurs(ctx, depth);
+                }
+            }
+        }
+        // The Close streak's stepped horizontal blurs, once per exit.
+        for exiting in self.previews.exiting.values_mut() {
+            if exiting.streak.is_empty()
+                && let Some(media) = &exiting.media
+            {
+                exiting.streak = crate::mini_preview::streak_blur_images(media)
+                    .into_iter()
+                    .map(|image| {
+                        ctx.load_texture("mini-preview-streak", image, egui::TextureOptions::LINEAR)
+                    })
+                    .collect();
+            }
+        }
         let cards = display
             .iter()
             .enumerate()
@@ -5527,6 +5607,11 @@ impl Live {
                     height: card.height,
                     texture: card.texture.clone()?,
                     blurred: card.blurred.clone(),
+                    depth_blurred: [true, false].map(|hovered| {
+                        let radius =
+                            captures_app::preview::collapsed_media_blur(pile_depth, hovered) as f32;
+                        (radius, card.depth_blur(radius))
+                    }),
                     size_bytes: card.size_bytes,
                     busy: card.busy,
                     message: card.message.clone(),
@@ -5568,6 +5653,7 @@ impl Live {
                 Some(PreviewExitRender {
                     texture: card.texture.clone(),
                     blurred: card.blurred.clone(),
+                    streak: card.streak.clone(),
                     kind: exit.kind,
                     elapsed_ms: exit.elapsed_ms(exits_now),
                     dust: card.dust.clone(),
@@ -5805,6 +5891,10 @@ impl Live {
                                 right_anchor: placement.is_right(),
                                 top_anchor,
                                 blurred: card.blurred.as_ref(),
+                                depth_blurred: [
+                                    (card.depth_blurred[0].0, card.depth_blurred[0].1.as_ref()),
+                                    (card.depth_blurred[1].0, card.depth_blurred[1].1.as_ref()),
+                                ],
                                 editor: card.editor_phase,
                                 editor_elapsed_ms: crate::motion::elapsed_ms(
                                     card.editor_since,
@@ -6133,6 +6223,7 @@ impl Live {
                                             crate::mini_preview::ExitView {
                                                 texture: &exit.texture,
                                                 blurred: exit.blurred.as_ref(),
+                                                streak: &exit.streak,
                                                 kind: exit.kind,
                                                 elapsed_ms: exit.elapsed_ms,
                                                 dust: &exit.dust,
@@ -10221,6 +10312,7 @@ mod tests {
                 image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
             }),
             blurred: None,
+            media: None,
         };
         let decode_job = || match requests.try_recv() {
             Ok(Job::DecodePreview {
@@ -10290,6 +10382,7 @@ mod tests {
                 artifact_id: id.clone(),
                 result: Err("unreadable".into()),
                 blurred: None,
+                media: None,
             })
             .unwrap();
         live.logic(&ctx, &mut frame);

@@ -7,6 +7,7 @@ mod compare_overlay;
 mod countdown;
 mod diagnostics;
 mod editor;
+mod effects;
 mod feedback;
 mod glass_tooltip;
 mod history;

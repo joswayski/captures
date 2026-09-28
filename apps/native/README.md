@@ -414,9 +414,10 @@ cards between the list and the compact pile, and the stack toolbar enters, leave
 and clears with its shipping keyframes; the Show less pill morphs over 240 ms.
 New cards fade an accent capture highlight, main-action glyphs pop when they
 change, the clipboard chip arrives with its bounce and a hovered pile sparkles.
-Reduce Motion skips every exit, flight, highlight and sparkle. Blur-based
-filters are approximated: wgpu draws the dismiss streak as averaged offset copies
-and omits the dust blur beyond its pre-blurred media.
+Reduce Motion skips every exit, flight, highlight and sparkle. The Close streak
+steps through shipping's horizontal Gaussian filters on wgpu (AppKit uses Core
+Image motion blur); dust chips carry only the pre-blurred hover media, not their own
+dissolve blur.
 
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.
 Overflow scrolls without dropping captures; chevron cues at the stack edges
@@ -427,9 +428,11 @@ their capture display and fan on hover, respecting reduced motion. Rear cards ta
 the shipping pile pose from `captures-app::preview::collapsed_card_pose`: the
 per-capture 2.7–3° spin (faded in as a dragged pile nears the vertical middle),
 depth recession through the 900 px perspective, depth scale and peek jitter.
-Neither host has a 3D card transform, so the backward `rotateX` tilt is
-approximated as vertical foreshortening (a y scale). The depth blur is not
-connected.
+The whole 3D pose, `rotateX` keystone included, reaches both hosts as a shared
+projective map; rear media blur with depth (less while fanned), and a hovered pile
+takes the shipping accent ring and glow. Cards and their controls draw the shipping
+box shadows (Core Animation shadow layers on AppKit, cached Gaussian masks on
+wgpu). Glass surfaces do not blur what is behind them yet (`backdrop-filter`).
 
 Show mini previews, all four placement corners and Include mini previews in
 captures use the shared settings. Turning previews off hides retained cards and

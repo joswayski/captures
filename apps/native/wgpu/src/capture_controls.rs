@@ -1149,6 +1149,13 @@ pub(crate) fn paint_guidance(
     } else {
         tokens.color("glass-border-strong")
     };
+    crate::effects::paint_box_shadows(
+        &painter,
+        chip,
+        tokens.number("r-xl"),
+        tokens.shadow("glass-shadow"),
+        1.,
+    );
     painter.rect(
         chip,
         tokens.number("r-xl"),

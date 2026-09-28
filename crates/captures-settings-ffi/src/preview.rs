@@ -227,6 +227,44 @@ pub unsafe extern "C" fn captures_preview_pile_pose_v1(
     true
 }
 
+/// The rear card's full shipping 3D pose as a row-major 3×3 projective map
+/// from card points (relative to the card centre, y down) to offsets from
+/// the posed centre (`dx`, `dy`), keystone included. The front card is the
+/// identity.
+///
+/// # Safety
+/// `id` is a readable NUL-terminated UTF-8 string and `output` aligned
+/// writable storage for nine doubles during this call. False leaves output
+/// unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_pile_projection_v1(
+    id: *const c_char,
+    depth: usize,
+    hovered: bool,
+    gravity: f64,
+    top_anchor: bool,
+    output: *mut [f64; 9],
+) -> bool {
+    if id.is_null() || output.is_null() {
+        return false;
+    }
+    // SAFETY: Caller guarantees a readable terminated string.
+    let Ok(id) = unsafe { CStr::from_ptr(id) }.to_str() else {
+        return false;
+    };
+    let pose = preview::collapsed_card_pose(id, depth, hovered, gravity, top_anchor);
+    // SAFETY: Validated writable output.
+    unsafe { output.write(pose.projection) };
+    true
+}
+
+/// Shipping rear-card media blur radius in points (`pose * 1.15px`, or
+/// `* 0.75px` while the pile fans on hover). Zero for the front card.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_pile_media_blur_v1(depth: usize, hovered: bool) -> f64 {
+    preview::collapsed_media_blur(depth, hovered)
+}
+
 /// Opaque, single-owner policy. Calls on one handle must never overlap.
 pub struct CapturesPreviewVisibility(ThumbnailVisibility);
 
@@ -1032,6 +1070,36 @@ mod tests {
             assert_eq!(
                 (pose.scale_x, pose.scale_y),
                 (expected.scale_x, expected.scale_y)
+            );
+            let mut projection = [0.0; 9];
+            assert!(!captures_preview_pile_projection_v1(
+                null(),
+                1,
+                false,
+                0.,
+                false,
+                &mut projection
+            ));
+            assert!(!captures_preview_pile_projection_v1(
+                c"a".as_ptr(),
+                1,
+                false,
+                0.,
+                false,
+                null_mut()
+            ));
+            assert!(captures_preview_pile_projection_v1(
+                c"capture-1".as_ptr(),
+                1,
+                false,
+                0.,
+                false,
+                &mut projection
+            ));
+            assert_eq!(projection, expected.projection);
+            assert_eq!(
+                captures_preview_pile_media_blur_v1(3, true),
+                preview::collapsed_media_blur(3, true)
             );
         }
     }

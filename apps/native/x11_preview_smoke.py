@@ -6,6 +6,7 @@ software-GL input/pixel evidence, not physical-desktop or accessibility acceptan
 """
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import select
@@ -931,8 +932,22 @@ def main():
                     # while the front card covers y52..212.
                     rear_y = 215 if placement.startswith("top") else 48
                     source = BACKGROUNDS[0][2 if placement.startswith("top") else 0]
-                    expected_rear = [round(s * (1 - .13748) + tint * .13748)
-                                     for s, tint in zip(source, (15, 15, 18))]
+                    shaded = [s * (1 - .13748) + tint * .13748 for s, tint in zip(source, (15, 15, 18))]
+                    # The front card (z-index 80 over the rear's 79) casts
+                    # `--thumbnail-card-shadow: 0 6px 14px rgba(0,0,0,.38),
+                    # 0 2px 5px rgba(0,0,0,.26)` over the whole peek, which is
+                    # at most 7 px from its edge. A CSS blur radius b is a
+                    # Gaussian with sigma b/2; x=100 is 72 px from either
+                    # side, so each layer is a straight blurred edge there.
+                    centre = rear_y + .5
+                    for offset, blur, alpha in ((6, 14, .38), (2, 5, .26)):
+                        # Signed distance from the offset shadow box's near
+                        # edge into the box.
+                        inside = (212 + offset - centre if placement.startswith("top")
+                                  else centre - (52 + offset))
+                        cover = alpha * .5 * (1 + math.erf(inside / (blur / 2) / math.sqrt(2)))
+                        shaded = [channel * (1 - cover) for channel in shaded]
+                    expected_rear = [round(channel) for channel in shaded]
                     actual_rear = run("import", "-window", preview, "-crop", f"1x1+100+{rear_y}",
                                       "-depth", "8", "rgb:-")
                     assert all(abs(a - b) <= 1 for a, b in zip(actual_rear, expected_rear)), (
