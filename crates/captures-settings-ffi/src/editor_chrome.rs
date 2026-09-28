@@ -129,6 +129,7 @@ fn copy() -> Value {
             "text_color": c::TEXT_COLOR, "color": c::COLOR,
         },
         "eraser": eraser(),
+        "brush_cursor": brush_cursor(),
         "text_format": text_format(),
         "layers": {
             "title": l::TITLE, "add": l::ADD, "hide": l::HIDE, "show": l::SHOW,
@@ -179,6 +180,19 @@ fn eraser() -> Value {
         "softness_range": [e::SOFTNESS_RANGE.0, e::SOFTNESS_RANGE.1],
         "softness_marks": marks(&e::SOFTNESS_MARKS),
         "erase_hint": e::ERASE_HINT, "restore_hint": e::RESTORE_HINT,
+    })
+}
+
+/// Erase/Restore ring paint (`editor_chrome::brush_cursor`).
+fn brush_cursor() -> Value {
+    use chrome::brush_cursor as b;
+    json!({
+        "ring_width": b::RING_WIDTH, "ring_rgba": b::RING_RGBA,
+        "erase_fill_rgba": b::ERASE_FILL_RGBA,
+        "restore_fill_accent_alpha": b::RESTORE_FILL_ACCENT_ALPHA,
+        "restore_dash": b::RESTORE_DASH,
+        "halo_width": b::HALO_WIDTH, "halo_rgba": b::HALO_RGBA,
+        "inset_width": b::INSET_WIDTH, "inset_rgba": b::INSET_RGBA,
     })
 }
 
@@ -442,6 +456,11 @@ mod tests {
             "Click a color to remove it everywhere in the layer."
         );
         assert_eq!(eraser["restore_hint"], "Paint to put back what you erased.");
+        let ring = &result["brush_cursor"];
+        assert_eq!(ring["ring_width"], 1.5);
+        assert_eq!(ring["ring_rgba"], json!([1., 1., 1., 0.92]));
+        assert_eq!(ring["halo_rgba"][3], 0.55);
+        assert_eq!(ring["restore_fill_accent_alpha"], 0.08);
         let format = &result["text_format"];
         assert_eq!(format["bold"], "Bold");
         assert_eq!(format["inline_label"], "Edit text on canvas");

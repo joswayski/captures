@@ -3743,6 +3743,7 @@ fn show_shape(
         return;
     }
     if matches!(view.draw_shape, DrawShape::Erase | DrawShape::Restore) {
+        use captures_app::editor_chrome::brush_cursor as brush_ring;
         let clipped_image = preview.intersect(available).intersect(ui.clip_rect());
         let previous_samples = view.brush_points.len();
         let mode = if view.draw_shape == DrawShape::Erase {
@@ -3755,22 +3756,22 @@ fn show_shape(
         let can_start =
             response.drag_started_by(egui::PointerButton::Primary) || response.contains_pointer();
         let mut released = None;
+        let image_at = |point| {
+            presented
+                .document
+                .elements
+                .iter()
+                .rev()
+                .find_map(|element| match element {
+                    Element::Image(image)
+                        if image.base.visible && image.natural_pixel_at(point).is_some() =>
+                    {
+                        Some(image)
+                    }
+                    _ => None,
+                })
+        };
         if first_pass && !view.pending && !viewport_intercepted {
-            let image_at = |point| {
-                presented
-                    .document
-                    .elements
-                    .iter()
-                    .rev()
-                    .find_map(|element| match element {
-                        Element::Image(image)
-                            if image.base.visible && image.natural_pixel_at(point).is_some() =>
-                        {
-                            Some(image)
-                        }
-                        _ => None,
-                    })
-            };
             let mut target = view.brush_points.first().copied().and_then(image_at);
             let mut last_move = None;
             ui.input(|input| {
@@ -3843,9 +3844,28 @@ fn show_shape(
                 );
             }
         }
-        if response.hovered() || !view.brush_points.is_empty() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        }
+        // Shipping `syncRemoveBgHoverCursor`: over a visible image (or for the
+        // whole stroke) the system cursor hides behind the size ring;
+        // elsewhere on the canvas it is `not-allowed`; panning hides the ring.
+        let stroking = !view.brush_points.is_empty();
+        let pointer = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|pointer| stroking || (response.hovered() && available.contains(*pointer)));
+        let ring = pointer.and_then(|pointer| {
+            let panning = view.viewport_pan.is_some() || ui.input(|input| input.modifiers.command);
+            let over_image = image_at(image_point(pointer, preview, bounds)).is_some();
+            match brush_ring::hover(over_image, stroking, panning) {
+                brush_ring::Hover::Ring => {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                    Some(pointer)
+                }
+                brush_ring::Hover::NotAllowed => {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+                    None
+                }
+                brush_ring::Hover::Pan => None,
+            }
+        });
         let position = |point: Point| {
             egui::pos2(
                 preview.left() + (point.x / bounds.width) as f32 * preview.width(),
@@ -3865,15 +3885,22 @@ fn show_shape(
                 feedback,
             ));
         }
-        let cursor = view
-            .brush_points
-            .last()
-            .copied()
-            .map(position)
-            .or_else(|| ui.input(|input| input.pointer.hover_pos()));
-        if let Some(cursor) = cursor.filter(|point| clipped_image.contains(*point)) {
-            let radius = (view.brush_size / bounds.width) as f32 * preview.width() / 2.;
-            painter.circle_stroke(cursor, radius.max(2.), feedback);
+        if let Some(center) = ring {
+            // `position: fixed`: the ring is not clipped to the image or canvas.
+            let diameter = brush_ring::screen_diameter(
+                view.brush_size,
+                f64::from(preview.width()) / bounds.width,
+            );
+            canvas::paint_brush_cursor(
+                &ui.ctx().layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    ui.scope_id().with("brush-cursor"),
+                )),
+                center,
+                diameter as f32,
+                mode == BrushMode::Restore,
+                tokens.color("theme-accent"),
+            );
         }
         if first_pass && released.is_some() {
             let points = std::mem::take(&mut view.brush_points);
@@ -10006,6 +10033,75 @@ mod tests {
         view.cancel_drawing();
         frame(&mut view, vec![button(250., 170., false)], false);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn brush_ring_replaces_the_cursor_over_images_like_shipping() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(1200, 600));
+        value.document = Arc::new(Document::new_capture("fixture", 1200., 600., None));
+        view.receive(&ctx, Ok(value));
+        view.draw_shape = DrawShape::Erase;
+        view.brush_size = 28.;
+        let (tx, _rx) = mpsc::channel();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
+        let preview = egui::Rect::from_min_size(egui::pos2(220., 140.), egui::vec2(600., 300.));
+        let frame = |view: &mut View, x: f32, y: f32, modifiers: egui::Modifiers| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::PointerMoved(egui::pos2(x, y)),
+                    ],
+                    ..Default::default()
+                },
+                |_| {
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("brush-ring-test"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    show_shape(&mut ui, test_tokens(), view, &tx, screen, preview, false);
+                },
+            );
+            output.textures_delta.clear();
+            // Filled disc radius: 28 document px at 0.5× is a 14 pt ring.
+            let rings = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::epaint::Shape::Circle(circle)
+                        if circle.center == egui::pos2(x, y) && circle.radius == 7.)
+                })
+                .count();
+            (
+                output.platform_output.cursor_icon,
+                rings,
+                output.shapes.len(),
+            )
+        };
+        // egui hovers a widget from the previous pass's layout.
+        frame(&mut view, 250., 170., Default::default());
+        // Over the capture image: no system cursor, the ring at the pointer
+        // (fill, halo, inset and border for Erase).
+        let (cursor, rings, _) = frame(&mut view, 250., 170., Default::default());
+        assert_eq!((cursor, rings), (egui::CursorIcon::None, 1));
+        // Off the image, still on the canvas: `not-allowed`, no ring.
+        let (cursor, rings, _) = frame(&mut view, 100., 100., Default::default());
+        assert_eq!((cursor, rings), (egui::CursorIcon::NotAllowed, 0));
+        // Pan-ready (Cmd/Ctrl) hides the ring.
+        let (cursor, rings, _) = frame(&mut view, 250., 170., egui::Modifiers::COMMAND);
+        assert_ne!(cursor, egui::CursorIcon::None);
+        assert_eq!(rings, 0);
+        // Restore dashes the border into many segments over the accent fill.
+        let (_, erase_rings, erase_shapes) = frame(&mut view, 250., 170., Default::default());
+        view.draw_shape = DrawShape::Restore;
+        let (cursor, rings, restore_shapes) = frame(&mut view, 250., 170., Default::default());
+        assert_eq!((cursor, rings, erase_rings), (egui::CursorIcon::None, 1, 1));
+        assert!(restore_shapes > erase_shapes + 4);
     }
 
     #[test]
