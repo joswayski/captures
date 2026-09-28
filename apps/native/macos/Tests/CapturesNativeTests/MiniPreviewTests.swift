@@ -211,7 +211,9 @@ final class MiniPreviewTests: XCTestCase {
                                                  anchorPoint: CGPoint(x: 0.5, y: 0.5), flipped: true)
         let top = mapped(tilt, CGPoint(x: 100, y: -50)).x - mapped(tilt, CGPoint(x: -100, y: -50)).x
         let bottom = mapped(tilt, CGPoint(x: 100, y: 50)).x - mapped(tilt, CGPoint(x: -100, y: 50)).x
-        XCTAssertGreaterThan(top, bottom)
+        // w = 1 - 0.001·y: the y = -50 edge divides by 1.05, the y = 50 edge by 0.95.
+        XCTAssertEqual(top, 200 / 1.05, accuracy: 1e-9)
+        XCTAssertEqual(bottom, 200 / 0.95, accuracy: 1e-9)
         XCTAssertTrue(CATransform3DIsIdentity(MiniPreviewView.pileTransform(
             projection: [1, 0, 0, 0, 1, 0, 0, 0, 1], size: size, anchorPoint: CGPoint(x: 0.5, y: 0.5),
             flipped: false)))

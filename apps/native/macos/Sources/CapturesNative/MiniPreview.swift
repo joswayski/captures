@@ -957,11 +957,12 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         editorRing.opacity = !compact && editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) ? 1 : 0
         CATransaction.commit()
-        setMediaHovered(!compact && chromeVisible, animated: false)
+        // Clear the pile blur first: the hover blur shares the media filter.
         if !compact {
             if depthBlurRadius != 0 { setDepthBlur(0) }
             setPileGlow(false, duration: 0)
         }
+        setMediaHovered(!compact && chromeVisible, animated: false)
         updateWarning()
     }
 
@@ -1559,6 +1560,8 @@ final class MiniPreviewView: NSView {
             let rest = captures_preview_pile_media_blur_v1(depths[id] ?? 0, false)
             card.setDepthBlur(collapsing ? rest : 0, from: collapsing ? 0 : rest,
                               duration: fly.duration, timing: fly.timing)
+            // Expanding drops the hovered pile's glow over `--dur-4`.
+            if !collapsing { card.setPileGlow(false, duration: Double(tokens.number("dur-4")) / 1000) }
             if !collapsing { card.frame = pile }
             moves.append((card, collapsing ? pile : laid))
         }
