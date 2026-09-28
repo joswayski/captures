@@ -804,6 +804,35 @@ pcm.!pulse {
                     "the screenshot must not pause, restart or split the take"
                 wait(lambda: windows("Captures Recording Region") == [guide], "region guide restored")
 
+            # Over the take's region selector, New Capture brings back the
+            # controls the screenshot concealed (shipping
+            # `restore_hidden_recording_controls`), and Screenshot Display
+            # saves the pointer's display at once with the selector in it
+            # (`start_capture_inner(Display)` with `includes_capture_ui`).
+            before = manifest()
+            run("xdotool", "mousemove", "--sync", "640", "600")
+            run("xdotool", "key", "ctrl+shift+F7")
+            selector = painted_selector("Captures Region Selection", "region selector to recapture")
+            run("xdotool", "key", "ctrl+shift+F10")
+            wait(lambda: windows("Captures Recording Controls"), "concealed controls restored")
+            assert windows("Captures Region Selection") == [selector], "New Capture closed the selector"
+            assert not windows("Captures") and not windows("Captures Capture Controls")
+            shot("root", "region-selector-controls-restored")
+            run("xdotool", "key", "ctrl+shift+F9")
+            counted_down = []
+
+            def recaptured_display():
+                counted_down.extend(windows("Captures Screenshot Countdown"))
+                return len(screenshots()) == 3 and screenshots()[-1]
+            metadata = wait(recaptured_display, "display recapture publication")
+            assert not counted_down, "the display recapture counted down"
+            entry = json.loads(metadata.read_text())
+            assert (entry["mode"], entry["width"], entry["height"]) == ("display", 1280, 900), entry
+            wait(lambda: not windows("Captures Region Selection"), "selector closed after the recapture")
+            hud = wait(lambda: windows("Captures Recording Controls"),
+                       "controls after the display recapture")[0]
+            unchanged_take(before)
+
             # Shipping `start_capture_inner(Region)`: the region shortcut opens
             # the selector over the running take, like its Screenshot button.
             before = manifest()
@@ -820,7 +849,7 @@ pcm.!pulse {
                     break
             else:
                 raise AssertionError("region screenshot beside the take was not confirmed")
-            metadata = wait(lambda: len(screenshots()) == 3 and screenshots()[-1],
+            metadata = wait(lambda: len(screenshots()) == 4 and screenshots()[-1],
                             "region screenshot publication")
             entry = json.loads(metadata.read_text())
             assert (entry["mode"], entry["width"], entry["height"]) == ("region", 310, 170), entry
@@ -850,7 +879,7 @@ pcm.!pulse {
                 shot(selector, "window-screenshot-selector-paused")
                 click(selector, 660, 360)  # The direct window picker commits the click.
                 wait(lambda: windows("Captures Screenshot Countdown"), "window screenshot countdown")
-                metadata = wait(lambda: len(screenshots()) == 4 and screenshots()[-1],
+                metadata = wait(lambda: len(screenshots()) == 5 and screenshots()[-1],
                                 "window screenshot publication")
                 entry = json.loads(metadata.read_text())
                 assert (entry["mode"], entry["width"], entry["height"]) == ("window", 421, 237), entry
@@ -870,7 +899,7 @@ pcm.!pulse {
             time.sleep(1)
             hud = wait(lambda: windows("Captures Recording Controls"), "resumed controls")[0]
             click(hud, 142, 54)
-            finished(5)
+            finished(6)
             videos = [path for path in history() if json.loads(path.read_text())["kind"] == "video"]
             assert len(videos) == 1
             entry = json.loads(videos[0].read_text())
@@ -878,7 +907,7 @@ pcm.!pulse {
             assert (entry["width"], entry["height"]) == (310, 170), entry
             media = videos[0].parent / "media.mp4"
             run("ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-")
-            # Four mini previews stack up over the region's left half by the
+            # Five mini previews stack up over the region's left half by the
             # end, so probe its blue right half.
             frames = run("ffmpeg", "-v", "error", "-i", str(media), "-vf", "crop=2:2:280:40",
                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
@@ -891,6 +920,8 @@ pcm.!pulse {
                 "region_shortcut_while_running": True, "window_tray_while_paused": True,
                 "region_and_window_pixels": True, "new_capture_in_progress_dialog": True,
                 "countdown_escape": True, "no_capture_menu": True,
+                "new_capture_restores_concealed_controls": True,
+                "display_recaptures_selector_without_countdown": True,
                 "controls_region_guide_and_previews_excluded": True, "clipboard_png": True,
                 "mini_preview": True, "same_recording_session": True, "single_segment": True,
                 "second_recording_blocked": True, "recording_decoded": True,
@@ -898,7 +929,8 @@ pcm.!pulse {
             }, indent=2))
             print("PASS native recording screenshots: display shortcut and tray, region shortcut "
                   "and window tray beside a running and paused take, countdown Escape, "
-                  "controls/guide/previews excluded, clipboard, busy New Capture dialog, same take, "
+                  "controls/guide/previews excluded, clipboard, busy New Capture dialog, concealed "
+                  "controls restored and display recapture over the selector, same take, "
                   "decode and cleanup")
             return
         if args.ready_notice_only:
