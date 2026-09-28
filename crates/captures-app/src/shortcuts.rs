@@ -131,10 +131,10 @@ impl Routes {
     }
 
     fn event(&mut self, id: u32, state: HotKeyState, blocked: bool) -> bool {
-        let recording = self.routes_busy();
+        let busy = self.routes_busy();
         if !self.enabled
             || (self.suspended && !self.restoring)
-            || (blocked && !recording)
+            || (blocked && !busy)
             || id == HotKey::new(None, Code::Escape).id()
         {
             self.clear();
@@ -143,7 +143,7 @@ impl Routes {
         let Some(binding) = self.bindings.get(&id) else {
             return false;
         };
-        if self.restore_only && binding.action != CaptureShortcut::NewCapture && !recording {
+        if self.restore_only && binding.action != CaptureShortcut::NewCapture && !busy {
             self.armed.remove(&id);
             return false;
         }
@@ -530,12 +530,12 @@ impl CaptureShortcuts {
     pub fn next_action(&self) -> Option<CaptureShortcut> {
         let mut routes = self.dispatcher.routes.lock().unwrap();
         let pending = routes.pending.take();
-        let recording = pending.is_some() && routes.routes_busy();
+        let busy = pending.is_some() && routes.routes_busy();
         (routes.enabled
             && !routes.suspended
-            && (!routes.restore_only || pending == Some(CaptureShortcut::NewCapture) || recording)
+            && (!routes.restore_only || pending == Some(CaptureShortcut::NewCapture) || busy)
             && (routes.restore_only
-                || recording
+                || busy
                 || crate::capture_flow::shortcuts_allowed(routes.selector_generation)))
         .then_some(pending)
         .flatten()
