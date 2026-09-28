@@ -4519,6 +4519,7 @@ mod tests {
         assert_eq!(playback.processes.live_count(), 0);
     }
 
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
     fn playback_pcm_uses_accepted_gain_mono_trim_and_frequency() {
         let Some((toolchain, ffmpeg, _ffprobe)) = cross_platform_toolchain() else {
