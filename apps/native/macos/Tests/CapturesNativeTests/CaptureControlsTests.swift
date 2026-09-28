@@ -377,6 +377,8 @@ final class CaptureControlsTests: XCTestCase {
         // Under auto-start the hidden primary returns as Retry.
         let automatic = makeView(autoStart: true)
         XCTAssertTrue(automatic.controls.primaryHidden)
+        // A start only fails after a target was chosen; its selection stays.
+        automatic.setTarget(.display)
         automatic.controls.setInFlight(.starting)
         automatic.controls.showInlineError("Display changed")
         XCTAssertFalse(automatic.controls.primaryHidden)
