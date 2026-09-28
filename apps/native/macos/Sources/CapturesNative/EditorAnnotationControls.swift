@@ -36,7 +36,7 @@ final class EditorAnnotationControls: NSView {
     let opacitySlider: EditorMarkedSlider
     let shadowFields: EditorDropShadowFields
 
-    init(tokens: Tokens, formatter: NumberFormatter, width: CGFloat = 272) {
+    init(tokens: Tokens, formatter: NumberFormatter, width: CGFloat = ScreenshotEditorController.contentWidth) {
         self.tokens = tokens
         strokeSwatches = ColorSwatchRow(tokens: tokens, label: EditorColors.text("stroke_color"), compact: false)
         fillSwatches = ColorSwatchRow(tokens: tokens, label: EditorColors.text("fill_color"), compact: false)

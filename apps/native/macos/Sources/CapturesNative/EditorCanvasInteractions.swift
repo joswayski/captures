@@ -295,7 +295,7 @@ final class EditorCurveControls: NSView {
     private(set) var handles: NativeCurveHandles?
     private var ready = false
 
-    init(tokens: Tokens, width: CGFloat = 272) {
+    init(tokens: Tokens, width: CGFloat = ScreenshotEditorController.contentWidth) {
         self.tokens = tokens
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: 0))
         setAccessibilityLabel("Curve controls")

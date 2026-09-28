@@ -189,7 +189,7 @@ final class ClosurePopUpButton: NSPopUpButton {
     /// Select an item as a click in the listbox does, reporting the change.
     func choose(_ index: Int) {
         closeListbox()
-        guard (0..<numberOfItems).contains(index), let item = item(at: index), item.isEnabled else { return }
+        guard (0..<numberOfItems).contains(index), let option = self.item(at: index), option.isEnabled else { return }
         // Like the native menu, choosing reports even the current item.
         selectItem(at: index)
         needsDisplay = true
