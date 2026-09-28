@@ -3750,9 +3750,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     @objc private func outputOptionsChanged() {
         if outputQuality.indexOfSelectedItem != lastQualityIndex {
-            // Shipping `applyQualityMode`: a new mode shows the comparison again.
+            // Shipping `applyQualityMode`: a new mode shows the comparison
+            // again; Preserve also recentres its split.
             lastQualityIndex = outputQuality.indexOfSelectedItem
             comparisonDismissed = false
+            if lastQualityIndex == 0 { compareView?.split = 0.5 }
         }
         normalizeOutputQuality()
         synchronizeOutputCompressionPreset()

@@ -513,11 +513,11 @@ def main():
     # `--glass-text` on the comparison divider (the fixed media palette).
     GLASS_TEXT = (246, 246, 248)
 
-    def divider_shown(name):
-        """The centred divider paints a glass-text column over the canvas."""
+    def divider_shown(name, split=.5):
+        """The divider paints a glass-text column over the canvas at `split`."""
         window, size = shot_layouts[name]
         left, top, scale = fit_geometry(size, window)
-        x = round(left + size[0] / 2 * scale)
+        x = round(left + size[0] * split * scale)
         for y in (30, 50, 70, 90):  # Clear of the centred handle.
             actual = run("convert", str(output / f"{name}.png"), "-crop",
                          f"1x1+{x}+{round(top + y * scale)}", "-depth", "8", "rgb:-")
@@ -537,6 +537,19 @@ def main():
                 return
             previous = current
         raise AssertionError(f"comparison never settled: {name}")
+
+    def drag_split(split, start_split=.5):
+        """Drag the comparison's round handle from `start_split` to `split`."""
+        size = document_size()
+        left, top, scale = fit_geometry(size)
+        y = round(top + size[1] / 2 * scale)
+        start = round(left + size[0] * start_split * scale)
+        end = round(left + size[0] * split * scale)
+        run("xdotool", "mousemove", "--sync", "--window", editor, str(start), str(y), "sleep", ".2",
+            "mousedown", "1", "sleep", ".2")
+        for x in (start + (end - start) // 2, end):
+            run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
+        run("xdotool", "mouseup", "1", "sleep", ".3")
 
     def export_filename(stem):
         export_click("filename")
@@ -2046,6 +2059,23 @@ def main():
             # before/after comparison covers the canvas on its own.
             compare_settled("output-compare-default")
             assert divider_shown("output-compare-default")
+            # Dragging the round handle moves the split without editing anything.
+            drag_split(.25)
+            compare_settled("output-compare-dragged")
+            assert divider_shown("output-compare-dragged", .25)
+            assert not divider_shown("output-compare-dragged")
+            # The focused split steps like shipping's range: Page Up is a tenth
+            # of its 6-94 % span and Home is its minimum.
+            run("xdotool", "key", "Prior", "sleep", ".3")
+            compare_settled("output-compare-page-up")
+            assert divider_shown("output-compare-page-up", .338)
+            run("xdotool", "key", "Home", "sleep", ".3")
+            compare_settled("output-compare-home")
+            assert divider_shown("output-compare-home", .06)
+            drag_split(.5, .06)
+            compare_settled("output-compare-recentred")
+            assert divider_shown("output-compare-recentred")
+            assert not draft.exists(), "moving the split never saves a draft"
             setting_click(426)
             shot(editor, "output-preset-menu")  # Per-format preset descriptions.
             run("xdotool", "key", "Escape", "sleep", ".2")
@@ -2106,6 +2136,7 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["quality-and-preset-descriptions", "automatic-compare",
+                           "split-handle-drag", "split-keyboard-page-home",
                            "tiny-saved-png-32-colors", "save-reveals-file", "compare-hide-and-show",
                            "highest-saved-png-exact-pixels", "maximum-size-units",
                            "maximum-size-floor-disables-save", "no-draft-or-original-write",

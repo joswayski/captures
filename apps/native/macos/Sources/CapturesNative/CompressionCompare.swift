@@ -23,6 +23,9 @@ enum CompressionCompareCopy {
         let afterHint: String
         let minSplit: CGFloat
         let maxSplit: CGFloat
+        /// The range input's step (0.1 %) and big step (a tenth of its span).
+        let keyStep: CGFloat
+        let pageStep: CGFloat
         /// The recording editor's refresh delay before a sample encodes.
         let refreshDelay: TimeInterval
     }
@@ -47,6 +50,8 @@ enum CompressionCompareCopy {
             afterHint: text("after_hint", "Edits apply to the original. This side updates after you finish."),
             minSplit: CGFloat((value?["min_split"] as? NSNumber)?.doubleValue ?? 0.06),
             maxSplit: CGFloat((value?["max_split"] as? NSNumber)?.doubleValue ?? 0.94),
+            keyStep: CGFloat((value?["key_step"] as? NSNumber)?.doubleValue ?? 0.001),
+            pageStep: CGFloat((value?["page_step"] as? NSNumber)?.doubleValue ?? 0.088),
             refreshDelay: ((value?["refresh_delay_ms"] as? NSNumber)?.doubleValue ?? 350) / 1000)
     }()
 
@@ -65,6 +70,38 @@ enum CompressionCompareCopy {
     static func clampSplit(_ split: CGFloat) -> CGFloat {
         guard !split.isNaN else { return 0.5 }
         return min(copy.maxSplit, max(copy.minSplit, split))
+    }
+
+    /// Keys shipping's focused range input (`.compression-preview-range`)
+    /// takes, as `captures_app::compression_compare::SplitKey`.
+    enum SplitKey: Equatable {
+        case decrease, increase, pageDown, pageUp, home, end
+
+        /// Arrow Left/Down, Arrow Right/Up, Page Down/Up, Home and End.
+        init?(keyCode: UInt16) {
+            switch keyCode {
+            case 123, 125: self = .decrease
+            case 124, 126: self = .increase
+            case 121: self = .pageDown
+            case 116: self = .pageUp
+            case 115: self = .home
+            case 119: self = .end
+            default: return nil
+            }
+        }
+    }
+
+    /// The split after one press of `key` on the focused range.
+    static func keyboardSplit(_ split: CGFloat, _ key: SplitKey) -> CGFloat {
+        let current = clampSplit(split)
+        switch key {
+        case .decrease: return clampSplit(current - copy.keyStep)
+        case .increase: return clampSplit(current + copy.keyStep)
+        case .pageDown: return clampSplit(current - copy.pageStep)
+        case .pageUp: return clampSplit(current + copy.pageStep)
+        case .home: return copy.minSplit
+        case .end: return copy.maxSplit
+        }
     }
 }
 
@@ -183,12 +220,22 @@ final class CompressionCompareView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        // The range input's keyboard steps, one percent at a time.
-        switch event.keyCode {
-        case 123: stepSplit(-0.01)
-        case 124: stepSplit(0.01)
-        default: super.keyDown(with: event)
+        // Shipping's range input steps; modified keys stay with the window.
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard modifiers.isEmpty, let key = CompressionCompareCopy.SplitKey(keyCode: event.keyCode) else {
+            super.keyDown(with: event); return
         }
+        pressSplitKey(key)
+    }
+
+    /// One key on the focused split. Like the shipping range, it is disabled
+    /// while a drawing tool is selected or a new encode runs.
+    @discardableResult
+    func pressSplitKey(_ key: CompressionCompareCopy.SplitKey) -> Bool {
+        guard splitActive, stripEnabled else { return false }
+        split = CompressionCompareCopy.keyboardSplit(split, key)
+        onSplitChanged?(split)
+        return true
     }
 
     func stepSplit(_ delta: CGFloat) {
@@ -206,8 +253,8 @@ final class CompressionCompareView: NSView {
         setAccessibilityValue(NSNumber(value: Double(split * 100).rounded()))
     }
 
-    override func accessibilityPerformIncrement() -> Bool { stepSplit(0.01); return true }
-    override func accessibilityPerformDecrement() -> Bool { stepSplit(-0.01); return true }
+    override func accessibilityPerformIncrement() -> Bool { pressSplitKey(.increase) }
+    override func accessibilityPerformDecrement() -> Bool { pressSplitKey(.decrease) }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

@@ -1574,6 +1574,89 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.compareView.isHidden)
     }
 
+    func testComparisonSplitHandleDragsFromTheCanvasAndTakesShippingRangeKeys() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        controller.window.setContentSize(NSSize(width: 1000, height: 560))
+        controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+        try showComparison(controller, worker)
+        let compare: CompressionCompareView = controller.compareView
+        let host = try XCTUnwrap(compare.superview)
+        waitUntil(timeout: 3) {
+            compare.mediaRect.width > 1
+                && compare.mediaRect == compare.convert(controller.presentedImageRect, from: host)
+                && compare.visibleRect.contains(compare.handleRect)
+        }
+        XCTAssertEqual(compare.split, 0.5)
+        let media = compare.mediaRect
+        let centre = NSPoint(x: compare.handleRect.midX, y: compare.handleRect.midY)
+        // The canvas routes a press on the round handle to the split, not to drawing.
+        let parent = try XCTUnwrap(host.superview)
+        XCTAssertTrue(host.hitTest(parent.convert(centre, from: compare)) === compare)
+        func mouse(_ type: NSEvent.EventType, _ x: CGFloat) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: compare.convert(NSPoint(x: x, y: centre.y), to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: controller.window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        var reported: [CGFloat] = []
+        compare.onSplitChanged = { reported.append($0) }
+        let snapshotBeforeDrag = controller.state.snapshot
+        let comparesBeforeDrag = worker.compares.count
+        compare.mouseDown(with: try mouse(.leftMouseDown, centre.x))
+        compare.mouseDragged(with: try mouse(.leftMouseDragged, media.minX + media.width * 0.4))
+        XCTAssertEqual(compare.split, 0.4, accuracy: 0.001)
+        compare.mouseUp(with: try mouse(.leftMouseUp, media.minX + media.width * 0.25))
+        XCTAssertEqual(compare.split, 0.25, accuracy: 0.001)
+        XCTAssertEqual(compare.handleRect.midX, media.minX + media.width * 0.25, accuracy: 0.5)
+        XCTAssertFalse(reported.isEmpty)
+        XCTAssertTrue(controller.window.firstResponder === compare, "dragging focuses the split")
+        XCTAssertEqual(controller.state.snapshot, snapshotBeforeDrag, "moving the split never edits the image")
+        XCTAssertEqual(worker.compares.count, comparesBeforeDrag, "moving the split never re-encodes")
+
+        // Shipping's range keys: 0.1 % arrows, a tenth of the span for Page Up/Down, Home/End.
+        func key(_ code: UInt16) throws -> NSEvent {
+            let functionKeys: [UInt16: String] = [123: "\u{F702}", 124: "\u{F703}", 125: "\u{F701}",
+                                                   115: "\u{F729}", 119: "\u{F72B}", 116: "\u{F72C}",
+                                                   121: "\u{F72D}"]
+            let characters = functionKeys[code] ?? ""
+            return try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.function],
+                timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters, isARepeat: false,
+                keyCode: code))
+        }
+        compare.keyDown(with: try key(124)); XCTAssertEqual(compare.split, 0.251, accuracy: 1e-6)
+        compare.keyDown(with: try key(125)); XCTAssertEqual(compare.split, 0.25, accuracy: 1e-6)
+        compare.keyDown(with: try key(116)); XCTAssertEqual(compare.split, 0.338, accuracy: 1e-6)
+        compare.keyDown(with: try key(121)); XCTAssertEqual(compare.split, 0.25, accuracy: 1e-6)
+        compare.keyDown(with: try key(119)); XCTAssertEqual(compare.split, 0.94, accuracy: 1e-6)
+        compare.keyDown(with: try key(115)); XCTAssertEqual(compare.split, 0.06, accuracy: 1e-6)
+        XCTAssertTrue(compare.accessibilityPerformIncrement())
+        XCTAssertEqual(compare.split, 0.061, accuracy: 1e-6)
+        // Dragging past either end stops at the shipping 6-94 % bounds.
+        compare.mouseDown(with: try mouse(.leftMouseDown, compare.handleRect.midX))
+        compare.mouseUp(with: try mouse(.leftMouseUp, media.maxX + 40))
+        XCTAssertEqual(compare.split, 0.94, accuracy: 1e-6)
+
+        // A drawing tool disables the range and its keys; the handle still drags.
+        compare.stripEnabled = false
+        XCTAssertFalse(compare.pressSplitKey(.home))
+        XCTAssertEqual(compare.split, 0.94, accuracy: 1e-6)
+        compare.mouseDown(with: try mouse(.leftMouseDown, compare.handleRect.midX))
+        compare.mouseUp(with: try mouse(.leftMouseUp, media.minX + media.width * 0.7))
+        XCTAssertEqual(compare.split, 0.7, accuracy: 0.001)
+        compare.stripEnabled = true
+
+        // Preserve recentres the split, like shipping `applyQualityMode`.
+        let quality = try popup("Save quality", in: controller.root)
+        quality.selectItem(withTitle: "Preserve quality"); _ = quality.sendAction(quality.action, to: quality.target)
+        XCTAssertEqual(compare.split, 0.5)
+        try showComparison(controller, worker)
+        XCTAssertEqual(compare.split, 0.5)
+    }
+
     func testOutputSizingControlsSendOptionsLockAspectAndRetainDocument() throws {
         _ = NSApplication.shared
         let original = snapshot(id: "shot", width: 641, height: 359, unsaved: true, draft: true)

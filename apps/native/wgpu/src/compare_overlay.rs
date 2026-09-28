@@ -142,6 +142,56 @@ pub fn after_hint_position(pointer: egui::Pos2, frame: Rect, hint: egui::Vec2) -
         )
 }
 
+/// Shipping's focused range input (`step` 0.1 %, Page Up/Down a tenth of
+/// the span, Home/End its ends); off while it is disabled for drawing. The
+/// arrows stay on the split instead of moving egui's focus.
+fn keyboard_split(ui: &egui::Ui, split: f64, ids: [egui::Id; 2]) -> Option<f64> {
+    let focused = ids
+        .into_iter()
+        .find(|id| ui.memory(|memory| memory.has_focus(*id)))?;
+    ui.memory_mut(|memory| {
+        memory.set_focus_lock_filter(
+            focused,
+            egui::EventFilter {
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                ..Default::default()
+            },
+        );
+    });
+    let keys = [
+        (egui::Key::ArrowLeft, compare::SplitKey::Decrease),
+        (egui::Key::ArrowDown, compare::SplitKey::Decrease),
+        (egui::Key::ArrowRight, compare::SplitKey::Increase),
+        (egui::Key::ArrowUp, compare::SplitKey::Increase),
+        (egui::Key::PageDown, compare::SplitKey::PageDown),
+        (egui::Key::PageUp, compare::SplitKey::PageUp),
+        (egui::Key::Home, compare::SplitKey::Home),
+        (egui::Key::End, compare::SplitKey::End),
+    ];
+    let mut next = split;
+    for (key, step) in keys {
+        let presses = ui.input_mut(|input| input.count_and_consume_key(egui::Modifiers::NONE, key));
+        for _ in 0..presses {
+            next = compare::keyboard_split(next, step);
+        }
+    }
+    let actions = ui.input(|input| {
+        use egui::accesskit::Action;
+        (
+            input.num_accesskit_action_requests(focused, Action::Increment),
+            input.num_accesskit_action_requests(focused, Action::Decrement),
+        )
+    });
+    for _ in 0..actions.0 {
+        next = compare::keyboard_split(next, compare::SplitKey::Increase);
+    }
+    for _ in 0..actions.1 {
+        next = compare::keyboard_split(next, compare::SplitKey::Decrease);
+    }
+    (next != split).then_some(next)
+}
+
 /// The divider, handle, badges, Hide pill, Processing veil and error. Call
 /// after the editor's own canvas interactions so the handle, the bottom strip
 /// and Hide take the pointer before them.
@@ -237,18 +287,19 @@ pub fn show_chrome(
                 f64::from(overlay.frame.width()),
             );
             output.split_changed = true;
+        } else if response.clicked() {
+            // A press without a drag still focuses the split for the keys.
+            response.request_focus();
         }
         focused |= response.has_focus();
-        if focused && !overlay.processing {
-            // The range input's keyboard steps, one percent at a time.
-            let step = ui.input(|input| {
-                i32::from(input.key_pressed(egui::Key::ArrowRight))
-                    - i32::from(input.key_pressed(egui::Key::ArrowLeft))
-            });
-            if step != 0 {
-                *split = compare::clamp_split(*split + f64::from(step) * 0.01);
-                output.split_changed = true;
-            }
+        let handle_id = response.id;
+        if focused
+            && !overlay.processing
+            && overlay.range_enabled
+            && let Some(next) = keyboard_split(ui, *split, [handle_id, overlay.id.with("range")])
+        {
+            *split = next;
+            output.split_changed = true;
         }
         let x = split_x(overlay.frame, *split);
         let handle =
@@ -427,6 +478,17 @@ mod tests {
         split: &mut f64,
         events: Vec<egui::Event>,
     ) -> (Output, egui::FullOutput) {
+        run_with(ctx, texture, processing, true, split, events)
+    }
+
+    fn run_with(
+        ctx: &egui::Context,
+        texture: &egui::TextureHandle,
+        processing: bool,
+        range_enabled: bool,
+        split: &mut f64,
+        events: Vec<egui::Event>,
+    ) -> (Output, egui::FullOutput) {
         let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
         let mut shown = Output::default();
         let mut full = ctx.run_ui(
@@ -451,7 +513,7 @@ mod tests {
                         badges: compare::badges(Some(2_000), Some(500), processing),
                         processing,
                         error: None,
-                        range_enabled: true,
+                        range_enabled,
                         after_hint: None,
                     },
                     split,
@@ -555,6 +617,93 @@ mod tests {
         run(&ctx, &texture, false, &mut split, vec![press(hide, true)]);
         let (clicked, _) = run(&ctx, &texture, false, &mut split, vec![press(hide, false)]);
         assert!(clicked.dismissed);
+    }
+
+    #[test]
+    fn focused_split_takes_the_shipping_range_keys_only_while_enabled() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "after",
+            egui::ColorImage::new([2, 2], vec![egui::Color32::RED; 4]),
+            egui::TextureOptions::default(),
+        );
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut split = compare::DEFAULT_SPLIT;
+        let (shown, _) = run(&ctx, &texture, false, &mut split, vec![]);
+        let handle = shown.handle.unwrap().center();
+        run(
+            &ctx,
+            &texture,
+            false,
+            &mut split,
+            vec![egui::Event::PointerMoved(handle)],
+        );
+        run(&ctx, &texture, false, &mut split, vec![press(handle, true)]);
+        run(
+            &ctx,
+            &texture,
+            false,
+            &mut split,
+            vec![press(handle, false)],
+        );
+        assert_eq!(
+            split,
+            compare::DEFAULT_SPLIT,
+            "a click on the handle keeps the split"
+        );
+        // The next frame takes focus and locks the arrows to the split.
+        run(&ctx, &texture, false, &mut split, vec![]);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let step = |events, expected: f64, split: &mut f64| {
+            let (output, _) = run(&ctx, &texture, false, split, events);
+            assert!(close(*split, expected), "{split} != {expected}");
+            output
+        };
+        let output = step(vec![key(egui::Key::ArrowRight)], 0.501, &mut split);
+        assert!(output.split_changed);
+        step(vec![key(egui::Key::ArrowDown)], 0.5, &mut split);
+        step(
+            vec![key(egui::Key::ArrowUp), key(egui::Key::ArrowUp)],
+            0.502,
+            &mut split,
+        );
+        step(vec![key(egui::Key::PageUp)], 0.59, &mut split);
+        step(vec![key(egui::Key::PageDown)], 0.502, &mut split);
+        step(vec![key(egui::Key::End)], compare::MAX_SPLIT, &mut split);
+        step(vec![key(egui::Key::Home)], compare::MIN_SPLIT, &mut split);
+        step(
+            vec![key(egui::Key::ArrowLeft)],
+            compare::MIN_SPLIT,
+            &mut split,
+        );
+        // The arrows kept focus on the split rather than moving it on.
+        step(vec![key(egui::Key::End)], compare::MAX_SPLIT, &mut split);
+        // A drawing tool disables the range; its keys no longer move the split.
+        let (output, _) = run_with(
+            &ctx,
+            &texture,
+            false,
+            false,
+            &mut split,
+            vec![key(egui::Key::Home)],
+        );
+        assert!(!output.split_changed);
+        assert_eq!(split, compare::MAX_SPLIT);
+        // So does a running encode.
+        run(&ctx, &texture, true, &mut split, vec![key(egui::Key::Home)]);
+        assert_eq!(split, compare::MAX_SPLIT);
     }
 
     #[test]
