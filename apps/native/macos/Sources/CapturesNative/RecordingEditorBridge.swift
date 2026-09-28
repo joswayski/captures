@@ -1052,8 +1052,35 @@ enum RecordingEditorCopy {
         request(["operation": "filename_error", "stem": stem])?["error"] as? String
     }
 
-    /// `input` uses the shared EstimateInput keys: estimating, unapplied,
-    /// invalid_maximum, maximum_bytes, estimate_bytes, estimate_exact, original_bytes.
+    /// Shipping's footer defaults for an opened recording
+    /// (`recordingUserFacingDefaults`): the original's folder and filename.
+    static func saveDefaults(savedPath: String?, path: String, createdAt: String,
+                             outputDirectory: String) -> (directory: String, stem: String) {
+        var object: [String: Any] = ["operation": "save_defaults", "path": path,
+                                     "created_at": createdAt, "output_directory": outputDirectory]
+        if let savedPath { object["saved_path"] = savedPath }
+        let value = request(object)
+        return (value?["directory"] as? String ?? outputDirectory,
+                value?["stem"] as? String ?? "Captures_recording")
+    }
+
+    /// `recordingEditedFileStem`: the `-edited` name for a new file.
+    static func editedStem(_ stem: String) -> String {
+        request(["operation": "edited_stem", "stem": stem])?["stem"] as? String ?? "\(stem)-edited"
+    }
+
+    /// Shared live-edit timing and shipping's WebM save error.
+    static let liveTiming: (estimateDebounceMilliseconds: Int, applyDelayMilliseconds: Int,
+                            webmExportError: String) = {
+        let value = RecordingEditorCopy.request(["operation": "live_timing"])
+        return ((value?["estimate_debounce_ms"] as? NSNumber)?.intValue ?? 600,
+                (value?["apply_delay_ms"] as? NSNumber)?.intValue ?? 250,
+                value?["webm_export_error"] as? String
+                    ?? "media processing failed: WebM export is not available in the bundled media tools")
+    }()
+
+    /// `input` uses the shared EstimateInput keys: estimating, webm, maximum,
+    /// maximum_bytes, estimate_bytes, estimate_exact, original_bytes.
     static func estimate(_ input: [String: Any]) -> Estimate {
         var object = input
         object["operation"] = "estimate"

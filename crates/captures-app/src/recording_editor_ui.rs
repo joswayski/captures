@@ -164,20 +164,37 @@ pub fn file_size_delta(estimated_bytes: Option<u64>, original_bytes: u64) -> Opt
     })
 }
 
+/// Shipping debounces its background size estimate this long after the
+/// latest edit (`App.tsx` `estimate_recording_export` timer).
+pub const ESTIMATE_DEBOUNCE_MS: u64 = 600;
+
+/// Native hosts decode an edited preview frame once edits settle this long.
+/// Shipping renders edits on a live `<video>` element, so it has no
+/// equivalent; the delay only coalesces key repeats and typed values.
+pub const LIVE_APPLY_DELAY_MS: u64 = 250;
+
+/// The error shipping surfaces when saving WebM: its bundled FFmpeg has no
+/// libvpx, and `MediaToolError::Process` is shown verbatim by
+/// `recordingErrorMessage`.
+pub const WEBM_EXPORT_ERROR: &str =
+    "media processing failed: WebM export is not available in the bundled media tools";
+
 /// Host state behind the Save quality card's `Est. size` value.
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 pub struct EstimateInput {
+    /// A background estimate is in flight (shipping's `estimatePending`).
     #[serde(default)]
     pub estimating: bool,
-    /// Staged edits differ from the accepted preview.
+    /// WebM output has no estimate.
     #[serde(default)]
-    pub unapplied: bool,
-    /// Maximum mode is selected but its typed limit is invalid.
+    pub webm: bool,
+    /// Maximum file size mode is selected.
     #[serde(default)]
-    pub invalid_maximum: bool,
-    /// Accepted Maximum file size, shown instead of an estimate.
+    pub maximum: bool,
+    /// The typed Maximum limit when it is valid (at least 100 KB).
     #[serde(default)]
     pub maximum_bytes: Option<u64>,
+    /// The latest estimate, retained while a newer one is pending.
     #[serde(default)]
     pub estimate_bytes: Option<u64>,
     #[serde(default)]
@@ -190,43 +207,131 @@ pub struct EstimateInput {
 pub struct EstimatePresentation {
     pub label: String,
     pub delta: Option<SizeDelta>,
-    /// Muted while a value is pending or unavailable.
+    /// Shipping's `data-pending` muted style while an estimate is in flight.
     pub muted: bool,
 }
 
+/// Shipping's `estimatedSizeLabel`/`estimatedDelta`: Maximum shows its cap,
+/// WebM and failures show "—", and a pending estimate keeps the previous
+/// value (muted, without a delta) until the new one arrives.
 pub fn estimate(input: &EstimateInput) -> EstimatePresentation {
-    let muted = |label: &str| EstimatePresentation {
-        label: label.into(),
-        delta: None,
-        muted: true,
+    let shown = |label: String, delta, muted| EstimatePresentation {
+        label,
+        delta,
+        muted,
     };
-    if input.estimating {
-        return muted("Estimating…");
+    if input.maximum {
+        return shown(
+            input
+                .maximum_bytes
+                .map_or_else(|| "—".into(), |cap| format!("≤ {}", format_file_size(cap))),
+            None,
+            false,
+        );
     }
-    if input.invalid_maximum {
-        return muted("Enter at least 100 KB");
+    if input.webm {
+        return shown("—".into(), None, false);
     }
-    if input.unapplied {
-        return muted("Apply edits to estimate");
+    let label = match input.estimate_bytes {
+        None if input.estimating => "Estimating…".into(),
+        None => "—".into(),
+        Some(bytes) => format!(
+            "{}{}",
+            if input.estimate_exact { "" } else { "≈ " },
+            format_file_size(bytes)
+        ),
+    };
+    let delta = if input.estimating {
+        None
+    } else {
+        file_size_delta(input.estimate_bytes, input.original_bytes)
+    };
+    shown(label, delta, input.estimating)
+}
+
+/// `recordingEditedFileStem`: the non-destructive `-edited` save name.
+pub fn edited_file_stem(stem: &str) -> String {
+    let trimmed = stem.trim();
+    if trimmed.is_empty() {
+        return "Captures_recording-edited".into();
     }
-    if let Some(cap) = input.maximum_bytes {
-        return EstimatePresentation {
-            label: format!("≤ {}", format_file_size(cap)),
-            delta: None,
-            muted: false,
+    if trimmed.ends_with("-edited") || trimmed.ends_with("-copy") {
+        return trimmed.into();
+    }
+    format!("{trimmed}-edited")
+}
+
+/// `capturesTimestampStem`: `Captures_YYYY-MM-DD_HH-MM-SS_mmm` in local time,
+/// or the current time when `created_at` is not RFC 3339.
+pub fn timestamp_stem(created_at: &str) -> String {
+    let value = chrono::DateTime::parse_from_rfc3339(created_at)
+        .map(|value| value.with_timezone(&chrono::Local))
+        .unwrap_or_else(|_| chrono::Local::now());
+    value.format("Captures_%Y-%m-%d_%H-%M-%S_%3f").to_string()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SaveDefaults {
+    pub directory: String,
+    pub stem: String,
+}
+
+fn file_stem(path: &str) -> String {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or_default();
+    // `/\.[^.]+$/`: strip an extension only when one follows the dot.
+    let stem = match name.rfind('.') {
+        Some(dot) if dot + 1 < name.len() => &name[..dot],
+        _ => name,
+    };
+    if stem.is_empty() {
+        "Captures_recording".into()
+    } else {
+        stem.into()
+    }
+}
+
+fn parent_directory(path: &str) -> String {
+    match path.rfind(['/', '\\']) {
+        None => ".".into(),
+        Some(0) => path[..1].into(),
+        Some(separator) => path[..separator].into(),
+    }
+}
+
+/// Private Capture History recovery media (`media.<ext>`).
+fn recovery_media(path: &str) -> bool {
+    path.rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name.to_ascii_lowercase().starts_with("media."))
+}
+
+/// `recordingUserFacingDefaults`: the footer's initial folder and filename.
+/// Prefer the permanent Captures save; never surface private recovery media.
+pub fn save_defaults(
+    saved_path: Option<&str>,
+    path: &str,
+    created_at: &str,
+    output_directory: &str,
+) -> SaveDefaults {
+    if let Some(saved) = saved_path.map(str::trim).filter(|saved| !saved.is_empty()) {
+        return SaveDefaults {
+            directory: parent_directory(saved),
+            stem: file_stem(saved),
         };
     }
-    match input.estimate_bytes {
-        Some(bytes) => EstimatePresentation {
-            label: format!(
-                "{}{}",
-                if input.estimate_exact { "" } else { "≈ " },
-                format_file_size(bytes)
-            ),
-            delta: file_size_delta(Some(bytes), input.original_bytes),
-            muted: false,
+    if !path.is_empty() && !recovery_media(path) {
+        return SaveDefaults {
+            directory: parent_directory(path),
+            stem: file_stem(path),
+        };
+    }
+    SaveDefaults {
+        directory: if output_directory.trim().is_empty() {
+            parent_directory(path)
+        } else {
+            output_directory.trim().into()
         },
-        None => muted("—"),
+        stem: timestamp_stem(created_at),
     }
 }
 
@@ -525,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn estimate_presentation_prioritises_pending_staged_and_maximum_states() {
+    fn estimate_presentation_matches_shipping_placeholders_and_pending_states() {
         let base = EstimateInput {
             estimate_bytes: Some(4_567),
             estimate_exact: true,
@@ -541,46 +646,78 @@ mod tests {
             ..base
         });
         assert_eq!(approximate.label, "≈ 4.6 KB");
-        for (input, label) in [
-            (
-                EstimateInput {
-                    estimating: true,
-                    ..base
-                },
-                "Estimating…",
-            ),
-            (
-                EstimateInput {
-                    invalid_maximum: true,
-                    ..base
-                },
-                "Enter at least 100 KB",
-            ),
-            (
-                EstimateInput {
-                    unapplied: true,
-                    ..base
-                },
-                "Apply edits to estimate",
-            ),
-            (
-                EstimateInput {
-                    estimate_bytes: None,
-                    ..base
-                },
-                "—",
-            ),
+        // A pending estimate keeps the previous value, muted and without a delta.
+        let pending = estimate(&EstimateInput {
+            estimating: true,
+            ..base
+        });
+        assert_eq!(pending.label, "4.6 KB");
+        assert!(pending.muted && pending.delta.is_none());
+        let first = estimate(&EstimateInput {
+            estimating: true,
+            estimate_bytes: None,
+            ..base
+        });
+        assert_eq!(first.label, "Estimating…");
+        assert!(first.muted && first.delta.is_none());
+        for input in [
+            EstimateInput {
+                estimate_bytes: None,
+                ..base
+            },
+            EstimateInput {
+                webm: true,
+                estimating: true,
+                ..base
+            },
+            EstimateInput {
+                maximum: true,
+                estimating: true,
+                ..base
+            },
         ] {
             let shown = estimate(&input);
-            assert_eq!(shown.label, label);
-            assert!(shown.delta.is_none() && shown.muted);
+            assert_eq!(shown.label, "—");
+            assert!(shown.delta.is_none() && !shown.muted);
         }
         let capped = estimate(&EstimateInput {
+            maximum: true,
             maximum_bytes: Some(10_000_000),
+            webm: true,
             ..base
         });
         assert_eq!(capped.label, "≤ 10.0 MB");
         assert!(capped.delta.is_none(), "a cap is not an estimate");
+    }
+
+    #[test]
+    fn save_names_follow_shipping_defaults() {
+        assert_eq!(edited_file_stem("clip"), "clip-edited");
+        assert_eq!(edited_file_stem(" clip "), "clip-edited");
+        assert_eq!(edited_file_stem("clip-edited"), "clip-edited");
+        assert_eq!(edited_file_stem("clip-copy"), "clip-copy");
+        assert_eq!(edited_file_stem(" "), "Captures_recording-edited");
+        let saved = save_defaults(
+            Some("/Users/me/Captures/Captures_2026-01-02_03-04-05_006.mp4"),
+            "/history/abc/media.mp4",
+            "2026-01-02T03:04:05.006Z",
+            "/elsewhere",
+        );
+        assert_eq!(saved.directory, "/Users/me/Captures");
+        assert_eq!(saved.stem, "Captures_2026-01-02_03-04-05_006");
+        let legacy = save_defaults(None, "C:\\Clips\\demo.gif", "", "/out");
+        assert_eq!(legacy.directory, "C:\\Clips");
+        assert_eq!(legacy.stem, "demo");
+        let private = save_defaults(Some(" "), "/history/abc/media.mp4", "bad", "/out");
+        assert_eq!(private.directory, "/out");
+        assert!(private.stem.starts_with("Captures_"));
+        let stem = timestamp_stem("2026-01-02T03:04:05.006Z");
+        assert_eq!(stem.len(), "Captures_2026-01-02_03-04-05_006".len());
+        assert!(stem.ends_with("_006"));
+        assert_eq!(
+            save_defaults(None, "/history/abc/media.gif", "", " ").directory,
+            "/history/abc"
+        );
     }
 
     #[test]
