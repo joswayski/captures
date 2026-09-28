@@ -90,12 +90,12 @@ def main():
 
                     screenshot("populated")
                     assert not previews(), "a preview opened before Restore"
-                    click(254, 555)  # First card's Restore brings back a floating preview.
+                    click(254, 433)  # First card's Restore brings back a floating preview.
                     preview = wait(previews)[0]
                     time.sleep(.5)  # Arrival motion.
                     screenshot("restored")
                     run("import", "-window", preview, str(output / f"{prefix}-restored-preview.png"))
-                    click(254, 555)  # Already showing: no duplicate window, still confirms.
+                    click(254, 433)  # Already showing: no duplicate window, still confirms.
                     time.sleep(.3)
                     assert len(previews()) == 1, "Restore duplicated the preview window"
                     assert len(list(history.glob("*/metadata.json"))) == 2, "Restore changed History"

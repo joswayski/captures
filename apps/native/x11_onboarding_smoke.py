@@ -126,15 +126,23 @@ def main():
                 time.sleep(1)
                 assert not windows(again.pid, "^Captures is running$"), "visible relaunch showed the launch notice"
                 run("import", "-window", window, str(output / f"completed-{appearance}.png"))
+                run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
+                    "sleep", ".4", "key", "ctrl+q")
+                assert again.wait(timeout=20) == 0
+                # Shipping History has no permissions button: a denied capture
+                # opens recovery. The workbench hook opens it the same way,
+                # without an OS prompt.
+                again = spawn(common + ["--open-preferences", "--permission-dialog", "ready"])
+                window = wait(lambda: windows(again.pid, "^Capture History$"), "History under recovery")[0]
+                preferences = wait(lambda: windows(again.pid, "^Captures Preferences$"), "Preferences window")[0]
+                time.sleep(1)
                 accepted_settings = settings.read_bytes()
                 recovery_media = root / "during permission recovery.png"
                 recovery_media.write_bytes(png(19, 9))
-                click(window, 109, 181)  # Capture permissions, wrapped to the History header's second action line, without an OS prompt.
-                time.sleep(.5)
                 secondary = subprocess.run(common + ["--", str(recovery_media)], env=env,
                                            capture_output=True, timeout=15)
                 assert secondary.returncode == 0, secondary.stderr
-                click(window, 380, 136)  # New Capture behind the dialog stays disabled.
+                run("xdotool", "key", "Print")  # The New Capture shortcut stays blocked behind the dialog.
                 run("xdotool", "key", "super+shift+s")
                 time.sleep(.5)
                 assert len(published(history)) == 2, "recovery imported queued media"
