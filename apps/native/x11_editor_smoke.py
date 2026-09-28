@@ -837,7 +837,7 @@ def main():
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
-        app_command = [str(binary), "--live", "--history-root", str(history),
+        app_command = [str(binary), "--live", "--open-history", "--history-root", str(history),
                        "--settings-file", str(settings), "--quit-after", "600"]
         open_arguments = []
         if args.external_image_only:
@@ -1059,13 +1059,16 @@ def main():
             assert draft_bytes() == preserved_draft
             assert len(layers()) == 2
 
+            # Shipping reopen priority: an open editor before History.
             run("xdotool", "windowminimize", root)
+            run("xdotool", "windowminimize", editor)
             relaunched = subprocess.run(app_command, cwd=output, env=env,
                                         capture_output=True, text=True, timeout=10)
             assert relaunched.returncode == 0, relaunched.stderr
             assert '"event":"forwarded"' in relaunched.stdout
-            wait(lambda: active_window() == root,
-                 "empty relaunch restores and focuses the open History window")
+            wait(lambda: active_window() in windows("Captures Screenshot Editor"),
+                 "empty relaunch restores and focuses an open editor window")
+            assert root not in windows("Capture History"), "empty relaunch restored History over an editor"
             assert app.poll() is None
             close(root)
             wait(lambda: app.poll() is not None, "external image batch quits")
@@ -1127,7 +1130,7 @@ def main():
                            "reload-preserves-history-identity", "reloaded-source-pixels",
                            "secondary-exits-before-renderer-and-settings",
                            "forwarded-relative-alias-preserves-edits",
-                           "empty-relaunch-restores-preferences"],
+                           "empty-relaunch-focuses-open-editor"],
             }, indent=2) + "\n")
             print("PASS native external images: batch, aliases, errors, pixels, autosaved drafts and source reload")
             return

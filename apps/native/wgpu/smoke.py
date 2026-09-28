@@ -72,10 +72,10 @@ def main():
     broken = args.output / "onboarding-error.json"
     broken.write_text("invalid-json")
     shots = {
-        "live-empty": ["--live", "--settings-file", str(completed), "--history-root", str(args.output / "empty-history"), "--appearance", "light"],
-        "live-populated": ["--live", "--settings-file", str(completed), "--history-root", str(populated)],
-        "permission-dialog-ready": ["--live", "--settings-file", str(completed), "--history-root", str(args.output / "permission-ready-history"), "--permission-dialog", "ready"],
-        "permission-dialog-error": ["--live", "--settings-file", str(completed), "--history-root", str(args.output / "permission-error-history"), "--permission-dialog", "error"],
+        "live-empty": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(args.output / "empty-history"), "--appearance", "light"],
+        "live-populated": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(populated)],
+        "permission-dialog-ready": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(args.output / "permission-ready-history"), "--permission-dialog", "ready"],
+        "permission-dialog-error": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(args.output / "permission-error-history"), "--permission-dialog", "error"],
         "onboarding-light": ["--live", "--history-root", str(args.output / "onboarding-history"), "--settings-file", str(args.output / "fresh-light.json"), "--appearance", "light"],
         "onboarding-dark": ["--live", "--history-root", str(args.output / "onboarding-history"), "--settings-file", str(args.output / "fresh-dark.json")],
         "onboarding-error": ["--live", "--history-root", str(args.output / "onboarding-history"), "--settings-file", str(broken)],

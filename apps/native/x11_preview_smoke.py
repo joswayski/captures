@@ -244,7 +244,7 @@ def main():
                                             "new_capture_shortcut": "Ctrl+Shift+F10",
                                             "appearance": "dark", "theme": "mustard"}))
             original = settings.read_bytes()
-            app = spawn("motion", [str(binary), "--live", "--settings-file", str(settings),
+            app = spawn("motion", [str(binary), "--live", "--open-history", "--settings-file", str(settings),
                                    "--history-root", str(output / "history"), "--quit-after", "60"])
             root = wait(lambda: windows("Capture History"), "motion workspace")[0]
 
@@ -437,7 +437,7 @@ def main():
                 "show_mini_previews": enabled,
                 "include_mini_previews_in_captures": include, "mini_preview_placement": placement,
             }))
-            app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
+            app = spawn(prefix, [str(binary), "--live", "--open-history", "--history-root", str(history),
                 "--settings-file", str(settings), "--quit-after", "300" if args.lifecycle else "180"]
                 + (["--reduced-motion"] if args.reduced_motion else []))
             root = wait(lambda: windows("Capture History"), "root workspace")[0]
@@ -1215,7 +1215,7 @@ def main():
             assert not windows(PREVIEW), "preview outlived application"
             print(f"PASS {prefix}: pixels, placement/visibility, cancellation, clean exit", flush=True)
         if args.lifecycle:
-            live_args = [str(binary), "--live", "--history-root", str(history),
+            live_args = [str(binary), "--live", "--open-history", "--history-root", str(history),
                          "--settings-file", str(settings)]
             if args.shortcut_editing:
                 # Test physical PrintScreen delivery without Openbox's external
@@ -1233,7 +1233,7 @@ def main():
                 run("openbox", "--reconfigure")
                 edit_settings = output / "shortcut-settings.json"
                 edit_settings.write_text(settings.read_text())
-                edit_args = [str(binary), "--live", "--open-preferences", "--history-root", str(history),
+                edit_args = [str(binary), "--live", "--open-history", "--open-preferences", "--history-root", str(history),
                              "--settings-file", str(edit_settings), "--quit-after", "180"]
                 editor = spawn("shortcut-editor", edit_args)
                 # The shortcut recorders live in the separate Preferences window.

@@ -86,6 +86,12 @@ pub struct Workbench {
     root_window: AppWindow,
     preferences: PreferencesWindow,
     root_hidden: bool,
+    /// A hidden (autostart or post-update) launch; it shows the launch
+    /// notice instead of a window.
+    launched_quietly: bool,
+    /// Whether the launch window (`app_windows::interactive_launch`) has
+    /// been decided; that waits for settings to load.
+    launch_decided: bool,
     onboarding_presented: bool,
     permission_dialog_presented: bool,
     /// Shipping `report_capture_error` dialog for a failed capture.
@@ -231,7 +237,10 @@ impl Workbench {
         } else {
             crate::capture_controls::CaptureControls::fixture()
         };
-        let root_hidden = options.live && options.scene == Scene::Idle;
+        // Every live launch starts hidden; the launch decision shows setup,
+        // Preferences or (with --open-history) History once settings load.
+        let root_hidden = options.live;
+        let launched_quietly = options.live && options.scene == Scene::Idle;
         let update_notice = crate::update_notice::FixtureHost::new(
             options.update_state.as_deref().unwrap_or("available"),
             options
@@ -279,6 +288,8 @@ impl Workbench {
             root_window: AppWindow::History,
             preferences: PreferencesWindow::default(),
             root_hidden,
+            launched_quietly,
+            launch_decided: false,
             onboarding_presented: false,
             permission_dialog_presented: false,
             capture_error: Default::default(),
@@ -363,17 +374,51 @@ impl Workbench {
         {
             return;
         }
+        use app_windows::{PrimaryWindow, Reactivation};
         let mut visible = Vec::new();
         if !self.root_hidden {
-            visible.push(self.root_window);
+            visible.push(PrimaryWindow::App(self.root_window));
         }
         if self.preferences.is_open() {
-            visible.push(AppWindow::Preferences);
+            visible.push(PrimaryWindow::App(AppWindow::Preferences));
+        }
+        if self.live.as_ref().is_some_and(Live::has_open_editor) {
+            visible.push(PrimaryWindow::Editor(()));
         }
         match app_windows::reactivation(onboarding_complete, false, &visible) {
-            app_windows::Reactivation::Focus(AppWindow::Preferences)
-            | app_windows::Reactivation::ShowPreferences => self.preferences.open(ctx),
+            Reactivation::Focus(PrimaryWindow::App(AppWindow::Preferences))
+            | Reactivation::ShowPreferences => self.preferences.open(ctx),
+            Reactivation::Focus(PrimaryWindow::Editor(()))
+                if self
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| live.focus_open_editor(ctx)) => {}
             _ => self.show_root(ctx),
+        }
+    }
+
+    /// Shipping `interactive_launch_action`, once settings have loaded:
+    /// setup when it is unfinished (presented by `logic`), the launch notice
+    /// on a quiet launch (`update_startup_notice`), no window when opening
+    /// files, and otherwise Preferences. `--open-history` opens History
+    /// instead of Preferences, as its tray item would.
+    fn decide_launch(&mut self, ctx: &egui::Context, onboarding_complete: bool) {
+        self.launch_decided = true;
+        let launch = app_windows::interactive_launch(
+            onboarding_complete,
+            self.launched_quietly,
+            self.launched_with_media,
+        );
+        emit(
+            "launch",
+            json!({"action": launch.map(|launch| format!("{launch:?}")), "openHistory": self.options.open_history}),
+        );
+        if launch == Some(app_windows::InteractiveLaunch::Preferences) && !self.options.open_history
+        {
+            self.preferences.open(ctx);
+        }
+        if onboarding_complete && self.options.open_history {
+            self.show_root(ctx);
         }
     }
 
@@ -545,7 +590,7 @@ impl Workbench {
             self.startup_notice_decided = true;
             let visible_for = if self.onboarding_presented {
                 Some(STARTUP_NOTICE_AFTER_SETUP_VISIBLE)
-            } else if self.root_hidden && self.tray.is_some() && !self.launched_with_media {
+            } else if self.launched_quietly && self.tray.is_some() && !self.launched_with_media {
                 Some(STARTUP_NOTICE_AUTOSTART_VISIBLE)
             } else {
                 None
@@ -1435,6 +1480,10 @@ impl eframe::App for Workbench {
                 self.preferences_state.open_permission_recovery();
             }
         }
+        if self.options.live && !self.launch_decided && !self.preferences_state.onboarding_pending()
+        {
+            self.decide_launch(ctx, onboarding_complete);
+        }
         if self.options.live
             && !self.onboarding_presented
             && !self.preferences_state.onboarding_pending()
@@ -1494,6 +1543,11 @@ impl eframe::App for Workbench {
         }
         if recovery_requested {
             // The recovery dialog sits over Capture History.
+            self.show_root(ctx);
+        }
+        // A media launch shows only its editors; a failed open is reported
+        // in History.
+        if self.live.as_mut().is_some_and(Live::take_media_open_failed) && self.root_hidden {
             self.show_root(ctx);
         }
         self.sync_shortcuts(ctx);
@@ -1669,6 +1723,11 @@ impl eframe::App for Workbench {
         // initial passes. Count settled work separately, without a sampling timer.
         if self.started.elapsed() >= Duration::from_secs(2) {
             self.settled_frames += 1;
+        }
+        if self.options.live && !self.launched_quietly && self.frames == 0 && self.root_hidden {
+            // eframe shows the root after its first paint; keep History
+            // hidden until the launch decision asks for it.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
         if self.options.scene == Scene::Idle
             && (!self.options.live || (self.frames == 0 && !self.onboarding_presented))

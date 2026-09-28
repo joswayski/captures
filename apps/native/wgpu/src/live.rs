@@ -1292,6 +1292,7 @@ pub struct Live {
     error: Option<String>,
     pending: usize,
     open_media: VecDeque<(PathBuf, PathBuf)>,
+    media_open_failed: bool,
     opening_media: bool,
     media_open_errors: Vec<String>,
     capture_waiting_for_hide: bool,
@@ -1626,6 +1627,7 @@ impl Live {
             error: None,
             pending: 0,
             open_media: VecDeque::new(),
+            media_open_failed: false,
             opening_media: false,
             media_open_errors: Vec::new(),
             capture_waiting_for_hide: false,
@@ -1732,6 +1734,7 @@ impl Live {
         }
         if !self.media_open_errors.is_empty() {
             self.error = Some(self.media_open_errors.join("\n"));
+            self.media_open_failed = true;
         }
     }
 
@@ -1841,6 +1844,7 @@ impl Live {
                 self.media_open_errors
                     .push(format!("Could not open {}: {error}", path.display()));
                 self.error = Some(self.media_open_errors.join("\n"));
+                self.media_open_failed = true;
             }
         }
     }
@@ -1890,6 +1894,50 @@ impl Live {
     /// Whether History should be on screen when not hidden for a capture.
     pub fn set_root_shown(&mut self, shown: bool) {
         self.root_shown = shown;
+    }
+
+    /// Whether a screenshot or recording editor window is open. Shipping
+    /// reopen focuses one before History and Preferences.
+    pub fn has_open_editor(&self) -> bool {
+        self.editors.values().any(|editor| !editor.closed())
+            || self
+                .recording_editors
+                .values()
+                .any(|editor| !editor.closed())
+    }
+
+    /// Show, restore and focus one open editor window (the first by artifact
+    /// id). Returns false when none is open.
+    pub fn focus_open_editor(&self, ctx: &egui::Context) -> bool {
+        let screenshot = self
+            .editors
+            .iter()
+            .filter(|(_, editor)| !editor.closed())
+            .min_by_key(|(id, _)| id.as_str());
+        let recording = self
+            .recording_editors
+            .iter()
+            .filter(|(_, editor)| !editor.closed())
+            .min_by_key(|(id, _)| id.as_str());
+        match (screenshot, recording) {
+            (Some((screenshot_id, screenshot)), Some((recording_id, recording))) => {
+                if screenshot_id <= recording_id {
+                    screenshot.focus(ctx);
+                } else {
+                    recording.focus(ctx);
+                }
+            }
+            (Some((_, screenshot)), None) => screenshot.focus(ctx),
+            (None, Some((_, recording))) => recording.focus(ctx),
+            (None, None) => return false,
+        }
+        true
+    }
+
+    /// Whether opening external media failed since the last call. A media
+    /// launch leaves History hidden, so the host shows it for the error.
+    pub fn take_media_open_failed(&mut self) -> bool {
+        std::mem::take(&mut self.media_open_failed)
     }
 
     pub fn recording_controls_hidden(&self) -> bool {

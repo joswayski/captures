@@ -356,7 +356,7 @@ pcm.!pulse {
             opener.chmod(0o755)
             env["PATH"] = str(tools) + os.pathsep + env["PATH"]
             env["CAPTURES_TEST_REVEAL"] = str(output / "revealed-path.txt")
-        app = spawn("app", [str(binary), "--live", "--history-root", str(output / "history"),
+        app = spawn("app", [str(binary), "--live", "--open-history", "--history-root", str(output / "history"),
                             "--settings-file", str(settings), "--quit-after", "120"])
         root = wait(lambda: windows("Capture History"), "capture workspace")[0]
         time.sleep(1)

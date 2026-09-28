@@ -3,6 +3,7 @@ use std::{path::PathBuf, time::Duration};
 pub const USAGE: &str = "Captures wgpu native host\n\
   --live [--history-root PATH] [--open-media PATH (repeatable; --open-image alias)]\n\
   --live --open-preferences (also open the Preferences window at launch)\n\
+  --live --open-history (open Capture History at launch instead of Preferences)\n\
   --live -- FILE... (Open With; everything after -- is a local path)\n\
   --scene preferences|history|hud|preview|editor|capture-controls|region|window|update|countdown|idle\n\
   --update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date\n\
@@ -112,6 +113,9 @@ pub struct Options {
     pub update_tray: Option<crate::update_notice::FixtureTray>,
     /// Open the Preferences window beside Capture History once setup is done.
     pub open_preferences: bool,
+    /// Open Capture History at launch, as its tray item or Preferences button
+    /// would, instead of shipping's launch Preferences window.
+    pub open_history: bool,
 }
 
 impl Options {
@@ -139,6 +143,7 @@ impl Options {
             update_state: None,
             update_tray: None,
             open_preferences: false,
+            open_history: false,
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -153,6 +158,7 @@ impl Options {
                 }
                 "--live" => options.live = true,
                 "--open-preferences" => options.open_preferences = true,
+                "--open-history" => options.open_history = true,
                 "--permission-dialog" => {
                     let value = args.next().ok_or("Missing permission dialog state")?;
                     if !matches!(value.as_str(), "ready" | "error") {
@@ -285,6 +291,9 @@ impl Options {
         }
         if options.open_preferences && (!options.live || options.scene == Scene::Idle) {
             return Err("--open-preferences requires a visible --live launch".into());
+        }
+        if options.open_history && (!options.live || options.scene == Scene::Idle) {
+            return Err("--open-history requires a visible --live launch".into());
         }
         if options.history_root.is_some() && !options.live {
             return Err("--history-root requires --live".into());
@@ -421,9 +430,13 @@ mod tests {
                 .unwrap()
                 .open_preferences
         );
+        let history = parse(&["--live", "--open-history"]).unwrap();
+        assert!(history.open_history && !history.open_preferences);
         for args in [
             vec!["--open-preferences"],
             vec!["--live", "--scene", "idle", "--open-preferences"],
+            vec!["--open-history"],
+            vec!["--live", "--scene", "idle", "--open-history"],
             vec!["--live", "--exercise"],
             vec!["--live", "--scene", "history"],
             vec!["--history-root", "/tmp/captures"],
