@@ -50,9 +50,9 @@ func displayListNeedsRefresh(listed: [String], pointer: String?) -> Bool {
     return !listed.contains(pointer)
 }
 
-/// A running or paused take accepts one display screenshot at a time; a take
-/// that is counting down, finalizing or busy with an action does not (shipping
-/// `screenshot_capture_is_blocked`).
+/// A running or paused take accepts one region, window or display screenshot
+/// at a time; a take that is counting down, finalizing or busy with an action
+/// does not (shipping `screenshot_capture_is_blocked`).
 func displayScreenshotAvailableDuringRecording(routeState: String?, screenshotActive: Bool,
                                                lifecycleBusy: Bool) -> Bool {
     (routeState == "recording" || routeState == "paused") && !screenshotActive && !lifecycleBusy
@@ -62,6 +62,15 @@ func displayScreenshotAvailableDuringRecording(routeState: String?, screenshotAc
 /// opted into captures (`conceal_capture_chrome_for_snapshot`).
 func recordingDisplayScreenshotHidesControls(includeControls: Bool) -> Bool {
     !includeControls
+}
+
+/// A region or window screenshot beside a running recording: the selector,
+/// the display it opens on and the preferences it uses.
+private struct RecordingSelectorShot {
+    let kind: StillCaptureKind
+    let display: DisplayItem
+    let screen: NSScreen
+    let preferences: CapturePreferences
 }
 
 /// A display screenshot taken beside a running recording.
@@ -225,6 +234,9 @@ final class LiveCaptureController: NSObject {
     private var recordingScreenshotSession: NativeRegionSession?
     private var recordingScreenshotPanel: RegionSelectionPanel?
     private var recordingScreenshotRect: CapturesSelectionRect?
+    private var recordingScreenshotWindowSession: NativeWindowSession?
+    private var recordingScreenshotWindowPanel: WindowSelectionPanel?
+    private var recordingScreenshotWindowTarget: WindowSelectionChoice?
     private var recordingScreenshotTimer: Timer?
     private var recordingScreenshotCountdownPanel: ScreenshotCountdownPanel?
     private var recordingScreenshotSnapshotPending = false
@@ -348,7 +360,16 @@ final class LiveCaptureController: NSObject {
             ?? (recordingSession == nil ? .captureMenu : .ignore)
     }
 
-    /// A running or paused take can take a display screenshot right now.
+    /// Where New Capture goes now
+    /// (`captures_app::capture_error::new_capture_route`).
+    var newCaptureRoute: NewCaptureRoute {
+        (try? NewCaptureRoute(recordingState: recordingRouteState,
+                              controlsHidden: recordingControlsHidden))
+            ?? (recordingControlsHidden ? .restoreControls : .captureMenu)
+    }
+
+    /// A running or paused take can take a region, window or display
+    /// screenshot right now.
     var recordingDisplayScreenshotAvailable: Bool {
         displayScreenshotAvailableDuringRecording(routeState: recordingRouteState,
             screenshotActive: recordingScreenshotGeneration != nil,
@@ -1790,108 +1811,227 @@ final class LiveCaptureController: NSObject {
         showError(context, error)
     }
 
+    /// The recording controls' Screenshot button: shipping
+    /// `start_capture_inner(Region)`, on the recording's display.
     private func takeRecordingScreenshot() {
         guard recordingSession != nil, let hud = recordingHUD,
-              let parentGeneration = activeRecordingGeneration,
               let display = recordingDisplay, let preferences = recordingPreferences,
-              let screen = screen(for: display), recordingScreenshotGeneration == nil,
-              recordingLifecycle.begin() else { return }
+              let screen = screen(for: display),
+              let generation = beginRecordingScreenshotFlow("Couldn’t start recording screenshot",
+                                                            fromControls: true) else { return }
+        hud.hud.actionStarted()
+        updateRecordingMeter()
+        openRecordingSelector(RecordingSelectorShot(kind: .region, display: display, screen: screen,
+            preferences: preferences), generation: generation, fromControls: true)
+    }
+
+    /// Shipping region, window and display shortcuts and tray items during a
+    /// recording (`start_capture_inner`): the same screenshot, beside the take.
+    /// Region and window open their selector on the display under the pointer
+    /// with the current preferences, like the controls' Screenshot button.
+    /// Refuses silently when the take is counting down, finalizing or busy.
+    @discardableResult func captureWhileRecording(_ kind: StillCaptureKind) -> Bool {
+        if kind == .display { return captureDisplayWhileRecording() }
+        guard recordingDisplayScreenshotAvailable, recordingHUD != nil else { return false }
+        // Shipping looks the display up for every capture: the pointer's.
+        let pointer = pointerDisplayID()
+        guard let display = displays.first(where: { $0.id == pointer }) ?? recordingDisplay,
+              let screen = screen(for: display) else {
+            showCaptureError("Couldn’t start capture",
+                AppBridgeError.backend("The selected display is no longer available."))
+            return false
+        }
+        guard let generation = beginRecordingScreenshotFlow("Couldn’t start capture",
+                                                            fromControls: false) else { return false }
+        status.stringValue = "Preparing screenshot… Press Escape to cancel."
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
+            guard let self, self.recordingScreenshotGeneration == generation else { return }
+            do {
+                let preferences = try result.get()
+                self.openRecordingSelector(RecordingSelectorShot(kind: kind, display: display,
+                    screen: screen, preferences: preferences), generation: generation, fromControls: false)
+            } catch {
+                self.finishRecordingScreenshot()
+                self.showCaptureError("Couldn’t start capture", error)
+            }
+        }
+        return true
+    }
+
+    /// Opens a child of the recording's capture flow for one screenshot, or
+    /// returns nil when the take is busy or the flow refuses it.
+    private func beginRecordingScreenshotFlow(_ context: String, fromControls: Bool) -> UInt64? {
+        guard let parentGeneration = activeRecordingGeneration, recordingScreenshotGeneration == nil,
+              recordingLifecycle.begin() else { return nil }
         do {
             let response = try AppBridge.flow([
                 "operation": "begin_recording_screenshot",
                 "parent_generation": parentGeneration,
                 "seconds": 0,
             ])
-            guard let generation = response["generation"] as? NSNumber else {
+            guard let value = response["generation"] as? NSNumber else {
                 throw AppBridgeError.invalidResponse
             }
-            recordingScreenshotGeneration = generation.uint64Value
-            hud.hud.actionStarted()
-            updateRecordingMeter()
-            recordingScreenshotPreviewGeneration = miniPreviews?.beginCapture(
-                settings: preferences.miniPreviewSettings)
+            recordingScreenshotGeneration = value.uint64Value
             recordingScreenshotSnapshotPending = false
-            hud.hud.setLifecycleActionsEnabled(false)
-            hud.orderOut(nil)
-            status.stringValue = "Preparing region screenshot… Press Escape to cancel."
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, self.recordingScreenshotGeneration == generation.uint64Value else {
-                    return
-                }
-                self.run({
-                    let session = try NativeRegionSession.prepare(display: display.id,
-                        generation: generation.uint64Value, preferences: preferences)
-                    return (session, try session.image())
-                }) { [weak self] result in
-                    guard let self,
-                          self.recordingScreenshotGeneration == generation.uint64Value else { return }
-                    do {
-                        let state = try AppBridge.flow([
-                            "operation": "poll", "generation": generation.uint64Value,
-                        ])
-                        guard state["current"] as? Bool == true else {
-                            self.finishRecordingScreenshot()
-                            return
-                        }
-                        let (session, image) = try result.get()
-                        guard session.logicalSize == screen.frame.size else {
-                            throw AppBridgeError.backend(
-                                "The recording display changed. Select the region again.")
-                        }
-                        self.recordingScreenshotSession = session
-                        let panel = RegionSelectionPanel(screen: screen, image: image,
-                            tokens: self.tokens, autoStart: true,
-                            confirm: { [weak self] rect in
-                                guard let self,
-                                      self.recordingScreenshotGeneration == generation.uint64Value,
-                                      self.recordingScreenshotPanel != nil else { return }
-                                do {
-                                    self.recordingScreenshotRect = rect
-                                    self.recordingScreenshotPanel?.close()
-                                    self.recordingScreenshotPanel = nil
-                                    _ = try AppBridge.flow([
-                                        "operation": "start_countdown",
-                                        "generation": generation.uint64Value,
-                                        "seconds": preferences.countdown,
-                                    ])
-                                    if preferences.countdown > 0 {
-                                        let countdown = ScreenshotCountdownPanel(screen: screen,
-                                            tokens: self.tokens, remaining: preferences.countdown)
-                                        self.recordingScreenshotCountdownPanel = countdown
-                                        countdown.orderFrontRegardless()
-                                    }
-                                    self.tickRecordingScreenshot(display: display,
-                                        preferences: preferences,
-                                        generation: generation.uint64Value)
-                                } catch {
-                                    self.finishRecordingScreenshot()
-                                    self.showCaptureError("Screenshot failed", error)
-                                }
-                            }, cancel: { [weak self] in
-                                guard let self,
-                                      self.recordingScreenshotGeneration == generation.uint64Value,
-                                      self.recordingScreenshotPanel != nil else { return }
-                                self.finishRecordingScreenshot()
-                                self.status.stringValue = "Screenshot cancelled; recording continues."
-                            })
-                        self.recordingScreenshotPanel = panel
-                        panel.makeKeyAndOrderFront(nil)
-                        NSApp.activate(ignoringOtherApps: true)
-                        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
-                            self?.tickRecordingScreenshot(display: display,
-                                preferences: preferences, generation: generation.uint64Value)
-                        }
-                        self.recordingScreenshotTimer = timer
-                        RunLoop.main.add(timer, forMode: .common)
-                    } catch {
-                        self.finishRecordingScreenshot()
-                        self.showRecordingError("Couldn’t prepare recording screenshot", error)
-                    }
-                }
-            }
+            recordingHUD?.hud.setLifecycleActionsEnabled(false)
+            updateRecordingMeter()
+            return value.uint64Value
         } catch {
             recordingLifecycle.end()
-            showRecordingError("Couldn’t start recording screenshot", error)
+            if fromControls { showRecordingError(context, error) } else { showCaptureError(context, error) }
+            return nil
+        }
+    }
+
+    /// Shipping `hide_capture_huds_before_snapshot`: the controls leave unless
+    /// they are opted into captures, then the region or window selector opens.
+    private func openRecordingSelector(_ shot: RecordingSelectorShot, generation: UInt64,
+                                       fromControls: Bool) {
+        recordingScreenshotPreviewGeneration = miniPreviews?.beginCapture(
+            settings: shot.preferences.miniPreviewSettings)
+        if recordingDisplayScreenshotHidesControls(
+            includeControls: shot.preferences.includeRecordingControlsInCaptures) {
+            recordingHUD?.orderOut(nil)
+        }
+        status.stringValue = shot.kind == .window
+            ? "Preparing window screenshot… Press Escape to cancel."
+            : "Preparing region screenshot… Press Escape to cancel."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.recordingScreenshotGeneration == generation else { return }
+            if shot.kind == .window {
+                self.prepareRecordingWindowSelector(shot, generation: generation, fromControls: fromControls)
+            } else {
+                self.prepareRecordingRegionSelector(shot, generation: generation, fromControls: fromControls)
+            }
+        }
+    }
+
+    private func reportRecordingSelectorError(_ error: Error, fromControls: Bool) {
+        finishRecordingScreenshot()
+        if fromControls { showRecordingError("Couldn’t prepare recording screenshot", error) }
+        else { showCaptureError("Couldn’t prepare screenshot", error) }
+    }
+
+    /// Starts the screenshot countdown for a confirmed selection, then polls it.
+    private func startRecordingSelectorCountdown(_ shot: RecordingSelectorShot, generation: UInt64) {
+        do {
+            _ = try AppBridge.flow([
+                "operation": "start_countdown",
+                "generation": generation,
+                "seconds": shot.preferences.countdown,
+            ])
+            if shot.preferences.countdown > 0 {
+                let countdown = ScreenshotCountdownPanel(screen: shot.screen, tokens: tokens,
+                    remaining: shot.preferences.countdown)
+                recordingScreenshotCountdownPanel = countdown
+                countdown.orderFrontRegardless()
+            }
+            tickRecordingScreenshot(display: shot.display, preferences: shot.preferences,
+                generation: generation)
+        } catch {
+            finishRecordingScreenshot()
+            showCaptureError("Screenshot failed", error)
+        }
+    }
+
+    /// Polls the child flow so Escape cancels while AppKit tracks a drag.
+    private func startRecordingSelectorTimer(_ shot: RecordingSelectorShot, generation: UInt64) {
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.tickRecordingScreenshot(display: shot.display, preferences: shot.preferences,
+                generation: generation)
+        }
+        recordingScreenshotTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func prepareRecordingRegionSelector(_ shot: RecordingSelectorShot, generation: UInt64,
+                                                fromControls: Bool) {
+        run({
+            let session = try NativeRegionSession.prepare(display: shot.display.id,
+                generation: generation, preferences: shot.preferences)
+            return (session, try session.image())
+        }) { [weak self] result in
+            guard let self, self.recordingScreenshotGeneration == generation else { return }
+            do {
+                let state = try AppBridge.flow(["operation": "poll", "generation": generation])
+                guard state["current"] as? Bool == true else {
+                    self.finishRecordingScreenshot()
+                    return
+                }
+                let (session, image) = try result.get()
+                guard session.logicalSize == shot.screen.frame.size else {
+                    throw AppBridgeError.backend("The display changed. Select the region again.")
+                }
+                self.recordingScreenshotSession = session
+                let panel = RegionSelectionPanel(screen: shot.screen, image: image,
+                    tokens: self.tokens, autoStart: true,
+                    confirm: { [weak self] rect in
+                        guard let self, self.recordingScreenshotGeneration == generation,
+                              self.recordingScreenshotPanel != nil else { return }
+                        self.recordingScreenshotRect = rect
+                        self.recordingScreenshotPanel?.close()
+                        self.recordingScreenshotPanel = nil
+                        self.startRecordingSelectorCountdown(shot, generation: generation)
+                    }, cancel: { [weak self] in
+                        guard let self, self.recordingScreenshotGeneration == generation,
+                              self.recordingScreenshotPanel != nil else { return }
+                        self.finishRecordingScreenshot()
+                        self.status.stringValue = "Screenshot cancelled; recording continues."
+                    })
+                self.recordingScreenshotPanel = panel
+                panel.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                self.startRecordingSelectorTimer(shot, generation: generation)
+            } catch {
+                self.reportRecordingSelectorError(error, fromControls: fromControls)
+            }
+        }
+    }
+
+    private func prepareRecordingWindowSelector(_ shot: RecordingSelectorShot, generation: UInt64,
+                                                fromControls: Bool) {
+        run({
+            let session = try NativeWindowSession.prepare(display: shot.display.id,
+                generation: generation, preferences: shot.preferences)
+            return (session, try session.image())
+        }) { [weak self] result in
+            guard let self, self.recordingScreenshotGeneration == generation else { return }
+            do {
+                let state = try AppBridge.flow(["operation": "poll", "generation": generation])
+                guard state["current"] as? Bool == true else {
+                    self.finishRecordingScreenshot()
+                    return
+                }
+                let (session, image) = try result.get()
+                guard session.display.size == shot.screen.frame.size else {
+                    throw AppBridgeError.backend("The display changed. Select the window again.")
+                }
+                self.recordingScreenshotWindowSession = session
+                let panel = WindowSelectionPanel(screen: shot.screen, image: image,
+                    targets: session.windows, tokens: self.tokens, autoStart: true,
+                    hitTest: { [weak session] point in session?.hitTest(point) },
+                    confirm: { [weak self] target in
+                        guard let self, self.recordingScreenshotGeneration == generation,
+                              self.recordingScreenshotWindowPanel != nil else { return }
+                        self.recordingScreenshotWindowTarget = target
+                        self.recordingScreenshotWindowPanel?.close()
+                        self.recordingScreenshotWindowPanel = nil
+                        self.startRecordingSelectorCountdown(shot, generation: generation)
+                    }, cancel: { [weak self] in
+                        guard let self, self.recordingScreenshotGeneration == generation,
+                              self.recordingScreenshotWindowPanel != nil else { return }
+                        self.finishRecordingScreenshot()
+                        self.status.stringValue = "Screenshot cancelled; recording continues."
+                    })
+                self.recordingScreenshotWindowPanel = panel
+                panel.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                panel.updatePointerLocation()
+                self.startRecordingSelectorTimer(shot, generation: generation)
+            } catch {
+                self.reportRecordingSelectorError(error, fromControls: fromControls)
+            }
         }
     }
 
@@ -1908,21 +2048,31 @@ final class LiveCaptureController: NSObject {
                 status.stringValue = "Screenshot cancelled; recording continues."
                 return
             }
-            guard recordingScreenshotPanel == nil,
+            guard recordingScreenshotPanel == nil, recordingScreenshotWindowPanel == nil,
                   let remaining = state["remaining"] as? Int else { return }
             recordingScreenshotCountdownPanel?.countdownContent.setRemaining(remaining)
+            let regionSession = recordingScreenshotSession, regionRect = recordingScreenshotRect
+            let windowSession = recordingScreenshotWindowSession
+            let windowTarget = recordingScreenshotWindowTarget
             guard remaining == 0, !recordingScreenshotSnapshotPending,
-                  let session = recordingScreenshotSession,
-                  let rect = recordingScreenshotRect else { return }
+                  (regionSession != nil && regionRect != nil)
+                    || (windowSession != nil && windowTarget != nil) else { return }
             recordingScreenshotSnapshotPending = true
             recordingScreenshotCountdownPanel?.close()
             recordingScreenshotCountdownPanel = nil
             status.stringValue = "Capturing screenshot while recording…"
+            let afterCountdown = preferences.countdown > 0
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, self.recordingScreenshotGeneration == generation else { return }
+                let root = self.historyRoot
                 self.run({
-                    try session.capture(root: self.historyRoot, rect: rect,
-                        afterCountdown: preferences.countdown > 0)
+                    if let windowSession, let windowTarget {
+                        return try windowSession.capture(root: root, target: windowTarget,
+                            afterCountdown: afterCountdown)
+                    }
+                    guard let regionSession, let regionRect else { throw AppBridgeError.invalidResponse }
+                    return try regionSession.capture(root: root, rect: regionRect,
+                        afterCountdown: afterCountdown)
                 }) { [weak self] result in
                     guard let self, self.recordingScreenshotGeneration == generation else { return }
                     switch result {
@@ -1953,6 +2103,8 @@ final class LiveCaptureController: NSObject {
         recordingScreenshotCountdownPanel?.close(); recordingScreenshotCountdownPanel = nil
         recordingScreenshotPanel?.close(); recordingScreenshotPanel = nil
         recordingScreenshotSession = nil; recordingScreenshotRect = nil
+        recordingScreenshotWindowPanel?.close(); recordingScreenshotWindowPanel = nil
+        recordingScreenshotWindowSession = nil; recordingScreenshotWindowTarget = nil
         recordingScreenshotSnapshotPending = false
         if let generation = recordingScreenshotGeneration {
             _ = try? AppBridge.flow(["operation": "finish", "generation": generation])

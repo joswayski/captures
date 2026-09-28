@@ -17,12 +17,14 @@ final class RecordingDisplayScreenshotTests: XCTestCase {
         XCTAssertEqual(try DisplayCaptureRoute(recordingState: "finalizing", transport: bridge), .ignore)
     }
 
-    func testOnlyScreenshotDisplayGoesBesideARunningTake() {
-        XCTAssertEqual(stillCaptureRoute(for: .display, displayRoute: .captureDisplay), .recordingScreenshot)
+    func testEveryScreenshotGoesBesideARunningTake() {
+        XCTAssertEqual(stillCaptureRoute(for: .display, displayRoute: .captureDisplay),
+                       .recordingScreenshot(.display))
         XCTAssertEqual(stillCaptureRoute(for: .display, displayRoute: .ignore), .ignore)
         XCTAssertEqual(stillCaptureRoute(for: .display, displayRoute: .captureMenu), .menu(.display))
-        XCTAssertEqual(stillCaptureRoute(for: .region, displayRoute: .captureDisplay), .capture(.region))
-        XCTAssertEqual(stillCaptureRoute(for: .window, displayRoute: .ignore), .capture(.window))
+        XCTAssertEqual(stillCaptureRoute(for: .region, displayRoute: .captureDisplay),
+                       .recordingScreenshot(.region))
+        XCTAssertEqual(stillCaptureRoute(for: .window, displayRoute: .ignore), .ignore)
     }
 
     func testOneDisplayScreenshotAtATimeFromARunningOrPausedTake() {
@@ -40,6 +42,28 @@ final class RecordingDisplayScreenshotTests: XCTestCase {
         }
     }
 
+    func testNewCaptureSharesTheShippingRecordingRule() throws {
+        // `captures_app::capture_error::new_capture_route` through the settings ABI.
+        let bridge = SettingsBridge()
+        let busy = NewCaptureRoute.inProgress(
+            message: "Captures could not start the capture: capture already in progress")
+        XCTAssertEqual(try NewCaptureRoute(recordingState: nil, controlsHidden: false,
+                                           transport: bridge), .captureMenu)
+        XCTAssertEqual(try NewCaptureRoute(recordingState: "failed", controlsHidden: false,
+                                           transport: bridge), .captureMenu)
+        XCTAssertEqual(try NewCaptureRoute(recordingState: "recording", controlsHidden: true,
+                                           transport: bridge), .restoreControls)
+        XCTAssertEqual(try NewCaptureRoute(recordingState: "paused", controlsHidden: true,
+                                           transport: bridge), .restoreControls)
+        XCTAssertEqual(try NewCaptureRoute(recordingState: "recording", controlsHidden: false,
+                                           transport: bridge), busy,
+                       "shipping `open_capture_controls` reports `CaptureInProgress`")
+        XCTAssertEqual(try NewCaptureRoute(recordingState: "countdown", controlsHidden: false,
+                                           transport: bridge), busy)
+        XCTAssertEqual(try NewCaptureRoute(recordingState: "finalizing", controlsHidden: false,
+                                           transport: bridge), busy)
+    }
+
     func testControlsLeaveTheScreenshotUnlessOptedIn() {
         XCTAssertTrue(recordingDisplayScreenshotHidesControls(includeControls: false))
         XCTAssertFalse(recordingDisplayScreenshotHidesControls(includeControls: true))
@@ -47,7 +71,7 @@ final class RecordingDisplayScreenshotTests: XCTestCase {
 
     func testShortcutsStayRoutableForARunningTake() {
         XCTAssertTrue(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil,
-            recordingScreenshot: true), "the shared routes pass only the display shortcut")
+            recordingScreenshot: true), "the shared routes pass the screenshot shortcuts")
         XCTAssertFalse(captureShortcutsEnabled(captureBusy: true, selectorGeneration: nil,
             recordingScreenshot: false))
     }
@@ -88,6 +112,11 @@ final class RecordingDisplayScreenshotTests: XCTestCase {
         XCTAssertFalse(controller.recordingDisplayScreenshotAvailable)
         XCTAssertFalse(controller.captureDisplayWhileRecording(),
             "without a take, Screenshot Display opens the capture menu instead")
+        XCTAssertFalse(controller.captureWhileRecording(.region),
+            "without a take, Screenshot Region opens its own selector instead")
+        XCTAssertFalse(controller.captureWhileRecording(.window))
+        XCTAssertFalse(controller.captureWhileRecording(.display))
+        XCTAssertEqual(controller.newCaptureRoute, .captureMenu)
         XCTAssertTrue(reported.isEmpty, "refusing a direct screenshot is silent")
         XCTAssertEqual(transport.captureRequests, 0)
     }

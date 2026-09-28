@@ -85,8 +85,8 @@ struct Routes {
     pending: Option<CaptureShortcut>,
     enabled: bool,
     restore_only: bool,
-    /// A running or paused recording owns the flow and accepts a display
-    /// screenshot (`capture_error::display_route`).
+    /// A running or paused recording owns the flow and accepts a region,
+    /// window or display screenshot (`capture_error::screenshot_route`).
     recording_screenshot: bool,
     suspended: bool,
     restoring: bool,
@@ -106,20 +106,29 @@ impl Routes {
         }
     }
 
-    /// Shipping lets the display shortcut through while a recording runs,
-    /// even with its controls hidden; every other busy binding stays blocked.
-    fn routes_recording_display(&self, action: Option<CaptureShortcut>) -> bool {
+    /// Shipping lets the screenshot shortcuts through while a recording runs,
+    /// even with its controls hidden, and New Capture too: it restores hidden
+    /// controls or reports the busy take (`capture_error::new_capture_route`).
+    /// The recording shortcuts stay blocked (`CaptureInProgress`).
+    fn routes_recording(&self, action: Option<CaptureShortcut>) -> bool {
         self.recording_screenshot
             && self.selector_generation.is_none()
-            && action == Some(CaptureShortcut::Display)
+            && matches!(
+                action,
+                Some(
+                    CaptureShortcut::NewCapture
+                        | CaptureShortcut::Region
+                        | CaptureShortcut::Window
+                        | CaptureShortcut::Display
+                )
+            )
     }
 
     fn event(&mut self, id: u32, state: HotKeyState, blocked: bool) -> bool {
-        let recording_display =
-            self.routes_recording_display(self.bindings.get(&id).map(|binding| binding.action));
+        let recording = self.routes_recording(self.bindings.get(&id).map(|binding| binding.action));
         if !self.enabled
             || (self.suspended && !self.restoring)
-            || (blocked && !recording_display)
+            || (blocked && !recording)
             || id == HotKey::new(None, Code::Escape).id()
         {
             self.clear();
@@ -128,8 +137,7 @@ impl Routes {
         let Some(binding) = self.bindings.get(&id) else {
             return false;
         };
-        if self.restore_only && binding.action != CaptureShortcut::NewCapture && !recording_display
-        {
+        if self.restore_only && binding.action != CaptureShortcut::NewCapture && !recording {
             self.armed.remove(&id);
             return false;
         }
@@ -487,10 +495,11 @@ impl CaptureShortcuts {
         }
     }
 
-    /// While a running or paused recording owns the flow, route the display
-    /// shortcut to a screenshot beside it (`capture_error::display_route`).
+    /// While a running or paused recording owns the flow, route the region,
+    /// window and display shortcuts to a screenshot beside it
+    /// (`capture_error::screenshot_route`), and New Capture to the host.
     /// This flips as each screenshot starts and ends, so it keeps held and
-    /// queued chords: a New Capture restore must survive it, and a display
+    /// queued chords: a New Capture restore must survive it, and a screenshot
     /// chord is checked against the route again when it is taken.
     pub fn set_recording_screenshot(&self, allowed: bool) {
         self.dispatcher.routes.lock().unwrap().recording_screenshot = allowed;
@@ -518,14 +527,12 @@ impl CaptureShortcuts {
     pub fn next_action(&self) -> Option<CaptureShortcut> {
         let mut routes = self.dispatcher.routes.lock().unwrap();
         let pending = routes.pending.take();
-        let recording_display = routes.routes_recording_display(pending);
+        let recording = routes.routes_recording(pending);
         (routes.enabled
             && !routes.suspended
-            && (!routes.restore_only
-                || pending == Some(CaptureShortcut::NewCapture)
-                || recording_display)
+            && (!routes.restore_only || pending == Some(CaptureShortcut::NewCapture) || recording)
             && (routes.restore_only
-                || recording_display
+                || recording
                 || crate::capture_flow::shortcuts_allowed(routes.selector_generation)))
         .then_some(pending)
         .flatten()
@@ -681,26 +688,34 @@ mod tests {
     }
 
     #[test]
-    fn a_running_recording_routes_only_the_display_shortcut() {
+    fn a_running_recording_routes_screenshots_and_new_capture_only() {
         let settings = settings();
         let id = |text: &str| text.parse::<HotKey>().unwrap().id();
-        let display = id(&settings.display_shortcut);
         let mut routes = Routes {
             bindings: bindings(&settings).unwrap(),
             enabled: true,
             recording_screenshot: true,
             ..Routes::default()
         };
+        let routed = [
+            (&settings.region_shortcut, CaptureShortcut::Region),
+            (&settings.window_shortcut, CaptureShortcut::Window),
+            (&settings.display_shortcut, CaptureShortcut::Display),
+            (&settings.new_capture_shortcut, CaptureShortcut::NewCapture),
+        ];
         for restore_only in [false, true] {
             routes.restore_only = restore_only;
             // The recording owns the capture flow, so every route is blocked.
-            assert!(!routes.event(display, HotKeyState::Pressed, true));
-            assert!(routes.event(display, HotKeyState::Released, true));
-            assert_eq!(routes.pending.take(), Some(CaptureShortcut::Display));
+            for (chord, action) in routed {
+                assert!(!routes.event(id(chord), HotKeyState::Pressed, true));
+                assert!(routes.event(id(chord), HotKeyState::Released, true));
+                assert_eq!(routes.pending.take(), Some(action), "{chord}");
+            }
+            // Shipping `prepare_capture_selector_inner` refuses a second
+            // recording silently.
             for other in [
-                &settings.region_shortcut,
-                &settings.window_shortcut,
                 &settings.recording.video_shortcut,
+                &settings.recording.window_shortcut,
                 &settings.recording.display_shortcut,
             ] {
                 assert!(!routes.event(id(other), HotKeyState::Pressed, true));
@@ -708,16 +723,25 @@ mod tests {
                 assert!(routes.pending.is_none(), "{other} stays blocked");
             }
         }
+        routes.restore_only = false;
         // Countdown, finalizing and a screenshot in progress withdraw the route.
         routes.recording_screenshot = false;
-        assert!(!routes.event(display, HotKeyState::Pressed, true));
-        assert!(!routes.event(display, HotKeyState::Released, true));
-        assert!(routes.pending.is_none());
+        for (chord, _) in routed {
+            assert!(!routes.event(id(chord), HotKeyState::Pressed, true));
+            assert!(!routes.event(id(chord), HotKeyState::Released, true));
+            assert!(routes.pending.is_none(), "{chord}");
+        }
+        let region = id(&settings.region_shortcut);
         routes.recording_screenshot = true;
         routes.suspended = true;
-        assert!(!routes.event(display, HotKeyState::Pressed, true));
+        assert!(!routes.event(region, HotKeyState::Pressed, true));
         routes.suspended = false;
-        assert!(!routes.event(display, HotKeyState::Released, true));
+        assert!(!routes.event(region, HotKeyState::Released, true));
+        assert!(routes.pending.is_none());
+        // An open New Capture selector owns target shortcuts instead.
+        routes.selector_generation = Some(7);
+        assert!(!routes.event(region, HotKeyState::Pressed, true));
+        assert!(!routes.event(region, HotKeyState::Released, true));
         assert!(routes.pending.is_none());
     }
 

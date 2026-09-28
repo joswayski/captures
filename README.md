@@ -250,13 +250,16 @@ region/window/display shortcuts switch mode and target in the same session; keyb
 Full screen does not auto-start capture. As in the shipping app, the display
 screenshot shortcut and tray Screenshot Display open these controls on Full screen
 with its display picker, and a failed capture shows a "Captures" error dialog
-instead of a History error. During a running or paused recording they instead
-screenshot the display under the pointer beside the take, with the screenshot
-countdown and without the recording controls unless they are included in captures.
-Focused Preferences and capture preparation/countdown suppress those shortcuts, and
-an active recording suppresses all but the display screenshot shortcut. While
-recording controls are hidden, the configured New Capture shortcut restores the same
-take and the display shortcut still takes a screenshot. Native Preferences can edit all seven capture
+instead of a History error. During a running or paused recording the region, window
+and display screenshot shortcuts and tray items take that screenshot beside the take,
+as the shipping app does: region and window open their selector on the display under
+the pointer, display captures that display directly, and each uses the screenshot
+countdown and leaves out the recording controls unless they are included in captures.
+The recording keeps running untouched. Focused Preferences and capture
+preparation/countdown suppress those shortcuts, an active recording ignores the
+recording shortcuts and tray items, and New Capture reports that a capture is already
+in progress. While recording controls are hidden, New Capture restores the same take
+and the screenshot shortcuts and tray items still take a screenshot. Native Preferences can edit all seven capture
 and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
@@ -269,8 +272,8 @@ replaces only the current take and resets its elapsed time. Both native HUDs sho
 live microphone level while visible, running, and unmuted, clearing it when paused,
 muted, hidden, or changing the take. Physical microphone and device acceptance
 remain open. Hide removes only the controls, shows a temporary
-noninteractive notice, and preserves the session, timer, pause and microphone state. The menu bar/tray,
-app reactivation, and configured New Capture shortcut restore the controls; Linux disables Hide without a
+noninteractive notice, and preserves the session, timer, pause and microphone state. New Capture
+(its shortcut and the menu bar/tray item) and app reactivation restore the controls; Linux disables Hide without a
 usable tray and restores the controls and workspace if its tray host disappears. FFmpeg and FFprobe must
 be installed separately for these development builds; native media-tool bundling
 is not connected. Started recordings are saved on session loss instead of being

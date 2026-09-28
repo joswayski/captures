@@ -230,9 +230,17 @@ enum Request {
     /// Shipping `report_capture_error` dialog copy for a failed capture.
     CaptureErrorCopy,
     /// Where Screenshot Display goes for the recording's state, if any
-    /// (`captures_app::capture_error::display_route`).
+    /// (`captures_app::capture_error::display_route`). Region and window
+    /// follow the same states (`screenshot_route`): "capture_display" means a
+    /// screenshot beside the take for them too.
     DisplayCaptureRoute {
         recording: Option<captures_recording::RecordingState>,
+    },
+    /// Where New Capture goes (`captures_app::capture_error::new_capture_route`).
+    NewCaptureRoute {
+        recording: Option<captures_recording::RecordingState>,
+        #[serde(default)]
+        controls_hidden: bool,
     },
     /// Shipping Screen Recording recovery dialog for a denied capture.
     PermissionRecoveryPrompt,
@@ -357,6 +365,23 @@ fn response(request: *const c_char) -> Value {
                 DisplayRoute::Ignore => "ignore",
             };
             json!({"ok":true,"route":route})
+        }
+        Ok(Request::NewCaptureRoute {
+            recording,
+            controls_hidden,
+        }) => {
+            use captures_app::capture_error::{
+                CAPTURE_IN_PROGRESS, NewCaptureRoute, message, new_capture_route,
+            };
+            match new_capture_route(recording, controls_hidden) {
+                NewCaptureRoute::CaptureMenu => json!({"ok":true,"route":"capture_menu"}),
+                NewCaptureRoute::RestoreControls => {
+                    json!({"ok":true,"route":"restore_controls"})
+                }
+                NewCaptureRoute::InProgress => json!({
+                    "ok":true,"route":"in_progress","message":message(CAPTURE_IN_PROGRESS),
+                }),
+            }
         }
         Ok(Request::PermissionRecoveryPrompt) => ONBOARDING
             .lock()
@@ -610,6 +635,25 @@ mod tests {
         // AppKit omits the key when no recording session exists.
         let idle = settings_request(json!({"operation":"display_capture_route"}));
         assert_eq!(idle["route"], "capture_menu");
+    }
+
+    #[test]
+    fn new_capture_route_abi_shares_the_recording_rule() {
+        // Region and window share `display_capture_route`'s recording states
+        // (`capture_error::screenshot_route`); New Capture has its own rule.
+        let idle = settings_request(json!({"operation":"new_capture_route"}));
+        assert_eq!(idle["route"], "capture_menu");
+        let hidden = settings_request(
+            json!({"operation":"new_capture_route","recording":"paused","controls_hidden":true}),
+        );
+        assert_eq!(hidden["route"], "restore_controls");
+        let busy =
+            settings_request(json!({"operation":"new_capture_route","recording":"recording"}));
+        assert_eq!(busy["route"], "in_progress");
+        assert_eq!(
+            busy["message"],
+            "Captures could not start the capture: capture already in progress"
+        );
     }
 
     #[test]

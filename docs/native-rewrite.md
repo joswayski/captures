@@ -201,7 +201,7 @@ menu in Screenshot mode on Full screen, with its display picker, instead of
 capturing at once (`open_capture_controls_with_target`). Opening on Full screen
 never auto-starts; only choosing it or another display does. While a recording
 runs or is paused they take a display screenshot beside it instead (see the
-Screenshot Display during recording slice below). A failed tray, shortcut or menu capture shows shipping's
+screenshots during recording slices below). A failed tray, shortcut or menu capture shows shipping's
 `report_capture_error` dialog, titled "Captures" with one OK button (copy in
 `captures_app::capture_error`, exposed to AppKit through the settings ABI). AppKit
 uses a sheet over History; wgpu draws the dialog in its own window, so it shows
@@ -1736,8 +1736,9 @@ multi-display acceptance remain open. Wayland remains gated.
 
 The recording Hide slice keeps the accepted AppKit/wgpu session and capture-flow
 generation alive while removing only its HUD. A 6.2-second click-through fixed-glass
-notice replaces no controls. Menu bar/tray actions, app reactivation and a restore-only
-New Capture shortcut bring the HUD back without enabling any other busy shortcut.
+notice replaces no controls. The menu bar/tray New Capture item, app reactivation and a
+restore-only New Capture shortcut bring the HUD back; screenshot shortcuts and tray items
+screenshot beside the take instead (see below), and no other busy shortcut is enabled.
 Stop, Discard, Restart/countdown, session loss and teardown clear hidden state; generation
 checks reject stale restoration. Linux requires a live SNI host and restores the HUD plus
 workspace on host loss. Windows/AppKit physical acceptance remains open and Wayland stays gated.
@@ -1761,32 +1762,43 @@ saved pixels, same-session continuity, final decode and recovery cleanup. AppKit
 renders/tests the enabled HUD; real macOS/Windows capture and Wayland remain open,
 so this does not close the Recording HUD parity gate.
 
-The Screenshot Display during recording slice matches shipping's direct display
-screenshot beside a take (`lib.rs` display shortcut and `start_capture_from_tray`,
-which call `start_capture_inner(Display)` while `recording_session_is_active`).
-`captures_app::capture_error::display_route` holds the rule, and AppKit reads it
-through the settings ABI: no session opens the capture menu; a running or paused
-take captures the display under the pointer; a take that is selecting, counting
-down, finalizing or in its editor refuses silently, like
-`screenshot_capture_is_blocked`. The shared shortcut routes pass only the display
-chord while a running take owns the capture flow, including while its controls are
-hidden; Region, Window, Record and New Capture stay blocked, and a second recording
-cannot start. The screenshot reuses the child generation above: both hosts hide the
-recording controls unless they are opted into captures (shipping
-`conceal_capture_chrome_for_snapshot`), keep the region guide and, unless opted in,
-mini previews out of the image, run the screenshot countdown on the captured
-display, and publish to History, the clipboard (when auto-copy is on) and the mini
-previews. Hidden controls stay hidden, as in shipping. The take keeps its segment,
-display, guide and output, and Escape during the countdown cancels only the
-screenshot. On X11 the countdown window still appears in the ongoing recording,
-as it does in shipping. Shipping also lets the region and window shortcuts and tray
-items screenshot during a recording; native hosts still refuse those, apart from
-the HUD's region Screenshot button. Private-X11 acceptance
-(`x11_recording_smoke.py --display-screenshot-only`) takes the shortcut screenshot
-while running and the real tray item while paused, cancels a countdown, and checks
-the saved pixels, the clipboard, the mini preview, same-session continuity and the
-decoded recording. AppKit is covered by XCTest only; real macOS/Windows capture,
-Wayland and multi-monitor acceptance remain open.
+The screenshots during recording slices match shipping's screenshots beside a take.
+Shipping's region, window and display shortcuts and `start_capture_from_tray` all call
+`start_capture_inner(mode)` while `recording_session_is_active`, exactly as the recording
+controls' Screenshot button does for region (`lib.rs` capture-shortcut handlers and
+`start_capture_inner`). `captures_app::capture_error::screenshot_route` holds the rule,
+with `display_route` for display's idle capture menu, and AppKit reads it through the
+settings ABI: no session opens the region or window selector, or the capture menu on
+Full screen for display; a running or paused take takes the screenshot beside it; a
+take that is selecting, counting down, finalizing or in its editor refuses silently,
+like `screenshot_capture_is_blocked` (`recording.rs`). The shared shortcut routes pass
+the region, window, display and New Capture chords while a running take owns the
+capture flow, including while its controls are hidden. The recording shortcuts and tray
+items stay blocked and do nothing (`prepare_capture_selector_inner` returns
+`CaptureInProgress`, which they ignore), so a second recording cannot start. New Capture
+restores hidden controls; with the controls showing it reports "capture already in
+progress" in the "Captures" error dialog, as shipping's `open_capture_controls` does
+(`capture_error::new_capture_route`). Only New Capture restores hidden controls; the
+other tray items leave them hidden.
+
+Each screenshot reuses the child generation above. Region and window open their normal
+selector over the take on the display under the pointer with the current screenshot
+preferences (the controls' Screenshot button keeps the recording's display); display captures the pointer's display after the screenshot countdown.
+Both hosts hide the recording controls for the selector, countdown and capture unless
+they are opted into captures (shipping `conceal_capture_chrome_for_snapshot`, restored
+in `finish_capture`), keep the region guide and, unless opted in, mini previews out of
+the image, and publish to History, the clipboard (when auto-copy is on) and the mini
+previews. Hidden controls stay hidden, as in shipping. The take keeps its segments,
+display, guide and output, and Escape during selection or countdown cancels only the
+screenshot. On X11 the selector and countdown windows still appear in the ongoing
+recording, as they do in shipping; AppKit selection panels are excluded from capture.
+Private-X11 acceptance (`x11_recording_smoke.py --display-screenshot-only`) takes the
+display shortcut screenshot while running and the real tray Screenshot Display while
+paused, the region shortcut screenshot while running and the real tray Screenshot Window
+while paused, cancels a countdown, dismisses the busy New Capture dialog, and checks the
+saved pixels, the clipboard, the mini preview, same-session continuity and the decoded
+recording. AppKit is covered by XCTest only; real macOS/Windows capture, Wayland and
+multi-monitor acceptance remain open.
 
 The recording HUD failure and retry slice ports the shipping `RecordingHud` failure
 states to both hosts through `captures_app::recording_hud` (AppKit calls it through
