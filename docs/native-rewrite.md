@@ -1605,10 +1605,21 @@ wgpu supports explicit `--reduced-motion` and reads Windows client-area animatio
 or the Linux Settings portal's standardized reduced-motion preference off the UI
 thread on live startup and workspace foreground return. Reads coalesce, never
 write settings, and retain the last known value if temporarily unavailable.
+Live wgpu also subscribes to changes for the life of the process
+(`captures_session::watch_reduced_motion`), so a change applies while the workspace
+stays unfocused: on Windows a hidden top-level window on its own thread receives the
+`WM_SETTINGCHANGE` broadcast for `SPI_SETCLIENTAREAANIMATION` (message-only windows
+miss broadcasts) and re-reads it; on Linux a session-bus thread takes the Settings
+portal's `SettingChanged` signal for `org.freedesktop.appearance` / `reduced-motion`
+and applies its value without another read. Neither polls. Where no notification
+source exists (no session bus or portal, or a portal that never emits the key), the
+foreground re-read remains the only refresh; macOS AppKit reads
+`accessibilityDisplayShouldReduceMotion` at each animation, so it is always current.
 Fixtures stay independent of the host preference. Linux desktops without that key
-use ordinary motion unless explicitly overridden. Changes while the workspace
-remains unfocused require returning to it; continuous OS change subscription and
-physical Windows/Linux accessibility acceptance remain open.
+use ordinary motion unless explicitly overridden. The private-X11 system-motion
+smoke checks startup, foreground refresh and unfocused `SettingChanged` signals; the
+Windows watcher is compiled only by Windows CI, and physical Windows/Linux
+accessibility acceptance remains open.
 Reduced motion switches immediately. AppKit
 uses native frame animation; wgpu repaints only while egui's transition is active.
 Both hosts also paint the shipping `glass-strong-solid` depth overlay on compact

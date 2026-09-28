@@ -369,6 +369,20 @@ impl Preferences {
         }
     }
 
+    /// Follow the desktop's motion preference as it changes, where the OS
+    /// sends a notification (`captures_session::watch_reduced_motion`), rather
+    /// than only on foreground return. Returns whether a watcher started.
+    pub fn watch_motion_preference(&self, ctx: &egui::Context) -> bool {
+        let out = self.out.clone();
+        let ctx = ctx.clone();
+        let watching = captures_session::watch_reduced_motion(move |value| {
+            let _ = out.send(Message::MotionPreference(value));
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        });
+        crate::emit("motion-watch", json!({ "watching": watching }));
+        watching
+    }
+
     pub fn refresh_motion_preference(&mut self) {
         if !self.motion_pending {
             self.motion_pending = self.io.tx.send(Command::MotionPreference).is_ok();

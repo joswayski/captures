@@ -230,6 +230,10 @@ def main():
                     return {"org.freedesktop.appearance": {} if self.value is None else {
                         "reduced-motion": dbus.UInt32(self.value, variant_level=1)}}
 
+                @dbus.service.signal("org.freedesktop.portal.Settings", signature="ssv")
+                def SettingChanged(self, namespace, key, value):
+                    pass
+
             portal_name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus=bus, do_not_queue=True)
             portal = PortalSettings(portal_name, "/org/freedesktop/portal/desktop")
             settings = output / "motion-settings.json"
@@ -249,12 +253,12 @@ def main():
                                    "--history-root", str(output / "history"), "--quit-after", "60"])
             root = wait(lambda: windows("Capture History"), "motion workspace")[0]
 
-            def motion_events():
+            def motion_events(event="motion-preference"):
                 events = []
                 for line in (output / "motion.stdout.log").read_text().splitlines():
                     if line.startswith("{") and line.endswith("}"):
                         value = json.loads(line)
-                        if value.get("event") == "motion-preference":
+                        if value.get("event") == event:
                             events.append(value["detail"])
                 return events
 
@@ -273,6 +277,25 @@ def main():
                 time.sleep(.5)
                 assert portal.calls == calls, "idle motion preference must not poll"
                 assert settings.read_bytes() == original, "desktop preference read saved app settings"
+            # The portal's SettingChanged signal applies while the workspace
+            # stays unfocused, without another ReadAll.
+            assert motion_events("motion-watch") == [{"watching": True}], motion_events("motion-watch")
+            run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other, "sleep", ".3")
+            for reported, expected in [(1, True), (0, False), (1, True)]:
+                count, calls = len(motion_events()), portal.calls
+                GLib.idle_add(lambda value=reported: portal.SettingChanged(
+                    "org.freedesktop.appearance", "reduced-motion",
+                    dbus.UInt32(value, variant_level=1)) and False)
+                wait(lambda: len(motion_events()) > count and motion_events()[-1] == {
+                    "available": True, "reduced": expected}, "unfocused motion change")
+                assert portal.calls == calls, "a change signal needs no ReadAll"
+            # Other appearance keys are ignored.
+            count = len(motion_events())
+            GLib.idle_add(lambda: portal.SettingChanged(
+                "org.freedesktop.appearance", "color-scheme", dbus.UInt32(1, variant_level=1)) and False)
+            time.sleep(.5)
+            assert len(motion_events()) == count, "unrelated settings must not report motion"
+            run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
             shot(root, "motion-foreground")
             run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
             wait(lambda: app.poll() is not None, "motion workspace closes")
@@ -285,8 +308,8 @@ def main():
             assert portal.calls == calls, "render fixtures must not read desktop motion preferences"
             (output / "result.json").write_text(json.dumps({"passed": True, "checks": [
                 "startup", "foreground-toggle", "unavailable-retains", "unknown-no-preference",
-                "no-idle-query", "settings-unchanged", "fixture-isolation"]}, indent=2) + "\n")
-            print("PASS native system motion: startup, foreground, unavailable, unknown, no polling or writes")
+                "no-idle-query", "settings-unchanged", "unfocused-change-signal", "fixture-isolation"]}, indent=2) + "\n")
+            print("PASS native system motion: startup, foreground, change signal, unavailable, unknown, no polling or writes")
             return
 
         if args.lifecycle:
