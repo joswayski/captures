@@ -115,13 +115,27 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(controller.selectionOverlay.selectionEnabled)
             XCTAssertTrue(rail[0].selected)
             XCTAssertEqual(rail.filter(\.selected).count, 1)
-            let menu = try XCTUnwrap(rail[3].menu)
-            XCTAssertEqual(menu.items.map(\.title), ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"])
+            // Shipping's three-column Shapes flyout replaces a native menu.
+            XCTAssertNil(rail[3].menu)
+            let flyout = try XCTUnwrap(controller.shapeFlyout)
+            XCTAssertTrue(flyout.isHidden)
+            rail[3].performClick(nil)
+            XCTAssertFalse(flyout.isHidden, "Shapes opens its flyout")
+            XCTAssertEqual(flyout.frame.minX, rail[3].frame.maxX + 10)
+            XCTAssertEqual(flyout.frame.size, NSSize(width: 6 + 3 * 44 + 2 * 4, height: 6 + 2 * 44 + 4 + 6),
+                           "three 44pt columns, --s-2 gaps and --s-3 padding")
+            XCTAssertEqual(flyout.buttons.map { $0.button.toolTip ?? "" },
+                           ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"])
+            XCTAssertEqual(flyout.buttons.map { $0.button.frame.size }, Array(repeating: NSSize(width: 44, height: 44), count: 6))
+            try render(controller.root, name: "screenshot-editor-shapes-flyout-\(appearance)")
             for (index, shape) in [EditorDrawOverlay.Shape.rectangle, .ellipse, .line, .triangle, .diamond, .star].enumerated() {
-                menu.performActionForItem(at: index)
+                controller.showShapeFlyout(true)
+                flyout.buttons[index].button.performClick(nil)
                 XCTAssertEqual(controller.drawOverlay.shape, shape)
                 XCTAssertTrue(rail[3].selected)
-                XCTAssertEqual(menu.items[index].state, .on)
+                XCTAssertTrue(flyout.isHidden, "choosing a shape closes the flyout")
+                XCTAssertTrue(flyout.buttons[index].button.active)
+                XCTAssertEqual(flyout.buttons.filter { $0.button.active }.count, 1)
             }
             for (index, shape) in [(4, EditorDrawOverlay.Shape.arrow), (5, .pen), (6, .wand)] {
                 rail[index].performClick(nil)
@@ -129,7 +143,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(rail[index].selected)
             }
             try showGeometry(in: controller.root)
-            XCTAssertEqual(rail.filter(\.selected).count, 0)
+            XCTAssertEqual(rail.filter(\.selected), [rail[1]], "shipping's Crop section is the Crop tool")
             XCTAssertTrue(rail.allSatisfy { $0.isEnabled && !$0.isHidden })
             rail[4].performClick(nil)
             try render(controller.root, name: "screenshot-editor-tool-rail-minimum-\(appearance)")
@@ -191,19 +205,17 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(controller.drawOverlay.startPoint)
         XCTAssertEqual(sections.selectedSegment, 0)
         XCTAssertTrue(controller.cropOverlay.croppingEnabled)
-        let fields = try ["Crop X", "Crop Y", "Crop width", "Crop height"].map { try field($0, in: controller.root) }
-        let previous = fields.map(\.stringValue)
+        XCTAssertNil(controller.cropSelection, "the Crop tool starts without a selection, like shipping")
         controller.cropOverlay.begin(at: NSPoint(x: image.minX + 40, y: image.minY + 50))
         controller.cropOverlay.end(at: NSPoint(x: image.minX + 180, y: image.minY + 120))
-        let candidate = fields.map(\.stringValue)
-        XCTAssertNotEqual(candidate, previous)
+        let candidate = try XCTUnwrap(controller.cropSelection)
         controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "c"))
         XCTAssertTrue(controller.cropOverlay.croppingEnabled)
-        XCTAssertEqual(fields.map(\.stringValue), candidate)
+        XCTAssertEqual(controller.cropSelection, candidate, "repeating the tool key keeps the selection")
         controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: "v"))
         XCTAssertEqual(sections.selectedSegment, 1)
         XCTAssertFalse(controller.cropOverlay.croppingEnabled)
-        XCTAssertEqual(fields.map(\.stringValue), previous, "switching tools cancels, not applies, crop")
+        XCTAssertNil(controller.cropSelection, "switching tools cancels, not applies, crop")
         XCTAssertEqual(controller.state.snapshot, original)
         XCTAssertTrue(worker.requests.isEmpty && worker.encodes.isEmpty && worker.saves.isEmpty)
     }
@@ -216,8 +228,8 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         let sections = try segmented("Editor section", in: controller.root)
-        let crop = try field("Crop X", in: controller.root)
-        XCTAssertTrue(controller.window.makeFirstResponder(crop))
+        let canvasWidth = try field("Canvas width", in: controller.root)
+        XCTAssertTrue(controller.window.makeFirstResponder(canvasWidth))
         let pen = try keyEvent(window: controller.window, keyCode: 35, characters: "p")
         XCTAssertFalse(controller.window.performKeyEquivalent(with: pen))
         XCTAssertEqual(sections.selectedSegment, 0)
@@ -360,7 +372,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let undo = try button("Undo", in: controller.root)
         let redo = try button("Redo", in: controller.root)
         XCTAssertTrue(undo.keyEquivalent.isEmpty && redo.keyEquivalent.isEmpty)
-        let field = try field("Crop X", in: controller.root)
+        let field = try field("Canvas width", in: controller.root)
         XCTAssertTrue(controller.window.makeFirstResponder(field))
         _ = controller.window.performKeyEquivalent(with: try event(.command))
         _ = controller.window.performKeyEquivalent(with: try event([.control, .shift]))
@@ -745,10 +757,12 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { input.bounds.size == NSSize(width: 760, height: 408)
                 && abs(controller.presentedImageRect.height - 360) < 1e-7 }
             XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 600))
-            // Shipping sidebar: Layers takes max(188pt, 40%) above Properties.
-            XCTAssertEqual(layersSection.frame, NSRect(x: 888, y: 64, width: 272, height: 188))
+            // Shipping's 320pt sidebar column: panels start --s-5 inside it, and
+            // Layers takes max(188pt, 40%) above Properties.
+            XCTAssertEqual(ScreenshotEditorController.sidebarWidth, 320)
+            XCTAssertEqual(layersSection.frame, NSRect(x: 892, y: 64, width: 308, height: 188))
             XCTAssertFalse(layersSection.isHidden, "Layers shows whatever the tool")
-            XCTAssertEqual(inspector.frame, NSRect(x: 888, y: 252, width: 272, height: 142))
+            XCTAssertEqual(inspector.frame, NSRect(x: 892, y: 252, width: 308, height: 142))
             XCTAssertFalse(undo.isHidden)
             let zoomGroup = try XCTUnwrap(descendants(in: controller.root)
                 .first { $0.accessibilityLabel() == "Canvas zoom controls" })
@@ -767,8 +781,8 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.root.layoutSubtreeIfNeeded()
             waitUntil { controller.presentedImageRect.width == 320 }
             XCTAssertEqual(input.bounds.size, NSSize(width: 320, height: 348))
-            XCTAssertEqual(layersSection.frame, NSRect(x: 448, y: 64, width: 272, height: 188))
-            XCTAssertEqual(inspector.frame, NSRect(x: 448, y: 252, width: 272, height: 82))
+            XCTAssertEqual(layersSection.frame, NSRect(x: 452, y: 64, width: 308, height: 188))
+            XCTAssertEqual(inspector.frame, NSRect(x: 452, y: 252, width: 308, height: 82))
             XCTAssertTrue(undo.isHidden)
             XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 84, width: 320, height: 180))
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
@@ -893,20 +907,26 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try button("Draw crop", in: controller.root).performClick(nil)
+        let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
+            .first { $0.accessibilityLabel() == "Screenshot viewport" })
+        try showGeometry(in: controller.root)
         let image = controller.presentedImageRect
         controller.cropOverlay.begin(at: NSPoint(x: image.minX + 60, y: image.minY + 70))
         controller.cropOverlay.drag(to: NSPoint(x: image.minX + 240, y: image.minY + 180))
         XCTAssertTrue(controller.cropOverlay.croppingEnabled)
+        let staged = try XCTUnwrap(controller.cropSelection)
         controller.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: controller.window))
-        XCTAssertTrue(controller.cropOverlay.croppingEnabled, "same-size notifications preserve the gesture")
+        controller.cropOverlay.drag(to: NSPoint(x: image.minX + 250, y: image.minY + 190))
+        let dragged = try XCTUnwrap(controller.cropSelection)
+        XCTAssertNotEqual(dragged, staged, "same-size notifications preserve the gesture")
+        let viewportWidth = input.bounds.width
         controller.window.setContentSize(NSSize(width: 1100, height: 580))
-        waitUntil { !controller.cropOverlay.croppingEnabled }
-        XCTAssertEqual(try field("Crop X", in: controller.root).stringValue, "0")
-        XCTAssertEqual(try field("Crop width", in: controller.root).stringValue, "640")
+        waitUntil { input.bounds.width != viewportWidth }
+        controller.cropOverlay.drag(to: NSPoint(x: image.minX + 300, y: image.minY + 200))
+        XCTAssertEqual(controller.cropSelection, dragged, "a resize cancels the drag and keeps the staged crop")
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled, "the Crop tool stays ready")
+        XCTAssertFalse(try field("Crop width", in: controller.root).stringValue.isEmpty)
         try chooseZoomPreset("200%", in: controller.root)
-        let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
-            .first { $0.accessibilityLabel() == "Screenshot viewport" })
         input.onViewportPan?(NSPoint(x: 37, y: -21))
         let viewport = controller.viewport
         try showDraw(in: controller.root)
@@ -980,9 +1000,9 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(controller.root.bounds.contains(control.frame), "\(control) must fit at minimum size")
             }
             try render(controller.root, name: "screenshot-editor-compact-fit-\(appearance)")
-            let controls: [NSView] = [try button("Apply crop", in: controller.root),
+            let controls: [NSView] = [try popup("Crop aspect", in: controller.root),
                 try table("Screenshot layers", in: controller.root),
-                try field("New drawing stroke width", in: controller.root)]
+                try rangeSlider("New drawing stroke width", in: controller.root)]
             for control in [try button("Change…", in: controller.root), try button("Save", in: controller.root),
                             try copyButton(in: controller.root)] as [NSView] {
                 XCTAssertNil(control.enclosingScrollView, "export actions are pinned, not scrolled")
@@ -1002,12 +1022,21 @@ final class ScreenshotEditorTests: XCTestCase {
             }
             sections.selectedSegment = 0
             _ = sections.sendAction(sections.action, to: sections.target)
+            // A staged crop shows shipping's Clear / Apply crop pair, reachable
+            // in the compact inspector; Clear drops it without an edit.
+            let image = controller.presentedImageRect
+            controller.cropOverlay.begin(at: NSPoint(x: image.minX + 20, y: image.minY + 20))
+            controller.cropOverlay.end(at: NSPoint(x: image.minX + 120, y: image.minY + 90))
             let crop = try button("Apply crop", in: controller.root)
+            XCTAssertFalse(crop.isHiddenOrHasHiddenAncestor)
+            let cropScroll = try XCTUnwrap(crop.enclosingScrollView)
             crop.scrollToVisible(crop.bounds)
-            try field("Crop width", in: controller.root).stringValue = "0"
-            crop.performClick(nil)
-            XCTAssertTrue(labels(in: controller.root).contains("Crop values must be finite numbers with positive width and height."))
-            try render(controller.root, name: "screenshot-editor-compact-error-\(appearance)")
+            controller.root.layoutSubtreeIfNeeded()
+            XCTAssertTrue(cropScroll.contentView.bounds.contains(crop.convert(crop.bounds, to: cropScroll.contentView)))
+            try render(controller.root, name: "screenshot-editor-compact-crop-\(appearance)")
+            try button("Clear", in: controller.root).performClick(nil)
+            XCTAssertNil(controller.cropSelection)
+            XCTAssertTrue(crop.isHidden)
             XCTAssertEqual(controller.state.snapshot, original)
             XCTAssertTrue(worker.requests.isEmpty)
             XCTAssertTrue(worker.encodes.isEmpty)
@@ -1310,10 +1339,7 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "first"), historyRoot: "/native/History")
         worker.deferRequests = true
 
-        (try field("Crop X", in: controller.root)).stringValue = "13"
-        (try field("Crop Y", in: controller.root)).stringValue = "7"
-        (try field("Crop width", in: controller.root)).stringValue = "321"
-        (try field("Crop height", in: controller.root)).stringValue = "199"
+        try stageCrop(NSRect(x: 13, y: 7, width: 321, height: 199), in: controller)
         try button("Apply crop", in: controller.root).performClick(nil)
         XCTAssertTrue(controller.state.busy)
 
@@ -1368,45 +1394,61 @@ final class ScreenshotEditorTests: XCTestCase {
         try showComparison(controller, worker)
         let sections = try segmented("Editor section", in: controller.root)
         sections.selectedSegment = 0; _ = sections.sendAction(sections.action, to: sections.target)
-        let fields = try ["Crop X", "Crop Y", "Crop width", "Crop height"].map { try field($0, in: controller.root) }
-        let previous = ["12", "7", "320", "180"]
-        for (field, value) in zip(fields, previous) { field.stringValue = value }
-        try button("Draw crop", in: controller.root).performClick(nil)
+        // Shipping's Crop tool is ready at once; there is no Draw crop or X/Y.
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled)
+        XCTAssertFalse(descendants(in: controller.root).contains {
+            ["Crop X", "Crop Y", "Draw crop"].contains(($0 as? NSControl)?.accessibilityLabel() ?? "")
+        })
+        let fields = try ["Crop width", "Crop height"].map { try field($0, in: controller.root) }
+        XCTAssertTrue(fields.allSatisfy { !$0.isEditable }, "shipping shows the size read-only")
+        let apply = try button("Apply crop", in: controller.root)
+        let clear = try button("Clear", in: controller.root)
+        XCTAssertTrue(apply.isHidden && clear.isHidden && fields.allSatisfy(\.isHidden),
+                      "the drag hint shows until a crop is dragged")
+        XCTAssertTrue(labels(in: controller.root).contains { $0.hasPrefix("Drag over the area you want to keep.") })
         let image = controller.presentedImageRect
         func drag() {
             controller.cropOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.75, y: image.minY + image.height * 0.8))
             controller.cropOverlay.end(at: NSPoint(x: image.minX + image.width * 0.25, y: image.minY + image.height * 0.3))
         }
+        let staged = NSRect(x: 160, y: 108, width: 320, height: 180)
         drag()
-        XCTAssertEqual(fields.map(\.stringValue), ["160", "108", "320", "180"])
+        XCTAssertEqual(controller.cropSelection, staged)
+        XCTAssertEqual(fields.map(\.stringValue), ["320", "180"])
+        XCTAssertFalse(apply.isHidden || clear.isHidden)
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true)
         XCTAssertNotNil(controller.compareView.afterImage, "a crop candidate keeps the comparison")
         controller.cropOverlay.keyDown(with: try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
-        XCTAssertEqual(fields.map(\.stringValue), previous)
-        XCTAssertFalse(controller.cropOverlay.croppingEnabled)
-        try button("Draw crop", in: controller.root).performClick(nil)
+        XCTAssertNil(controller.cropSelection, "Escape clears the selection")
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled, "the Crop tool stays ready for a new drag")
+        XCTAssertTrue(apply.isHidden)
         drag()
-        fields[0].selectText(nil)
+        XCTAssertTrue(controller.window.makeFirstResponder(try field("Canvas width", in: controller.root)))
         controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
-        XCTAssertEqual(fields.map(\.stringValue), previous, "Escape works with a numeric field focused")
+        XCTAssertNil(controller.cropSelection, "Escape works with a numeric field focused")
         XCTAssertNotNil(controller.compareView.afterImage)
-        try button("Draw crop", in: controller.root).performClick(nil)
+        drag()
+        clear.performClick(nil)
+        XCTAssertNil(controller.cropSelection, "Clear drops the selection without an edit")
+        XCTAssertTrue(worker.requests.isEmpty)
         drag()
         worker.failOperation = "crop"
-        try button("Apply crop", in: controller.root).performClick(nil)
+        apply.performClick(nil)
         XCTAssertEqual(worker.requests.count, 1)
         XCTAssertEqual(controller.state.snapshot?.width, 640)
-        XCTAssertEqual(fields.map(\.stringValue), ["160", "108", "320", "180"])
-        XCTAssertFalse(controller.cropOverlay.croppingEnabled)
+        XCTAssertEqual(controller.cropSelection, staged, "a rejected crop stays staged for a retry")
+        XCTAssertEqual(fields.map(\.stringValue), ["320", "180"])
         worker.failOperation = nil; worker.deferRequests = true
-        try button("Apply crop", in: controller.root).performClick(nil)
+        apply.performClick(nil)
         XCTAssertEqual(worker.requests.count, 2)
         XCTAssertEqual(worker.requests.last?["rect"] as? [String: Double],
                        ["x": 160, "y": 108, "width": 320, "height": 180])
-        XCTAssertFalse(try button("Draw crop", in: controller.root).isEnabled)
+        XCTAssertFalse(apply.isEnabled)
         worker.completePending(with: snapshot(id: "shot", width: 320, height: 180, unsaved: true))
-        XCTAssertEqual(fields.map(\.stringValue), ["0", "0", "320", "180"])
+        XCTAssertNil(controller.cropSelection)
+        XCTAssertTrue(apply.isHidden)
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled, "the Crop tool stays ready after Apply crop")
         XCTAssertTrue(controller.state.snapshot?.canUndo == true)
     }
 
@@ -1417,7 +1459,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            try button("Draw crop", in: controller.root).performClick(nil)
+            try showGeometry(in: controller.root)
+            try render(controller.root, name: "screenshot-editor-crop-hint-\(appearance)")
             let aspect = try popup("Crop aspect", in: controller.root)
             XCTAssertEqual(aspect.itemTitles, ["Free", "1 : 1", "4 : 3", "3 : 2", "16 : 9"])
             aspect.selectItem(withTitle: "4 : 3"); _ = aspect.sendAction(aspect.action, to: aspect.target)
@@ -1425,15 +1468,14 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.cropOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.1, y: image.minY + image.height * 0.2))
             controller.cropOverlay.drag(to: NSPoint(x: image.minX + image.width * 0.5, y: image.minY + image.height * 0.6))
             XCTAssertEqual(controller.cropOverlay.selection, NSRect(x: 64, y: 72, width: 256, height: 192))
+            XCTAssertEqual(controller.cropSelection, controller.cropOverlay.selection)
+            XCTAssertEqual(try field("Crop width", in: controller.root).stringValue, "256")
+            XCTAssertEqual(try field("Crop height", in: controller.root).stringValue, "192")
             try render(controller.root, name: "screenshot-editor-crop-drag-\(appearance)")
             try press("Zoom in", in: controller.root)
             let candidate = controller.cropOverlay.selection
             controller.cropOverlay.end(at: NSPoint(x: 500, y: 400))
             XCTAssertEqual(controller.cropOverlay.selection, candidate, "zoom cancels only the active pointer gesture")
-            let x = try field("Crop X", in: controller.root)
-            x.stringValue = "120"
-            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: x))
-            XCTAssertEqual(controller.cropOverlay.selection?.minX, 120)
             controller.window.setContentSize(NSSize(width: 1000, height: 780))
             let apply = try button("Apply crop", in: controller.root)
             let scroll = try XCTUnwrap(apply.enclosingScrollView)
@@ -1444,12 +1486,13 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(scroll.contentView.bounds.contains(apply.convert(apply.bounds, to: scroll.contentView)))
             try render(controller.root, name: "screenshot-editor-crop-minimum-\(appearance)")
             controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: controller.window))
-            XCTAssertFalse(controller.cropOverlay.croppingEnabled)
-            XCTAssertEqual(x.stringValue, "0")
+            XCTAssertTrue(controller.cropOverlay.croppingEnabled, "losing key focus keeps the Crop tool")
+            XCTAssertEqual(controller.cropSelection, candidate, "and its staged selection")
             XCTAssertTrue(worker.requests.isEmpty)
-            try button("Draw crop", in: controller.root).performClick(nil)
             try showDraw(in: controller.root)
-            XCTAssertFalse(controller.cropOverlay.croppingEnabled, "leaving Geometry cancels crop mode")
+            XCTAssertFalse(controller.cropOverlay.croppingEnabled, "leaving the Crop tool cancels crop mode")
+            XCTAssertNil(controller.cropSelection, "without applying the selection")
+            XCTAssertTrue(worker.requests.isEmpty)
         }
     }
 
@@ -1465,10 +1508,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.cropOverlay.canvasSize, NSSize(width: 640, height: 360),
                        "pointer crops use the rendered pixels, like wgpu, rather than fractional document dimensions")
 
-        (try field("Crop X", in: controller.root)).stringValue = "1,5"
-        (try field("Crop Y", in: controller.root)).stringValue = "2,25"
-        (try field("Crop width", in: controller.root)).stringValue = "300,75"
-        (try field("Crop height", in: controller.root)).stringValue = "150,5"
+        try stageCrop(NSRect(x: 1.5, y: 2.25, width: 300.75, height: 150.5), in: controller)
+        XCTAssertEqual((try field("Crop width", in: controller.root)).stringValue, "300,75")
+        XCTAssertEqual((try field("Crop height", in: controller.root)).stringValue, "150,5")
         try button("Apply crop", in: controller.root).performClick(nil)
 
         let rect = try XCTUnwrap(worker.requests.last?["rect"] as? [String: Double])
@@ -1528,10 +1570,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.compareView.badges.after, "After · 12.3 KB")
         XCTAssertTrue(controller.exportSettingsOpen, "the comparison lives with the export settings")
 
-        (try field("Crop X", in: controller.root)).stringValue = "3"
-        (try field("Crop Y", in: controller.root)).stringValue = "5"
-        (try field("Crop width", in: controller.root)).stringValue = "300"
-        (try field("Crop height", in: controller.root)).stringValue = "200"
+        try stageCrop(NSRect(x: 3, y: 5, width: 300, height: 200), in: controller)
         try button("Apply crop", in: controller.root).performClick(nil)
         XCTAssertNil(controller.compareView.afterImage, "an accepted edit drops the stale After side")
         XCTAssertEqual(controller.compareView.badges.after, "After · Processing…")
@@ -2001,9 +2040,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
         controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
         waitUntil { controller.state.snapshot != nil && !controller.state.busy }
-        for (label, value) in [("Crop X", "2"), ("Crop Y", "1"), ("Crop width", "4"), ("Crop height", "2")] {
-            (try field(label, in: controller.root)).stringValue = value
-        }
+        try stageCrop(NSRect(x: 2, y: 1, width: 4, height: 2), in: controller)
         try button("Apply crop", in: controller.root).performClick(nil)
         waitUntil { controller.state.snapshot?.width == 4 && !controller.state.busy }
         let edited = controller.state.snapshot
@@ -2696,16 +2733,13 @@ final class ScreenshotEditorTests: XCTestCase {
                 $0.accessibilityLabel() == "Geometry controls"
             })
             XCTAssertTrue(geometry.isFlipped)
+            try stageCrop(NSRect(x: 13, y: 7, width: 321, height: 199), in: controller)
             let cropLabel = try XCTUnwrap(descendants(in: geometry).compactMap { $0 as? NSTextField }
-                .first { $0.stringValue == "X" })
-            let cropField = try field("Crop X", in: geometry)
+                .first { $0.stringValue == "Width" })
+            let cropField = try field("Crop width", in: geometry)
             XCTAssertNotNil(cropField.enclosingScrollView)
             XCTAssertLessThan(cropLabel.frame.minY, cropField.frame.minY,
                               "top-down geometry places labels above fields")
-            (try field("Crop X", in: controller.root)).stringValue = "13"
-            (try field("Crop Y", in: controller.root)).stringValue = "7"
-            (try field("Crop width", in: controller.root)).stringValue = "321"
-            (try field("Crop height", in: controller.root)).stringValue = "199"
             try button("Apply crop", in: controller.root).performClick(nil)
             XCTAssertEqual(worker.requests.last?["operation"] as? String, "crop")
             let rect = try XCTUnwrap(worker.requests.last?["rect"] as? [String: Double])
@@ -2721,6 +2755,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
             worker.snapshot = snapshot(id: "shot", width: 640, height: 360,
                                        unsaved: true, draft: true)
+            try stageCrop(NSRect(x: 13, y: 7, width: 321, height: 199), in: controller)
             try button("Apply crop", in: controller.root).performClick(nil)
             // Shipping closes without a save prompt; the draft flushes first.
             XCTAssertFalse(controller.windowShouldClose(controller.window))
@@ -3554,36 +3589,62 @@ final class ScreenshotEditorTests: XCTestCase {
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "de_DE"); formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = false; formatter.maximumFractionDigits = 3
-        let controls = EditorAnnotationControls(tokens: Tokens.variants["light-mustard"]!, formatter: formatter)
+        let controls = EditorAnnotationControls(tokens: Tokens.variants["light-mustard"]!, formatter: formatter,
+                                                width: ScreenshotEditorController.contentWidth)
         var values = annotationStyle()
         values["color"] = "legacy-color"; values["strokeWidth"] = 8.123456
         let original = try XCTUnwrap(NativeAnnotationStyle(values))
         controls.setStyle(original); controls.setReady(true)
         var patches: [[String: Any]] = []
         var keys: [String?] = []
-        var errors: [String] = []
         var opacities: [Double] = []
         controls.apply = { patch, field in patches.append(patch); keys.append(field) }
-        controls.reportError = { errors.append($0) }
         controls.opacityChanged = { opacities.append($0) }
         XCTAssertTrue(descendants(in: controls).compactMap { $0 as? CaptureButton }
             .allSatisfy { $0.title != "Apply style" && $0.title != "Reset fields" },
                       "shipping applies style changes as they are made")
-        let width = try field("Stroke width", in: controls)
-        XCTAssertEqual(width.stringValue, "8,123")
-        _ = width.sendAction(width.action, to: width.target)
+        // Shipping order, labels above controls: Stroke, Stroke color, Stroke
+        // width, Opacity, Drop shadow and its settings, Filled shape, Fill color.
+        let order: [NSView] = [controls.strokeCheck, controls.strokeSwatches, controls.strokeWidthSlider,
+                               controls.opacitySlider, controls.shadowCheck, controls.shadowFields,
+                               controls.fillCheck, controls.fillSwatches]
+        XCTAssertTrue(order.allSatisfy { !$0.isHidden })
+        XCTAssertEqual(order.map(\.frame.minY), order.map(\.frame.minY).sorted())
+        XCTAssertEqual(Set(order.map(\.frame.minY)).count, order.count, "one control per row")
+        XCTAssertEqual(controls.shadowFields.frame.minX, EditorDropShadowFields.indent,
+                       "shadow settings align with the Drop shadow label")
+        XCTAssertEqual([controls.strokeCheck, controls.shadowCheck, controls.fillCheck].map(\.title),
+                       ["Stroke", "Drop shadow", "Filled shape"])
+        // Shipping RangeSliders with value readouts; offsets stay NumberInputs.
+        let width = try rangeSlider("Stroke width", in: controls)
+        XCTAssertEqual(width.slider.minValue, 2); XCTAssertEqual(width.slider.maxValue, 40)
+        XCTAssertEqual(width.readout.stringValue, "8 px")
+        let shadowOpacity = try rangeSlider("Shadow opacity", in: controls)
+        XCTAssertEqual(shadowOpacity.slider.maxValue, 100)
+        XCTAssertEqual(shadowOpacity.readout.stringValue, "70%")
+        let blur = try rangeSlider("Shadow blur", in: controls)
+        XCTAssertEqual(blur.slider.maxValue, 100)
+        XCTAssertEqual(blur.readout.stringValue, "3 px")
         XCTAssertTrue(patches.isEmpty, "displaying resolved values is not an edit")
-        // Each valid value applies as it is typed; a partial entry waits.
-        let shadowY = try field("Shadow Y", in: controls)
+        let shadowY = try field("Shadow Y offset", in: controls)
+        XCTAssertTrue(shadowY is TokenNumberField)
+        XCTAssertEqual(shadowY.stringValue, "-3")
+        // Shipping `commitOffset`: an unparsable entry keeps the offset; a
+        // number commits rounded and clamped to ±500.
         shadowY.stringValue = "-"
-        controls.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: shadowY))
-        XCTAssertTrue(patches.isEmpty && errors.isEmpty)
+        _ = shadowY.sendAction(shadowY.action, to: shadowY.target)
+        XCTAssertTrue(patches.isEmpty)
+        XCTAssertEqual(shadowY.stringValue, "-3")
         shadowY.stringValue = "-12,75"
-        controls.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: shadowY))
+        _ = shadowY.sendAction(shadowY.action, to: shadowY.target)
         XCTAssertEqual(patches.count, 1)
-        XCTAssertEqual(patches[0] as NSDictionary, ["dropShadowStyle": ["offsetY": -12.75]] as NSDictionary)
+        XCTAssertEqual(patches[0] as NSDictionary, ["dropShadowStyle": ["offsetY": -13.0]] as NSDictionary)
         XCTAssertEqual(keys, ["shadow-y"])
-        XCTAssertTrue(errors.isEmpty, "unchanged legacy colors are not revalidated")
+        XCTAssertEqual(shadowY.stringValue, "-13")
+        shadowY.stringValue = "900"
+        _ = shadowY.sendAction(shadowY.action, to: shadowY.target)
+        XCTAssertEqual(patches.last as NSDictionary?, ["dropShadowStyle": ["offsetY": 500.0]] as NSDictionary)
+        XCTAssertEqual(keys.last, "shadow-y", "one field's changes fold into one undo step")
         // Stroke, fill and shadow colors use the shared shipping swatch row.
         for name in ["Stroke color", "Fill color", "Shadow color"] {
             let row = try swatchRow(name, in: controls)
@@ -3595,8 +3656,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(try swatchRow("Stroke color", in: controls).swatchButtons.contains(where: \.active),
                        "a legacy value matches no swatch")
         try swatchButton("Stroke color: #2d9cff", in: controls).performClick(nil)
-        XCTAssertEqual(patches.count, 2, "a swatch applies at once")
-        XCTAssertEqual(patches.last?["color"] as? String, "#2d9cff")
+        XCTAssertEqual(patches.last?["color"] as? String, "#2d9cff", "a swatch applies at once")
         XCTAssertEqual(keys.last, "stroke-color")
         XCTAssertTrue(try swatchButton("Stroke color: #2d9cff", in: controls).active)
         let picker = try swatchRow("Stroke color", in: controls).customWell
@@ -3604,43 +3664,62 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = picker.sendAction(picker.action, to: picker.target)
         XCTAssertEqual(patches.last?["color"] as? String, "#336699")
         XCTAssertEqual(keys.last, "stroke-color", "one color burst folds into one undo step")
+        try swatchButton("Shadow color: #2d9cff", in: controls).performClick(nil)
+        XCTAssertEqual((patches.last?["dropShadowStyle"] as? [String: Any])?["color"] as? String, "#2d9cff")
+        XCTAssertEqual(keys.last, "shadow-color")
 
-        // The published style catches up: typing keeps its field and caret.
+        // The published style catches up; a slider then patches against it.
         var landed = original
-        landed.color = "#336699"; landed.shadowY = -12.75
+        landed.color = "#336699"; landed.shadowY = 500; landed.shadowColor = "#2d9cff"
         controls.setStyle(landed)
         let count = patches.count
-        width.stringValue = "0"
-        _ = width.sendAction(width.action, to: width.target)
-        XCTAssertEqual(errors, ["Enter a valid stroke width."])
-        XCTAssertEqual(patches.count, count, "an invalid entry never applies")
+        width.slider.doubleValue = 13.4
+        _ = width.slider.sendAction(width.slider.action, to: width.slider.target)
+        XCTAssertEqual(patches.count, count + 1)
+        XCTAssertEqual(patches.last as NSDictionary?, ["strokeWidth": 13.0] as NSDictionary)
+        XCTAssertEqual(keys.last, "stroke-width")
+        XCTAssertEqual(width.readout.stringValue, "13 px")
+        blur.slider.doubleValue = 40
+        _ = blur.slider.sendAction(blur.slider.action, to: blur.slider.target)
+        XCTAssertEqual((patches.last?["dropShadowStyle"] as? [String: Any])?["blur"] as? Double, 40)
+        XCTAssertEqual(keys.last, "shadow-blur")
 
         controls.setStyle(original)
-        try annotationToggle("Shadow", in: controls).performClick(nil)
+        controls.shadowCheck.performClick(nil)
         XCTAssertEqual(patches.last as NSDictionary?, ["dropShadow": false] as NSDictionary)
         XCTAssertEqual(keys.last, .some(nil), "each toggle is its own undo step")
-        XCTAssertTrue(try field("Shadow blur", in: controls).isHiddenOrHasHiddenAncestor)
-        try annotationToggle("Fill", in: controls).performClick(nil)
+        XCTAssertTrue(controls.shadowFields.isHidden)
+        controls.fillCheck.performClick(nil)
         XCTAssertEqual(patches.last as NSDictionary?, ["dropShadow": false, "fill": NSNull()] as NSDictionary)
+        XCTAssertTrue(controls.fillSwatches.isHidden)
+        controls.fillCheck.performClick(nil)
+        XCTAssertEqual(patches.last?["fill"] as? String, "legacy-color",
+                       "shipping fills with the stroke color when Filled shape turns on")
+        controls.strokeCheck.performClick(nil)
+        XCTAssertEqual(patches.last?["strokeEnabled"] as? Bool, false)
+        XCTAssertTrue(controls.strokeSwatches.isHidden && controls.strokeWidthSlider.isHidden,
+                      "an unstroked shape hides Stroke color and Stroke width")
 
-        let opacity = try XCTUnwrap(descendants(in: controls).compactMap { $0 as? NSSlider }
-            .first { $0.accessibilityLabel() == "Opacity" })
+        let opacity = try rangeSlider("Opacity", in: controls)
         controls.setOpacity(80)
-        XCTAssertEqual(opacity.doubleValue, 80)
-        opacity.doubleValue = 42.4
-        _ = opacity.sendAction(opacity.action, to: opacity.target)
+        XCTAssertEqual(opacity.slider.doubleValue, 80)
+        XCTAssertEqual(opacity.readout.stringValue, "80%")
+        opacity.slider.doubleValue = 42.4
+        _ = opacity.slider.sendAction(opacity.slider.action, to: opacity.slider.target)
         XCTAssertEqual(opacities, [42])
 
         values["closed"] = false
         controls.setStyle(try XCTUnwrap(NativeAnnotationStyle(values)))
-        XCTAssertTrue(try annotationToggle("Stroke", in: controls).isHiddenOrHasHiddenAncestor)
-        XCTAssertTrue(try annotationToggle("Fill", in: controls).isHiddenOrHasHiddenAncestor)
-        width.stringValue = "3,25"
-        controls.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
-        XCTAssertEqual(patches.last as NSDictionary?, ["strokeWidth": 3.25] as NSDictionary)
+        XCTAssertTrue(controls.strokeCheck.isHidden)
+        XCTAssertTrue(controls.fillCheck.isHidden && controls.fillSwatches.isHidden)
+        XCTAssertFalse(controls.strokeSwatches.isHidden, "open shapes always stroke")
+        width.slider.doubleValue = 3
+        _ = width.slider.sendAction(width.slider.action, to: width.slider.target)
+        XCTAssertEqual(patches.last as NSDictionary?, ["strokeWidth": 3.0] as NSDictionary)
         XCTAssertEqual(keys.last, "stroke-width")
         controls.setReady(false)
         XCTAssertFalse(width.isEnabled)
+        XCTAssertFalse(shadowY.isEnabled)
     }
 
     func testAnnotationStylesApplyLiveQueueWhileBusyAndFoldUndoByField() throws {
@@ -3684,7 +3763,7 @@ final class ScreenshotEditorTests: XCTestCase {
                        ["fill": "#8b5cf6"] as NSDictionary)
         worker.deferRequests = false
         worker.completePending(with: published)
-        try annotationToggle("Shadow", in: controller.root).performClick(nil)
+        try annotationToggle("Drop shadow", in: controller.root).performClick(nil)
         XCTAssertTrue(worker.liveKeys.last?.hasPrefix("style:once:") == true, "a toggle is its own step")
         let opacity = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSSlider }
             .first { $0.accessibilityLabel() == "Opacity" })
@@ -3715,7 +3794,7 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1000, height: 600))
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showLayers(in: controller.root)
-            let shadowY = try field("Shadow Y", in: controller.root)
+            let shadowY = try field("Shadow Y offset", in: controller.root)
             let scroll = try XCTUnwrap(shadowY.enclosingScrollView)
             let document = try XCTUnwrap(scroll.documentView)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: 550))
@@ -3744,8 +3823,8 @@ final class ScreenshotEditorTests: XCTestCase {
             try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
             try render(controller.root, name: "screenshot-editor-style-error-minimum-\(appearance)")
             worker.failLayerAction = nil
-            try annotationToggle("Shadow", in: controller.root).performClick(nil)
-            try annotationToggle("Fill", in: controller.root).performClick(nil)
+            try annotationToggle("Drop shadow", in: controller.root).performClick(nil)
+            try annotationToggle("Filled shape", in: controller.root).performClick(nil)
             try render(controller.root, name: "screenshot-editor-style-disabled-\(appearance)")
         }
     }
@@ -3872,24 +3951,52 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.root.layoutSubtreeIfNeeded()
         try showDraw(in: controller.root)
 
+        // Shipping order under the heading: the grouped-shape picker, the tool
+        // preview, Stroke, Stroke color, Size, Opacity, Filled shape, Fill color
+        // and Drop shadow, each label above its control.
+        let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
+        let stroke = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing stroke" })
+        let fill = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing fill" })
+        let shadow = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing drop shadow" })
+        XCTAssertEqual([stroke.title, fill.title, shadow.title], ["Stroke", "Filled shape", "Drop shadow"])
+        stroke.state = .on; _ = stroke.sendAction(stroke.action, to: stroke.target)
+        fill.state = .on; _ = fill.sendAction(fill.action, to: fill.target)
+        let picker = try XCTUnwrap(controller.shapePicker)
+        let order: [NSView] = [picker, controller.drawToolPreview, stroke,
+                               try swatchRow("Stroke color", in: controller.root),
+                               try rangeSlider("New drawing stroke width", in: controller.root),
+                               try rangeSlider("New drawing opacity", in: controller.root), fill,
+                               try swatchRow("Fill color", in: controller.root), shadow]
+        XCTAssertTrue(order.allSatisfy { !$0.isHiddenOrHasHiddenAncestor })
+        XCTAssertEqual(order.map(\.frame.minY), order.map(\.frame.minY).sorted())
+        // Shipping Size (2–40 px) and Opacity RangeSliders replace number fields.
+        let size = try rangeSlider("New drawing stroke width", in: controller.root)
+        XCTAssertEqual(size.titleLabel.stringValue, "Size")
+        XCTAssertEqual(size.slider.minValue, 2); XCTAssertEqual(size.slider.maxValue, 40)
+        XCTAssertEqual(try rangeSlider("New drawing opacity", in: controller.root).readout.stringValue, "100%")
+
         // Shipping ColorField swatch rows replace the hex fields.
         try swatchButton("Stroke color: #111318", in: controller.root).performClick(nil)
         try swatchButton("Fill color: #36c96b", in: controller.root).performClick(nil)
-        (try field("New drawing stroke width", in: controller.root)).stringValue = "13"
-        (try field("New drawing opacity", in: controller.root)).stringValue = "37"
-        let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
-        let stroke = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing stroke" })
-        stroke.state = .on; _ = stroke.sendAction(stroke.action, to: stroke.target)
+        try slide("New drawing stroke width", to: 13, in: controller.root)
+        try slide("New drawing opacity", to: 37, in: controller.root)
+        XCTAssertEqual(size.readout.stringValue, "13 px")
         XCTAssertTrue(worker.requests.isEmpty, "changing creation defaults is not a document command")
-        let shadow = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing drop shadow" })
         shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
-        XCTAssertEqual(Double(try field("New drawing shadow blur", in: controller.root).stringValue)!, 11.05, accuracy: 0.001)
-        for (key, value) in [("color", "#2468ac"), ("opacity", "61"), ("blur", "9"),
-                             ("offsetX", "-23"), ("offsetY", "17")] {
-            let input = try field("New drawing shadow \(key)", in: controller.root)
-            input.stringValue = value
-            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: input))
-        }
+        let settings = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "New drawing shadow settings" })
+        XCTAssertFalse(settings.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(settings.frame.minX, EditorDropShadowFields.indent)
+        XCTAssertGreaterThan(settings.frame.minY, shadow.frame.minY)
+        XCTAssertEqual(try rangeSlider("New drawing shadow blur", in: controller.root).readout.stringValue, "11 px",
+                       "untouched settings follow the renderer's default for the stroke width")
+        let customShadow = try swatchRow("New drawing shadow color", in: controller.root).customWell
+        customShadow.color = try XCTUnwrap(NSColor(hex: "#2468ac"))
+        _ = customShadow.sendAction(customShadow.action, to: customShadow.target)
+        try slide("New drawing shadow opacity", to: 61, in: controller.root)
+        try slide("New drawing shadow blur", to: 9, in: controller.root)
+        try commit("-23", into: "New drawing shadow x offset", in: controller.root)
+        try commit("17", into: "New drawing shadow y offset", in: controller.root)
         let expectedShadow: NSDictionary = ["color": "#2468AC", "opacity": 61.0, "blur": 9.0,
                                             "offsetX": -23.0, "offsetY": 17.0]
         XCTAssertTrue(worker.requests.isEmpty, "shadow controls do not send a document command")
@@ -3920,6 +4027,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try swatchRow("Color", in: controller.root).selectedHex, "#111318",
                        "open tools name the stroke color Color, like shipping")
         XCTAssertTrue(try swatchRow("Fill color", in: controller.root).isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(fill.isHidden)
         overlay.begin(at: start); overlay.drag(to: end)
         try render(controller.root, name: "screenshot-editor-new-drawing-line-light")
         overlay.end(at: end)
@@ -3930,7 +4038,7 @@ final class ScreenshotEditorTests: XCTestCase {
                       "hidden fill input cannot block a line or enter its request")
         XCTAssertEqual(style["dropShadowStyle"] as? NSDictionary, expectedShadow)
 
-        (try field("New drawing opacity", in: controller.root)).stringValue = "0"
+        try slide("New drawing opacity", to: 0, in: controller.root)
         tool.selectItem(at: 4); _ = tool.sendAction(tool.action, to: tool.target)
         overlay.begin(at: NSPoint(x: 40, y: 40)); overlay.drag(to: NSPoint(x: 80, y: 70)); overlay.end(at: NSPoint(x: 90, y: 80))
         request = try XCTUnwrap(worker.requests.last)
@@ -3941,50 +4049,45 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual((request["style"] as? [String: Any])?["dropShadowStyle"] as? NSDictionary, expectedShadow)
         let count = worker.requests.count
         tool.selectItem(at: 0); _ = tool.sendAction(tool.action, to: tool.target)
-        let fill = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing fill" })
         fill.state = .off; _ = fill.sendAction(fill.action, to: fill.target)
         fill.state = .on; _ = fill.sendAction(fill.action, to: fill.target)
         XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#111318",
                        "reenabling fill adopts current stroke color, matching shipping")
         XCTAssertEqual(worker.requests.count, count)
         shadow.state = .off; _ = shadow.sendAction(shadow.action, to: shadow.target)
-        let shadowColor = try field("New drawing shadow color", in: controller.root)
-        XCTAssertTrue(shadowColor.isHidden)
-        shadowColor.stringValue = "unfinished"
+        XCTAssertTrue(settings.isHidden)
         overlay.begin(at: start); overlay.end(at: end)
-        XCTAssertEqual(worker.requests.count, count + 1, "hidden invalid shadow input does not block drawing")
+        XCTAssertEqual(worker.requests.count, count + 1)
         XCTAssertEqual((worker.requests.last?["style"] as? [String: Any])?["dropShadow"] as? Bool, false)
         shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
-        XCTAssertEqual(shadowColor.stringValue, "unfinished", "reenabling preserves local edits")
-        overlay.begin(at: start); overlay.end(at: end)
-        XCTAssertEqual(worker.requests.count, count + 1, "enabled invalid shadow cannot commit")
-        shadowColor.stringValue = "#2468ac"
-        (try field("New drawing stroke width", in: controller.root)).stringValue = "29"
-        _ = shadow.sendAction(shadow.action, to: shadow.target)
-        XCTAssertEqual(try field("New drawing shadow blur", in: controller.root).stringValue, "9",
+        XCTAssertEqual(try rangeSlider("New drawing shadow blur", in: controller.root).readout.stringValue, "9 px",
+                       "reenabling preserves local edits")
+        try slide("New drawing stroke width", to: 29, in: controller.root)
+        XCTAssertEqual(try rangeSlider("New drawing shadow blur", in: controller.root).readout.stringValue, "9 px",
                        "custom shadow stops following stroke width")
         overlay.begin(at: start); overlay.end(at: end)
         XCTAssertEqual(worker.requests.count, count + 2)
         XCTAssertEqual((worker.requests.last?["style"] as? [String: Any])?["dropShadowStyle"] as? NSDictionary, expectedShadow)
         // AppKit constrains windows to the runner's screen even after requesting
         // 1000 points. Reveal the entire expanded group within that real viewport.
-        let shadowInputs = try ["color", "opacity", "blur", "offsetX", "offsetY"].map {
-            try field("New drawing shadow \($0)", in: controller.root)
-        }
-        let shadowContent = try XCTUnwrap(shadowInputs.first?.superview)
+        let shadowInputs: [NSView] = [
+            try swatchRow("New drawing shadow color", in: controller.root),
+            try rangeSlider("New drawing shadow opacity", in: controller.root),
+            try rangeSlider("New drawing shadow blur", in: controller.root),
+            try field("New drawing shadow x offset", in: controller.root),
+            try field("New drawing shadow y offset", in: controller.root),
+        ]
         let shadowBounds = shadowInputs.map(\.frame).reduce(NSRect.null) { $0.union($1) }
-        shadowContent.scrollToVisible(shadowBounds.insetBy(dx: 0, dy: -22))
-        for key in ["color", "opacity", "blur", "offsetX", "offsetY"] {
-            let input = try field("New drawing shadow \(key)", in: controller.root)
-            XCTAssertTrue(input.visibleRect.contains(input.bounds), "expanded shadow \(key) is fully visible")
+        settings.scrollToVisible(shadowBounds.insetBy(dx: 0, dy: -22))
+        for input in shadowInputs {
+            XCTAssertTrue(input.visibleRect.contains(input.bounds), "expanded \(input) is fully visible")
         }
         try render(controller.root, name: "screenshot-editor-new-drawing-shadow-retained-light")
         controller.window.setContentSize(NSSize(width: 760, height: 540))
         controller.root.layoutSubtreeIfNeeded()
-        for key in ["color", "opacity", "blur", "offsetX", "offsetY"] {
-            let input = try field("New drawing shadow \(key)", in: controller.root)
+        for input in shadowInputs {
             input.scrollToVisible(input.bounds)
-            XCTAssertTrue(input.visibleRect.contains(input.bounds), "compact shadow \(key) remains reachable by scrolling")
+            XCTAssertTrue(input.visibleRect.contains(input.bounds), "compact \(input) remains reachable by scrolling")
         }
         try render(controller.root, name: "screenshot-editor-new-drawing-shadow-compact-light")
     }
@@ -4998,15 +5101,16 @@ final class ScreenshotEditorTests: XCTestCase {
         let shadow = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing drop shadow" })
         XCTAssertFalse(shadow.isHidden, "shipping's new-text section offers Drop shadow")
         shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
-        let blur = try field("New drawing shadow blur", in: controller.root)
-        XCTAssertFalse(blur.isHidden)
-        // Untouched defaults scale from the 50 pt text: max(6, max(4, 50 × 0.22) × 0.85).
-        XCTAssertEqual(Double(blur.stringValue)!, 9.35, accuracy: 0.001)
+        let blur = try rangeSlider("New drawing shadow blur", in: controller.root)
+        XCTAssertFalse(blur.isHiddenOrHasHiddenAncestor)
+        // Untouched defaults scale from the 50 pt text: max(6, max(4, 50 × 0.22) × 0.85),
+        // shown rounded on shipping's whole-pixel Blur slider.
+        XCTAssertEqual(blur.readout.stringValue, "9 px")
+        let size = try field("New text size", in: controller.root)
+        XCTAssertLessThan(size.frame.maxY, shadow.frame.minY, "Drop shadow follows New text size")
         XCTAssertTrue(worker.requests.isEmpty, "shadow defaults are not a document command")
         // A customized shadow is the drawing defaults' shadow too.
-        let offset = try field("New drawing shadow offsetY", in: controller.root)
-        offset.stringValue = "17"
-        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: offset))
+        try commit("17", into: "New drawing shadow y offset", in: controller.root)
         let click = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
         worker.failOperation = "begin_text_input"
         controller.drawOverlay.begin(at: click); controller.drawOverlay.end(at: click)
@@ -5964,31 +6068,41 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
-        let y = try field("Text shadow y", in: controller.root)
-        let blur = try field("Text shadow blur", in: controller.root)
+        // Shipping `DropShadowFields`: Shadow color swatches, Opacity and Blur
+        // sliders, then the X/Y offset NumberInputs, indented to the label.
+        let settings = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Text shadow settings" })
+        XCTAssertEqual(settings.frame.minX, EditorDropShadowFields.indent)
+        let y = try field("Text shadow y offset", in: controller.root)
+        let blur = try rangeSlider("Text shadow blur", in: controller.root)
+        let opacity = try rangeSlider("Text shadow opacity", in: controller.root)
+        XCTAssertEqual(try swatchRow("Text shadow color", in: controller.root).selectedHex, "#123456")
         let shadow = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
             .first { $0.accessibilityLabel() == "Text drop shadow" })
+        XCTAssertLessThan(shadow.frame.maxY, settings.frame.minY)
         XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.shadowStyle?.opacity, 61.234567)
-        XCTAssertEqual(y.stringValue, "6.75")
+        XCTAssertEqual(opacity.readout.stringValue, "61%")
+        XCTAssertEqual(blur.readout.stringValue, "15 px")
+        XCTAssertEqual(y.stringValue, "7", "offsets show shipping's whole pixels")
+        XCTAssertTrue(worker.requests.isEmpty, "showing rounded values is not an edit")
         worker.failOperation = "edit_text"
-        typeLive("-12.75", into: y, controller: controller)
+        try commit("-12.75", into: "Text shadow y offset", in: controller.root)
         XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
-                       ["dropShadowStyle": ["offsetY": -12.75]] as NSDictionary,
-                       "unchanged display values keep their authored precision")
-        XCTAssertEqual(worker.liveKeys.last, "text:copy:Text shadow y", "typing in one field is one undo step")
-        XCTAssertEqual(y.stringValue, "-12.75", "failure retains pending settings")
+                       ["dropShadowStyle": ["offsetY": -13.0]] as NSDictionary,
+                       "untouched settings keep their authored precision")
+        XCTAssertEqual(worker.liveKeys.last, "text:copy:shadow-offsetY", "one field's changes are one undo step")
+        XCTAssertEqual(y.stringValue, "-13", "failure retains pending settings")
         let count = worker.requests.count
-        typeLive("invalid", into: blur, controller: controller)
+        try commit("invalid", into: "Text shadow y offset", in: controller.root)
         XCTAssertEqual(worker.requests.count, count, "invalid numbers never enter the worker")
-        blur.stringValue = "14.96"
-        let shadowColor = try field("Text shadow color", in: controller.root)
-        typeLive("invalid", into: shadowColor, controller: controller)
-        XCTAssertEqual(worker.requests.count, count, "invalid colors never enter the worker")
-        try field("Text shadow color", in: controller.root).stringValue = "#123456"
-        y.stringValue = "6.75"
+        XCTAssertEqual(y.stringValue, "-13")
+        try slide("Text shadow blur", to: 20, in: controller.root)
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["dropShadowStyle": ["offsetY": -13.0, "blur": 20.0]] as NSDictionary)
+        XCTAssertEqual(worker.liveKeys.last, "text:copy:shadow-blur")
         worker.failOperation = nil
         shadow.performClick(nil)
-        XCTAssertTrue(try XCTUnwrap(blur.superview).isHidden)
+        XCTAssertTrue(settings.isHidden)
         XCTAssertEqual(worker.requests.last?["patch"] as? [String: Bool], ["dropShadow": false])
     }
 
@@ -6002,11 +6116,11 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
-        let blur = try field("Text shadow blur", in: controller.root)
-        XCTAssertEqual(blur.stringValue, "5,984")
-        typeLive("7,25", into: blur, controller: controller)
+        XCTAssertEqual(try rangeSlider("Text shadow blur", in: controller.root).readout.stringValue, "6 px")
+        try commit("-7,6", into: "Text shadow x offset", in: controller.root)
         XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
-                       ["dropShadowStyle": ["blur": 7.25]] as NSDictionary)
+                       ["dropShadowStyle": ["offsetX": -8.0]] as NSDictionary)
+        XCTAssertEqual(try field("Text shadow x offset", in: controller.root).stringValue, "-8")
     }
 
     func testTextBackgroundMatchesShippingAndOutlineIsAStyle() throws {
@@ -6058,7 +6172,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(inputScroll.isHiddenOrHasHiddenAncestor)
             XCTAssertNil(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
                 .first { $0.title == "Apply" }, "text applies live; there is no staged Apply")
-            let last = try field("Text shadow y", in: controller.root)
+            let last = try field("Text shadow y offset", in: controller.root)
             let scroll = try XCTUnwrap(inputScroll.enclosingScrollView)
             let document = try XCTUnwrap(scroll.documentView)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
@@ -6498,11 +6612,13 @@ final class ScreenshotEditorTests: XCTestCase {
             let shadow = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSButton }
                 .first { $0.accessibilityLabel() == "New drawing drop shadow" })
             shadow.state = .on; _ = shadow.sendAction(shadow.action, to: shadow.target)
-            for (key, value) in [("color", "#f0c040"), ("opacity", "100"), ("blur", "0"), ("offsetX", "-3"), ("offsetY", "9")] {
-                let input = try field("New drawing shadow \(key)", in: controller.root)
-                input.stringValue = value
-                controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: input))
-            }
+            let shadowColor = try swatchRow("New drawing shadow color", in: controller.root).customWell
+            shadowColor.color = try XCTUnwrap(NSColor(hex: "#f0c040"))
+            _ = shadowColor.sendAction(shadowColor.action, to: shadowColor.target)
+            try slide("New drawing shadow opacity", to: 100, in: controller.root)
+            try slide("New drawing shadow blur", to: 0, in: controller.root)
+            try commit("-3", into: "New drawing shadow x offset", in: controller.root)
+            try commit("9", into: "New drawing shadow y offset", in: controller.root)
             let before = controller.state.snapshot
             let image = controller.drawOverlay.presentedImageRect
             controller.drawOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.3, y: image.minY + image.height * 0.3))
@@ -6973,9 +7089,10 @@ final class ScreenshotEditorTests: XCTestCase {
         return try XCTUnwrap(matches.first { !$0.isHiddenOrHasHiddenAncestor } ?? matches.first)
     }
 
-    private func annotationToggle(_ label: String, in view: NSView) throws -> CaptureButton {
-        try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
-            .first { $0.accessibilityLabel() == label })
+    /// A shipping `.screenshot-check-row` in the annotation style controls.
+    private func annotationToggle(_ label: String, in view: NSView) throws -> NSButton {
+        try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSButton }
+            .first { !($0 is CaptureButton) && $0.accessibilityLabel() == label })
     }
 
     func testExportFooterTabOrderFollowsTheShippingExportBar() throws {
@@ -7123,6 +7240,20 @@ final class ScreenshotEditorTests: XCTestCase {
         return try XCTUnwrap(matches.first { !$0.isHiddenOrHasHiddenAncestor } ?? matches.first)
     }
 
+    /// Move a shipping `RangeSlider` as a drag or arrow key does.
+    private func slide(_ label: String, to value: Double, in view: NSView) throws {
+        let control = try rangeSlider(label, in: view)
+        control.slider.doubleValue = value
+        _ = control.slider.sendAction(control.slider.action, to: control.slider.target)
+    }
+
+    /// Commit a shipping `NumberInput` entry, as Enter or leaving it does.
+    private func commit(_ text: String, into label: String, in view: NSView) throws {
+        let control = try field(label, in: view)
+        control.stringValue = text
+        _ = control.sendAction(control.action, to: control.target)
+    }
+
     private func typeLive(_ text: String, into field: NSTextField, controller: ScreenshotEditorController) {
         field.stringValue = text
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
@@ -7146,6 +7277,17 @@ final class ScreenshotEditorTests: XCTestCase {
         }
         return try XCTUnwrap(cells.flatMap { descendants(in: $0) }.compactMap { $0 as? CaptureButton }
             .first { $0.accessibilityLabel() == label })
+    }
+
+    /// Stage a crop the way a canvas drag does: shipping has no crop fields.
+    private func stageCrop(_ rect: NSRect, in controller: ScreenshotEditorController,
+                           file: StaticString = #filePath, line: UInt = #line) throws {
+        if !controller.cropOverlay.croppingEnabled {
+            try button("Crop (C)", in: controller.root).performClick(nil)
+        }
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled, file: file, line: line)
+        controller.stageCropSelection(rect)
+        XCTAssertEqual(controller.cropSelection, rect, file: file, line: line)
     }
 
     private func field(_ label: String, in view: NSView) throws -> NSTextField {
@@ -8185,15 +8327,18 @@ extension ScreenshotEditorTests {
         XCTAssertEqual(corner, 6)
         XCTAssertEqual(preview.sample?.strokeWidth, 0, "the fixture's closed shapes start without a stroke")
         XCTAssertNotNil(preview.sampleFill)
-        // Rows below the card move down by its height plus one gap.
-        let width = try field("New drawing stroke width", in: controller.root)
-        XCTAssertGreaterThanOrEqual(width.frame.minY, preview.frame.maxY)
+        // Shipping puts the grouped-shape picker above the card and the rows below it.
+        let picker = try XCTUnwrap(controller.shapePicker)
+        XCTAssertFalse(picker.isHiddenOrHasHiddenAncestor)
+        XCTAssertLessThanOrEqual(picker.frame.maxY, preview.frame.minY)
+        let opacity = try rangeSlider("New drawing opacity", in: controller.root)
+        XCTAssertGreaterThanOrEqual(opacity.frame.minY, preview.frame.maxY)
         try render(controller.root, name: "screenshot-editor-draw-preview-rectangle")
 
         controller.selectDrawTool(.line)
         XCTAssertEqual(Double(preview.sample?.strokeWidth ?? 0), 3.36, accuracy: 0.001)
         XCTAssertNil(preview.sampleFill, "open strokes take no fill")
-        typeLive("40", into: try field("New drawing opacity", in: controller.root), controller: controller)
+        try slide("New drawing opacity", to: 40, in: controller.root)
         XCTAssertEqual(Double(preview.sampleOpacity), 0.4, accuracy: 0.001)
 
         controller.selectDrawTool(.erase)
@@ -8218,6 +8363,35 @@ extension ScreenshotEditorTests {
                           "Wand rows keep their place without the card")
     }
 
+    func testGroupedShapePickerSwitchesShapesLikeShipping() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        controller.selectDrawTool(.ellipse)
+        let picker = try XCTUnwrap(controller.shapePicker)
+        XCTAssertFalse(picker.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(picker.accessibilityLabel(), "Shape")
+        XCTAssertEqual(picker.buttons.map(\.key), ["rectangle", "ellipse", "line", "triangle", "diamond", "star"])
+        XCTAssertEqual(picker.buttons.map { $0.button.toolTip ?? "" },
+                       ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"])
+        XCTAssertEqual(picker.buttons.filter { $0.button.active }.map(\.key), ["ellipse"])
+        // `.screenshot-shape-picker`: three columns of 40pt buttons, --s-2 apart.
+        XCTAssertEqual(picker.frame.width, ScreenshotEditorController.contentWidth)
+        XCTAssertEqual(picker.frame.height, 2 * 40 + 4)
+        XCTAssertEqual(picker.buttons[1].button.frame.minX - picker.buttons[0].button.frame.maxX, 4, accuracy: 0.01)
+        XCTAssertEqual(picker.buttons[3].button.frame.minY - picker.buttons[0].button.frame.maxY, 4, accuracy: 0.01)
+        picker.buttons[5].button.performClick(nil)
+        XCTAssertEqual(controller.drawOverlay.shape, .star)
+        XCTAssertEqual(picker.buttons.filter { $0.button.active }.map(\.key), ["star"])
+        XCTAssertTrue(worker.requests.isEmpty, "choosing a shape is not a document command")
+        try render(controller.root, name: "screenshot-editor-shape-picker")
+        for shape in [EditorDrawOverlay.Shape.arrow, .pen, .text, .wand] {
+            controller.selectDrawTool(shape)
+            XCTAssertTrue(picker.isHiddenOrHasHiddenAncestor, "\(shape) is not a grouped shape")
+        }
+    }
+
     func testApplyCropPulsesOnlyWhileACropIsStaged() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
@@ -8229,7 +8403,7 @@ extension ScreenshotEditorTests {
         let halo = controller.applyCropHalo
         XCTAssertTrue(halo.superview === apply.superview)
         XCTAssertFalse(halo.pulsing, "no halo before a crop is staged")
-        try press("Draw crop", in: controller.root)
+        try stageCrop(NSRect(x: 10, y: 10, width: 200, height: 120), in: controller)
         XCTAssertTrue(halo.pulsing)
         XCTAssertEqual(halo.frame, apply.frame.insetBy(dx: -EditorCtaHalo.outset, dy: -EditorCtaHalo.outset))
         // `screenshot-cta-pulse 2.4s`: nothing at the start, 5 pt at the middle.
@@ -8238,8 +8412,8 @@ extension ScreenshotEditorTests {
         XCTAssertEqual(halo.halo(at: 1.2 + 2.4 * 2, reduced: false).opacity, 1, accuracy: 0.01)
         XCTAssertEqual(halo.halo(at: 1.2, reduced: true).spread, 0, "reduced motion rests without the halo")
         try render(controller.root, name: "screenshot-editor-apply-crop-pulse")
-        try press("Cancel crop", in: controller.root)
-        XCTAssertFalse(halo.pulsing, "cancelling the crop stops the pulse")
+        try press("Clear", in: controller.root)
+        XCTAssertFalse(halo.pulsing, "clearing the crop stops the pulse")
         XCTAssertFalse(halo.isAnimating)
     }
 }

@@ -74,7 +74,7 @@ final class PrimitivesTests: XCTestCase {
         XCTAssertTrue(vertical.tokens?.color("text") == dark.color("text"))
     }
 
-    func testTokenSelectDescribesItemsAndKeepsPlainTitles() throws {
+    func testTokenSelectOpensShippingListboxWithDescriptionsAndHomeEndKeys() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
         let frame = NSRect(x: 0, y: 0, width: 300, height: 120)
@@ -85,24 +85,55 @@ final class PrimitivesTests: XCTestCase {
         window.contentView = root
         let select = ClosurePopUpButton(frame: NSRect(x: 20, y: 20, width: 200, height: 32), pullsDown: false)
         select.tokens = tokens
-        select.addItems(withTitles: ["Preserve quality", "Compress"])
+        select.addItems(withTitles: ["Preserve quality", "Compress", "Maximum file size"])
         select.item(at: 1)?.toolTip = "Smaller file with Tiny through Highest quality presets."
         root.addSubview(select)
+        defer { select.closeListbox() }
         XCTAssertEqual(select.focusRingType, .none, "the token ring replaces the system ring")
         XCTAssertEqual(select.selectStyle, .field)
         var changed: [Int] = []
         select.bindChange { changed.append($0) }
-        select.describeItems()
-        XCTAssertFalse(select.item(at: 0)?.attributedTitle?.string.contains("\n") ?? false,
-                       "items without a description stay plain")
-        let described = try XCTUnwrap(select.item(at: 1)?.attributedTitle?.string)
-        XCTAssertEqual(described, "Compress\nSmaller file with Tiny through Highest quality presets.")
-        select.restoreItems()
+        // A click (or Space) opens shipping's listbox instead of the native menu.
+        select.performClick(nil)
+        let list = try XCTUnwrap(select.listbox)
+        XCTAssertTrue(select.isListboxOpen)
+        XCTAssertEqual(list.options.map(\.title), ["Preserve quality", "Compress", "Maximum file size"])
+        XCTAssertNil(list.options[0].detail, "items without a description stay plain")
+        XCTAssertEqual(list.options[1].detail, "Smaller file with Tiny through Highest quality presets.")
+        XCTAssertEqual(TokenSelectListView.rowHeight(list.options[0]), 30)
+        XCTAssertEqual(TokenSelectListView.rowHeight(list.options[1]), 46, "the description takes its own line")
+        XCTAssertEqual(list.rowRect(1).minY, list.rowRect(0).maxY)
+        XCTAssertEqual(list.active, 0, "opening highlights the selected option")
+        XCTAssertGreaterThanOrEqual(list.frame.width, select.bounds.width)
         XCTAssertEqual(select.item(at: 1)?.title, "Compress", "titles and accessibility names are unchanged")
-        XCTAssertFalse(select.item(at: 1)?.attributedTitle?.string.contains("\n") ?? false)
-        select.selectItem(at: 1); select.selectedValue()
+        list.display()
+        // Shipping `CustomSelect` keys from the shared controls model.
+        XCTAssertTrue(select.handleSelectKey("end"))
+        XCTAssertEqual(list.active, 2, "End jumps to the last option")
+        XCTAssertTrue(select.handleSelectKey("home"))
+        XCTAssertEqual(list.active, 0, "Home jumps to the first option")
+        XCTAssertTrue(select.handleSelectKey("arrow_down"))
+        XCTAssertEqual(list.active, 1)
+        XCTAssertTrue(select.handleSelectKey("enter"))
+        XCTAssertFalse(select.isListboxOpen)
         XCTAssertEqual(changed, [1])
         XCTAssertEqual(select.titleOfSelectedItem, "Compress")
+        XCTAssertFalse(select.handleSelectKey("home"), "Home and End only move an open listbox")
+        XCTAssertTrue(select.handleSelectKey("arrow_up"))
+        XCTAssertTrue(select.isListboxOpen, "arrows open a closed select")
+        XCTAssertEqual(select.listbox?.active, 1, "on the selected option")
+        XCTAssertTrue(select.handleSelectKey("escape"))
+        XCTAssertFalse(select.isListboxOpen)
+        XCTAssertEqual(changed, [1], "Escape closes without choosing")
+        let home = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F729}", charactersIgnoringModifiers: "\u{F729}", isARepeat: false, keyCode: 115))
+        select.performClick(nil)
+        select.keyDown(with: home)
+        XCTAssertEqual(select.listbox?.active, 0, "the Home key event moves the open listbox")
+        select.listbox?.choose(2)
+        XCTAssertFalse(select.isListboxOpen, "a click on an option chooses it and closes")
+        XCTAssertEqual(changed, [1, 2])
         window.display()
     }
 

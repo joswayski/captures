@@ -295,9 +295,9 @@ final class EditorCurveControls: NSView {
     private(set) var handles: NativeCurveHandles?
     private var ready = false
 
-    init(tokens: Tokens) {
+    init(tokens: Tokens, width: CGFloat = 272) {
         self.tokens = tokens
-        super.init(frame: NSRect(x: 0, y: 0, width: 272, height: 0))
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 0))
         setAccessibilityLabel("Curve controls")
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
         heading.textColor = tokens.color("text")
@@ -306,9 +306,9 @@ final class EditorCurveControls: NSView {
         bendValue.alignment = .right
         bendValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         bendValue.textColor = tokens.color("text-muted")
-        bendValue.frame = NSRect(x: 212, y: 2, width: 60, height: 20)
+        bendValue.frame = NSRect(x: width - 60, y: 2, width: 60, height: 20)
         addSubview(bendValue)
-        bendSlider.frame = NSRect(x: 0, y: 26, width: 272, height: 24)
+        bendSlider.frame = NSRect(x: 0, y: 26, width: width, height: 24)
         bendSlider.tokens = tokens
         bendSlider.isContinuous = false
         bendSlider.numberOfTickMarks = 3
@@ -319,17 +319,17 @@ final class EditorCurveControls: NSView {
             let mark = NSTextField(labelWithString: title)
             mark.font = .systemFont(ofSize: 11); mark.textColor = tokens.color("text-subtle")
             mark.alignment = index == 0 ? .left : index == 1 ? .center : .right
-            mark.frame = NSRect(x: CGFloat(index) * 91, y: 52, width: 90, height: 16)
+            mark.frame = NSRect(x: CGFloat(index) * width / 3, y: 52, width: width / 3 - 1, height: 16)
             addSubview(mark); marks.append(mark)
         }
-        straightenButton = CaptureButton("Straighten line", frame: NSRect(x: 0, y: 26, width: 272, height: 30),
+        straightenButton = CaptureButton("Straighten line", frame: NSRect(x: 0, y: 26, width: width, height: 30),
                                          tokens: tokens) { [weak self] in
             guard let self, self.ready else { return }
             self.apply(["kind": "straighten"])
         }
         addSubview(straightenButton)
         help.font = .systemFont(ofSize: 11); help.textColor = tokens.color("text-muted")
-        help.frame = NSRect(x: 0, y: 74, width: 272, height: 44)
+        help.frame = NSRect(x: 0, y: 74, width: width, height: 44)
         addSubview(help)
         setHandles(nil)
     }
