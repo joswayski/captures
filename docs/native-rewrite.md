@@ -585,7 +585,7 @@ existing layers. Color changes participate in undo/redo and draft reopen; copy/e
 use the newly rendered pixels. These are canvas fills, not image-background removal
 or text backgrounds. Stroke, fill and shadow colors in Layers → Annotation style use
 the same swatch row and apply at once, as do selected text's Text color and
-Background color, the new-text Color and the drawing defaults' Stroke color (Color
+Background color and the drawing defaults' Stroke color (Color
 for open tools) and Fill color; selected text shows shipping's five-column B, I and
 alignment icon buttons (`editor_chrome::text_format`). Text style menus show the shipping
 preview chips, preset labels use shipping title case (Mono Box, Rounded Box) and
@@ -810,17 +810,20 @@ or physical Text-tool presentation/input acceptance.
 The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
 per slice, not inferred from shared tests. Additional font import and OS acquisition,
 inline input and physical input/IME/accessibility remain open.
-Both hosts now offer new-text style, size (8–512) and color before placement.
+Both hosts now offer new-text style and size (8–512) before placement.
 Like shipping, the Text section also shows the drawing defaults' Drop shadow:
 one shared toggle and custom style, whose untouched fields scale from the new text
 size (`editor_text::new_text_shadow_style`, `text_default_shadow` on the AppKit
 chrome ABI). `TextCreate` carries `dropShadow`/`dropShadowStyle`, clamped by the
 shared resolver, so each placement copies them as `createPlacedTextElement` does.
-Shipping takes new-text color from the drawing Color; the native new-text Color
-remains a separate per-editor choice.
-Choices are per-editor UI state, not document/draft/undo; accepted responses and
-failed creation retain them. Both hosts' new editors start at Rounded Box when the
-snapshot offers it, otherwise Standard, then Plain. Both start at annotation red. Shared Rust
+As in shipping (`createPlacedTextElement` takes `defaultStyle.color`), there is no
+separate new-text colour: the Text section has no Color row, and each placement
+uses the drawing defaults' one shared Color (Color for Arrow/Pen/Line, Stroke color
+for closed shapes), starting at annotation red `#ff3b5c`.
+Choices are per-editor UI state, not document/draft/undo or settings; accepted
+responses and failed creation retain them and a new editor starts from the
+defaults again, like shipping's `useState`. Both hosts' new editors start at Rounded Box when the
+snapshot offers it, otherwise Standard, then Plain. Shared Rust
 supplies Tauri's initial size: 5.5% of the original capture's shorter side,
 rounded and clamped to 24–72. It uses History dimensions,
 not the resized/cropped canvas of a restored draft; later user choices remain

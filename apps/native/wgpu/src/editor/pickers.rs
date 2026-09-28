@@ -472,6 +472,7 @@ pub(super) fn text_style_picker(
     label: &str,
     presets: &[TextStylePreset],
     value: &mut Option<String>,
+    plain: bool,
 ) -> bool {
     let mut changed = false;
     let current = presets
@@ -540,14 +541,18 @@ pub(super) fn text_style_picker(
         .width(width)
         .show(|ui| {
             ui.spacing_mut().item_spacing.y = 2.;
-            if text_style_row(ui, tokens, None, "Plain", value.is_none()).clicked() {
-                changed |= value.take().is_some();
+            // Plain (native-only) keeps a custom-font draft's explicit family.
+            if plain && text_style_row(ui, tokens, None, "Plain", value.is_none()).clicked() {
+                *value = None;
+                changed = true;
                 ui.close();
             }
             for preset in presets {
                 let selected = Some(preset.id) == value.as_deref();
+                // Like shipping's `onChange`, choosing the current style still
+                // reports the choice (it sets the next new text's style).
                 if text_style_row(ui, tokens, Some(preset), preset.label, selected).clicked() {
-                    changed |= !selected;
+                    changed = true;
                     *value = Some(preset.id.into());
                     ui.close();
                 }
