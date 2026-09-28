@@ -4,7 +4,7 @@ use captures_app::{
     editor::{
         AnnotationStylePatch, Element, ImageOrientation, LayerEdit, OptionalNullable, Point, Rect,
     },
-    editor_session::{EditorSession, ImportImage, OpenRequest, Request},
+    editor_session::{EditorSession, ImportImage, OpenRequest, PlatformFonts, Request},
 };
 use captures_capture::CaptureMode;
 use image::{Rgba, RgbaImage};
@@ -2973,13 +2973,15 @@ fn open_text(
     id: &str,
     fonts: captures_history::editor_draft::FontAssets,
 ) -> Result<EditorSession, String> {
-    EditorSession::open_with_fonts(
+    // No installed-font fallback, so results do not depend on this machine.
+    EditorSession::open_with_font_fallback(
         OpenRequest {
             history_root: root.join("history"),
             drafts_root: root.join("drafts"),
             artifact_id: id.into(),
         },
         Some(fonts),
+        PlatformFonts::None,
     )
 }
 
@@ -3095,13 +3097,13 @@ fn text_failures_preserve_frames_redo_and_saved_drafts_without_fallback() {
     editor.execute(Request::Undo).unwrap();
     let before = serde_json::to_value(editor.snapshot()).unwrap();
     let frame = editor.pixels();
-    for missing_glyph in [false, true] {
+    for control_character in [false, true] {
         let mut document = editor.snapshot().document.clone();
         let Element::Text(label) = document.elements.last_mut().unwrap() else {
             panic!()
         };
-        if missing_glyph {
-            label.text = "☃".into();
+        if control_character {
+            label.text = "L\u{0085}L".into();
         } else {
             label.font_family = "missing".into();
         }
@@ -3456,9 +3458,9 @@ fn transient_updates_preserve_anchor_metadata_and_last_accepted_preview() {
     );
     assert!(
         editor
-            .execute(update_text_input("anchor", "☃"))
+            .execute(update_text_input("anchor", "L\u{0085}L"))
             .unwrap_err()
-            .contains("glyph")
+            .contains("one line")
     );
     assert_eq!(editor.snapshot().document, &accepted);
     assert!(Arc::ptr_eq(&accepted_pixels, &editor.pixels()));
@@ -4181,7 +4183,6 @@ fn rejected_text_commands_preserve_redo_frame_and_saved_draft_including_hidden_l
     let saved = fs::read(&manifest).unwrap();
     for patch in [
         json!({"fontFamily":"missing"}),
-        json!({"text":"☃"}),
         json!({"text":"L".repeat(4097)}),
         json!({"fontSize":7.99}),
         json!({"fontSize":513}),
@@ -4336,31 +4337,32 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         *accepted
     );
     // Nunito's pinned revision covers representative Latin, Greek and Cyrillic,
-    // but unlike Liberation Sans it lacks Greek lambda. There is no fallback.
-    assert!(
-        editor
-            .execute(edit_text_request(&text_id, json!({"text":"λ"})))
-            .is_err()
-    );
-    assert!(Arc::ptr_eq(&accepted, &editor.pixels()));
+    // but unlike Liberation Sans it lacks Greek lambda: like a browser, the
+    // glyph falls back, first to the other pinned faces (Sans first).
     editor
         .execute(edit_text_request(
             &text_id,
-            json!({"fontFamily":"sans","text":"λ"}),
+            json!({"fontFamily":"sans","bold":true,"italic":true,"text":"λ"}),
         ))
         .unwrap();
+    let sans_lambda = editor.pixels();
     editor
-        .execute(edit_text_request(
-            &text_id,
-            json!({"fontFamily":"rounded","text":"Café Ω Ж"}),
-        ))
+        .execute(edit_text_request(&text_id, json!({"fontFamily":"rounded"})))
+        .unwrap();
+    assert_eq!(editor.pixels(), sans_lambda);
+    editor
+        .execute(edit_text_request(&text_id, json!({"text":"Café Ω Ж"})))
         .unwrap();
     assert_eq!(editor.pixels(), accepted);
-    assert!(
-        editor
-            .execute(edit_text_request(&text_id, json!({"text":"雪"})))
-            .is_err()
-    );
+    // No bundled face has CJK; with no platform fallback it draws the
+    // missing-glyph box instead of failing.
+    editor
+        .execute(edit_text_request(&text_id, json!({"text":"雪"})))
+        .unwrap();
+    assert_ne!(editor.pixels(), accepted);
+    editor
+        .execute(edit_text_request(&text_id, json!({"text":"Café Ω Ж"})))
+        .unwrap();
     assert_eq!(editor.pixels(), accepted);
     editor
         .execute(Request::SaveDraft { updated_at_ms: 73 })
@@ -4381,8 +4383,9 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
 }
 
 #[test]
-fn older_drafts_offer_only_their_persisted_fonts_without_implicit_font_migration() {
-    let mut legacy = captures_app::editor_fonts::bundled();
+fn older_sans_only_drafts_pin_a_bundled_family_when_text_first_uses_it() {
+    let bundled = captures_app::editor_fonts::bundled();
+    let mut legacy = bundled.clone();
     legacy.families.retain(|key, _| key == "sans");
     legacy
         .files
@@ -4390,27 +4393,51 @@ fn older_drafts_offer_only_their_persisted_fonts_without_implicit_font_migration
     assert_eq!(legacy.files.len(), 4);
     let (data, id, _) = setup();
     let mut editor = open_text(data.path(), &id, legacy.clone()).unwrap();
+    editor
+        .execute(Request::ResizeCanvas {
+            width: 640.,
+            height: 200.,
+        })
+        .unwrap();
     editor.execute(create_text_request("Pinned text")).unwrap();
     editor
         .execute(Request::SaveDraft { updated_at_ms: 75 })
         .unwrap();
     let accepted = editor.pixels();
-    let mut reopened = open_text(data.path(), &id, captures_app::editor_fonts::bundled()).unwrap();
-    assert_eq!(reopened.snapshot().font_families, Some(&legacy.families));
+    // Without host defaults there is nothing to pin.
+    let alone = open_text(data.path(), &id, legacy.clone()).unwrap();
+    assert_eq!(alone.snapshot().font_families, Some(&legacy.families));
+
+    // Shipping offers all four families on every document; so does the draft.
+    let mut reopened = open_text(data.path(), &id, bundled.clone()).unwrap();
+    assert_eq!(reopened.snapshot().font_families, Some(&bundled.families));
     assert_eq!(
         serde_json::to_value(&reopened.snapshot().font_family_options).unwrap(),
-        json!([{"key": "sans", "label": "Sans serif"}])
+        json!([
+            {"key": "sans", "label": "Sans serif"},
+            {"key": "serif", "label": "Serif"},
+            {"key": "mono", "label": "Monospace"},
+            {"key": "rounded", "label": "Rounded"},
+        ])
     );
-    assert_eq!(
-        reopened
-            .snapshot()
-            .text_style_presets
-            .iter()
-            .map(|preset| preset.id)
-            .collect::<Vec<_>>(),
-        ["standard", "outlined", "box"]
-    );
+    assert_eq!(reopened.snapshot().text_style_presets.len(), 7);
     assert_eq!(reopened.pixels(), accepted);
+    assert!(!reopened.snapshot().unsaved_changes);
+    // Offering families does not pin them.
+    reopened
+        .execute(Request::SaveDraft { updated_at_ms: 76 })
+        .unwrap();
+    let load_fonts = || {
+        captures_history::editor_draft::load(&data.path().join("drafts"), &id, |_, id| {
+            format!("draft-asset:{id}")
+        })
+        .unwrap()
+        .unwrap()
+        .fonts
+        .unwrap()
+    };
+    assert_eq!(load_fonts(), legacy);
+
     let text_id = reopened
         .snapshot()
         .document
@@ -4420,13 +4447,37 @@ fn older_drafts_offer_only_their_persisted_fonts_without_implicit_font_migration
         .base()
         .id
         .clone();
-    assert!(
-        reopened
-            .execute(edit_text_request(&text_id, json!({"fontFamily":"serif"})))
-            .is_err()
-    );
-    assert_eq!(reopened.pixels(), accepted);
-    assert!(!reopened.snapshot().unsaved_changes);
+    reopened
+        .execute(edit_text_request(&text_id, json!({"fontFamily":"serif"})))
+        .unwrap();
+    assert_ne!(reopened.pixels(), accepted);
+    let serif = reopened.pixels();
+    // A preset placement pins Rounded the same way.
+    reopened
+        .execute(styled_text_request(
+            "Rounded",
+            "rounded-box",
+            Point { x: 300., y: 150. },
+            24.,
+        ))
+        .unwrap();
+    reopened.execute(Request::Undo).unwrap();
+    assert_eq!(reopened.pixels(), serif);
+    reopened
+        .execute(Request::SaveDraft { updated_at_ms: 77 })
+        .unwrap();
+    let saved = load_fonts();
+    let mut expected = bundled.clone();
+    expected.families.remove("mono");
+    expected
+        .files
+        .retain(|key, _| !key.starts_with("liberation-mono-"));
+    assert_eq!(saved, expected);
+
+    // The pinned families now reopen without host help, pixel for pixel.
+    let pinned = open_text(data.path(), &id, text_fonts()).unwrap();
+    assert_eq!(pinned.pixels(), serif);
+    assert_eq!(pinned.snapshot().font_families, Some(&expected.families));
 }
 
 #[test]
@@ -4452,22 +4503,38 @@ fn prior_liberation_draft_keeps_its_font_map_notice_and_export_after_rounded_is_
     .unwrap();
     assert_eq!(saved.fonts, Some(prior.clone()));
 
-    let reopened = open_text(data.path(), &id, captures_app::editor_fonts::bundled()).unwrap();
-    assert_eq!(reopened.snapshot().font_families, Some(&prior.families));
-    assert_eq!(
-        reopened
-            .snapshot()
-            .text_style_presets
-            .iter()
-            .map(|preset| preset.id)
-            .collect::<Vec<_>>(),
-        ["standard", "outlined", "mono", "box", "mono-box"]
-    );
+    let bundled = captures_app::editor_fonts::bundled();
+    let mut reopened = open_text(data.path(), &id, bundled.clone()).unwrap();
+    // Rounded is offered, but nothing is pinned until text uses it.
+    assert_eq!(reopened.snapshot().font_families, Some(&bundled.families));
+    assert_eq!(reopened.snapshot().text_style_presets.len(), 7);
     assert_eq!(reopened.pixels(), pixels);
     assert_eq!(
         reopened.encode_export(png_export_options()).unwrap(),
         encoded
     );
+    let text_id = reopened
+        .snapshot()
+        .document
+        .elements
+        .last()
+        .unwrap()
+        .base()
+        .id
+        .clone();
+    reopened
+        .execute(edit_text_request(&text_id, json!({"fontFamily":"rounded"})))
+        .unwrap();
+    reopened
+        .execute(Request::SaveDraft { updated_at_ms: 78 })
+        .unwrap();
+    // Pinning Rounded completes the bundle, license notices included.
+    let saved = captures_history::editor_draft::load(&data.path().join("drafts"), &id, |_, id| {
+        format!("draft-asset:{id}")
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(saved.fonts, Some(bundled));
 }
 
 #[test]

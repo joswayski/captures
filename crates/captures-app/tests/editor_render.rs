@@ -1067,7 +1067,6 @@ fn text_errors_are_explicit_hidden_layers_are_skipped_and_failed_render_is_retry
     let (mut renderer, families) = fonts();
     for mutate in [
         |t: &mut TextElement| t.base.rotation = Some(f64::INFINITY),
-        |t: &mut TextElement| t.text = "☃".into(),
         |t: &mut TextElement| t.text = "L\u{0085}L".into(),
         |t: &mut TextElement| t.font_family = "unknown".into(),
         |t: &mut TextElement| t.color = "invalid".into(),

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use captures_image::text::{TextLine, TextRenderer, TextStyle};
+use captures_image::text::{PlatformFonts, TextLine, TextRenderer, TextStyle, font_family_names};
 
 fn renderer() -> TextRenderer {
     TextRenderer::new([
@@ -21,28 +21,149 @@ fn style() -> TextStyle<'static> {
     }
 }
 
+fn bundled(name: &str) -> Arc<[u8]> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../captures-app/fonts")
+        .join(name);
+    Arc::from(std::fs::read(path).unwrap())
+}
+
+fn sized(family: &'static str) -> TextStyle<'static> {
+    TextStyle {
+        family,
+        size: 40.,
+        color: [20, 30, 40, 255],
+        ..style()
+    }
+}
+
 #[test]
-fn a_requested_family_does_not_substitute_another_supplied_family_for_missing_glyphs() {
-    let mut renderer = TextRenderer::new([
-        Arc::from(include_bytes!("../../captures-app/fonts/nunito/Nunito-Regular.ttf").as_slice()),
-        Arc::from(
-            include_bytes!("../../captures-app/fonts/liberation/LiberationSans-Regular.ttf")
-                .as_slice(),
-        ),
-    ])
+fn missing_glyphs_fall_back_to_other_supplied_faces_in_the_given_order() {
+    let nunito = bundled("nunito/Nunito-Regular.ttf");
+    let sans = bundled("liberation/LiberationSans-Regular.ttf");
+    let serif = bundled("liberation/LiberationSerif-Regular.ttf");
+    assert_eq!(font_family_names(&nunito), ["Nunito"]);
+    let fonts = [nunito.clone(), serif.clone(), sans.clone()];
+    let mut sans_first =
+        TextRenderer::with_fallback(fonts.clone(), &["Liberation Sans"], PlatformFonts::None)
+            .unwrap();
+    let mut serif_first =
+        TextRenderer::with_fallback(fonts, &["Liberation Serif"], PlatformFonts::None).unwrap();
+    let mut only_sans = TextRenderer::new([sans]).unwrap();
+    let mut only_serif = TextRenderer::new([serif]).unwrap();
+    let mut only_nunito = TextRenderer::new([nunito]).unwrap();
+    // Nunito lacks Greek lambda; Liberation Sans and Serif both have it.
+    let lambda = sans_first.render_line("λ", &sized("Nunito")).unwrap();
+    let expected = only_sans
+        .render_line("λ", &sized("Liberation Sans"))
+        .unwrap();
+    assert_eq!(
+        (lambda.advance, lambda.bounds, lambda.pixels),
+        (expected.advance, expected.bounds, expected.pixels)
+    );
+    let lambda = serif_first.render_line("λ", &sized("Nunito")).unwrap();
+    let expected = only_serif
+        .render_line("λ", &sized("Liberation Serif"))
+        .unwrap();
+    assert_eq!(lambda.pixels, expected.pixels);
+    assert_eq!(
+        serif_first.measure_line("λ", &sized("Nunito")).unwrap(),
+        expected.advance
+    );
+    // Covered text keeps the requested face exactly.
+    for engine in [&mut sans_first, &mut serif_first] {
+        assert_eq!(
+            engine
+                .render_line("Café Ω Ж", &sized("Nunito"))
+                .unwrap()
+                .pixels,
+            only_nunito
+                .render_line("Café Ω Ж", &sized("Nunito"))
+                .unwrap()
+                .pixels
+        );
+    }
+    // Mixed lines take only the missing glyph from the fallback face.
+    let mixed = sans_first.render_line("aλ", &sized("Nunito")).unwrap();
+    let a = only_nunito.render_line("a", &sized("Nunito")).unwrap();
+    assert_eq!(mixed.advance, a.advance + expected_advance(&mut only_sans));
+    assert!(
+        sans_first
+            .render_outline_line("λ", &sized("Nunito"), 2.)
+            .is_ok()
+    );
+}
+
+fn expected_advance(engine: &mut TextRenderer) -> f32 {
+    engine.measure_line("λ", &sized("Liberation Sans")).unwrap()
+}
+
+#[test]
+fn uncovered_glyphs_use_platform_faces_then_the_missing_glyph_box() {
+    let sans = bundled("liberation/LiberationSans-Regular.ttf");
+    let shaping = Arc::<[u8]>::from(include_bytes!("shaping-regular.ttf").as_slice());
+    let mut offline = TextRenderer::new([shaping.clone()]).unwrap();
+    // No face has a snowman: the requested font's empty 700-unit .notdef.
+    let boxed = offline.render_line("☃", &style()).unwrap();
+    assert_eq!((boxed.advance, boxed.pixels.width()), (70., 0));
+    assert_eq!(offline.measure_line("L☃", &style()).unwrap(), 140.);
+    assert!(offline.render_outline_line("☃", &style(), 4.).is_ok());
+
+    let mut platform = TextRenderer::with_fallback(
+        [shaping.clone()],
+        &[],
+        PlatformFonts::Fonts(vec![sans.clone()]),
+    )
     .unwrap();
-    let rounded = TextStyle {
-        family: "Nunito",
-        ..style()
+    let mut only_sans = TextRenderer::new([sans.clone()]).unwrap();
+    let lambda = platform
+        .render_line("λ", &sized("Captures Shaping Test"))
+        .unwrap();
+    let expected = only_sans
+        .render_line("λ", &sized("Liberation Sans"))
+        .unwrap();
+    assert_eq!(
+        (lambda.advance, lambda.pixels),
+        (expected.advance, expected.pixels)
+    );
+    // Lines the supplied faces cover never consult the platform faces.
+    assert_eq!(
+        platform.render_line("fi", &style()).unwrap().pixels,
+        offline.render_line("fi", &style()).unwrap().pixels
+    );
+    // A platform face never shadows a supplied family, even in a fallback line.
+    let mut shadowed = TextRenderer::with_fallback(
+        [shaping.clone()],
+        &[],
+        PlatformFonts::Fonts(vec![
+            Arc::from(include_bytes!("shaping-bold.ttf").as_slice()),
+            sans,
+        ]),
+    )
+    .unwrap();
+    let bold = TextStyle {
+        bold: true,
+        ..sized("Captures Shaping Test")
     };
-    assert!(renderer.render_line("Café Ω Ж", &rounded).is_ok());
-    assert!(renderer.measure_line("λ", &rounded).is_err());
-    assert!(renderer.render_line("λ", &rounded).is_err());
-    let sans = TextStyle {
-        family: "Liberation Sans",
-        ..style()
-    };
-    assert!(renderer.render_line("λ", &sans).is_ok());
+    assert_eq!(
+        shadowed.render_line("Lλ", &bold).unwrap().pixels,
+        platform.render_line("Lλ", &bold).unwrap().pixels
+    );
+}
+
+#[test]
+fn installed_fonts_are_only_a_last_resort() {
+    let shaping = Arc::<[u8]>::from(include_bytes!("shaping-regular.ttf").as_slice());
+    let mut system =
+        TextRenderer::with_fallback([shaping.clone()], &[], PlatformFonts::System).unwrap();
+    let mut offline = TextRenderer::new([shaping]).unwrap();
+    // Whatever this machine has installed, uncovered text still renders and
+    // covered text is unaffected.
+    assert!(system.render_line("L☃λ", &style()).is_ok());
+    assert_eq!(
+        system.render_line("fi", &style()).unwrap().pixels,
+        offline.render_line("fi", &style()).unwrap().pixels
+    );
 }
 
 #[test]
@@ -57,7 +178,7 @@ fn measurement_shares_shaping_validation_but_not_the_raster_extent_limit() {
     let long = "L".repeat(240);
     assert_eq!(engine.measure_line(&long, &style()).unwrap(), 16_800.);
     assert!(engine.render_line(&long, &style()).is_err());
-    for text in ["☃", "A\nL", &"L".repeat(4097)] {
+    for text in ["A\nL", &"L".repeat(4097)] {
         assert!(engine.measure_line(text, &style()).is_err());
     }
     assert_eq!(engine.measure_line("fi", &style()).unwrap(), 45.);
@@ -317,7 +438,6 @@ fn outlined_validation_bounds_and_pixel_budgets_leave_the_renderer_reusable() {
     for width in [0., -1., f32::NAN, f32::INFINITY, 512.1] {
         assert!(engine.render_outline_line("L", &style(), width).is_err());
     }
-    assert!(engine.render_outline_line("☃", &style(), 4.).is_err());
     assert!(
         engine
             .render_outline_line(&"L".repeat(240), &style(), 4.)
@@ -390,7 +510,7 @@ fn embedded_bitmap_glyphs_are_already_straight_alpha() {
 }
 
 #[test]
-fn rejects_missing_fonts_glyphs_invalid_metrics_and_oversized_lines_then_recovers() {
+fn rejects_missing_fonts_invalid_metrics_and_oversized_lines_then_recovers() {
     assert!(TextRenderer::new([]).is_err());
     assert!(TextRenderer::new([Arc::from(b"invalid".as_slice())]).is_err());
     let mut renderer = renderer();
@@ -405,7 +525,6 @@ fn rejects_missing_fonts_glyphs_invalid_metrics_and_oversized_lines_then_recover
             )
             .is_err()
     );
-    assert!(renderer.render_line("unavailable", &style()).is_err());
     for size in [0., -1., f32::NAN, f32::INFINITY, 512.1] {
         assert!(
             renderer
