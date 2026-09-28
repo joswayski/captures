@@ -22,7 +22,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
-| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects (backdrop blur, dust dissolve blur, fan stagger and drag sway), physical setup/login and installed Open With acceptance, crash reporting |
+| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and staggered hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects (backdrop blur and drag sway), physical setup/login and installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts and shared new-text drop shadow, the shipping Erase/Restore brush ring, copy and save-new-copy | Remaining text/font parity (explicit font migration, OS/imported fonts, IME), remaining viewport/output controls and Tauri design parity; remaining recording controls |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
@@ -328,10 +328,17 @@ the capture highlight, main-action icon pop, clipboard chip arrival and the hove
 pile sparkle, plus the "Not in History"/"Clipboard unavailable" card warnings (native
 captures reach only the latter, after a failed copy). Reduce Motion skips all of
 them. wgpu draws the hover blur and the Close streak with real separable Gaussians
-(see the preview effects slice below); the dust chips still carry only the
-pre-blurred hover media rather than their own `--blur-dissolve`. A saved card's dust
-starts after its Trash request succeeds rather than before it. wgpu unit tests and AppKit XCTests (not run here)
-cover the state machine, exits, flight, morph and warnings. The private-X11 preview
+(see the preview effects slice below). Dust chips follow shipping's canvas path on
+both hosts: each chip is cut sharp from the card media, padded with 8 pt of
+transparency and blurred on its own (`blur(2px) brightness(.5)`), so flying chips
+keep soft edges. AppKit filters one Core Image atlas; wgpu blurs one atlas at a
+pixel per point when the exit first paints. A saved card's Delete now runs in
+shipping's order: the card dissolves at once, the Trash request goes out after the
+dust has played and the stack settled (at once under Reduce Motion), and a failed
+Trash puts the card back in its slot with the error so it can be retried; a card
+presented again under the same ID meanwhile is left alone. wgpu unit tests and
+AppKit XCTests (not run here) cover the state machine, exits, flight, morph,
+warnings and the Trash order. The private-X11 preview
 `--stack` smoke now waits for settled pixels after exits and flights (and before
 its frozen-capture comparison) and lets the hovered pile's sparkle dots through its
 fan checks. Physical macOS/Windows and Wayland acceptance remain open.
@@ -1609,8 +1616,15 @@ rear cards: shared Rust calculates `min(.72, poseDepth * .14)`, with no shade on
 the front or expanded images. AppKit uses a clipped native view overlay; wgpu
 paints the same token over the retained image without altering source pixels.
 This connects translation and depth shading; the preview effects slice below
-adds the 3D tilt, depth blur, shadows and hover glow. The per-card 16 ms fan
-stagger, drag sway and the expand blur keyframe remain open. Shipping keeps the pile on the primary
+adds the 3D tilt, depth blur, shadows and hover glow. The hover fan now eases over
+`--stack-fan-dur`/`--stack-fan-ease` (`--dur-3`, `--ease-standard`) with shipping's
+16 ms stagger per layer: the transform, glow and position wait `pose depth × 16 ms`
+and the media blur `slot depth × 16 ms` (shared `preview_motion::StackFan`, which
+retargets each card from where it is; AppKit delays each layer's Core Animation).
+Expand clears the blur each card had on screen when it began, usually the fanned
+pile's (`thumbnail-card-expand-blur` from `--thumbnail-stack-expand-blur-from`), over
+the 0.52 s flight; wgpu also starts the flight from the fanned pose. Drag sway
+remains open. Shipping keeps the pile on the primary
 monitor; both hosts already open it on the capture display. Physical
 AppKit, Windows and Wayland presentation/interaction are unverified; private X11
 provides the Linux rendering/input evidence. The effects parity gate remains open.
@@ -1652,11 +1666,19 @@ tilt from the shipping values instead of approximations:
   `0 0 0 1px rgba(accent, .55), 0 0 22px rgba(accent, .28)` on every card.
 
 Masks and blurs are built once per size or radius, so settled frames stay idle.
+- **Arrival blur.** `thumbnail-arrive`'s `filter: blur(3px → 0)` plays on the
+  media: AppKit animates a second Core Image Gaussian that is removed once the
+  card lands; wgpu cross-fades a copy blurred at 3 pt (built with the hover blur
+  off the UI thread) out as the radius falls. The card's border and chrome are not
+  blurred.
+- **History hover shadow.** `.history-card` draws `--shadow-sm` and eases to
+  `--shadow-md` with the hover lift (`--dur-3`, `--ease-standard`). Both hosts
+  cross-fade the two token shadows instead of interpolating each layer, so their
+  cached masks serve every frame.
+
 Still open: `backdrop-filter` glass (wgpu cannot read the desktop behind its
 window; AppKit's `NSVisualEffectView` materials add their own tint over the 82–93%
-opaque token fills, so neither host blurs the backdrop yet), the dust chips'
-`--blur-dissolve`, the 16 ms fan stagger, drag sway, the expand blur keyframe, the
-preview arrival's 3 px blur and the History hover shadow. Verified with Rust unit
+opaque token fills, so neither host blurs the backdrop yet) and drag sway. Verified with Rust unit
 tests, `node --test scripts/native-tokens.test.mjs` and the private-X11 preview
 smoke; AppKit XCTests run only in macOS CI, and physical macOS/Windows/Wayland
 visual acceptance remains open.
@@ -2488,13 +2510,15 @@ settled for code and tests that read them. Both hosts now play:
 - the recording-saved (15 s) and controls-hidden (6 s) lifecycles: arrive, hold,
   and fade out ending 200 ms before the window closes. A save that extends the
   saved notice's life holds it steady instead of replaying the entrance;
-- mini-preview `thumbnail-arrive` for each newly decoded card;
+- mini-preview `thumbnail-arrive` for each newly decoded card, including its
+  3 px media blur;
 - countdown scrim/content fade-in and the cancelling fade-out;
 - capture menu `recording-options-arrive` on the Record row, and sliding
   `.capture-segmented-indicator`s for Screenshot/Record, Region/Window/Full
   screen and the Preferences Appearance control (`--dur-4` `--ease-standard`);
 - the Preferences save-status pop-in (`--dur-2`);
-- History card hover lift (2 pt over `--dur-3`); wgpu also eases the border.
+- History card hover lift (2 pt over `--dur-3`) with its `--shadow-sm` →
+  `--shadow-md` shadow; wgpu also eases the border.
 
 Reduced motion follows the shipping global rule (0.01 ms animations and
 transitions): entrances and transitions land at rest with no frames between,
@@ -2504,9 +2528,9 @@ invisible final keyframe, so both hosts keep them still and visible until their
 windows close. The existing system Reduce Motion wiring (AppKit workspace
 setting; wgpu portal/Windows preference or `--reduced-motion`) drives all of it.
 wgpu requests repaints only while a pose changes, and its motion wrapper keeps
-widget ids stable when an animation settles. Not reproduced: the preview
-arrival's 3 px blur (no egui/Core Animation equivalent without filters), the
-History hover shadow and AppKit's hover border easing, segment label colour
+widget ids stable when an animation settles. The preview arrival's 3 px blur and
+the History hover shadow now play too (see the preview effects slice). Not
+reproduced: AppKit's History hover border easing, segment label colour
 transitions, and pop-ins on native select menus (AppKit uses system menus; wgpu
 uses egui popups). Confirmation dialogs are native in shipping and have no
 entrance to match. Verified with Rust/XCTest source tests and private-X11 smokes;

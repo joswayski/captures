@@ -265,6 +265,18 @@ pub extern "C" fn captures_preview_pile_media_blur_v1(depth: usize, hovered: boo
     preview::collapsed_media_blur(depth, hovered)
 }
 
+/// Shipping hover-fan transition delay in milliseconds for a pile card at
+/// `depth`: 16 ms per pose depth for its transform, shade and glow, or per
+/// slot depth for its media blur (`media`).
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_fan_delay_ms_v1(depth: usize, media: bool) -> f64 {
+    if media {
+        captures_app::preview_motion::fan_media_delay_ms(depth)
+    } else {
+        captures_app::preview_motion::fan_delay_ms(depth)
+    }
+}
+
 /// Opaque, single-owner policy. Calls on one handle must never overlap.
 pub struct CapturesPreviewVisibility(ThumbnailVisibility);
 
@@ -474,6 +486,29 @@ pub unsafe extern "C" fn captures_preview_stack_insert_v1(
         return false;
     };
     handle.0.insert(id.to_owned())
+}
+
+/// Put a removed ID back at `index` (clamped), as a failed exit action does.
+/// False for a present/invalid ID.
+/// # Safety
+/// Same handle/string contract as captures_preview_stack_insert_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_stack_restore_v1(
+    handle: *mut CapturesPreviewStack,
+    id: *const c_char,
+    index: usize,
+) -> bool {
+    if id.is_null() {
+        return false;
+    }
+    // SAFETY: Non-null pointers satisfy the documented handle/string contract.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    let Ok(id) = (unsafe { CStr::from_ptr(id) }).to_str() else {
+        return false;
+    };
+    handle.0.restore(id.to_owned(), index)
 }
 
 /// Remove membership only, never files/history. False for an absent/invalid ID.
@@ -1101,6 +1136,12 @@ mod tests {
                 captures_preview_pile_media_blur_v1(3, true),
                 preview::collapsed_media_blur(3, true)
             );
+            assert_eq!(captures_preview_fan_delay_ms_v1(0, false), 0.);
+            assert_eq!(
+                captures_preview_fan_delay_ms_v1(2, false),
+                preview::stack_pose_depth(2.) * 16.
+            );
+            assert_eq!(captures_preview_fan_delay_ms_v1(2, true), 32.);
         }
     }
 
@@ -1277,6 +1318,18 @@ mod tests {
             assert!(captures_preview_stack_insert_v1(stack, c"古い".as_ptr()));
             assert!(captures_preview_stack_insert_v1(stack, c"new".as_ptr()));
             assert!(!captures_preview_stack_insert_v1(stack, c"古い".as_ptr()));
+            assert!(captures_preview_stack_remove_v1(stack, c"古い".as_ptr()));
+            assert!(captures_preview_stack_restore_v1(
+                stack,
+                c"古い".as_ptr(),
+                0
+            ));
+            assert!(!captures_preview_stack_restore_v1(
+                stack,
+                c"古い".as_ptr(),
+                0
+            ));
+            assert!(!captures_preview_stack_restore_v1(stack, null(), 0));
             assert_eq!(captures_preview_stack_count_v1(stack), 2);
             assert_eq!(captures_preview_stack_height_v1(stack), 424.);
             let mut id = CapturesPreviewID {

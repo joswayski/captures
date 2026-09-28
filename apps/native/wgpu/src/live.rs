@@ -243,6 +243,8 @@ enum Reply {
         result: Result<Decoded, String>,
         /// Card-sized pre-blurred copy for the hover treatment.
         blurred: Option<egui::ColorImage>,
+        /// Card-sized copy at the arrival's starting `blur(3px)`.
+        arrive_blurred: Option<egui::ColorImage>,
         /// Card-sized sharp media for later CSS blurs (pile depth, streak).
         media: Option<egui::ColorImage>,
     },
@@ -694,6 +696,8 @@ struct PreviewCard {
     texture: Option<egui::TextureHandle>,
     /// Pre-blurred copy for the shipping hover blur.
     blurred: Option<egui::TextureHandle>,
+    /// Copy at the arrival's starting blur, cross-faded out as it lands.
+    arrive_blurred: Option<egui::TextureHandle>,
     /// Card-sized sharp media at 2 px per point, the source of later blurs.
     media: Option<std::sync::Arc<egui::ColorImage>>,
     /// Pile depth blurs by radius (points), rebuilt as depths change.
@@ -753,6 +757,8 @@ struct ExitingCard {
     media: Option<std::sync::Arc<egui::ColorImage>>,
     /// The Close streak's stepped blurs, built when the exit first paints.
     streak: Vec<egui::TextureHandle>,
+    /// Delete's individually blurred chips, built when the exit first paints.
+    dust_atlas: Option<(egui::TextureHandle, std::sync::Arc<Vec<egui::Rect>>)>,
 }
 
 #[derive(Clone)]
@@ -760,6 +766,7 @@ struct PreviewExitRender {
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
     streak: Vec<egui::TextureHandle>,
+    dust_atlas: Option<(egui::TextureHandle, std::sync::Arc<Vec<egui::Rect>>)>,
     kind: captures_app::preview_motion::ExitKind,
     elapsed_ms: f64,
     dust: std::sync::Arc<Vec<captures_app::preview_motion::DustParticle>>,
@@ -782,6 +789,7 @@ struct PreviewRenderCard {
     height: u32,
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
+    arrive_blurred: Option<egui::TextureHandle>,
     /// Pile media blurs at the hover and rest radii, ascending.
     depth_blurred: [(f32, Option<egui::TextureHandle>); 2],
     size_bytes: u64,
@@ -795,6 +803,8 @@ struct PreviewRenderCard {
     editor_since: Instant,
     rejected_at: Option<Instant>,
     arrived_at: Option<Instant>,
+    /// Depth in the collapsed pile (0 = the front card).
+    pile_depth: usize,
     layout: captures_app::preview::PreviewCardLayout,
     hover_y: f64,
     /// Collapsed pile position, for the list ↔ pile fly.
@@ -835,8 +845,20 @@ struct MiniPreviews {
     /// Cards holding their slots while their exits play.
     exits: captures_app::preview_motion::StackExits,
     exiting: HashMap<String, ExitingCard>,
+    /// Saved cards whose Delete dissolves before their export moves to the
+    /// Trash, as shipping orders it; a failed Trash puts them back.
+    trashing: HashMap<String, TrashingCard>,
     toolbar: captures_app::preview_motion::StackToolbar,
     fly: Option<StackFly>,
+}
+
+/// A saved card between its dust and the Trash request's reply.
+struct TrashingCard {
+    card: PreviewCard,
+    /// The card's slot in the stack, for a failed Trash.
+    index: usize,
+    /// The Trash request went out (after the dust played).
+    sent: bool,
 }
 
 impl Default for MiniPreviews {
@@ -858,6 +880,7 @@ impl Default for MiniPreviews {
             hover_lock_generation: 0,
             exits: Default::default(),
             exiting: HashMap::new(),
+            trashing: HashMap::new(),
             toolbar: Default::default(),
             fly: None,
         }
@@ -948,6 +971,7 @@ impl MiniPreviews {
                 height: artifact.entry.height,
                 texture: None,
                 blurred: None,
+                arrive_blurred: None,
                 media: None,
                 depth_blurred: Vec::new(),
                 size_bytes: artifact.entry.size_bytes,
@@ -1046,7 +1070,7 @@ impl MiniPreviews {
     /// An empty stack forgets its display and dragged origin once its last
     /// exit has played.
     fn release_empty_stack(&mut self) {
-        if self.stack.ids().is_empty() && self.exiting.is_empty() {
+        if self.stack.ids().is_empty() && self.exiting.is_empty() && self.trashing.is_empty() {
             self.stack_target = None;
             self.visibility.clear_stack_origin();
         }
@@ -1118,6 +1142,7 @@ impl MiniPreviews {
                     dust: std::sync::Arc::new(dust),
                     media,
                     streak: Vec::new(),
+                    dust_atlas: None,
                 },
             );
         }
@@ -1133,6 +1158,10 @@ impl MiniPreviews {
         reduced_motion: bool,
     ) -> bool {
         self.begin_exit(artifact_id, kind, 0., true, reduced_motion);
+        self.remove_after_exit(artifact_id)
+    }
+
+    fn remove_after_exit(&mut self, artifact_id: &str) -> bool {
         let removed = self.remove(artifact_id);
         if removed && self.stack.ids().len() < 2 {
             let now = self.now_ms();
@@ -1140,6 +1169,94 @@ impl MiniPreviews {
                 .set(false, captures_app::preview_motion::ToolbarCause::Exit, now);
         }
         removed
+    }
+
+    /// A saved card's Delete: shipping dissolves it first and moves its
+    /// export to the Trash once the dust has played and the stack settled.
+    /// Returns whether the request can go out now (no exit plays).
+    fn begin_trash(&mut self, artifact_id: &str, reduced_motion: bool) -> bool {
+        let Some(index) = self.stack.ids().iter().position(|id| id == artifact_id) else {
+            return false;
+        };
+        self.begin_exit(
+            artifact_id,
+            captures_app::preview_motion::ExitKind::Dust,
+            0.,
+            true,
+            reduced_motion,
+        );
+        let Some(card) = self.cards.remove(artifact_id) else {
+            return false;
+        };
+        let now = !self.exiting.contains_key(artifact_id);
+        self.trashing.insert(
+            artifact_id.to_owned(),
+            TrashingCard {
+                card,
+                index,
+                sent: now,
+            },
+        );
+        self.remove_after_exit(artifact_id);
+        now
+    }
+
+    /// Trash requests whose dust has finished: `(id, generation, saved path)`.
+    fn due_trash(&mut self) -> Vec<(String, u64, Option<PathBuf>)> {
+        let exiting = &self.exiting;
+        self.trashing
+            .iter_mut()
+            .filter(|(id, pending)| !pending.sent && !exiting.contains_key(*id))
+            .map(|(id, pending)| {
+                pending.sent = true;
+                (
+                    id.clone(),
+                    pending.card.generation,
+                    pending.card.saved_path.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// The export is in the Trash: forget the dissolved card.
+    fn finish_trash(&mut self, artifact_id: &str, generation: u64) -> bool {
+        if self
+            .trashing
+            .get(artifact_id)
+            .is_none_or(|pending| pending.card.generation != generation)
+        {
+            return false;
+        }
+        self.trashing.remove(artifact_id);
+        self.release_empty_stack();
+        true
+    }
+
+    /// Trash failed: like shipping's unlocked card, it returns to its slot
+    /// with the error, available to retry.
+    fn restore_trashed(&mut self, artifact_id: &str, generation: u64, message: String) -> bool {
+        if self
+            .trashing
+            .get(artifact_id)
+            .is_none_or(|pending| pending.card.generation != generation)
+        {
+            return false;
+        }
+        let Some(TrashingCard {
+            mut card, index, ..
+        }) = self.trashing.remove(artifact_id)
+        else {
+            return false;
+        };
+        self.exiting.remove(artifact_id);
+        if !self.stack.restore(artifact_id.to_owned(), index) {
+            return false;
+        }
+        card.busy = None;
+        card.message = Some(message);
+        self.cards.insert(artifact_id.to_owned(), card);
+        self.exits.sync(self.stack.ids());
+        true
     }
 
     /// Clear all: every card streaks out, bottom first, without settling.
@@ -1308,6 +1425,12 @@ fn countdown_entrance(
 
 /// Shipping keeps the controls-hidden notice window for 6.2 s.
 const RECORDING_HIDDEN_NOTICE_MS: f64 = 6_200.;
+
+/// Where the mini preview viewport keeps its collapsed pile's
+/// [`captures_app::preview_motion::StackFan`].
+fn fan_id() -> egui::Id {
+    egui::Id::unique("mini-preview-hover-fan")
+}
 
 pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(
@@ -1646,11 +1769,14 @@ impl Live {
                             crate::mini_preview::card_media_image(&decoded.image)
                         });
                         let blurred = media.as_ref().map(crate::mini_preview::hover_blur_image);
+                        let arrive_blurred =
+                            media.as_ref().map(crate::mini_preview::arrive_blur_image);
                         Reply::PreviewDecoded {
                             generation,
                             artifact_id,
                             result,
                             blurred,
+                            arrive_blurred,
                             media,
                         }
                     }
@@ -3202,19 +3328,29 @@ impl Live {
                     if card.busy.is_some() || card.saved_path != saved_path {
                         continue;
                     }
-                    card.busy = Some(crate::mini_preview::Busy::Trash);
-                    card.message = Some("Moving saved export to Trash…".into());
-                    self.send_preview(
-                        Request::TrashPreview {
-                            root: self.root.clone(),
-                            id: artifact_id.clone(),
-                            saved_path,
-                        },
-                        PreviewGuard {
-                            artifact_id,
-                            generation,
-                        },
-                    );
+                    // Shipping dissolves the card first; Trash follows the dust.
+                    if self
+                        .previews
+                        .begin_trash(&artifact_id, crate::motion::reduced(ctx))
+                    {
+                        self.previews
+                            .trashing
+                            .get_mut(&artifact_id)
+                            .expect("trashing card")
+                            .sent = true;
+                        self.send_preview(
+                            Request::TrashPreview {
+                                root: self.root.clone(),
+                                id: artifact_id.clone(),
+                                saved_path,
+                            },
+                            PreviewGuard {
+                                artifact_id,
+                                generation,
+                            },
+                        );
+                    }
+                    request_hidden_root_paint(ctx);
                 }
                 PreviewMessage::Edit {
                     artifact_id,
@@ -4346,7 +4482,13 @@ impl Live {
                                 continue;
                             }
                             if let Some(preview) = preview {
-                                if let Some(card) = self
+                                if self.previews.restore_trashed(
+                                    &preview.artifact_id,
+                                    preview.generation,
+                                    format!("Trash failed: {error}"),
+                                ) {
+                                    request_hidden_root_paint(ctx);
+                                } else if let Some(card) = self
                                     .previews
                                     .cards
                                     .get_mut(&preview.artifact_id)
@@ -4390,16 +4532,10 @@ impl Live {
                             if let Some(guard) = &preview
                                 && let Response::PreviewTrashed { id } = response.as_ref()
                             {
+                                // The card already dissolved before the request.
                                 if *id == guard.artifact_id
-                                    && self.previews.accepts(id, guard.generation)
+                                    && self.previews.finish_trash(id, guard.generation)
                                 {
-                                    // A saved card's Delete dissolves once the
-                                    // export is in the Trash.
-                                    self.previews.exit_card(
-                                        id,
-                                        captures_app::preview_motion::ExitKind::Dust,
-                                        crate::motion::reduced(ctx),
-                                    );
                                     request_hidden_root_paint(ctx);
                                 }
                                 continue;
@@ -4772,6 +4908,7 @@ impl Live {
                     artifact_id,
                     result,
                     blurred,
+                    arrive_blurred,
                     media,
                 } if self.previews.accepts(&artifact_id, generation) => match result {
                     Ok(decoded) => {
@@ -4790,6 +4927,13 @@ impl Live {
                         card.blurred = blurred.map(|image| {
                             ctx.load_texture(
                                 format!("mini-preview-blur:{generation}:{artifact_id}"),
+                                image,
+                                egui::TextureOptions::LINEAR,
+                            )
+                        });
+                        card.arrive_blurred = arrive_blurred.map(|image| {
+                            ctx.load_texture(
+                                format!("mini-preview-arrive:{generation}:{artifact_id}"),
                                 image,
                                 egui::TextureOptions::LINEAR,
                             )
@@ -5457,6 +5601,20 @@ impl Live {
             request_hidden_root_paint(ctx);
             ctx.request_repaint();
         }
+        // A saved card's Trash goes out once its dust has played.
+        for (artifact_id, generation, saved_path) in self.previews.due_trash() {
+            self.send_preview(
+                Request::TrashPreview {
+                    root: self.root.clone(),
+                    id: artifact_id.clone(),
+                    saved_path,
+                },
+                PreviewGuard {
+                    artifact_id,
+                    generation,
+                },
+            );
+        }
         if let Some(wait) = self
             .previews
             .exits
@@ -5562,6 +5720,21 @@ impl Live {
                 }
             }
         }
+        // Delete's blurred dust chips, once per exit.
+        let radius = tokens.number("thumbnail-card-radius");
+        for exiting in self.previews.exiting.values_mut() {
+            if exiting.dust_atlas.is_none()
+                && !exiting.dust.is_empty()
+                && let Some(media) = &exiting.media
+                && let Some((atlas, cells)) =
+                    crate::mini_preview::dust_atlas(media, &exiting.dust, radius)
+            {
+                exiting.dust_atlas = Some((
+                    ctx.load_texture("mini-preview-dust", atlas, egui::TextureOptions::LINEAR),
+                    std::sync::Arc::new(cells),
+                ));
+            }
+        }
         // The Close streak's stepped horizontal blurs, once per exit.
         for exiting in self.previews.exiting.values_mut() {
             if exiting.streak.is_empty()
@@ -5607,6 +5780,7 @@ impl Live {
                     height: card.height,
                     texture: card.texture.clone()?,
                     blurred: card.blurred.clone(),
+                    arrive_blurred: card.arrive_blurred.clone(),
                     depth_blurred: [true, false].map(|hovered| {
                         let radius =
                             captures_app::preview::collapsed_media_blur(pile_depth, hovered) as f32;
@@ -5625,6 +5799,7 @@ impl Live {
                         + Duration::from_secs_f64(card.editor.since_ms().max(0.) / 1000.),
                     rejected_at: card.rejected_at,
                     arrived_at: card.arrived_at,
+                    pile_depth,
                     layout: layout(collapsed, false)?,
                     hover_y: layout(collapsed, true)?.y,
                     pile_y: captures_app::preview::card_layout_in(
@@ -5654,6 +5829,7 @@ impl Live {
                     texture: card.texture.clone(),
                     blurred: card.blurred.clone(),
                     streak: card.streak.clone(),
+                    dust_atlas: card.dust_atlas.clone(),
                     kind: exit.kind,
                     elapsed_ms: exit.elapsed_ms(exits_now),
                     dust: card.dust.clone(),
@@ -5891,6 +6067,7 @@ impl Live {
                                 right_anchor: placement.is_right(),
                                 top_anchor,
                                 blurred: card.blurred.as_ref(),
+                                arrive_blur: (arrival.blur as f32, card.arrive_blurred.as_ref()),
                                 depth_blurred: [
                                     (card.depth_blurred[0].0, card.depth_blurred[0].1.as_ref()),
                                     (card.depth_blurred[1].0, card.depth_blurred[1].1.as_ref()),
@@ -6030,24 +6207,41 @@ impl Live {
                                         .is_some_and(|point| rect.contains(point)))
                         })
                     });
-                    // Zero duration also updates the stored endpoint. Bypassing
-                    // the animator would revive a stale fan when motion returns.
-                    let fan = ui.ctx().animate_bool_with_time(
-                        egui::Id::unique("mini-preview-hover-fan"),
-                        fan_open,
-                        if reduced_motion {
-                            0.
-                        } else {
-                            tokens.number("dur-3") / 1000.
-                        },
-                    );
+                    // Shipping's hover fan: each layer eases on its own
+                    // transition, 16 ms later per depth.
+                    let fan_tween =
+                        tokens.transition(captures_app::motion::Transition::PreviewStackFan);
+                    let mut fan: captures_app::preview_motion::StackFan =
+                        ui.data(|data| data.get_temp(fan_id())).unwrap_or_default();
+                    let pile_cards: Vec<(&str, usize)> = cards
+                        .iter()
+                        .map(|card| (card.artifact_id.as_str(), card.pile_depth))
+                        .collect();
+                    if fan.set(fan_open, frame_ms, &pile_cards, &fan_tween, reduced_motion) {
+                        ui.data_mut(|data| data.insert_temp(fan_id(), fan.clone()));
+                    }
+                    let deepest = pile_cards.iter().map(|card| card.1).max().unwrap_or(0);
+                    if fan.running(deepest, frame_ms, &fan_tween, reduced_motion) {
+                        ui.ctx().request_repaint();
+                    }
                     for card in &cards {
-                        let (offset, pile) = crate::mini_preview::pile_pose_between(
+                        let (pose, media) = fan.progress(
+                            &card.artifact_id,
+                            card.pile_depth,
+                            frame_ms,
+                            &fan_tween,
+                            reduced_motion,
+                        );
+                        let (offset, pile) = crate::mini_preview::pile_pose_between_staggered(
                             &card.pile_rest,
                             &card.pile_hover,
-                            fan,
+                            pose as f32,
+                            media as f32,
                         );
-                        let y = egui::lerp(card.layout.y as f32..=card.hover_y as f32, fan);
+                        let y = egui::lerp(
+                            card.layout.y as f32..=card.hover_y as f32,
+                            pose as f32,
+                        );
                         let rect = egui::Rect::from_min_size(
                             egui::pos2(captures_app::preview::THUMBNAIL_PADDING as f32, y) + offset,
                             egui::vec2(
@@ -6109,13 +6303,43 @@ impl Live {
                         captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
                     );
                     let toward_pile = if collapsing { progress } else { 1. - progress };
+                    // Show less lands on the resting pile. Expand starts from
+                    // the pose each card had when it began (shipping's
+                    // `--thumbnail-stack-expand-from` and `-expand-blur-from`),
+                    // usually the fanned pile under the pointer.
+                    let fan = if collapsing {
+                        ui.data_mut(|data| {
+                            data.remove::<captures_app::preview_motion::StackFan>(fan_id())
+                        });
+                        None
+                    } else {
+                        ui.data(|data| {
+                            data.get_temp::<captures_app::preview_motion::StackFan>(fan_id())
+                        })
+                    };
+                    let fan_tween =
+                        tokens.transition(captures_app::motion::Transition::PreviewStackFan);
+                    let expand_ms = fly.map_or(frame_ms, |fly| {
+                        crate::motion::elapsed_ms(epoch, fly.started)
+                    });
                     for card in &cards {
                         // The pile end carries its depth pose; the list end is flat.
-                        let (pose_offset, pose) = crate::mini_preview::pile_pose_between(
-                            &card.pile_rest,
-                            &card.pile_rest,
-                            0.,
-                        );
+                        let (pose_t, media_t) = fan.as_ref().map_or((0., 0.), |fan| {
+                            fan.progress(
+                                &card.artifact_id,
+                                card.pile_depth,
+                                expand_ms,
+                                &fan_tween,
+                                reduced_motion,
+                            )
+                        });
+                        let (pose_offset, pose) =
+                            crate::mini_preview::pile_pose_between_staggered(
+                                &card.pile_rest,
+                                &card.pile_hover,
+                                pose_t as f32,
+                                media_t as f32,
+                            );
                         let list = egui::pos2(padding, card.layout.y as f32 - scroll);
                         let pile = egui::pos2(padding, card.pile_y as f32) + pile_offset + pose_offset;
                         let rect = egui::Rect::from_min_size(list.lerp(pile, toward_pile), size);
@@ -6143,6 +6367,9 @@ impl Live {
                             ),
                         )
                     };
+                    ui.data_mut(|data| {
+                        data.remove::<captures_app::preview_motion::StackFan>(fan_id())
+                    });
                     // Overflow cues request whole-slot scrolls; apply them
                     // inside the scroll area on the next pass so egui
                     // animates the move and releases stick-to-bottom.
@@ -6224,6 +6451,9 @@ impl Live {
                                                 texture: &exit.texture,
                                                 blurred: exit.blurred.as_ref(),
                                                 streak: &exit.streak,
+                                                dust_atlas: exit.dust_atlas.as_ref().map(
+                                                    |(atlas, cells)| (atlas, cells.as_slice()),
+                                                ),
                                                 kind: exit.kind,
                                                 elapsed_ms: exit.elapsed_ms,
                                                 dust: &exit.dust,
@@ -9247,11 +9477,12 @@ mod tests {
                 "busy Trash dispatches only once"
             );
             assert_eq!(live.pending, 1);
+            // Shipping dissolves the card before its Trash request.
+            assert!(!live.previews.cards.contains_key(&id));
+            assert!(live.previews.stack.ids().is_empty());
             if attempt == 1 {
-                // Same ID, different presentation: a late reply cannot remove it.
-                let card = live.previews.cards.get_mut(&id).unwrap();
-                card.generation += 1;
-                card.busy = None;
+                // Same ID, different presentation: a late reply cannot finish it.
+                live.previews.trashing.get_mut(&id).unwrap().card.generation += 1;
             }
             results
                 .send(Reply::Executed {
@@ -9276,9 +9507,18 @@ mod tests {
                     Some("Trash failed: fixture denied")
                 );
             } else if attempt == 1 {
-                assert!(live.previews.cards.contains_key(&guard.artifact_id));
+                let pending = live.previews.trashing.remove(&guard.artifact_id).unwrap();
+                assert!(
+                    live.previews
+                        .stack
+                        .restore(guard.artifact_id.clone(), pending.index)
+                );
+                live.previews
+                    .cards
+                    .insert(guard.artifact_id.clone(), pending.card);
             } else {
                 assert!(live.previews.cards.is_empty());
+                assert!(live.previews.trashing.is_empty());
             }
         }
         ctx.end_pass().textures_delta.clear();
@@ -9801,12 +10041,25 @@ mod tests {
         assert!(live.previews.is_visible());
         let tokens = crate::tokens::load()["dark-mustard"].clone();
         ctx.begin_pass(Default::default());
-        let animation = egui::Id::unique("mini-preview-hover-fan");
-        assert_eq!(ctx.animate_bool_with_time(animation, true, 0.), 1.);
+        let tween = tokens.transition(captures_app::motion::Transition::PreviewStackFan);
+        let ids = live.previews.stack.ids().to_vec();
+        let cards: Vec<(&str, usize)> = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.as_str(), ids.len() - index - 1))
+            .collect();
+        let mut open = captures_app::preview_motion::StackFan::default();
+        open.set(true, 0., &cards, &tween, false);
+        ctx.data_mut(|data| data.insert_temp(fan_id(), open));
         // While reduction is enabled the pointer left the card. Re-enabling
-        // motion must not resurrect the old open fan from the animation cache.
+        // motion must not resurrect the old open fan from the stored state.
         live.viewports(&ctx, &tokens, Ok(settings), true);
-        assert_eq!(ctx.animate_bool_with_time(animation, false, 0.2), 0.);
+        let fan: captures_app::preview_motion::StackFan =
+            ctx.data(|data| data.get_temp(fan_id())).unwrap();
+        assert!(!fan.open());
+        for (id, depth) in &cards {
+            assert_eq!(fan.progress(id, *depth, 0., &tween, false), (0., 0.));
+        }
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         live.flush();
@@ -9931,6 +10184,58 @@ mod tests {
         assert!(first.image_path.exists());
         assert!(second.image_path.exists());
         assert!(later.image_path.exists());
+    }
+
+    #[test]
+    fn saved_delete_dissolves_before_its_trash_and_a_failure_restores_the_slot() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = AppSettings::default();
+        let context = egui::Context::default();
+        let texture = context.load_texture(
+            "trash-exit-test",
+            egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+            egui::TextureOptions::LINEAR,
+        );
+        let mut previews = MiniPreviews::default();
+        let mut ids = Vec::new();
+        for (frame, color) in [[10, 20, 30, 255], [30, 20, 10, 255]]
+            .into_iter()
+            .enumerate()
+        {
+            let artifact = preview_artifact(root.path(), color);
+            previews
+                .begin_capture(&settings, Some(preview_target()), frame as u64)
+                .unwrap();
+            let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+            previews.mark_ready(&guard.artifact_id);
+            let card = previews.cards.get_mut(&guard.artifact_id).unwrap();
+            card.texture = Some(texture.clone());
+            card.saved_path = Some(root.path().join(format!("export-{frame}.png")));
+            ids.push((guard.artifact_id, guard.generation));
+        }
+        let (id, generation) = ids[1].clone();
+        let saved = previews.cards[&id].saved_path.clone();
+        // The dust plays first; the request waits for it.
+        assert!(!previews.begin_trash(&id, false));
+        assert_eq!(previews.stack.ids(), &[ids[0].0.clone()]);
+        assert!(previews.exiting.contains_key(&id));
+        assert!(previews.due_trash().is_empty());
+        assert!(previews.settle_exits(true));
+        assert_eq!(previews.due_trash(), vec![(id.clone(), generation, saved)]);
+        assert!(previews.due_trash().is_empty(), "sent once");
+        // A failure puts the card back in its slot with the error.
+        assert!(!previews.restore_trashed(&id, generation + 1, "stale".into()));
+        assert!(previews.restore_trashed(&id, generation, "Trash failed: denied".into()));
+        assert_eq!(previews.stack.ids(), &[ids[0].0.clone(), id.clone()]);
+        assert_eq!(
+            previews.cards[&id].message.as_deref(),
+            Some("Trash failed: denied")
+        );
+        // Success forgets the dissolved card; reduced motion sends at once.
+        assert!(previews.begin_trash(&id, true));
+        assert!(previews.due_trash().is_empty());
+        assert!(previews.finish_trash(&id, generation));
+        assert!(previews.trashing.is_empty() && !previews.cards.contains_key(&id));
     }
 
     #[test]
@@ -10312,6 +10617,7 @@ mod tests {
                 image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
             }),
             blurred: None,
+            arrive_blurred: None,
             media: None,
         };
         let decode_job = || match requests.try_recv() {
@@ -10382,6 +10688,7 @@ mod tests {
                 artifact_id: id.clone(),
                 result: Err("unreadable".into()),
                 blurred: None,
+                arrive_blurred: None,
                 media: None,
             })
             .unwrap();

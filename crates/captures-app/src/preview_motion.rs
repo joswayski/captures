@@ -379,6 +379,118 @@ impl StackToolbar {
     }
 }
 
+/// `--stack-fan-stagger`: each pile layer starts its fan transition this
+/// much later per depth, so the lift cascades instead of moving as a slab.
+pub const FAN_STAGGER_MS: f64 = 16.0;
+
+/// Fan transition delay of a card's `transform`, `opacity`, `box-shadow` and
+/// depth shade: `calc(var(--thumbnail-stack-pile-depth) * 16ms)`, the pose
+/// depth ([`crate::preview::stack_pose_depth`]).
+pub fn fan_delay_ms(depth: usize) -> f64 {
+    crate::preview::stack_pose_depth(depth as f64) * FAN_STAGGER_MS
+}
+
+/// Fan transition delay of a card's media `filter`:
+/// `calc(var(--thumbnail-stack-depth) * 16ms)`, the whole slot depth.
+pub fn fan_media_delay_ms(depth: usize) -> f64 {
+    depth as f64 * FAN_STAGGER_MS
+}
+
+/// The collapsed pile's hover fan with shipping's per-card stagger. Each card
+/// runs its own CSS transition toward the target: a change mid-way starts
+/// from where that card is, after its delay again.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StackFan {
+    open: bool,
+    since_ms: f64,
+    /// Each card's `(pose, media)` progress when the latest change began.
+    from: Vec<(String, f64, f64)>,
+}
+
+impl StackFan {
+    /// Retarget the fan. `cards` are the pile's `(id, depth)`; returns whether
+    /// the target changed.
+    pub fn set(
+        &mut self,
+        open: bool,
+        now_ms: f64,
+        cards: &[(&str, usize)],
+        tween: &Tween,
+        reduced_motion: bool,
+    ) -> bool {
+        if open == self.open {
+            return false;
+        }
+        // Under reduced motion every card lands at once, and a later change
+        // with motion back on must not replay a stale pose.
+        let target = if open { 1.0 } else { 0.0 };
+        self.from = cards
+            .iter()
+            .map(|&(id, depth)| {
+                let (pose, media) = if reduced_motion {
+                    (target, target)
+                } else {
+                    self.progress(id, depth, now_ms, tween, false)
+                };
+                (id.to_owned(), pose, media)
+            })
+            .collect();
+        self.open = open;
+        self.since_ms = now_ms;
+        true
+    }
+
+    pub fn open(&self) -> bool {
+        self.open
+    }
+
+    /// Eased `(pose, media)` progress of one card toward the fanned pose
+    /// (0 = rest, 1 = fanned). A card the fan has not seen starts at rest.
+    pub fn progress(
+        &self,
+        id: &str,
+        depth: usize,
+        now_ms: f64,
+        tween: &Tween,
+        reduced_motion: bool,
+    ) -> (f64, f64) {
+        let target = if self.open { 1.0 } else { 0.0 };
+        let (from_pose, from_media) = self
+            .from
+            .iter()
+            .find(|(card, ..)| card == id)
+            .map_or((0.0, 0.0), |&(_, pose, media)| (pose, media));
+        let elapsed = now_ms - self.since_ms;
+        (
+            tween.value(
+                from_pose,
+                target,
+                elapsed - fan_delay_ms(depth),
+                reduced_motion,
+            ),
+            tween.value(
+                from_media,
+                target,
+                elapsed - fan_media_delay_ms(depth),
+                reduced_motion,
+            ),
+        )
+    }
+
+    /// Whether any card down to depth `deepest` is still moving.
+    pub fn running(&self, deepest: usize, now_ms: f64, tween: &Tween, reduced: bool) -> bool {
+        let delay = fan_delay_ms(deepest).max(fan_media_delay_ms(deepest));
+        tween.running(now_ms - self.since_ms - delay, reduced)
+    }
+
+    /// Milliseconds until the deepest card lands, as shipping's
+    /// `thumbnailStackFanCollapseMs`: `--stack-fan-dur` plus the pose-depth
+    /// stagger.
+    pub fn settle_ms(deepest: usize, tween: &Tween) -> f64 {
+        tween.duration_ms + fan_delay_ms(deepest)
+    }
+}
+
 /// Show less morph progress (0 = the 28 pt stack icon, 1 = the pill) for the
 /// width tween and the icon/label crossfade tween.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -799,6 +911,46 @@ pub fn exit_catalog() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fan_tween() -> Tween {
+        Tween {
+            duration_ms: 200.0,
+            easing: CubicBezier::LINEAR,
+        }
+    }
+
+    #[test]
+    fn the_hover_fan_staggers_each_layer_by_its_depth() {
+        let tween = fan_tween();
+        let cards = [("front", 0), ("one", 1), ("two", 2)];
+        let mut fan = StackFan::default();
+        assert!(fan.set(true, 1_000.0, &cards, &tween, false));
+        assert!(!fan.set(true, 1_010.0, &cards, &tween, false));
+        // 16 ms per pose depth for the transform, per slot depth for the blur.
+        assert_eq!(fan_delay_ms(0), 0.0);
+        let pose_one = crate::preview::stack_pose_depth(1.0) * 16.0;
+        assert!((fan_delay_ms(1) - pose_one).abs() < 1e-6);
+        assert_eq!(fan_media_delay_ms(2), 32.0);
+        assert_eq!(fan.progress("front", 0, 1_100.0, &tween, false), (0.5, 0.5));
+        let (pose, media) = fan.progress("two", 2, 1_100.0, &tween, false);
+        assert!((pose - (100.0 - fan_delay_ms(2)) / 200.0).abs() < 1e-6);
+        assert!((media - 68.0 / 200.0).abs() < 1e-6);
+        // Nothing of a deeper card moves before its delay.
+        assert_eq!(fan.progress("two", 2, 1_010.0, &tween, false), (0.0, 0.0));
+        assert!(fan.running(2, 1_210.0, &tween, false));
+        assert!(!fan.running(2, 1_232.0, &tween, false));
+        assert!((StackFan::settle_ms(2, &tween) - (200.0 + fan_delay_ms(2))).abs() < 1e-6);
+        // Reversing mid-way starts each card from where it is, delayed again.
+        assert!(fan.set(false, 1_100.0, &cards, &tween, false));
+        assert_eq!(fan.progress("front", 0, 1_100.0, &tween, false), (0.5, 0.5));
+        let (pose, _) = fan.progress("two", 2, 1_110.0, &tween, false);
+        assert!((pose - (100.0 - fan_delay_ms(2)) / 200.0).abs() < 1e-6);
+        assert_eq!(fan.progress("front", 0, 1_300.0, &tween, false), (0.0, 0.0));
+        // Reduced motion lands at once.
+        assert!(fan.set(true, 2_000.0, &cards, &tween, true));
+        assert_eq!(fan.progress("two", 2, 2_000.0, &tween, true), (1.0, 1.0));
+        assert!(!fan.running(2, 2_000.0, &tween, true));
+    }
 
     struct Shipping;
     impl MotionTokens for Shipping {

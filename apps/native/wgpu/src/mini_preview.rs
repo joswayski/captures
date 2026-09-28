@@ -82,11 +82,14 @@ impl PileTransform {
 }
 
 /// Rect offset and paint transform between the rest (`t = 0`) and hover
-/// fan (`t = 1`) poses. The accent glow follows the fan.
-pub fn pile_pose_between(
+/// fan (`t = 1`) poses. The accent glow follows the fan; the media blur has
+/// its own progress, since shipping staggers the `filter` transition by slot
+/// depth and the transform, shade and glow by pose depth.
+pub fn pile_pose_between_staggered(
     rest: &captures_app::preview::CollapsedCardPose,
     hover: &captures_app::preview::CollapsedCardPose,
     t: f32,
+    media: f32,
 ) -> (egui::Vec2, PileTransform) {
     let mix = |a: f64, b: f64| egui::lerp(a as f32..=b as f32, t);
     let mut projection = [0.; 9];
@@ -97,7 +100,7 @@ pub fn pile_pose_between(
         egui::vec2(mix(rest.dx, hover.dx), mix(rest.slot_dy, hover.slot_dy)),
         PileTransform {
             projection,
-            blur: mix(rest.media_blur, hover.media_blur),
+            blur: egui::lerp(rest.media_blur as f32..=hover.media_blur as f32, media),
             glow: t,
         },
     )
@@ -149,6 +152,9 @@ pub struct View<'a> {
     pub depth_shade: f32,
     /// Compact rear-card depth pose (identity for the front card).
     pub pile: PileTransform,
+    /// Shipping `thumbnail-arrive`'s `filter: blur()` now (points) and the
+    /// media prepared at its starting radius ([`arrive_blur_image`]).
+    pub arrive_blur: (f32, Option<&'a egui::TextureHandle>),
     /// Prepared blurred media for the pile's blur radii, `(radius, texture)`
     /// ascending; see [`crate::effects::blur_levels`].
     pub depth_blurred: [(f32, Option<&'a egui::TextureHandle>); 2],
@@ -186,6 +192,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         ui.painter()
             .rect_filled(card, radius, tokens.color("glass-raised"));
         paint_media(ui, card, radius, view.texture, None, 0., 0.);
+        paint_arrive_blur(ui, card, radius, view.arrive_blur, 1.);
         if view.depth > 0 && view.depth_shade > 0. {
             ui.painter().rect_filled(
                 card,
@@ -357,6 +364,16 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         view.blurred,
         media.0,
         media.1,
+    );
+    paint_arrive_blur(
+        ui,
+        card,
+        radius,
+        view.arrive_blur,
+        egui::lerp(
+            1.0..=captures_app::preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+            media.0,
+        ),
     );
     ui.painter().rect_stroke(
         card,
@@ -624,6 +641,9 @@ pub struct ExitView<'a> {
     /// Milliseconds into the exit's own animation (after any Clear all delay).
     pub elapsed_ms: f64,
     pub dust: &'a [captures_app::preview_motion::DustParticle],
+    /// [`dust_atlas`] for a Delete, once prepared: the atlas and each
+    /// particle's cell.
+    pub dust_atlas: Option<(&'a egui::TextureHandle, &'a [egui::Rect])>,
     /// [`streak_blur_images`] for a Close, once prepared.
     pub streak: &'a [egui::TextureHandle],
     pub right_anchor: bool,
@@ -776,30 +796,45 @@ fn paint_dust(
         let pad = DUST_LAYER_PAD as f32;
         let layer = card.min - egui::vec2(pad, pad);
         let clip = card.expand(pad * frame.clip_open as f32);
-        let mut mesh = egui::Mesh::with_texture(texture);
+        // Each chip carries its own blur from the atlas, spilling past its
+        // cut; without it, chips are cut from the pre-blurred card.
+        let mut mesh =
+            egui::Mesh::with_texture(view.dust_atlas.map_or(texture, |(atlas, _)| atlas.id()));
         let size = card.size();
-        for particle in view.dust {
+        for (index, particle) in view.dust.iter().enumerate() {
             let visual = dust_visual_at(particle, elapsed);
             let alpha = (visual.opacity * frame.layer_opacity) as f32;
             if alpha <= 0. {
                 continue;
             }
-            let half = egui::vec2(particle.width as f32, particle.height as f32) / 2.;
+            let chip = egui::vec2(particle.width as f32, particle.height as f32) / 2.;
+            let cell = view.dust_atlas.and_then(|(_, cells)| cells.get(index));
+            let half = chip
+                + if cell.is_some() {
+                    egui::Vec2::splat(DUST_CHIP_BLUR_PAD)
+                } else {
+                    egui::Vec2::ZERO
+                };
             let centre = layer
                 + egui::vec2(particle.left as f32, particle.top as f32)
-                + half
+                + chip
                 + egui::vec2(visual.dx as f32, visual.dy as f32);
             let (sin, cos) = (visual.rotate.to_radians() as f32).sin_cos();
             let scale = visual.scale as f32;
-            let uv_min = base.min
-                + egui::vec2(
-                    particle.source_left as f32 / size.x * base.width(),
-                    particle.source_top as f32 / size.y * base.height(),
-                );
-            let uv_size = egui::vec2(
-                particle.width as f32 / size.x * base.width(),
-                particle.height as f32 / size.y * base.height(),
-            );
+            let (uv_min, uv_size) = match cell {
+                Some(cell) => (cell.min, cell.size()),
+                None => (
+                    base.min
+                        + egui::vec2(
+                            particle.source_left as f32 / size.x * base.width(),
+                            particle.source_top as f32 / size.y * base.height(),
+                        ),
+                    egui::vec2(
+                        particle.width as f32 / size.x * base.width(),
+                        particle.height as f32 / size.y * base.height(),
+                    ),
+                ),
+            };
             let color = tint(alpha);
             let first = mesh.vertices.len() as u32;
             for (corner, uv) in [
@@ -1081,6 +1116,59 @@ fn paint_media(
             ),
         );
     }
+}
+
+/// Shipping `thumbnail-arrive`'s `filter: blur(3px → 0)`: the media prepared
+/// at the starting radius fades out over the sharp media as the radius falls,
+/// like the pile's cross-faded blur levels. Nothing paints once it lands.
+fn paint_arrive_blur(
+    ui: &egui::Ui,
+    card: egui::Rect,
+    radius: f32,
+    (blur, texture): (f32, Option<&egui::TextureHandle>),
+    brightness: f32,
+) {
+    let Some(texture) = texture else {
+        return;
+    };
+    // `blur_levels` between the sharp media (0) and the prepared radius.
+    let weight = (blur / arrive_blur_radius()).clamp(0., 1.);
+    if weight.is_nan() || weight <= 0. {
+        return;
+    }
+    let value = (brightness * weight * 255.).round() as u8;
+    ui.painter()
+        .with_clip_rect(ui.clip_rect().intersect(card))
+        .add(
+            egui::epaint::RectShape::filled(
+                card,
+                radius,
+                Color32::from_rgba_premultiplied(
+                    value,
+                    value,
+                    value,
+                    (weight * 255.).round() as u8,
+                ),
+            )
+            .with_texture(
+                texture.id(),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+            ),
+        );
+}
+
+/// The starting `filter: blur()` of shipping `thumbnail-arrive`, in points.
+pub fn arrive_blur_radius() -> f32 {
+    captures_app::motion::Motion::PreviewCardArrive
+        .keyframes()
+        .frames[0]
+        .pose
+        .blur as f32
+}
+
+/// [`blurred_card_media`] at [`arrive_blur_radius`].
+pub fn arrive_blur_image(media: &egui::ColorImage) -> egui::ColorImage {
+    blurred_card_media(media, arrive_blur_radius())
 }
 
 /// Opacity of the editor ring: it arrives over `0.22s ease` and eases out
@@ -2018,6 +2106,101 @@ pub fn card_media_image(image: &egui::ColorImage) -> Option<egui::ColorImage> {
     ))
 }
 
+/// Transparent margin around each dust chip in [`dust_atlas`], in points
+/// (`THUMBNAIL_DUST_CHIP_BLUR_PAD_PX`), so its blur fades past the cut.
+pub const DUST_CHIP_BLUR_PAD: f32 = 8.;
+
+/// Shipping's canvas dust chips: every chip is cut sharp from the card media
+/// (inside the card's rounded rect), padded with [`DUST_CHIP_BLUR_PAD`] of
+/// transparency and blurred on its own with the hover `blur(2px)`, so flying
+/// chips keep soft edges instead of hard cuts through a pre-blurred card.
+/// One Gaussian pass over an atlas at one pixel per point. Returns the atlas
+/// and each particle's cell as normalised UVs (padding included).
+pub fn dust_atlas(
+    media_2x: &egui::ColorImage,
+    particles: &[captures_app::preview_motion::DustParticle],
+    radius: f32,
+) -> Option<(egui::ColorImage, Vec<egui::Rect>)> {
+    let first = particles.first()?;
+    let pad = DUST_CHIP_BLUR_PAD;
+    let columns = (particles.len() as f64).sqrt().ceil() as usize;
+    let rows = particles.len().div_ceil(columns);
+    let widest = particles.iter().map(|p| p.width).fold(0., f64::max) as f32;
+    let tallest = particles.iter().map(|p| p.height).fold(0., f64::max) as f32;
+    let cell = [
+        (widest + 2. * pad).ceil() as usize,
+        (tallest + 2. * pad).ceil() as usize,
+    ];
+    let size = [columns * cell[0], rows * cell[1]];
+    let mut atlas = egui::ColorImage::filled(size, Color32::TRANSPARENT);
+    let card = egui::vec2(first.card_width as f32, first.card_height as f32);
+    let [media_w, media_h] = media_2x.size;
+    if media_w == 0 || media_h == 0 || card.x <= 0. || card.y <= 0. {
+        return None;
+    }
+    let density = egui::vec2(media_w as f32 / card.x, media_h as f32 / card.y);
+    // Box-sample the 2× media over one point, like the half-size blur copies.
+    let sample = |point: egui::Pos2| {
+        let (x, y) = (point.x * density.x, point.y * density.y);
+        let x0 = ((x - density.x / 2.).floor().max(0.) as usize).min(media_w - 1);
+        let y0 = ((y - density.y / 2.).floor().max(0.) as usize).min(media_h - 1);
+        let (x1, y1) = ((x0 + 1).min(media_w - 1), (y0 + 1).min(media_h - 1));
+        let mut sum = [0u32; 4];
+        for (sx, sy) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+            for (total, value) in sum
+                .iter_mut()
+                .zip(media_2x.pixels[sy * media_w + sx].to_array())
+            {
+                *total += u32::from(value);
+            }
+        }
+        let [r, g, b, a] = sum.map(|total| ((total + 2) / 4) as u8);
+        Color32::from_rgba_premultiplied(r, g, b, a)
+    };
+    let half = card / 2.;
+    let corner = radius.clamp(0., half.x.min(half.y));
+    let inside_card = |point: egui::Pos2| {
+        let q = (point.to_vec2() - half).abs() - half + egui::Vec2::splat(corner);
+        q.max(egui::Vec2::ZERO).length() + q.x.max(q.y).min(0.) - corner <= 0.
+    };
+    let mut cells = Vec::with_capacity(particles.len());
+    for (index, particle) in particles.iter().enumerate() {
+        let origin = [(index % columns) * cell[0], (index / columns) * cell[1]];
+        let source = egui::Rect::from_min_size(
+            egui::pos2(particle.source_left as f32, particle.source_top as f32),
+            egui::vec2(particle.width as f32, particle.height as f32),
+        );
+        let span = [
+            (particle.width as f32 + 2. * pad).ceil() as usize,
+            (particle.height as f32 + 2. * pad).ceil() as usize,
+        ];
+        for cy in 0..span[1] {
+            for cx in 0..span[0] {
+                let point = source.min - egui::vec2(pad, pad)
+                    + egui::vec2(cx as f32 + 0.5, cy as f32 + 0.5);
+                if source.contains(point) && inside_card(point) {
+                    atlas.pixels[(origin[1] + cy) * size[0] + origin[0] + cx] = sample(point);
+                }
+            }
+        }
+        cells.push(egui::Rect::from_min_size(
+            egui::pos2(
+                origin[0] as f32 / size[0] as f32,
+                origin[1] as f32 / size[1] as f32,
+            ),
+            egui::vec2(
+                (particle.width as f32 + 2. * pad) / size[0] as f32,
+                (particle.height as f32 + 2. * pad) / size[1] as f32,
+            ),
+        ));
+    }
+    let sigma = captures_app::preview_chrome::HOVER_MEDIA_BLUR as f32;
+    Some((
+        crate::effects::gaussian_blur(&atlas, [sigma, sigma], [0, 0]),
+        cells,
+    ))
+}
+
 /// The hover treatment's `blur(2px)`: a real Gaussian of [`card_media_image`]
 /// that fades toward the card's edges like the CSS filter.
 pub fn hover_blur_image(media: &egui::ColorImage) -> egui::ColorImage {
@@ -2230,6 +2413,7 @@ mod tests {
                 warning: None,
                 depth_shade: 1.,
                 pile: PileTransform::IDENTITY,
+                arrive_blur: (0., None),
                 depth_blurred: [(0., None); 2],
             },
         );
@@ -2288,6 +2472,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    arrive_blur: (0., None),
                     depth_blurred: [(0., None); 2],
                 },
             );
@@ -2382,6 +2567,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    arrive_blur: (0., None),
                     depth_blurred: [(0., None); 2],
                 },
             );
@@ -2461,6 +2647,7 @@ mod tests {
                         warning: None,
                         depth_shade: 1.,
                         pile: PileTransform::IDENTITY,
+                        arrive_blur: (0., None),
                         depth_blurred: [(0., None); 2],
                     },
                 );
@@ -2539,6 +2726,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    arrive_blur: (0., None),
                     depth_blurred: [(0., None); 2],
                 },
             );
@@ -2850,6 +3038,7 @@ mod tests {
                 warning: Some(preview_chrome::WARNING_CLIPBOARD_UNAVAILABLE),
                 depth_shade: 1.,
                 pile: PileTransform::IDENTITY,
+                arrive_blur: (0., None),
                 depth_blurred: [(0., None); 2],
             },
         );
@@ -2884,6 +3073,7 @@ mod tests {
                     kind,
                     elapsed_ms: elapsed,
                     dust: &particles,
+                    dust_atlas: None,
                     right_anchor: false,
                     reduced_motion: false,
                 },
@@ -3009,6 +3199,7 @@ mod tests {
                     warning: None,
                     depth_shade: 1.,
                     pile: PileTransform::IDENTITY,
+                    arrive_blur: (0., None),
                     depth_blurred: [(0., None); 2],
                 },
             );
@@ -3023,6 +3214,76 @@ mod tests {
             );
             output.textures_delta.clear();
         }
+    }
+
+    /// `thumbnail-arrive` starts at the shipping `blur(3px)` and fades the
+    /// prepared blur out linearly with the radius; a landed card paints none.
+    #[test]
+    fn arrival_blur_fades_the_prepared_radius_out() {
+        assert_eq!(arrive_blur_radius(), 3.);
+        let ctx = egui::Context::default();
+        let blurred = ctx.load_texture(
+            "arrive-blurred",
+            egui::ColorImage::filled([4, 4], Color32::GRAY),
+            Default::default(),
+        );
+        let card = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 160.));
+        for (blur, expected) in [(3., Some(255)), (1.5, Some(128)), (0., None)] {
+            ctx.begin_pass(raw(card, Vec::new()));
+            let ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("arrive-frame"),
+                egui::UiBuilder::new().max_rect(card),
+            );
+            paint_arrive_blur(&ui, card, 12., (blur, Some(&blurred)), 1.);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let alpha = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill_texture_id() == blurred.id() => {
+                    Some(rect.fill.a())
+                }
+                _ => None,
+            });
+            assert_eq!(alpha, expected, "blur {blur}");
+        }
+    }
+
+    /// Shipping's canvas dust: chips are cut sharp, padded and blurred one
+    /// by one, so each fades past its own cut instead of being a hard slice
+    /// of the pre-blurred card.
+    #[test]
+    fn dust_chips_blur_past_their_own_cut() {
+        let particles =
+            captures_app::preview_motion::dust_particles(284., 160., (320., 180.), (22.5, 22.5), 1);
+        let media = egui::ColorImage::filled([568, 320], Color32::WHITE);
+        let (atlas, cells) = dust_atlas(&media, &particles, 12.).unwrap();
+        assert_eq!(cells.len(), particles.len());
+        let [width, height] = atlas.size;
+        let alpha = |index: usize, x: f32, y: f32| {
+            let cell = cells[index];
+            let px = (cell.min.x * width as f32 + x) as usize;
+            let py = (cell.min.y * height as f32 + y) as usize;
+            atlas.pixels[py * width + px].a()
+        };
+        // A chip away from the card's rounded corners.
+        let (index, chip) = particles
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.source_left > 40. && p.source_top > 40. && p.width >= 8.)
+            .unwrap();
+        let pad = DUST_CHIP_BLUR_PAD;
+        let (cx, cy) = (pad + chip.width as f32 / 2., pad + chip.height as f32 / 2.);
+        assert!(alpha(index, cx, cy) > 200, "the chip's middle stays opaque");
+        let edge = alpha(index, pad - 1.5, cy);
+        assert!(
+            edge > 0 && edge < 128,
+            "the blur spills just past the cut: {edge}"
+        );
+        assert_eq!(
+            alpha(index, 0., 0.),
+            0,
+            "the padding's far corner stays clear"
+        );
     }
 
     struct ChromeCase {
@@ -3093,6 +3354,7 @@ mod tests {
                 warning: None,
                 depth_shade: 1.,
                 pile: PileTransform::IDENTITY,
+                arrive_blur: (0., None),
                 depth_blurred: [(0., None); 2],
             },
         );

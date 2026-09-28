@@ -736,6 +736,11 @@ pub enum Transition {
     /// `thumbnail-card-expand` and the minimize run: cards fly between the
     /// list and the compact pile over `0.52s var(--ease-standard)`.
     PreviewStackFly,
+    /// `.thumbnail-stack-compact`: the collapsed pile's hover fan, `transform`,
+    /// `opacity`, `box-shadow` and the media `filter` over `--stack-fan-dur`
+    /// (`var(--dur-3)`) `--stack-fan-ease` (`var(--ease-standard)`), each card
+    /// delayed by [`crate::preview_motion::FAN_STAGGER_MS`] per depth.
+    PreviewStackFan,
     /// `thumbnail-delete-frame-fade`: a dissolving card's shadow and outline
     /// leave over `0.5s cubic-bezier(0.22, 0.1, 0.25, 1)`.
     PreviewDeleteFrameFade,
@@ -759,7 +764,7 @@ const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::Tooltip,
@@ -774,6 +779,7 @@ impl Transition {
         Self::PreviewMinimizeSwap,
         Self::PreviewStackSettle,
         Self::PreviewStackFly,
+        Self::PreviewStackFan,
         Self::PreviewDeleteFrameFade,
         Self::CaptureGuidanceFade,
         Self::CaptureGuidanceSlide,
@@ -795,6 +801,7 @@ impl Transition {
             Self::PreviewMinimizeSwap => "preview_minimize_swap",
             Self::PreviewStackSettle => "preview_stack_settle",
             Self::PreviewStackFly => "preview_stack_fly",
+            Self::PreviewStackFan => "preview_stack_fan",
             Self::PreviewDeleteFrameFade => "preview_delete_frame_fade",
             Self::CaptureGuidanceFade => "capture_guidance_fade",
             Self::CaptureGuidanceSlide => "capture_guidance_slide",
@@ -805,7 +812,9 @@ impl Transition {
         let token = |duration, easing| (Timing::Token(duration), Easing::Token(easing));
         let (duration, easing) = match self {
             Self::SegmentedIndicator => token("dur-4", "ease-standard"),
-            Self::HistoryCardHover | Self::CaptureGuidanceFade => token("dur-3", "ease-standard"),
+            Self::HistoryCardHover | Self::CaptureGuidanceFade | Self::PreviewStackFan => {
+                token("dur-3", "ease-standard")
+            }
             Self::CaptureGuidanceSlide => token("dur-3", "ease-out"),
             Self::Tooltip => token("dur-1", "ease-standard"),
             Self::PreviewMediaFilter => (Timing::Millis(180.), CSS_EASE),

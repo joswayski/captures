@@ -488,6 +488,17 @@ fn card(
     });
     let radius = t.number("r-xl");
     let r = radius as u8;
+    // `box-shadow: var(--shadow-sm)`, easing to `var(--shadow-md)` on hover
+    // with the lift. The two token shadows cross-fade, so their cached masks
+    // serve every frame of the transition.
+    crate::effects::paint_box_shadows(
+        ui.painter(),
+        rect,
+        radius,
+        t.shadow("shadow-sm"),
+        1. - hover,
+    );
+    crate::effects::paint_box_shadows(ui.painter(), rect, radius, t.shadow("shadow-md"), hover);
     let painter = ui.painter_at(rect.expand(3.));
     painter.rect_filled(rect, r, t.color("surface-raised"));
 

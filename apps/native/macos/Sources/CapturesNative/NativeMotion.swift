@@ -276,6 +276,31 @@ enum NativeMotion {
         return max(0, delay + duration - startedAgo)
     }
 
+    /// Plays the `blur` of `name`'s keyframes (CSS `filter: blur()`) on the
+    /// radius of `layer`'s Core Image filter named `filter`, with the same
+    /// timing as [`play(_:onLayer:)`]. Presentation-only like it: the filter's
+    /// model radius is left alone. Returns seconds, or 0 when nothing plays
+    /// (reduced motion, or keyframes without a blur).
+    @discardableResult
+    static func playBlur(_ name: String, onLayer layer: CALayer, filter: String, tokens: Tokens,
+                         key: String, reduced: Bool = NativeMotion.reduceMotion) -> Double {
+        guard !reduced, let spec = catalog.keyframes[name],
+              spec.frames.contains(where: { $0.blur != 0 }) else { return 0 }
+        let delay = spec.delayMs / 1000
+        let duration = seconds(spec.duration, tokens: tokens)
+        guard duration > 0 else { return 0 }
+        let blur = CAKeyframeAnimation(keyPath: "filters.\(filter).inputRadius")
+        blur.values = spec.frames.map { NSNumber(value: $0.blur) }
+        blur.keyTimes = spec.frames.map { NSNumber(value: $0.offset) }
+        blur.timingFunctions = Array(repeating: timingFunction(spec.easing, tokens: tokens),
+                                     count: spec.frames.count - 1)
+        blur.duration = duration
+        blur.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay
+        blur.fillMode = .backwards
+        layer.add(blur, forKey: key)
+        return delay + duration
+    }
+
     /// Removes any playing or held motion, returning the view to rest.
     static func cancel(on view: NSView) {
         view.layer?.removeAnimation(forKey: animationKey)

@@ -260,6 +260,9 @@ CapturesPreviewStack *captures_preview_stack_new_v1(void);
 void captures_preview_stack_free_v1(CapturesPreviewStack *handle);
 bool captures_preview_stack_insert_v1(CapturesPreviewStack *handle, const char *id);
 bool captures_preview_stack_remove_v1(CapturesPreviewStack *handle, const char *id);
+/* Put a removed ID back at index (clamped), as a failed exit action does.
+ * False for a present/invalid ID. */
+bool captures_preview_stack_restore_v1(CapturesPreviewStack *handle, const char *id, size_t index);
 size_t captures_preview_stack_count_v1(const CapturesPreviewStack *handle);
 /* Unclamped logical document height, including the control gutter; zero empty. */
 double captures_preview_stack_height_v1(const CapturesPreviewStack *handle);
@@ -296,6 +299,9 @@ bool captures_preview_pile_pose_v1(const char *id, size_t depth, bool hovered,
 bool captures_preview_pile_projection_v1(const char *id, size_t depth, bool hovered,
     double gravity, bool top_anchor, double output[9]);
 double captures_preview_pile_media_blur_v1(size_t depth, bool hovered);
+/* Shipping hover-fan stagger: milliseconds a pile card at depth waits before
+ * its fan transition (transform, shade and glow; media blur when media). */
+double captures_preview_fan_delay_ms_v1(size_t depth, bool media);
 
 /* Pure compact-card shade policy. Paint glass-strong-solid at this opacity.
  * Depth zero is undimmed. Expanded cards never use this overlay. */

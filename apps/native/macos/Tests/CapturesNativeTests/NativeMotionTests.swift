@@ -39,6 +39,21 @@ final class NativeMotionTests: XCTestCase {
         XCTAssertEqual(saved.restOffsets.last, 0.86, accuracy: 1e-9)
     }
 
+    func testArrivalBlurAnimatesTheNamedFilterRadiusFromThreePoints() throws {
+        let layer = CALayer()
+        let seconds = NativeMotion.playBlur("preview_card_arrive", onLayer: layer, filter: "arrive",
+                                            tokens: tokens, key: "arrive-blur", reduced: false)
+        XCTAssertEqual(seconds, 0.52, accuracy: 1e-6)
+        let blur = try XCTUnwrap(layer.animation(forKey: "arrive-blur") as? CAKeyframeAnimation)
+        XCTAssertEqual(blur.keyPath, "filters.arrive.inputRadius")
+        XCTAssertEqual(blur.values as? [NSNumber], [3, 0])
+        XCTAssertEqual(NativeMotion.playBlur("preview_card_arrive", onLayer: CALayer(), filter: "arrive",
+                                             tokens: tokens, key: "arrive-blur", reduced: true), 0)
+        XCTAssertEqual(NativeMotion.playBlur("update_notice_in", onLayer: CALayer(), filter: "arrive",
+                                             tokens: tokens, key: "arrive-blur", reduced: false), 0,
+                       "keyframes without a blur play nothing")
+    }
+
     func testTokensResolveDurationsAndEasings() {
         XCTAssertEqual(NativeMotion.seconds(.token("dur-4"), tokens: tokens), 0.28, accuracy: 1e-9)
         XCTAssertEqual(NativeMotion.seconds(.millis(520), tokens: tokens), 0.52, accuracy: 1e-9)

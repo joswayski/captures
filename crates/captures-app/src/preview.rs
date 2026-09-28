@@ -78,6 +78,17 @@ impl PreviewStack {
         true
     }
 
+    /// Put a removed card back at `index` (clamped), as shipping unlocks a
+    /// card whose exit action failed. A card already present stays put.
+    pub fn restore(&mut self, id: String, index: usize) -> bool {
+        if id.is_empty() || self.ids.contains(&id) {
+            return false;
+        }
+        let index = index.min(self.ids.len());
+        self.ids.insert(index, id);
+        true
+    }
+
     pub fn remove(&mut self, id: &str) -> bool {
         let before = self.ids.len();
         self.ids.retain(|existing| existing != id);
@@ -979,6 +990,28 @@ mod tests {
         assert_eq!(preview_drag_outcome(true, PreviewStack), Reject);
         assert_eq!(preview_drag_outcome(true, External), Dismiss);
         assert_eq!(PREVIEW_DROP_REJECT_MS, 420);
+    }
+
+    #[test]
+    fn a_failed_exit_restores_the_card_to_its_slot() {
+        let mut stack = PreviewStack::default();
+        for id in ["older", "middle", "latest"] {
+            assert!(stack.insert(id.into()));
+        }
+        assert!(stack.remove("middle"));
+        assert!(stack.restore("middle".into(), 1));
+        assert_eq!(stack.ids(), &["older", "middle", "latest"]);
+        assert!(
+            !stack.restore("middle".into(), 0),
+            "a present card stays put"
+        );
+        assert!(!stack.restore(String::new(), 0));
+        assert!(stack.remove("latest"));
+        assert!(
+            stack.restore("latest".into(), 9),
+            "the slot clamps to the end"
+        );
+        assert_eq!(stack.ids(), &["older", "middle", "latest"]);
     }
 
     #[test]
