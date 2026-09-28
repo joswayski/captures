@@ -1286,7 +1286,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private(set) var expandCanvasButton: CaptureButton!
     /// Remaining files from one drop; each imports after the previous one.
     private var pendingDropURLs: [URL] = []
-    private let rotationSnap = NSTextField()
+    /// Shipping `NumberInput`s: Shift rotation snap (1–180), New text size and
+    /// the selected text's Size (8–512), with steppers and arrow keys.
+    private let rotationSnap = TokenNumberField()
     private var rotationSnapLabel: NSTextField!
     /// Shipping's rotation snap hint, with the current increment.
     private var rotationSnapHint: NSTextField!
@@ -1404,7 +1406,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var drawHelper: NSTextField!
     private var drawIntro: NSTextField!
     private let createTextPreset = ClosurePopUpButton(frame: .zero, pullsDown: false)
-    private let createTextSize = NSTextField()
+    private let createTextSize = TokenNumberField()
     private var createTextControls: [NSView] = []
     private var createTextDefaultsPublished = false
     private let drawingStroke = NSButton(checkboxWithTitle: "Stroke", target: nil, action: nil)
@@ -1427,7 +1429,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var drawingShadowSettings: EditorDropShadowFields!
     private var drawingShadowCustomized = false
     private let textEditor = NSTextView()
-    private let textSize = NSTextField()
+    private let textSize = TokenNumberField()
     private var textColor: ColorSwatchRow!
     private let textFamily = ClosurePopUpButton(frame: .zero, pullsDown: false)
     private var textFormat: EditorTextFormatButtons!
@@ -2775,6 +2777,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                   label: "New text size", parent: content)
         createTextSize.stringValue = format(24)
         createTextSize.delegate = self
+        createTextSize.tokens = tokens
+        createTextSize.minimum = { 8 }; createTextSize.maximum = { 512 }
+        createTextSize.stepped = { [weak self] _ in self?.refreshDefaultShadowFields() }
         // Like shipping, new text has no Color row: it takes the drawing Color.
         createTextControls = [styleLabel, createTextPreset, sizeLabel, createTextSize]
     }
@@ -2833,6 +2838,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         configure(textSize, frame: NSRect(x: Self.pairX, y: 550, width: Self.pairWidth, height: 32),
                   label: "Text size", parent: content)
         textSize.formatter = nil; textSize.stringValue = "32"; textSize.delegate = self
+        textSize.tokens = tokens
+        textSize.minimum = { 8 }; textSize.maximum = { 512 }
+        textSize.stepped = { [weak self] field in
+            self?.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        }
         // Shipping `.screenshot-format-buttons`: B, I and the alignment icons.
         let format = EditorTextFormatButtons(tokens: tokens)
         format.frame = NSRect(x: 0, y: 588, width: width, height: 32)
@@ -3175,6 +3185,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         rotationSnap.toolTip = "Hold Shift while dragging the rotate handle. Does not edit the document."
         rotationSnap.delegate = self
         rotationSnap.target = self; rotationSnap.action = #selector(rotationSnapChanged)
+        rotationSnap.tokens = tokens
+        rotationSnap.minimum = { 1 }; rotationSnap.maximum = { 180 }
+        rotationSnap.stepped = { [weak self] _ in self?.rotationSnapChanged() }
         annotationControls = EditorAnnotationControls(tokens: tokens, formatter: editorNumberFormatter,
                                                       width: Self.contentWidth)
         // Shipping applies style changes live; a burst in one field is one undo step.
@@ -4021,6 +4034,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// Escape in the inline rename field cancels the rename.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        // Shipping `NumberInput` steps on ArrowUp/ArrowDown while editing.
+        if let field = control as? TokenNumberField {
+            if commandSelector == #selector(NSResponder.moveUp(_:)) { field.step(up: true); return true }
+            if commandSelector == #selector(NSResponder.moveDown(_:)) { field.step(up: false); return true }
+            return false
+        }
         guard control.identifier == Self.layerRenameIdentifier,
               commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
         finishLayerRename(commit: false)
@@ -6690,7 +6709,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 item.image = TextStyleChip.image(for: preset, tokens: tokens)
             }
         }
-        for field in [layerWidth, layerHeight, layerX, layerY] { field.tokens = tokens }
+        for field in [layerWidth, layerHeight, layerX, layerY, rotationSnap, createTextSize, textSize] {
+            field.tokens = tokens
+        }
         for section in layerMenuSections { section.title.textColor = tokens.color("text-subtle") }
         let menuControls: [CaptureButton?] = [rotateLeftButton, rotateRightButton, flipHorizontalButton,
                                               flipVerticalButton, bringFrontButton, sendBackButton,

@@ -600,7 +600,9 @@ width and Size 2–40 px, Opacity 0–100%, shadow Opacity 0–100% and Blur 0�
 check rows and one shared `EditorDropShadowFields` (Shadow color swatches, the two
 sliders and the X/Y offset `TokenNumberField` pair, ±500 whole pixels committed on
 Enter, leaving the field or a stepper, like shipping's `commitOffset`); unchanged
-settings keep their authored precision. Drawing tools open with the grouped-shape
+settings keep their authored precision. Shift rotation snap (1–180), New text size and
+the selected text's Size (8–512) are `TokenNumberField` NumberInputs whose steppers and
+ArrowUp/ArrowDown keys step like the layer Width/Height/X/Y fields. Drawing tools open with the grouped-shape
 picker (`EditorShapePicker`, three 40-point columns) and the rail's Shapes button
 opens the three-column flyout. Its Crop shows the Aspect ratio select, then the
 dragged selection's read-only Width/Height with Clear and Apply crop, or the drag
