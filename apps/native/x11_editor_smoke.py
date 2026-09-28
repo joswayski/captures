@@ -2054,14 +2054,26 @@ def main():
                 assert not draft.exists() and (artifact / "capture.png").read_bytes() == original
                 shot(editor, f"output-size-{name}-saved")
 
+            def output_size(index):
+                # The token Output size listbox opens below with little room
+                # and scrolls: its described rows are 40 px apart, and End
+                # reaches the clipped Custom row.
+                setting_click(54)
+                if index < 3:
+                    x, y = setting_point(54)
+                    click(editor, x, y + 40 + 40 * index)
+                else:
+                    for key in ("End", "Return"):
+                        run("xdotool", "key", key, "sleep", ".2")
+
             setting_click(54)
             shot(editor, "output-size-menu")
             run("xdotool", "key", "Escape", "sleep", ".2")
-            setting_menu(54, 1, 4)  # 75%.
+            output_size(1)  # 75%.
             size_export("75-percent", "480x270", section="geometry")
-            setting_menu(54, 2, 4)  # 50%.
+            output_size(2)  # 50%.
             size_export("50-percent", "320x180", section="layers")
-            setting_menu(54, 3, 4)  # Custom starts from 640x360, locked.
+            output_size(3)  # Custom starts from 640x360, locked.
             setting_field(237, 96)
             size_export("locked", "96x54", section="draw")
             setting_click(372)  # Unlock aspect.
