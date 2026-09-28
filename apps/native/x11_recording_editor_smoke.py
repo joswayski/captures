@@ -319,6 +319,10 @@ def main():
         # Shipping RangeSlider (0-200%, whole percents): a press focuses the
         # track, then Home or End, Page (10%) and arrow (1%) keys set the exact
         # value. Paced keys keep every press under software-GL frame times.
+        # Measure only once live edits settle: the automatic comparison that
+        # follows each applied edit changes the preview caption's height, so
+        # a rect read while Working can miss the track once it finishes.
+        idle(window)
         x0, y0, x1, y1 = visible_rect(window, f"{track} volume")
         click(window, (x0 + x1) // 2, (y0 + y1) // 2)
         edge, base = ("End", 200) if value > 100 else ("Home", 0)
