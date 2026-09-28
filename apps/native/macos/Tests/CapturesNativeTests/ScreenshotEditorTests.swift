@@ -5771,9 +5771,12 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            let scroll = try XCTUnwrap(futureColor.enclosingScrollView)
+            let scroll = try XCTUnwrap(future.enclosingScrollView)
             // The 82pt Properties area below Layers scrolls to each carried value.
-            for control in [future, futureSize, futureColor] as [NSView] {
+            // Shipping's Text section has no Color row: new text takes the
+            // drawing Color, which keeps its value while hidden.
+            XCTAssertEqual(futureColor.selectedHex, "#ff3b5c")
+            for control in [future, futureSize] as [NSView] {
                 XCTAssertFalse(control.isHiddenOrHasHiddenAncestor)
                 control.scrollToVisible(control.bounds)
                 controller.root.layoutSubtreeIfNeeded()
@@ -6010,7 +6013,9 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = NSApplication.shared
         var original = textLayer(id: "copy", text: "accepted")
         original["outlined"] = true
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
+        // Style presets are offered only for pinned font families.
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original],
+            fonts: ["sans": "Liberation Sans"]))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
