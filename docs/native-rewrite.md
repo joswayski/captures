@@ -1644,7 +1644,8 @@ tilt from the shipping values instead of approximations:
   `--thumbnail-card-shadow` (read from the shipping rule). Cards (expanded, pile and
   exiting), card icon buttons (`--shadow-sm`), main actions (`--shadow-md`), the
   editor control and pill, stack toolbar buttons, overflow cues (`--glass-shadow`)
-  and the capture guidance chip draw them. AppKit uses one masked shadow sublayer
+  and the capture guidance chip draw them (AppKit's present editor pill keeps only
+  its accent glow, without `--shadow-sm`). AppKit uses one masked shadow sublayer
   per layer (`shadowRadius` = blur / 2, clipped outside the element like CSS);
   wgpu draws cached Gaussian masks (σ = blur / 2) cut out under the element and
   mapped through the card's transform. The hovered or pressed pile adds shipping's
