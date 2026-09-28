@@ -19,7 +19,7 @@ mod work_area;
 #[cfg(target_os = "windows")]
 pub use work_area::windows_monitor_work_area;
 
-pub use motion::prefers_reduced_motion;
+pub use motion::{prefers_reduced_motion, watch_reduced_motion};
 
 /// Returns whether the process belongs to an active, unlocked desktop session.
 pub fn capture_session_available() -> bool {

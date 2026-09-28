@@ -1322,6 +1322,77 @@ fn shape_for_key(key: &str) -> DrawShape {
     }
 }
 
+/// Shipping `.screenshot-shape-picker` in grouped-shape Properties: three
+/// columns of 40 pt icon buttons, `--s-2` apart; the current shape is
+/// accent-filled. Choosing one switches the tool like the flyout.
+pub(super) fn shape_picker(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
+    let gap = tokens.number("s-2");
+    let height = 40.;
+    let rows = model::SHAPE_TOOLS.len().div_ceil(3);
+    let (area, _) = ui.allocate_exact_size(
+        vec2(
+            ui.available_width(),
+            rows as f32 * height + (rows as f32 - 1.) * gap,
+        ),
+        Sense::hover(),
+    );
+    let width = (area.width() - 2. * gap) / 3.;
+    let mut chosen = None;
+    for (index, tool) in model::SHAPE_TOOLS.iter().enumerate() {
+        let rect = egui::Rect::from_min_size(
+            area.min
+                + vec2(
+                    (index % 3) as f32 * (width + gap),
+                    (index / 3) as f32 * (height + gap),
+                ),
+            vec2(width, height),
+        );
+        let response = ui.interact(
+            rect,
+            ui.scope_id().with(("shape-picker", tool.key)),
+            Sense::click(),
+        );
+        let shape = shape_for_key(tool.key);
+        let active = view.draw_shape == shape;
+        let hovered = response.hovered();
+        let (fill, border, ink) = if active {
+            (
+                tokens.color("theme-accent"),
+                tokens.color("theme-accent"),
+                tokens.color("theme-accent-ink"),
+            )
+        } else {
+            (
+                tokens.color(if hovered { "control-hover" } else { "control" }),
+                tokens.color("border-subtle"),
+                tokens.color(if hovered { "text" } else { "text-muted" }),
+            )
+        };
+        ui.painter().rect(
+            rect,
+            tokens.number("r-sm"),
+            fill,
+            Stroke::new(1., border),
+            StrokeKind::Inside,
+        );
+        icon(ui.painter(), tool.icon, rect.center(), 18., 1.8, ink);
+        if response.has_focus() {
+            crate::primitives::focus_ring(ui, tokens, rect, tokens.number("r-sm"));
+        }
+        let name = tool.label;
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, name)
+        });
+        let response = response.on_hover_text(tool.name());
+        if response.clicked() && !active {
+            chosen = Some(shape);
+        }
+    }
+    if let Some(shape) = chosen {
+        view.activate_tool(Section::Draw, Some(shape));
+    }
+}
+
 /// Shipping `.screenshot-tool-flyout`: a three-column grid of 44 px shape
 /// buttons beside the rail. Returns whether it is open.
 fn shapes_flyout(
@@ -1672,6 +1743,7 @@ pub(super) fn primary_action(
     ui: &mut egui::Ui,
     tokens: &Tokens,
     label: &str,
+    width: f32,
     enabled: bool,
     pulse: bool,
 ) -> egui::Response {
@@ -1685,7 +1757,7 @@ pub(super) fn primary_action(
     .fill(fill)
     .stroke(Stroke::NONE)
     .corner_radius(tokens.number("r-md") as u8)
-    .min_size(vec2(0., tokens.number("h-md")));
+    .min_size(vec2(width, tokens.number("h-md")));
     let response = ui.add_enabled(enabled, button);
     if enabled && response.hovered() {
         ui.painter().rect_filled(

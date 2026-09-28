@@ -342,6 +342,20 @@ struct SelectMemory {
     opened_at: Option<f64>,
 }
 
+/// Whether a raw pointer press at `pos` belongs to gestures drawn in `ui`:
+/// inside its clip and not on an interactable layer above it. Custom gestures
+/// that read `PointerButton` events (instead of a widget `Response`, which egui
+/// already hit-tests by layer) must check this, so a press on an open
+/// [`Select`] listbox, a popover or any other foreground area over them picks
+/// that control instead of also starting a gesture beneath it.
+pub fn pressed_on_layer(ui: &egui::Ui, pos: egui::Pos2) -> bool {
+    ui.clip_rect().contains(pos)
+        && ui
+            .ctx()
+            .layer_id_at(pos)
+            .is_none_or(|layer| layer == ui.layer_id())
+}
+
 /// Shipping `CustomSelect`: a field-style trigger and a listbox with option
 /// descriptions. The focused trigger (or an open listbox) takes ArrowUp/Down,
 /// Home/End, Enter/Space and Escape through `captures_app::controls::select`.
@@ -849,6 +863,19 @@ impl<'a> Select<'a> {
             memory.menu = egui::Vec2::ZERO;
             memory.opened_at = None;
         }
+        // The listbox is our own foreground area, so mirror it into egui's popup
+        // slot: surfaces that gate pointer gestures and shortcuts on
+        // `Popup::is_any_open` treat an open select like any other menu. Never
+        // displace a real popup (it already makes `is_any_open` true).
+        let listbox = id.with("listbox");
+        let ctx = ui.ctx();
+        if state.open {
+            if !egui::Popup::is_any_open(ctx) || egui::Popup::is_id_open(ctx, listbox) {
+                egui::Popup::open_id(ctx, listbox);
+            }
+        } else if egui::Popup::is_id_open(ctx, listbox) {
+            egui::Popup::close_id(ctx, listbox);
+        }
         memory.state = state;
         ui.data_mut(|data| data.insert_temp(memory_id, memory));
         SelectOutput {
@@ -938,12 +965,12 @@ impl<'a> NumberInput<'a> {
             egui::Sense::hover(),
         );
         let focused_before = ui.memory(|memory| memory.has_focus(text_id));
-        let mut buffer = if focused_before {
-            ui.data(|data| data.get_temp::<String>(buffer_id))
-                .unwrap_or_else(|| number_text(*value, self.step))
-        } else {
-            number_text(*value, self.step)
-        };
+        // The typed text lives until the frame after focus leaves (it is
+        // dropped below once unfocused), so the losing-focus commit parses
+        // what was typed (37.5), not its step-formatted display (38).
+        let mut buffer = ui
+            .data(|data| data.get_temp::<String>(buffer_id))
+            .unwrap_or_else(|| number_text(*value, self.step));
         let mut changed = false;
         let mut set = |value: &mut N, next: f64| {
             let next = N::from_f64(next);
@@ -1035,7 +1062,9 @@ impl<'a> NumberInput<'a> {
                 );
             });
             focus_ring(ui, t, rect, radius);
-        } else {
+        } else if !focused_before {
+            // Kept for one frame after focus leaves: egui reports
+            // `lost_focus` on the following frame.
             ui.data_mut(|data| data.remove::<String>(buffer_id));
         }
 
@@ -1630,6 +1659,10 @@ mod tests {
             rows[0].top() > trigger.bottom(),
             "the listbox opens below the trigger"
         );
+        assert!(
+            egui::Popup::is_any_open(&ctx),
+            "an open listbox gates surfaces like any egui popup"
+        );
         let beta = rows[1].center();
         run(
             vec![egui::Event::PointerMoved(beta), press(beta, true)],
@@ -1637,6 +1670,10 @@ mod tests {
         );
         run(vec![press(beta, false)], &mut value);
         assert_eq!(value, 'b');
+        assert!(
+            !egui::Popup::is_any_open(&ctx),
+            "choosing releases the popup"
+        );
         run(
             vec![egui::Event::PointerMoved(center), press(center, true)],
             &mut value,
@@ -1652,7 +1689,45 @@ mod tests {
         run(vec![press(outside, false)], &mut value);
         let (_, rows) = run(vec![], &mut value);
         assert!(rows.is_empty(), "a press outside closes the listbox");
+        assert!(!egui::Popup::is_any_open(&ctx));
         assert_eq!(value, 'b');
+
+        // Opening never displaces a real egui popup that is already open.
+        let menu = egui::Id::unique("real-menu");
+        egui::Popup::open_id(&ctx, menu);
+        run(
+            vec![egui::Event::PointerMoved(center), press(center, true)],
+            &mut value,
+        );
+        egui::Popup::open_id(&ctx, menu);
+        run(vec![press(center, false)], &mut value);
+        egui::Popup::open_id(&ctx, menu);
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(rows.len(), 2);
+        assert!(egui::Popup::is_id_open(&ctx, menu));
+    }
+
+    #[test]
+    fn a_press_on_a_foreground_area_is_not_on_the_layer_beneath() {
+        let (ctx, _) = setup();
+        let covered = egui::pos2(100., 100.);
+        let open = egui::pos2(300., 300.);
+        let mut seen = Vec::new();
+        // A new area is invisible for its first pass.
+        for _ in 0..3 {
+            frame(&ctx, vec![], |ui| {
+                seen = [covered, open, egui::pos2(-10., -10.)]
+                    .map(|pos| pressed_on_layer(ui, pos))
+                    .to_vec();
+                egui::Area::new(egui::Id::unique("over"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(covered - egui::vec2(20., 20.))
+                    .show(ui.ctx(), |ui| {
+                        ui.allocate_exact_size(egui::vec2(40., 40.), egui::Sense::click());
+                    });
+            });
+        }
+        assert_eq!(seen, [false, true, false]);
     }
 
     #[test]
@@ -1693,6 +1768,48 @@ mod tests {
         run(vec![key(egui::Key::ArrowDown)], &mut value);
         run(vec![key(egui::Key::ArrowDown)], &mut value);
         assert_eq!(value, 8, "ArrowDown steps the focused field");
+    }
+
+    #[test]
+    fn number_input_keeps_a_typed_decimal_when_focus_leaves() {
+        let (ctx, t) = setup();
+        let mut value = 24.;
+        let run = |events: Vec<egui::Event>, value: &mut f64| {
+            let mut field = Rect::NOTHING;
+            frame(&ctx, events, |ui| {
+                field = NumberInput::new("test-decimal", "New text size", 120.)
+                    .range(8. ..=512.)
+                    .show(ui, &t, value)
+                    .rect;
+            });
+            field
+        };
+        let field = run(vec![], &mut value);
+        let text = egui::pos2(field.left() + 20., field.center().y);
+        run(
+            vec![egui::Event::PointerMoved(text), press(text, true)],
+            &mut value,
+        );
+        run(vec![press(text, false)], &mut value);
+        run(
+            vec![
+                // End, then clear "24" and type the decimal.
+                key(egui::Key::End),
+                key(egui::Key::Backspace),
+                key(egui::Key::Backspace),
+                egui::Event::Text("37.5".into()),
+            ],
+            &mut value,
+        );
+        assert_eq!(value, 37.5);
+        run(vec![key(egui::Key::Enter)], &mut value);
+        for _ in 0..3 {
+            run(vec![], &mut value);
+        }
+        assert_eq!(
+            value, 37.5,
+            "committing on blur parses the typed text, not the step-rounded display"
+        );
     }
 
     #[test]

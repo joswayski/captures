@@ -4,41 +4,32 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
-    func testReplaceOriginalConfirmationCancelFailureAndRebase() throws {
+    func testReplaceOriginalSavesWithoutConfirmationCancelFailureAndRebase() throws {
         _ = NSApplication.shared
         let path = "/Exports/original.mp4"
         let initial = try presentation(position: 400, revision: 1, originalSavePath: path)
         let rebased = try presentation(position: 0, revision: 2)
         let worker = FakeRecordingEditorWorker(presentation: initial)
-        var decision: ((Bool) -> Void)?
-        var confirmedPath: String?
         var refreshed: [String] = []
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
-            worker: worker, didReplaceOriginal: { refreshed.append($0) },
-            confirmReplaceOriginal: { _, path, completion in
-                confirmedPath = path; decision = completion
-            })
+            worker: worker, didReplaceOriginal: { refreshed.append($0) })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(savedPath: "/Exports/stale.mp4"), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        let replace = try button("Replace original…", in: controller.root)
+        // Shipping's Save overwrites a same-format original at once.
+        let replace = try button("Replace original", in: controller.root)
         XCTAssertTrue(replace.isEnabled)
         replace.performClick(nil)
-        XCTAssertEqual(confirmedPath, path, "confirm the opened session, not a stale History-list hint")
-        XCTAssertFalse(replace.isEnabled)
-        XCTAssertFalse(controller.windowShouldClose(controller.window))
-        decision?(false)
-        XCTAssertEqual(worker.replaceCalls, 0)
-        XCTAssertTrue(replace.isEnabled)
-
-        replace.performClick(nil); decision?(true)
-        XCTAssertEqual(worker.replaceCalls, 1)
+        XCTAssertEqual(worker.replaceCalls, 1, "Save replaces without a confirmation")
         XCTAssertFalse(controller.dirty)
         XCTAssertTrue(replace.isEnabled, "ordinary failure preserves accepted edits")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("replace unavailable") })
 
         worker.deferReplace = true
-        replace.performClick(nil); decision?(true)
+        replace.performClick(nil)
+        XCTAssertEqual(worker.replaceCalls, 2)
+        XCTAssertFalse(replace.isEnabled)
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
         let cancel = try button("Cancel replacement", in: controller.root)
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.observedReplaceCancel).isCancelled)
@@ -49,16 +40,97 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(worker.thumbnailCalls, thumbnailCount + 1)
         XCTAssertFalse(controller.dirty)
         XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 0)
-        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Source thumbnails ready") })
-        XCTAssertTrue(replace.isEnabled)
+        XCTAssertTrue(labels(in: controller.root).contains { $0 == "Video saved — 1.0 KB." },
+                      "shipping's save toast outlasts the refreshed thumbnails")
+        XCTAssertFalse(replace.isEnabled, "Save stays disabled until anything changes, as in shipping")
+        XCTAssertFalse(try button("Show in Folder", in: controller.root).isHidden)
+    }
+
+    func testShippingSaveNamesReplaceByDefaultAndWebMReportsTheShippingError() throws {
+        _ = NSApplication.shared
+        let path = "/Exports/Clip.mp4"
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(originalSavePath: path))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
+                           outputDirectory: "/Elsewhere")
+        // Shipping's footer starts on the original's folder and name.
+        let filename = try field("Saved filename", in: controller.root)
+        XCTAssertEqual(filename.stringValue, "Clip")
+        XCTAssertEqual(try field("Recording destination", in: controller.root).stringValue, "/Exports")
+        XCTAssertFalse(controller.savingCopy)
+        let saveAsNew = try saveAsNewSwitch(in: controller.root)
+        saveAsNew.performClick(nil)
+        XCTAssertTrue(controller.savingCopy)
+        XCTAssertEqual(filename.stringValue, "Clip-edited")
+        saveAsNew.performClick(nil)
+        XCTAssertFalse(controller.savingCopy)
+        XCTAssertEqual(filename.stringValue, "Clip")
+
+        let format = try popup("Recording export format", in: controller.root)
+        XCTAssertEqual(format.itemTitles, [".mp4", ".gif", ".webm"])
+        choose(format, ".webm")
+        XCTAssertTrue(controller.savingCopy, "another format always saves a new file")
+        XCTAssertFalse(saveAsNew.isEnabled)
+        XCTAssertEqual(filename.stringValue, "Clip-edited")
+        XCTAssertFalse(controller.dirty, "WebM keeps the accepted MP4 preview settings")
+        XCTAssertEqual(try field("Recording size estimate", in: controller.root).stringValue, "—")
+        XCTAssertFalse(controller.canEstimate)
+        try button("Save new copy", in: controller.root).performClick(nil)
+        XCTAssertTrue(worker.saves.isEmpty)
+        XCTAssertTrue(labels(in: controller.root).contains {
+            $0 == "media processing failed: WebM export is not available in the bundled media tools"
+        }, "shipping's bundled FFmpeg cannot encode WebM")
+        choose(format, ".mp4")
+        XCTAssertTrue(controller.savingCopy, "shipping keeps Save as new file on after a format change")
+        XCTAssertEqual(filename.stringValue, "Clip-edited")
+    }
+
+    func testLiveEditsApplyAfterSettlingAndSupersedeTheBackgroundEstimate() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        worker.deferEstimate = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        XCTAssertFalse(descendants(in: controller.root).contains {
+            ["Apply edits", "Estimate size"].contains(($0 as? CaptureButton)?.title ?? "")
+        }, "shipping has no Apply edits or Estimate size button")
+        let label = try field("Recording size estimate", in: controller.root)
+        XCTAssertEqual(label.stringValue, "—")
+        // Shipping's debounced background estimate starts on its own.
+        pump { label.stringValue == "Estimating…" }
+        let format = try popup("Recording export format", in: controller.root)
+        XCTAssertTrue(format.isEnabled, "a background estimate never holds edits")
+        worker.requestResult = .success(try presentation(revision: 1,
+            output: NativeRecordingDimensions(width: 320, height: 180),
+            exportFormat: "gif", exportQuality: "highest", framesPerSecond: 15,
+            gifMaxColors: 256))
+        choose(format, ".gif")
+        XCTAssertTrue(worker.requests.isEmpty, "the edit waits for the superseded estimate")
+        worker.completeEstimate(.failure(AppBridgeError.backend("operation cancelled")))
+        XCTAssertEqual(label.stringValue, "—", "a superseded estimate is silent")
+        XCTAssertFalse(labels(in: controller.root).contains { $0.contains("operation cancelled") })
+        pump { worker.requests.count == 1 }
+        let export = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
+        XCTAssertEqual(export["format"] as? String, "gif")
+        XCTAssertTrue(controller.dirty)
+        XCTAssertFalse(controller.canApplyEdits)
+        // The new accepted settings estimate again after the debounce.
+        worker.deferEstimate = false
+        worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 4_567, exact: true))
+        pump { label.stringValue == "4.6 KB" }
+        XCTAssertEqual(worker.requests.count, 1, "an applied edit is not applied again")
     }
 
     func testReplaceOriginalEligibilityTerminalFailureAndNewSession() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
-        var decision: ((Bool) -> Void)?
         let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
-            worker: worker, confirmReplaceOriginal: { _, _, completion in decision = completion })
+            worker: worker)
         defer { controller.window.orderOut(nil) }
         let save = try button("Save", in: controller.root)
         let saveAsNew = try saveAsNewSwitch(in: controller.root)
@@ -81,12 +153,12 @@ final class RecordingEditorTests: XCTestCase {
                            historyRoot: "/History", outputDirectory: "/Exports")
         // Shipping's default for a same-format original: Save replaces it.
         XCTAssertFalse(controller.savingCopy)
-        XCTAssertEqual(save.accessibilityLabel(), "Replace original…")
+        XCTAssertEqual(save.accessibilityLabel(), "Replace original")
         XCTAssertEqual(saveAsNew.state, .off); XCTAssertTrue(saveAsNew.isEnabled)
         XCTAssertTrue(save.isEnabled)
         worker.replaceResult = .failure(RecordingReplaceError(message: "compensation failed",
                                                               requiresReopen: true))
-        save.performClick(nil); decision?(true)
+        save.performClick(nil)
         XCTAssertFalse(save.isEnabled)
         XCTAssertFalse(try button("Play", in: controller.root).isEnabled)
         XCTAssertTrue(controller.savingCopy, "an uncertain replacement never offers another")
@@ -109,7 +181,7 @@ final class RecordingEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: recordingArtifact(savedPath: "/Exports/original.mp4"),
                                historyRoot: "/History", outputDirectory: "/Exports")
-            XCTAssertTrue(try button("Replace original…", in: controller.root).isEnabled)
+            XCTAssertTrue(try button("Replace original", in: controller.root).isEnabled)
             try render(controller.root, name: "recording-editor-replace-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "recording-editor-replace-minimum-\(appearance)")
@@ -129,11 +201,11 @@ final class RecordingEditorTests: XCTestCase {
         let worker = FakeRecordingEditorWorker(presentation: initial)
         worker.replaceResult = .success(RecordingReplaceResult(path: path, presentation: rebased))
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
-            worker: worker, confirmReplaceOriginal: { _, _, completion in completion(true) })
+            worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        let replace = try button("Replace original…", in: controller.root)
+        let replace = try button("Replace original", in: controller.root)
         XCTAssertTrue(replace.isEnabled, "the initial accepted GIF must be clean")
         replace.performClick(nil)
         XCTAssertEqual(worker.replaceCalls, 1)
@@ -166,9 +238,8 @@ final class RecordingEditorTests: XCTestCase {
         outputWidth.stringValue = "1000"; outputHeight.stringValue = "300"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: outputWidth))
-        let apply = try button("Apply edits", in: controller.root)
         worker.requestResult = .failure(AppBridgeError.backend("keep staged geometry"))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         var edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_000)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 300,
@@ -177,20 +248,20 @@ final class RecordingEditorTests: XCTestCase {
         let width = try popup("GIF maximum width", in: controller.root)
         width.selectItem(withTitle: "320 px")
         _ = width.sendAction(width.action, to: width.target)
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 96)
         width.selectItem(withTitle: "Original")
         _ = width.sendAction(width.action, to: width.target)
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_000)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 300)
 
         outputMode.selectItem(withTitle: "720p maximum")
         _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1_280)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 720,
@@ -503,14 +574,13 @@ final class RecordingEditorTests: XCTestCase {
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
-        let estimate = try button("Estimate size", in: controller.root)
         let trimStart = try field("Trim start milliseconds", in: controller.root)
 
         play.performClick(nil)
         XCTAssertEqual(worker.playbackStarts, [400])
         XCTAssertEqual(play.title, "Pause")
         XCTAssertFalse(seek.isEnabled); XCTAssertFalse(save.isEnabled)
-        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(trimStart.isEnabled)
+        XCTAssertFalse(controller.canEstimate); XCTAssertFalse(trimStart.isEnabled)
         XCTAssertFalse(controller.dirty)
         worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 650,
                                                          image: try solidImage(red: 20, green: 210, blue: 30)))
@@ -605,10 +675,9 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let loop = try checkbox("Loop recording preview", in: controller.root)
         let play = try button("Play", in: controller.root)
-        let estimate = try button("Estimate size", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
         loop.performClick(nil)
-        XCTAssertFalse(controller.dirty); XCTAssertTrue(estimate.isEnabled); XCTAssertTrue(save.isEnabled)
+        XCTAssertFalse(controller.dirty); XCTAssertTrue(controller.canEstimate); XCTAssertTrue(save.isEnabled)
 
         play.performClick(nil)
         worker.completePlayback(.success(.empty))
@@ -628,13 +697,13 @@ final class RecordingEditorTests: XCTestCase {
                                                      object: trimEnd))
         worker.requestResult = .success(try presentation(start: 200, end: 1_600,
                                                          position: 400, revision: 1))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(loop.state, .on)
         let acceptedDirty = controller.dirty
         let requestCount = worker.requests.count
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_500_000,
                                                                   exact: false))
-        estimate.performClick(nil)
+        controller.estimateSizeNow()
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("≈") && $0.contains("MB") })
         loop.performClick(nil); loop.performClick(nil)
         XCTAssertEqual(controller.dirty, acceptedDirty,
@@ -644,7 +713,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("≈") && $0.contains("MB") },
                       "Loop leaves the accepted-settings estimate intact")
         XCTAssertTrue(worker.saves.isEmpty); XCTAssertEqual(worker.openCount, 1)
-        XCTAssertTrue(estimate.isEnabled); XCTAssertTrue(save.isEnabled)
+        XCTAssertTrue(controller.canEstimate); XCTAssertTrue(save.isEnabled)
 
         let seek = try slider("Recording frame position", in: controller.root)
         worker.requestResult = .success(try presentation(start: 200, end: 1_600,
@@ -737,7 +806,7 @@ final class RecordingEditorTests: XCTestCase {
                                                      object: trimEnd))
         worker.requestResult = .success(try presentation(start: 200, end: 1_600,
             position: 400, revision: 1, hasSystemAudio: true, hasMicrophoneAudio: true))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(sound.state, .on, "Apply retains the item-local preference")
         worker.requestResult = .success(try presentation(start: 200, end: 1_600,
             position: 733, revision: 2, hasSystemAudio: true, hasMicrophoneAudio: true))
@@ -967,7 +1036,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertLessThan(image.frame.width, 1_200)
 
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 4_567, exact: true))
-        try button("Estimate size", in: controller.root).performClick(nil)
+        controller.estimateSizeNow()
         let estimateLabel = try field("Recording size estimate", in: controller.root)
         let estimateText = estimateLabel.stringValue
         XCTAssertEqual(estimateText, "4.6 KB")
@@ -1005,7 +1074,7 @@ final class RecordingEditorTests: XCTestCase {
                                                      object: trimEnd))
         worker.requestResult = .success(try presentation(end: 1_700, position: 417, revision: 1,
             sourceWidth: 1_600, sourceHeight: 900, previewWidth: 480, previewHeight: 270))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertTrue(actual.selected, "Apply preserves 100%")
 
         worker.requestResult = .success(try presentation(end: 1_700, position: 811, revision: 2,
@@ -1348,19 +1417,19 @@ final class RecordingEditorTests: XCTestCase {
             uncapped.present(artifact: recordingArtifact(), historyRoot: "/History",
                              outputDirectory: "/Exports")
             let uncappedLabel = try field("Recording size estimate", in: uncapped.root)
-            let estimate = try button("Estimate size", in: uncapped.root)
             XCTAssertEqual(uncappedLabel.stringValue, "—")
+            XCTAssertFalse(descendants(in: uncapped.root).contains {
+                ($0 as? CaptureButton)?.title == "Estimate size" }, "shipping has no Estimate size button")
+            // Shipping estimates on its own, debounced after the settings settle.
+            pump(until: { uncappedLabel.stringValue == "1.5 MB" })
             for (suffix, size) in [("normal", NSSize(width: 960, height: 600)),
                                    ("minimum", NSSize(width: 760, height: 540))] {
                 uncapped.window.setContentSize(size)
-                XCTAssertLessThanOrEqual(uncappedLabel.frame.maxX + 8, estimate.frame.minX,
-                                         "\(appearance) \(suffix) estimate label stays before button")
+                XCTAssertTrue(try XCTUnwrap(uncappedLabel.superview).bounds.contains(uncappedLabel.frame),
+                              "\(appearance) \(suffix) estimate label stays in its card")
                 try render(uncapped.root,
                            name: "recording-editor-estimate-\(appearance)-\(suffix)")
             }
-            try dispatchButtonClick(estimate, in: uncapped)
-            XCTAssertEqual(uncappedLabel.stringValue, "1.5 MB",
-                           "window dispatch reaches the unobscured Estimate size button")
             let mode = try popup("Save quality", in: uncapped.root)
             let uncappedQuality = try popup("Recording export quality", in: uncapped.root)
             XCTAssertEqual(mode.titleOfSelectedItem, "Preserve quality")
@@ -1394,8 +1463,7 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertEqual(value.stringValue, "0.100019")
             XCTAssertEqual(unit.titleOfSelectedItem, "MB")
             XCTAssertFalse(warning.isHiddenOrHasHiddenAncestor)
-            XCTAssertTrue(try button("Estimate size", in: controller.root).isHidden,
-                          "a hard limit replaces the estimate action")
+            XCTAssertFalse(controller.canEstimate, "a hard limit shows its cap, not an estimate")
             try render(controller.root, name: "recording-editor-maximum-size-\(appearance)")
 
             controller.window.setContentSize(NSSize(width: 760, height: 540))
@@ -1413,8 +1481,12 @@ final class RecordingEditorTests: XCTestCase {
             value.stringValue = ".099999"
             controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                          object: value))
-            XCTAssertTrue(labels(in: controller.root).contains { $0 == "Enter at least 100 KB" })
-            XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+            // Shipping shows "—" for an invalid limit; the field explains why.
+            XCTAssertEqual(capLabel.stringValue, "—")
+            XCTAssertTrue(descendants(in: controller.root).contains {
+                ($0 as? NSTextField)?.stringValue == "Enter at least 100 KB (decimal units)."
+                    && !$0.isHiddenOrHasHiddenAncestor })
+            XCTAssertFalse(controller.canApplyEdits)
             try render(controller.root,
                        name: "recording-editor-maximum-size-invalid-minimum-\(appearance)")
         }
@@ -1487,7 +1559,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
         worker.requestResult = .success(try presentation(start: 100, position: 500, revision: 2))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(worker.thumbnailCalls, 1,
                        "seek and accepted edits never regenerate immutable source thumbnails")
     }
@@ -1622,7 +1694,7 @@ final class RecordingEditorTests: XCTestCase {
         let acceptedImage = image.image
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_234_567,
                                                                  exact: false))
-        try button("Estimate size", in: controller.root).performClick(nil)
+        controller.estimateSizeNow()
         let acceptedEstimate = try XCTUnwrap(labels(in: controller.root).first {
             $0.contains("≈") && $0.contains("MB")
         })
@@ -1672,7 +1744,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(worker.sourceCalls, 1, "same-item accepted-position source frame is cached")
     }
 
-    func testGraphicalCropPendingInputApplyFailureSuccessAndMotionRestore() throws {
+    func testGraphicalCropPendingInputLiveEditFailureSuccessAndMotionRestore() throws {
         _ = NSApplication.shared
         let initialCrop = NativeRecordingCropRect(x: 40, y: 20, width: 160, height: 90)
         let worker = FakeRecordingEditorWorker(presentation: try presentation(
@@ -1724,7 +1796,7 @@ final class RecordingEditorTests: XCTestCase {
         overlay.nudge(.east, deltaX: 20, deltaY: 0)
         let sourceImage = image.image
         worker.requestResult = .failure(AppBridgeError.backend("crop preview unavailable"))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertFalse(overlay.isHidden)
         XCTAssertTrue(image.image === sourceImage,
                       "failed Apply preserves the full-source display and pending crop")
@@ -1732,10 +1804,14 @@ final class RecordingEditorTests: XCTestCase {
 
         worker.requestResult = .success(try presentation(position: 400, revision: 1,
             crop: NativeRecordingCropRect(x: 40, y: 20, width: 180, height: 90)))
-        try button("Apply edits", in: controller.root).performClick(nil)
-        XCTAssertTrue(overlay.isHidden, "successful Apply leaves source adjustment mode")
-        XCTAssertFalse(image.image === sourceImage)
+        controller.applyPendingEdits()
+        XCTAssertFalse(overlay.isHidden, "a live crop edit keeps Adjust crop open")
+        XCTAssertTrue(image.image === sourceImage, "the source frame stays while adjusting")
         XCTAssertEqual(width.stringValue, "180")
+        try button("Done cropping", in: controller.root).performClick(nil)
+        XCTAssertTrue(overlay.isHidden)
+        XCTAssertFalse(image.image === sourceImage, "Done shows the newly accepted preview")
+        XCTAssertFalse(image.image === motionImage)
     }
 
     func testGraphicalCropLoadCancelErrorRetryAndSeekInvalidation() throws {
@@ -1971,14 +2047,14 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(start.stringValue, "250", "fractional shared time rounds only when staged")
         XCTAssertTrue(worker.requests.isEmpty, "pointer movement stages values without decoding")
         XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
-        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canEstimate)
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
         timeline.endDrag()
         timeline.continueDrag(at: trackLeft + trackWidth * 0.25)
         XCTAssertEqual(start.stringValue, "250", "lost capture retains the staged value and ends the gesture")
 
         worker.requestResult = .success(try presentation(start: 250, revision: 1))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(worker.requests.count, 1)
         XCTAssertEqual(worker.requests.first?["operation"] as? String, "update_preview")
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
@@ -2155,7 +2231,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
         worker.requestResult = .failure(AppBridgeError.backend("preview unavailable"))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let request = try XCTUnwrap(worker.requests.last)
         XCTAssertEqual(request["operation"] as? String, "update_preview")
         let edit = try XCTUnwrap(request["edit"] as? [String: Any])
@@ -2219,10 +2295,8 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let width = try field("Recording crop width", in: controller.root)
         let height = try field("Recording crop height", in: controller.root)
-        let apply = try button("Apply edits", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
         let outputMode = try popup("Recording output size", in: controller.root)
-        let estimate = try button("Estimate size", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
         let play = try button("Play", in: controller.root)
 
@@ -2234,9 +2308,9 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(width.stringValue, "300")
         XCTAssertEqual(height.stringValue, "90", "ratio math remains deferred until commit")
         XCTAssertTrue(controller.dirty)
-        XCTAssertTrue(apply.isEnabled, "valid pending text can be applied")
+        XCTAssertTrue(controller.canApplyEdits, "valid pending text can be applied")
         XCTAssertFalse(seek.isEnabled)
-        XCTAssertFalse(estimate.isEnabled)
+        XCTAssertFalse(controller.canEstimate)
         XCTAssertFalse(save.isEnabled)
         XCTAssertFalse(play.isEnabled)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
@@ -2244,7 +2318,7 @@ final class RecordingEditorTests: XCTestCase {
 
         worker.requestResult = .success(try presentation(revision: 1,
             crop: NativeRecordingCropRect(x: 10, y: 60, width: 213, height: 120)))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(worker.requests.count, 1,
                        "Apply commits the active field editor and sends one atomic update")
         let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
@@ -2252,7 +2326,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual((crop["width"] as? NSNumber)?.uint32Value, 213)
         XCTAssertEqual((crop["height"] as? NSNumber)?.uint32Value, 120)
         XCTAssertEqual(width.stringValue, "213"); XCTAssertEqual(height.stringValue, "120")
-        XCTAssertFalse(apply.isEnabled)
+        XCTAssertFalse(controller.canApplyEdits)
         XCTAssertTrue(play.isEnabled)
 
         width.selectText(nil)
@@ -2261,8 +2335,8 @@ final class RecordingEditorTests: XCTestCase {
         invalidEditor.insertText("-", replacementRange: NSRange(
             location: 0, length: invalidEditor.string.utf16.count))
         XCTAssertTrue(controller.dirty)
-        XCTAssertFalse(apply.isEnabled, "partial input cannot publish stale crop geometry")
-        XCTAssertFalse(seek.isEnabled); XCTAssertFalse(estimate.isEnabled)
+        XCTAssertFalse(controller.canApplyEdits, "partial input cannot publish stale crop geometry")
+        XCTAssertFalse(seek.isEnabled); XCTAssertFalse(controller.canEstimate)
         let requestCount = worker.requests.count
         _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(worker.requests.count, requestCount)
@@ -2276,8 +2350,8 @@ final class RecordingEditorTests: XCTestCase {
         _ = outputMode.sendAction(outputMode.action, to: outputMode.target)
         XCTAssertEqual(width.stringValue, "-",
                        "an unrelated output preset cannot discard ended invalid crop input")
-        XCTAssertFalse(apply.isEnabled); XCTAssertFalse(seek.isEnabled)
-        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+        XCTAssertFalse(controller.canApplyEdits); XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(controller.canEstimate); XCTAssertFalse(save.isEnabled)
         XCTAssertFalse(play.isEnabled)
 
         width.selectText(nil)
@@ -2291,8 +2365,8 @@ final class RecordingEditorTests: XCTestCase {
                       "selecting a popup item does not guarantee field-editor resignation")
         XCTAssertEqual(width.stringValue, "100",
                        "a preset change retains valid active crop text until explicit commit")
-        XCTAssertTrue(apply.isEnabled); XCTAssertFalse(seek.isEnabled)
-        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(controller.canApplyEdits); XCTAssertFalse(seek.isEnabled)
+        XCTAssertFalse(controller.canEstimate); XCTAssertFalse(save.isEnabled)
     }
 
     func testCropPresetCustomOriginalAndFailureRetentionShareAtomicGates() throws {
@@ -2320,11 +2394,11 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(outputHeight.stringValue, "720")
         XCTAssertFalse(outputWidth.isEnabled); XCTAssertFalse(outputHeight.isEnabled)
         XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
-        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canEstimate)
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
 
         worker.requestResult = .failure(AppBridgeError.backend("crop preview unavailable"))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let failed = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         let failedCrop = try XCTUnwrap(failed["crop"] as? [String: Any])
         XCTAssertEqual((failedCrop["x"] as? NSNumber)?.uint32Value, 20)
@@ -2337,12 +2411,12 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(revision: 1,
             sourceWidth: 4_001, sourceHeight: 2_003, crop: crop,
             output: NativeRecordingDimensions(width: 480, height: 720)))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(mode.titleOfSelectedItem, "720p maximum",
                        "acceptance retains the preset rather than inferring Custom")
-        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canApplyEdits)
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
-        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertTrue(controller.canEstimate)
         XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
 
         let seek = try slider("Recording frame position", in: controller.root)
@@ -2352,7 +2426,7 @@ final class RecordingEditorTests: XCTestCase {
         seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(mode.titleOfSelectedItem, "720p maximum",
                        "source-relative seek retains the host preset")
-        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canApplyEdits)
 
         lock.state = .off; _ = lock.sendAction(lock.action, to: lock.target)
         cropHeight.stringValue = "501"
@@ -2371,7 +2445,7 @@ final class RecordingEditorTests: XCTestCase {
             sourceWidth: 4_001, sourceHeight: 2_003,
             crop: NativeRecordingCropRect(x: 20, y: 30, width: 1_001, height: 501),
             output: NativeRecordingDimensions(width: 81, height: 61)))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(mode.titleOfSelectedItem, "Custom")
         XCTAssertEqual(outputWidth.stringValue, "81"); XCTAssertEqual(outputHeight.stringValue, "61")
 
@@ -2381,7 +2455,7 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(position: 500, revision: 4,
             sourceWidth: 4_001, sourceHeight: 2_003,
             crop: NativeRecordingCropRect(x: 20, y: 30, width: 1_001, height: 501)))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let original = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertTrue(original["output_width"] is NSNull)
         XCTAssertTrue(original["output_height"] is NSNull,
@@ -2411,7 +2485,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: system))
         XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
-        XCTAssertFalse(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canEstimate)
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
         XCTAssertTrue(controller.dirty, "audio-only staging participates in dirty lifecycle")
 
@@ -2419,7 +2493,7 @@ final class RecordingEditorTests: XCTestCase {
             hasSystemAudio: true, hasMicrophoneAudio: true,
             systemVolume: 0.25, microphoneVolume: 1.75,
             muteMicrophone: true, monoOutput: true))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let request = try XCTUnwrap(worker.requests.last)
         let edit = try XCTUnwrap(request["edit"] as? [String: Any])
         let audio = try XCTUnwrap(edit["audio"] as? [String: Any])
@@ -2466,12 +2540,12 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(revision: 1,
             hasSystemAudio: true, hasMicrophoneAudio: true,
             systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.333))))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(system.stringValue, "12.34%")
         XCTAssertEqual(microphone.stringValue, "33.3%")
-        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canApplyEdits)
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
-        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertTrue(controller.canEstimate)
         XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
 
         let seek = try slider("Recording frame position", in: controller.root)
@@ -2481,7 +2555,7 @@ final class RecordingEditorTests: XCTestCase {
         seek.doubleValue = 500; _ = seek.sendAction(seek.action, to: seek.target)
         XCTAssertEqual(system.stringValue, "12.34%")
         XCTAssertEqual(microphone.stringValue, "33.3%")
-        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canApplyEdits)
         XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
 
         microphone.stringValue = "29%"
@@ -2490,11 +2564,11 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(position: 500, revision: 3,
             hasSystemAudio: true, hasMicrophoneAudio: true,
             systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.29))))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(system.stringValue, "12.34%")
         XCTAssertEqual(microphone.stringValue, "29%")
-        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
-        XCTAssertTrue(try button("Estimate size", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canApplyEdits)
+        XCTAssertTrue(controller.canEstimate)
 
         let start = try field("Trim start milliseconds", in: controller.root)
         start.stringValue = "100"
@@ -2510,13 +2584,13 @@ final class RecordingEditorTests: XCTestCase {
             hasSystemAudio: true, hasMicrophoneAudio: true,
             systemVolume: Double(Float(0.1234)), microphoneVolume: Double(Float(0.29)),
             muteSystem: true))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let request = try XCTUnwrap(worker.requests.last)
         let edit = try XCTUnwrap(request["edit"] as? [String: Any])
         let audio = try XCTUnwrap(edit["audio"] as? [String: Any])
         XCTAssertEqual((audio["system_volume"] as? NSNumber)?.floatValue, Float(0.1234))
         XCTAssertEqual((audio["microphone_volume"] as? NSNumber)?.floatValue, Float(0.29))
-        XCTAssertFalse(try button("Apply edits", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canApplyEdits)
         XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
     }
 
@@ -2537,7 +2611,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: system))
         worker.requestResult = .failure(AppBridgeError.backend("audio preview unavailable"))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(system.stringValue, "30"); XCTAssertEqual(microphone.stringValue, "160")
         XCTAssertTrue(preview.image === acceptedFrame, "failed Apply retains the accepted frame")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("audio preview unavailable") })
@@ -2590,7 +2664,6 @@ final class RecordingEditorTests: XCTestCase {
         let format = try popup("Recording export format", in: controller.root)
         let fps = try popup("GIF frame rate", in: controller.root)
         let play = try button("Play", in: controller.root)
-        let estimate = try button("Estimate size", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
         XCTAssertTrue(fps.isHiddenOrHasHiddenAncestor)
 
@@ -2600,14 +2673,14 @@ final class RecordingEditorTests: XCTestCase {
                                         "20 FPS", "24 FPS", "30 FPS"])
         XCTAssertEqual(fps.titleOfSelectedItem, "15 FPS", "each item defaults GIF cadence to 15 FPS")
         XCTAssertTrue(controller.dirty); XCTAssertFalse(play.isEnabled)
-        XCTAssertFalse(estimate.isEnabled); XCTAssertFalse(save.isEnabled)
+        XCTAssertFalse(controller.canEstimate); XCTAssertFalse(save.isEnabled)
         XCTAssertTrue(worker.requests.isEmpty, "GIF cadence is staged without worker work")
 
         fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
         worker.requestResult = .success(try presentation(revision: 1,
             output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", framesPerSecond: 8))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let gifExport = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual(gifExport["format"] as? String, "gif")
         XCTAssertEqual((gifExport["frames_per_second"] as? NSNumber)?.uint16Value, 8)
@@ -2623,7 +2696,7 @@ final class RecordingEditorTests: XCTestCase {
 
         fps.selectItem(withTitle: "24 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
         worker.requestResult = .failure(AppBridgeError.backend("GIF preview unavailable"))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(fps.titleOfSelectedItem, "24 FPS",
                        "failed Apply retains the staged cadence correction")
         XCTAssertTrue(try XCTUnwrap(try XCTUnwrap(descendants(in: controller.root)
@@ -2633,7 +2706,7 @@ final class RecordingEditorTests: XCTestCase {
         fps.selectItem(withTitle: "8 FPS"); _ = fps.sendAction(fps.action, to: fps.target)
         format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(revision: 2, exportFormat: "mp4"))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let mp4Export = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertTrue(mp4Export["frames_per_second"] is NSNull,
                       "GIF cadence never changes MP4 export cadence")
@@ -2644,7 +2717,7 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(revision: 3,
             output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", framesPerSecond: 8))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         let seek = try slider("Recording frame position", in: controller.root)
         worker.requestResult = .success(try presentation(position: 733, revision: 4,
             output: NativeRecordingDimensions(width: 320, height: 180),
@@ -2687,7 +2760,6 @@ final class RecordingEditorTests: XCTestCase {
         let outputMode = try popup("Recording output size", in: controller.root)
         let outputWidth = try field("Recording output width", in: controller.root)
         let outputHeight = try field("Recording output height", in: controller.root)
-        let apply = try button("Apply edits", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
         XCTAssertTrue(maximumWidth.isHiddenOrHasHiddenAncestor)
 
@@ -2705,7 +2777,7 @@ final class RecordingEditorTests: XCTestCase {
             revision: 1, sourceWidth: 2_001, sourceHeight: 3_001,
             output: NativeRecordingDimensions(width: 800, height: 450),
             exportFormat: "gif", framesPerSecond: 15))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         var edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 800)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 450)
@@ -2716,7 +2788,7 @@ final class RecordingEditorTests: XCTestCase {
         maximumWidth.selectItem(withTitle: "1200 px")
         _ = maximumWidth.sendAction(maximumWidth.action, to: maximumWidth.target)
         worker.requestResult = .failure(AppBridgeError.backend("wide GIF preview unavailable"))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1200)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 674,
@@ -2727,7 +2799,7 @@ final class RecordingEditorTests: XCTestCase {
             revision: 2, sourceWidth: 2_001, sourceHeight: 3_001,
             output: NativeRecordingDimensions(width: 1200, height: 674),
             exportFormat: "gif", framesPerSecond: 15))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         let seek = try slider("Recording frame position", in: controller.root)
         worker.requestResult = .success(try presentation(
             position: 733, revision: 3, sourceWidth: 2_001, sourceHeight: 3_001,
@@ -2743,7 +2815,7 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(
             position: 733, revision: 4, sourceWidth: 2_001, sourceHeight: 3_001,
             output: NativeRecordingDimensions(width: 1601, height: 901)))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 1601)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 901,
@@ -2758,7 +2830,7 @@ final class RecordingEditorTests: XCTestCase {
             position: 733, revision: 5, sourceWidth: 2_001, sourceHeight: 3_001,
             output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", framesPerSecond: 15))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 180,
@@ -2771,7 +2843,7 @@ final class RecordingEditorTests: XCTestCase {
             position: 733, revision: 6, sourceWidth: 2_001, sourceHeight: 3_001,
             output: NativeRecordingDimensions(width: 320, height: 6),
             exportFormat: "gif", framesPerSecond: 15))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 6,
@@ -2808,7 +2880,7 @@ final class RecordingEditorTests: XCTestCase {
             revision: 1, sourceWidth: 2_001, sourceHeight: 3_001, crop: crop,
             output: NativeRecordingDimensions(width: 500, height: 1000),
             exportFormat: "gif", framesPerSecond: 15))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         var edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 500)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 1000,
@@ -2822,7 +2894,7 @@ final class RecordingEditorTests: XCTestCase {
             revision: 2, sourceWidth: 2_001, sourceHeight: 3_001, crop: crop,
             output: NativeRecordingDimensions(width: 320, height: 640),
             exportFormat: "gif", framesPerSecond: 15))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         XCTAssertEqual((edit["output_width"] as? NSNumber)?.uint32Value, 320)
         XCTAssertEqual((edit["output_height"] as? NSNumber)?.uint32Value, 640,
@@ -2846,7 +2918,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertNil(formatRecordingFileSizeDelta(estimatedBytes: 250_000, originalBytes: 0))
     }
 
-    func testAcceptedEstimateDeltaLifecycleHidesPendingStagedErrorMaximumAndReset() throws {
+    func testAutomaticEstimateDeltaLifecycleKeepsPendingValueAndHidesErrorMaximumAndReset() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(
             sourceSizeBytes: 1_000_000))
@@ -2857,16 +2929,16 @@ final class RecordingEditorTests: XCTestCase {
                            outputDirectory: "/Exports")
         let label = try field("Recording size estimate", in: controller.root)
         let delta = try field("Recording size estimate change", in: controller.root)
-        let estimate = try button("Estimate size", in: controller.root)
         let start = try field("Trim start milliseconds", in: controller.root)
         let mode = try popup("Save quality", in: controller.root)
         XCTAssertEqual(label.stringValue, "—")
 
         worker.deferEstimate = true
-        estimate.performClick(nil)
+        controller.estimateSizeNow()
         XCTAssertEqual(label.stringValue, "Estimating…")
         XCTAssertTrue(delta.isHidden, "pending estimate has no delta")
-        XCTAssertEqual(try button("Cancel estimate", in: controller.root).isHidden, false)
+        XCTAssertTrue(try button("Cancel", in: controller.root).isHidden,
+                      "shipping estimates in the background without a Cancel")
         worker.completeEstimate(.success(RecordingEditorEstimate(sizeBytes: 400_000, exact: true)))
         XCTAssertEqual(label.stringValue, "400 KB")
         XCTAssertFalse(delta.isHidden); XCTAssertEqual(delta.stringValue, "−60%")
@@ -2890,19 +2962,28 @@ final class RecordingEditorTests: XCTestCase {
         start.stringValue = "100"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        XCTAssertEqual(label.stringValue, "Apply edits to estimate")
-        XCTAssertTrue(delta.isHidden, "staged edits invalidate the delta")
+        XCTAssertEqual(label.stringValue, "400 KB",
+                       "shipping keeps the previous estimate until a newer one arrives")
+        XCTAssertFalse(delta.isHidden)
+        XCTAssertFalse(controller.canEstimate, "staged edits apply before estimating")
         start.stringValue = "0"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: start))
-        XCTAssertEqual(label.stringValue, "—")
+        XCTAssertEqual(label.stringValue, "400 KB")
 
         worker.deferEstimate = false
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_250_000,
                                                                  exact: false))
-        estimate.performClick(nil)
+        controller.estimateSizeNow()
         XCTAssertEqual(label.stringValue, "≈ 1.3 MB", "shipping toFixed rounds 1.25 up")
         XCTAssertEqual(delta.stringValue, "+25%"); XCTAssertFalse(delta.isHidden)
+        worker.deferEstimate = true
+        controller.estimateSizeNow()
+        XCTAssertEqual(label.stringValue, "≈ 1.3 MB", "a pending estimate keeps the previous value")
+        XCTAssertTrue(delta.isHidden, "pending estimate has no delta")
+        worker.completeEstimate(.success(RecordingEditorEstimate(sizeBytes: 1_250_000,
+                                                                 exact: false)))
+        worker.deferEstimate = false
 
         choose(mode, "Maximum file size")
         XCTAssertTrue(delta.isHidden, "Maximum shows only its cap")
@@ -2910,12 +2991,14 @@ final class RecordingEditorTests: XCTestCase {
         choose(mode, "Preserve quality")
         XCTAssertEqual(controller.compareView.split, 0.5, "Preserve recentres the comparison split")
         worker.estimateResult = .failure(AppBridgeError.backend("estimate failed"))
-        estimate.performClick(nil)
+        controller.estimateSizeNow()
+        XCTAssertEqual(label.stringValue, "—", "shipping shows a placeholder for a failed estimate")
         XCTAssertTrue(delta.isHidden, "estimate errors publish no delta")
+        XCTAssertFalse(labels(in: controller.root).contains { $0.contains("estimate failed") })
 
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_004_000,
                                                                  exact: true))
-        estimate.performClick(nil)
+        controller.estimateSizeNow()
         XCTAssertEqual(label.stringValue, "1.0 MB")
         XCTAssertTrue(delta.isHidden, "a delta rounded to zero stays hidden")
         controller.present(artifact: recordingArtifact(id: "next-recording"),
@@ -2937,16 +3020,15 @@ final class RecordingEditorTests: XCTestCase {
                                outputDirectory: "/Exports")
             let label = try field("Recording size estimate", in: controller.root)
             let delta = try field("Recording size estimate change", in: controller.root)
-            let estimate = try button("Estimate size", in: controller.root)
 
             worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 400_000,
                                                                      exact: true))
-            estimate.performClick(nil)
+            controller.estimateSizeNow()
             XCTAssertEqual(label.stringValue, "400 KB")
             XCTAssertEqual(delta.stringValue, "−60%")
             XCTAssertLessThanOrEqual(label.frame.maxX, delta.frame.minX)
-            XCTAssertLessThanOrEqual(delta.frame.maxX + 8, estimate.frame.minX,
-                                     "the delta pill sits between the size and Estimate size")
+            XCTAssertTrue(try XCTUnwrap(delta.superview).bounds.contains(delta.frame),
+                          "the delta pill stays inside the Save quality card")
             try render(controller.root,
                        name: "recording-editor-estimate-delta-exact-\(appearance)")
 
@@ -2958,7 +3040,7 @@ final class RecordingEditorTests: XCTestCase {
 
             worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_250_000,
                                                                      exact: false))
-            estimate.performClick(nil)
+            controller.estimateSizeNow()
             XCTAssertTrue(label.stringValue.hasPrefix("≈ "))
             XCTAssertEqual(delta.stringValue, "+25%")
             XCTAssertGreaterThanOrEqual(label.frame.width, label.intrinsicContentSize.width)
@@ -2980,7 +3062,6 @@ final class RecordingEditorTests: XCTestCase {
         let quality = try popup("Recording export quality", in: controller.root)
         let mode = try popup("Save quality", in: controller.root)
         let maximumValue = try field("Maximum recording file size value", in: controller.root)
-        let apply = try button("Apply edits", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
 
         format.selectItem(withTitle: ".gif"); _ = format.sendAction(format.action, to: format.target)
@@ -2999,7 +3080,7 @@ final class RecordingEditorTests: XCTestCase {
                 exportFormat: "gif",
                 exportQuality: palette.1, framesPerSecond: 15,
                 gifMaxColors: palette.2))
-            apply.performClick(nil)
+            controller.applyPendingEdits()
             let request = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
             XCTAssertEqual(request["quality"] as? String, palette.1, palette.0)
             XCTAssertEqual((request["gif_max_colors"] as? NSNumber)?.intValue, palette.2,
@@ -3008,7 +3089,7 @@ final class RecordingEditorTests: XCTestCase {
 
         format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(revision: 7, exportQuality: "tiny"))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         let mp4 = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertTrue(mp4["gif_max_colors"] is NSNull,
                       "GIF palette never changes an MP4 request")
@@ -3021,7 +3102,7 @@ final class RecordingEditorTests: XCTestCase {
             revision: 8, output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", exportQuality: "preserve",
             saveMaximumBytes: 10_000_000, framesPerSecond: 15, gifMaxColors: 64))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         let capped = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual(capped["quality"] as? String, "preserve")
         XCTAssertEqual((capped["gif_max_colors"] as? NSNumber)?.intValue, 64,
@@ -3033,7 +3114,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: maximumValue))
         worker.requestResult = .failure(AppBridgeError.backend("GIF palette preview unavailable"))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(mode.titleOfSelectedItem, "Maximum file size")
         let failedRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual((failedRequest["gif_max_colors"] as? NSNumber)?.intValue, 64)
@@ -3083,8 +3164,6 @@ final class RecordingEditorTests: XCTestCase {
         let maximum = try popup("Save quality", in: controller.root)
         let value = try field("Maximum recording file size value", in: controller.root)
         let unit = try popup("Maximum recording file size unit", in: controller.root)
-        let apply = try button("Apply edits", in: controller.root)
-        let estimate = try button("Estimate size", in: controller.root)
         let save = try button("Save new copy", in: controller.root)
         let play = try button("Play", in: controller.root)
         let seek = try slider("Recording frame position", in: controller.root)
@@ -3096,11 +3175,11 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: value))
         XCTAssertFalse(quality.isEnabled)
-        XCTAssertTrue(estimate.isHiddenOrHasHiddenAncestor)
-        XCTAssertTrue(apply.isEnabled); XCTAssertFalse(play.isEnabled)
+        XCTAssertFalse(controller.canEstimate, "Maximum shows its cap instead of estimating")
+        XCTAssertTrue(controller.canApplyEdits); XCTAssertFalse(play.isEnabled)
         worker.requestResult = .success(try presentation(revision: 1,
                                                          saveMaximumBytes: 100_019))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(maximum.titleOfSelectedItem, "Maximum file size")
         let acceptedRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual((acceptedRequest["max_size_bytes"] as? NSNumber)?.uint64Value, 100_019)
@@ -3111,7 +3190,7 @@ final class RecordingEditorTests: XCTestCase {
 
         unit.selectItem(withTitle: "KB"); _ = unit.sendAction(unit.action, to: unit.target)
         XCTAssertEqual(value.stringValue, "100.019")
-        XCTAssertFalse(apply.isEnabled, "an exact unit switch does not stage a change")
+        XCTAssertFalse(controller.canApplyEdits, "an exact unit switch does not stage a change")
 
         worker.saveResult = .failure(AppBridgeError.backend("maximum file size cannot be reached"))
         save.performClick(nil)
@@ -3127,7 +3206,7 @@ final class RecordingEditorTests: XCTestCase {
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                      object: value))
         worker.requestResult = .failure(AppBridgeError.backend("planner rejected"))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertEqual(value.stringValue, "200", "failed Apply retains the staged cap")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("planner rejected") })
         value.stringValue = "100.019"
@@ -3146,21 +3225,21 @@ final class RecordingEditorTests: XCTestCase {
         worker.requestResult = .success(try presentation(position: 733, revision: 3,
             output: NativeRecordingDimensions(width: 320, height: 180),
             exportFormat: "gif", saveMaximumBytes: 100_019, framesPerSecond: 15))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         let gifRequest = try XCTUnwrap(worker.requests.last?["export"] as? [String: Any])
         XCTAssertEqual(gifRequest["format"] as? String, "gif")
         XCTAssertEqual((gifRequest["max_size_bytes"] as? NSNumber)?.uint64Value, 100_019)
         format.selectItem(withTitle: ".mp4"); _ = format.sendAction(format.action, to: format.target)
         worker.requestResult = .success(try presentation(position: 733, revision: 4,
                                                           saveMaximumBytes: 100_019))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertFalse(controller.dirty)
 
         for invalid in ["", ".", "99.999", "-10", "NaN"] {
             value.stringValue = invalid
             controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
                                                          object: value))
-            XCTAssertFalse(apply.isEnabled, invalid)
+            XCTAssertFalse(controller.canApplyEdits, invalid)
             XCTAssertFalse(play.isEnabled, invalid)
             XCTAssertFalse(seek.isEnabled, invalid)
             XCTAssertFalse(save.isEnabled, invalid)
@@ -3174,7 +3253,7 @@ final class RecordingEditorTests: XCTestCase {
                        "leaving maximum restores the prior quality preference")
         worker.requestResult = .success(try presentation(position: 733, revision: 5,
                                                           exportQuality: "tiny"))
-        apply.performClick(nil)
+        controller.applyPendingEdits()
         worker.saveResult = .success(.saved(path: "/Exports/uncapped.mp4"))
         save.performClick(nil)
         XCTAssertFalse(controller.dirty)
@@ -3203,7 +3282,7 @@ final class RecordingEditorTests: XCTestCase {
                                                      object: start))
         let accepted = try presentation(start: 100, end: nil, position: 0, revision: 1)
         worker.requestResult = .success(accepted)
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
         XCTAssertFalse(controller.prepareForTermination(), "accepted edits remain dirty until save")
 
@@ -3215,13 +3294,14 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual((worker.requests.last?["position_ms"] as? NSNumber)?.uint64Value, 700)
 
         worker.estimateResult = .success(RecordingEditorEstimate(sizeBytes: 1_500_000, exact: false))
-        try button("Estimate size", in: controller.root).performClick(nil)
+        controller.estimateSizeNow()
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("≈") && $0.contains("MB") })
         worker.saveResult = .success(.savedWithoutHistory(path: "/Exports/edited.mp4",
                                                           warning: "History disk unavailable"))
         let filename = try field("Saved filename", in: controller.root)
-        XCTAssertTrue(filename.stringValue.hasPrefix("Captures_") && filename.stringValue.hasSuffix("_edited"),
-                      "the default stem matches the wgpu host")
+        XCTAssertTrue(filename.stringValue.hasPrefix("Captures_2026-09-2")
+                        && filename.stringValue.hasSuffix("-edited"),
+                      "shipping names a History-only recording by its capture time")
         XCTAssertEqual(try field("Recording destination", in: controller.root).stringValue, "/Exports")
         filename.stringValue = "bad/name"
         controller.controlTextDidChange(Notification(name: NSText.didChangeNotification,
@@ -3265,7 +3345,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(start.stringValue, "100", "same-item focus retains staged values")
 
         worker.requestResult = .success(try presentation(start: 100, revision: 1))
-        try button("Apply edits", in: controller.root).performClick(nil)
+        controller.applyPendingEdits()
         XCTAssertTrue(controller.dirty)
         controller.present(artifact: artifact, historyRoot: "/History", outputDirectory: "/Elsewhere")
         XCTAssertEqual(worker.openCount, 1)
@@ -3577,7 +3657,7 @@ final class RecordingEditorTests: XCTestCase {
             overlay.nudge(.east, deltaX: 20, deltaY: 0)
             activeWorker.requestResult = .success(try presentation(position: 400, revision: 1,
                 crop: NativeRecordingCropRect(x: 40, y: 20, width: 180, height: 90)))
-            try button("Apply edits", in: active.root).performClick(nil)
+            active.applyPendingEdits()
             try renderSizes(active, "accepted-\(appearance)")
         }
     }
@@ -4591,7 +4671,7 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(predicate(), file: file, line: line)
     }
     /// A button by title, or by accessible name: Save is named for what it
-    /// does now ("Save new copy" or "Replace original…").
+    /// does now ("Save new copy" or "Replace original").
     private func button(_ title: String, in view: NSView) throws -> CaptureButton {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
             .first { $0.title == title || $0.accessibilityLabel() == title })

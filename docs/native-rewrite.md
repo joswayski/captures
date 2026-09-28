@@ -20,10 +20,10 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
-| Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
+| Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview with per-card errors, the capture menu's Capturing/Starting/Switching states, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
-| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and sway and a staggered hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback | Capture-time permission recovery, remaining Preferences parity, remaining preview effects (backdrop blur), physical setup/login and installed Open With acceptance, crash reporting |
-| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, basic pan/zoom, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts and shared new-text drop shadow, the shipping Erase/Restore brush ring, copy and save-new-copy | Remaining text/font parity (explicit font migration, OS/imported fonts, IME), remaining viewport/output controls and Tauri design parity; remaining recording controls |
+| Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and sway and a staggered hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback, permission recovery on a denied capture, OS reduced-motion change notifications (wgpu on Windows/Linux) | Remaining Preferences parity, remaining preview effects (backdrop blur), physical setup/login, permission revocation and installed Open With acceptance, crash reporting |
+| Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, curve and endpoint grips, Fit/100%/zoom steps/wheel and magnify zoom/pan/Recenter, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts and shared new-text drop shadow, the shipping Erase/Restore brush ring, Trim edges hover preview, Wand loupe, the shipping header/rail and export bar (copy, overwrite Save, save-new-copy) | Remaining text/font parity (explicit font migration, OS/imported fonts, IME), Tauri inspector design parity; remaining recording-editor parity |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
 
 Development package staging now supplies macOS Editor/Alternate document types,
@@ -155,10 +155,20 @@ Selects share one primitive per host. wgpu draws the `CustomSelect` field trigge
 (media palette in the capture menu, borderless for the recording filename format)
 and a token listbox with option descriptions, placed and driven by shared
 `captures_app::controls::select` (ArrowUp/Down, Home/End, Enter/Space, Escape), in
-Preferences, the capture menu, the region aspect picker and the recording editor. AppKit's token `ClosurePopUpButton` trigger replaces the
+Preferences, the capture menu, the region aspect picker and the recording editor. An
+open wgpu listbox counts as an egui popup, and raw-pointer gestures (editor canvas and
+viewport, recording timeline and crop) ignore presses on any foreground layer above
+them, so a row or popover over a canvas takes the click and keys instead of the canvas;
+AppKit's native menu tracking already does this. AppKit's token `ClosurePopUpButton` trigger replaces the
 capture menu's glass popups and the recording editor's stock popups; its native
 menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
-line. Screenshot editor selects remain stock on both hosts.
+line. The screenshot editor's selects use the same primitives: Crop's Aspect ratio,
+the selected text's Font, the export bar's Output size (with shipping's option
+descriptions) and format suffix on both hosts, plus AppKit's Save quality, Compress
+and file-size unit, which already did. The text style pickers draw shipping's
+`TextStylePicker` trigger (preview chip, label, chevron) over chip rows; AppKit's
+`ClosurePopUpButton` draws the selected item's chip. The header zoom preset keeps a
+token trigger over a plain menu on both hosts, matching shipping's native `<select>`.
 Recording editor number fields (crop, output size, trim; wgpu also Position) follow
 `NumberInput`: wgpu `primitives::NumberInput` and AppKit `TokenNumberField` draw the
 token field with Increase/Decrease steppers ("Increase {label}", hidden while
@@ -301,7 +311,7 @@ rule and grid metrics; AppKit reads them through the `history_copy`,
 `history_cards` and `history_grid` settings operations. Native differences: no
 card is selected on load, but explicit selection, arrow keys and Return are
 supported; secondary click lists card commands (including Copy image, Save image
-and Show in Folder for screenshots); capture controls stay above the grid. Private-X11
+and Show in Folder for screenshots). Private-X11
 history, recovery, capture and preview smokes exercise the wgpu grid; AppKit XCTests
 cover cards, filters, two-step deletion and rendered light/dark grids but have not
 run here. Physical macOS/Windows, Wayland and screen-reader acceptance remain open;
@@ -314,15 +324,20 @@ mini-preview stack as the front card, without a capture generation, auto-copy or
 History change. A card already in the stack is neither duplicated nor moved but still
 confirms Restored; an empty stack opens on the workspace's selected display (AppKit
 falls back to the workspace window's screen), while a non-empty pile keeps its
-display and position. Decode failures show a workspace error; a card dismissed before
-it decodes ends the restore quietly. History **Edit** on a screenshot now restores
+display and position. A card dismissed before it decodes ends the restore quietly. History **Edit** on a screenshot now restores
 its preview through the same path before opening the editor, as shipping's
 `restore_history_artifact` call does, without Restore's busy state or feedback; a
-failed restore opens no editor. Errors use the workspace status line rather than a
-per-card message. The private-X11 history smoke restores a card, checks that a
-second Restore opens no extra window and that Delete all removes the preview; wgpu
-unit tests and AppKit XCTests (not run here) cover success, already-showing,
-dismissal and failure. Physical macOS/Windows and Wayland acceptance remain open.
+failed restore opens no editor. A failed Restore or Edit restore (no display for an
+empty stack, unreadable settings, an undecodable image) shows shipping's
+`.history-card-error` under that card's actions, not in the status line; the card's
+next action clears it. Like shipping's CSS grid, the error grows its row and the
+row's other cards stretch while keeping their actions in place
+(`history_view::RowExtras`, `card_error_extra`); both hosts measure the wrapped text.
+Other card actions still report through the status line. The private-X11 history
+smoke restores a card, checks that a second Restore opens no extra window and that
+Delete all removes the preview; wgpu unit tests and AppKit XCTests (not run here)
+cover success, already-showing, dismissal, the card error and its row growth.
+Physical macOS/Windows and Wayland acceptance remain open.
 
 Preview stack motion now plays on both hosts from shared data
 (`captures-app::motion` keyframes and transitions, `captures-app::preview_motion`
@@ -573,8 +588,41 @@ Merge visible, Flatten image, Duplicate and Delete. Image Width/Height/X/Y
 live; `Request::Live` folds each field's burst into one undo step, and edits made
 while a job runs queue on the host. Annotation stroke color and width, opacity,
 fill and shadow also apply live (Apply style and Reset fields are gone): a burst in
-one field folds into one undo step and each toggle is its own. Native controls keep
-their own styling.
+one field folds into one undo step and each toggle is its own.
+The inspector sections slice then lays Properties out like shipping's
+`.screenshot-properties`. Under the heading each section has `--s-5` padding, a
+`--s-5` item gap and a rule below; labels sit `--s-3` above their control in
+`--text-sm` muted text, numbers pair in two `--s-4`-apart columns, hints are
+`--text-sm` subtle paragraphs and checkboxes are 15 pt `.screenshot-check-row`
+boxes. Sections follow shipping order: a selected layer opens with Shift rotation
+snap (and its increment hint), then image Width/Height/X/Y, or text (Text style
+picker showing the layer's current treatment, Text, Font beside Size, B/I/alignment,
+Text color, Text background, Background color, Drop shadow), or annotation (Stroke,
+Stroke color, Stroke width, Opacity, Drop shadow, Filled shape, Fill color, Curve).
+Drop shadow is shipping's `DropShadowFields`: the check row, then Shadow color
+swatches, Opacity and Blur sliders and the X/Y offset pair indented to the label.
+Drawing tools show the grouped-shape picker (Shapes), the tool preview, Stroke,
+Color/Stroke color, Size and Opacity sliders, Filled shape, Fill color and Drop
+shadow; Text shows New text style, New text size and Drop shadow; the Eraser keeps
+its intro, mode group, sliders and hints; Crop shows the Aspect ratio select and,
+once a selection is dragged, its read-only Width/Height, Clear and the pulsing
+Apply crop, or shipping's drag hint. Native-only rows and copy are gone: the Outline
+and Rounded plate controls (the Outlined and Rounded Box styles set them, and "Text
+background" adds shipping's `#111318` plate, clearing both) and the per-tool helper
+paragraphs. wgpu draws every row from `editor/inspector.rs` with the shared
+`NumberInput`, `RangeSlider`, `Select` and `ColorField` primitives (a typed decimal
+such as 37.5 now commits as typed when focus leaves). While the rail's Crop is
+active, wgpu stays ready for a new selection after Apply crop, Clear or Escape, as
+shipping does, and a selection starts only once a press becomes a drag. AppKit follows
+shipping's order, spacing and labels for the selected layer (Shift rotation snap
+first, with its hint and rule), selected text (the Text style picker showing the
+current treatment, Text, Font beside Size, format buttons, Text color, Text
+background, Drop shadow), Text defaults (no Color row), the Eraser copy and the
+crop Aspect ratio, but still differs: selected-text shadow fields, annotation style
+controls and drawing defaults keep native label-beside-field rows and number fields
+(no sliders), its Crop keeps X/Y/Width/Height fields and Draw crop, it has no
+grouped-shape picker, and the inspector remains 272 points wide (wgpu 230) rather
+than shipping's 320 px column.
 X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete
@@ -602,7 +650,7 @@ existing layers. Color changes participate in undo/redo and draft reopen; copy/e
 use the newly rendered pixels. These are canvas fills, not image-background removal
 or text backgrounds. Stroke, fill and shadow colors in Layers → Annotation style use
 the same swatch row and apply at once, as do selected text's Text color and
-Background color, the new-text Color and the drawing defaults' Stroke color (Color
+Background color and the drawing defaults' Stroke color (Color
 for open tools) and Fill color; selected text shows shipping's five-column B, I and
 alignment icon buttons (`editor_chrome::text_format`). Text style menus show the shipping
 preview chips, preset labels use shipping title case (Mono Box, Rounded Box) and
@@ -666,7 +714,8 @@ It includes rotated image/shape/path bounds and annotation shadows, not an alpha
 Changed trims are one render-before-publish undo step; draft and output use the new
 dimensions. Shipping TypeScript vectors cover fractional/rotated/shadowed geometry;
 host tests cover controls, undo/redo, output invalidation, drafts and clipboard.
-Trim hover-margin feedback and the shipping toolbar layout remain unimplemented.
+Trim hover-margin feedback and the shipping header toolbar arrived later (see the
+editor chrome and final editor-parity slices).
 Windows/Wayland presentation and physical macOS input remain unverified.
 Both hosts connect the shipping Compress presets: Tiny (55), Smaller (70), Balanced
 (85), High (92) and Highest (98). Presets derive the PNG palette (there is no
@@ -827,17 +876,20 @@ or physical Text-tool presentation/input acceptance.
 The basic Text tool is implemented in AppKit and wgpu; host verification is recorded
 per slice, not inferred from shared tests. Additional font import and OS acquisition,
 inline input and physical input/IME/accessibility remain open.
-Both hosts now offer new-text style, size (8–512) and color before placement.
+Both hosts now offer new-text style and size (8–512) before placement.
 Like shipping, the Text section also shows the drawing defaults' Drop shadow:
 one shared toggle and custom style, whose untouched fields scale from the new text
 size (`editor_text::new_text_shadow_style`, `text_default_shadow` on the AppKit
 chrome ABI). `TextCreate` carries `dropShadow`/`dropShadowStyle`, clamped by the
 shared resolver, so each placement copies them as `createPlacedTextElement` does.
-Shipping takes new-text color from the drawing Color; the native new-text Color
-remains a separate per-editor choice.
-Choices are per-editor UI state, not document/draft/undo; accepted responses and
-failed creation retain them. Both hosts' new editors start at Rounded Box when the
-snapshot offers it, otherwise Standard, then Plain. Both start at annotation red. Shared Rust
+As in shipping (`createPlacedTextElement` takes `defaultStyle.color`), there is no
+separate new-text colour: the Text section has no Color row, and each placement
+uses the drawing defaults' one shared Color (Color for Arrow/Pen/Line, Stroke color
+for closed shapes), starting at annotation red `#ff3b5c`.
+Choices are per-editor UI state, not document/draft/undo or settings; accepted
+responses and failed creation retain them and a new editor starts from the
+defaults again, like shipping's `useState`. Both hosts' new editors start at Rounded Box when the
+snapshot offers it, otherwise Standard, then Plain. Shared Rust
 supplies Tauri's initial size: 5.5% of the original capture's shorter side,
 rounded and clamped to 24–72. It uses History dimensions,
 not the resized/cropped canvas of a restored draft; later user choices remain
@@ -907,8 +959,8 @@ original origin. Release, Escape, lost pointer/focus and layout changes end the
 gesture without rolling back staged values. Handles accept focused arrow keys
 (1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second). They never
 decode or publish media during drag: numeric values and the range update together,
-while the accepted frame remains unchanged until the existing Apply/Seek actions.
-Unapplied trim continues to gate seek, estimation and save. The wgpu track now
+and, as in shipping, the edit applies live once the drag ends (see live edits below).
+Until the edited preview decodes, pending trim gates seek, estimation and save. The wgpu track now
 displays the shared 12-frame full-source thumbnail strip, center-cropped vertically
 to the compact row. Excluded ranges are dimmed and grips retain the same hit regions.
 Generation runs once on the serialized worker after open, with independent cancel
@@ -933,7 +985,7 @@ shared accepted-mix audio API; silent v1 remains unchanged. One metadata event p
 operation reports whether audio is actually enabled. GIF/no-track/muted/zero-gain mixes use silent playback
 without a device. Audible MP4 uses the default output device; device failures remain
 visible and require an explicit Sound-off retry to play silently. Loop reopens both
-decoders each lap and is not gapless. Sound survives Apply/Seek/Pause/errors but
+decoders each lap and is not gapless. Sound survives edits/Seek/Pause/errors but
 does not change edits, estimates, dirty identity, exports or History. Private-X11
 checks capture real CPAL output through an isolated PulseAudio sink, not physical
 speakers. AppKit host tests exercise the same v2 metadata and lifecycle contract;
@@ -952,8 +1004,9 @@ and paused motion frame. Eight handles and interior move use shared source-pixel
 geometry and the current aspect lock; arrows nudge one pixel, Shift ten. Release,
 Escape, focus loss and layout changes end the gesture without reverting staged
 values. Loading is cancellable/retryable; the still is cached until accepted seek
-changes position. **Done cropping** restores the prior display, while Apply is the
-only publication boundary and playback is gated during adjustment. This host path
+changes position. Crop gestures apply live when they end while Adjust crop stays on
+the cached source frame; **Done cropping** shows the accepted (edited) preview, and
+playback is gated during adjustment. This host path
 is shared by Windows/X11/Wayland; automated real-media interaction is exercised on
 X11, not physical Windows/Wayland acceptance. The AppKit host path is described below.
 Typed dimensions commit on Enter/focus loss so partial input does not change the
@@ -961,9 +1014,9 @@ ratio. The lock is an input preference, not an export edit. Custom output width/
 remain independent (no output aspect lock). Original, 1080p maximum and 720p maximum presets
 reuse shared `MaxResolution::constrain`: cap height without upscaling, preserve
 the current crop's aspect ratio and round to even pixels. Presets stay selected
-after Apply/seek so later crop changes recompute the dimensions; Custom overrides
-the preset and disabling Custom restores it. Apply edits stages these
-values together with format/quality and previews the accepted export configuration.
+after edits and seeks so later crop changes recompute the dimensions; Custom overrides
+the preset and disabling Custom restores it. These values apply live together with
+format/quality and preview the accepted export configuration.
 Shared GIF encoding honors both explicit dimensions, including square-pixel aspect and proportional
 size-budget retries, instead of silently ignoring output height. Re-encoded MP4 on
 Windows/Linux fits within 3840 × 2160 (portrait: 2160 × 3840); format-aware preview
@@ -973,7 +1026,7 @@ Both native recording previews have display-only **Fit / 100%**. Fit retains the
 existing scaling; 100% maps each decoded pixel to one logical screen point and
 scrolls overflowing pixels inside the preview. Smaller images stay centered.
 This applies to accepted, motion and crop-source frames without media I/O, edits,
-estimate invalidation or History changes. Apply/Seek retain the mode; another item
+estimate invalidation or History changes. Edits and seeks retain the mode; another item
 defaults to Fit. Crop gestures use the scrolled image rectangle and end on scroll,
 scale or layout changes. Motion remains capped at 1280 × 720 regardless of display
 scale. Physical AppKit input/accessibility and Windows/Wayland/mixed-DPI acceptance
@@ -981,18 +1034,18 @@ are still open.
 Available system/microphone tracks have 0–200% volume, an include (unmute) checkbox
 per track and a Convert to mono control. Availability comes from the accepted session's trusted audio
 identity, not caller-provided track flags. Audio stages with geometry/format and
-uses the same Apply/save/dirty guards; failed updates preserve staged controls
+uses the same live-edit/save/dirty guards; failed updates preserve staged controls
 and accepted output state. Accepted audio also feeds opt-in Sound preview. GIF replaces
 the audio rows with the shipping note while keeping settings for a later MP4 export.
 No-track recordings show no Audio card. Private X11 smoke uses
 distinct stereo tones in a retained playback mix plus separate system/mic tracks,
 then measures decoded export frequencies/amplitudes, mono channel count, mute,
 GIF silence, restored MP4 settings and History audio identity.
-Both native hosts offer 8/10/12/15/20/24/30 GIF FPS (default 15), staged
-through the existing accepted export/Apply boundary. It participates in save,
+Both native hosts offer 8/10/12/15/20/24/30 GIF FPS (default 15), applied live
+through the accepted export boundary. It participates in save,
 playback, estimate and dirty guards, survives an MP4 roundtrip without modifying
-MP4 cadence, and resets for a new item. Failed Apply retains both the accepted
-frame and the staged correction. Private X11 light/dark coverage exports 24 and
+MP4 cadence, and resets for a new item. A failed live edit retains both the accepted
+frame and the staged correction, and is not retried until edited again. Private X11 light/dark coverage exports 24 and
 72 frames over the same three-second source at 8 and 24 FPS, checks duration,
 dimensions, colors, source/History immutability, failure/retry and minimum layout.
 AppKit real-media coverage exercises the same asymmetric trim at both cadences;
@@ -1001,7 +1054,7 @@ Both native hosts offer shipping-compatible GIF maximum widths of
 320/480/640/800/1200 pixels (default 800). The cap applies after crop and
 preset/custom output sizing, never upscales, and always recomputes from the
 independently retained MP4 base instead of compounding an accepted GIF reduction.
-Apply/save/seek/failure/dirty/new-item behavior stays on the existing boundary.
+Live-edit/save/seek/failure/dirty/new-item behavior stays on the existing boundary.
 Private X11 light/dark coverage saves 800/1200/320 px GIFs from a 1600×900 source,
 restores 1600×900 MP4, and checks source/History immutability. AppKit CI exercises
 the same sizing lifecycle and real GIF dimensions. Physical acceptance remains open.
@@ -1010,18 +1063,20 @@ limits: Tiny 64, Smaller 96, Balanced 128 and High/Highest/Preserve 256 colors. 
 palette control is added. Maximum uses the remembered quality for the palette while
 forcing Preserve export quality; MP4 omits the GIF field without losing the choice.
 Private X11 exports a high-color source at Tiny and High and checks decoded colors,
-Apply/save gating and source/History immutability. AppKit CI distinguishes 64- and
+live-edit/save gating and source/History immutability. AppKit CI distinguishes 64- and
 256-color saved GIFs while retaining the high-color edit-preview pixels, including
-failed Apply and accepted preview/save identity. Physical macOS/Windows/Wayland
+a failed live edit and accepted preview/save identity. Physical macOS/Windows/Wayland
 verification remains open.
-Unapplied format/quality gates save and seek alongside geometric edits; failed
-updates retain all accepted state and preserve staged values for correction.
+Format/quality edits apply live alongside geometric edits and gate save and seek
+until their preview decodes; failed updates retain all accepted state and preserve
+staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require
 save or explicit discard. Both native hosts' **Maximum file size** controls accept a decimal
 KB/MB/GB cap of at least 100000 bytes through the shared v2 `save_export` contract.
-Maximum mode uses Preserve quality, shows the accepted cap instead of sampling an
-estimate, and keeps the previous quality preference for leaving maximum mode.
-Changing units preserves whole bytes; invalid/partial input gates Apply, playback,
+Maximum mode uses Preserve quality, shows the typed cap (or shipping's "—" while it
+is invalid) instead of sampling an estimate, and keeps the previous quality
+preference for leaving maximum mode.
+Changing units preserves whole bytes; invalid/partial input never applies and gates playback,
 seek and save. Budget-only changes participate in accepted/dirty identity.
 Still and motion previews use the budget-free `preview_export`; a visible warning
 explains that fitting retries may lower resolution, cadence or audio quality.
@@ -1030,23 +1085,39 @@ Private X11 covers capped MP4, a real GIF retry with different saved dimensions,
 unattainable export and light/dark normal/minimum controls. AppKit CI covers the
 same accepted-save lifecycle, real capped outputs and native rendered states;
 physical macOS/Windows/Wayland acceptance remains open and no parity gate closes.
-**Estimate size** explicitly runs the shared Tauri estimator on the accepted
-edit/export configuration through the same serialized worker. Copied bytes and
+**Live edits.** As in shipping, there is no **Apply edits** button: trim, crop,
+resize, format, quality, GIF and audio edits take effect as they are made. Shipping
+renders edits on a live `<video>`; natively the edited preview decodes on the
+serialized worker once staged values settle for the shared
+`recording_editor_ui::LIVE_APPLY_DELAY_MS` (250 ms): after a drag or held pointer is
+released, and after typed values commit on Return or focus loss. The existing guards
+remain: edits wait for decoding, encoding and playback, invalid values never apply,
+and a failed edit keeps the accepted frame and the staged correction without
+retrying until the user edits again. Pending edits gate seek, playback and Save
+until the preview decodes. Accepted-versus-saved dirty state, History and the
+close/quit discard guard are unchanged.
+**Est. size** is automatic, as in shipping: the shared Tauri estimator runs on the
+accepted edit/export configuration `recording_editor_ui::ESTIMATE_DEBOUNCE_MS`
+(600 ms, shipping's debounce) after the accepted settings settle, once per identity,
+on the serialized worker. There is no **Estimate size** button and no Cancel for it:
+newer edits, Save, Play, Seek, source crop, thumbnails and close supersede and cancel
+a running estimate, which then runs again for the new settings. Copied bytes and
 fully encoded short ranges report exact byte counts; longer sampled ranges and
-audio-only Preserve changes are marked approximate. Staged edits hide the previous
-result and gate estimation until Apply. A successful changed preview invalidates
-the result; a seek retains it. Estimation has independent cancellation and error/retry,
-creates no History entry, and never marks unsaved edits as saved. No estimate promises
-a byte budget. Both native hosts display nonzero percentage change versus immutable
-source bytes beside an accepted estimate, preserving exact/approximate meaning.
-They follow shipping rounding (including negative half ties), hide unknown/zero
-baselines and rounded-zero deltas, and suppress the percentage during staged,
-pending, failed-estimate or Maximum states. Seek (including failure) retains the
-result; changed Apply and new items invalidate it. Private X11 covers sampled/exact
-normal/minimum labels and minimum-window estimate error/retry without publishing an
-estimate to History. AppKit CI covers exact/approximate light/dark normal/minimum
-labels and the same lifecycle. Physical macOS/Windows/Wayland acceptance remains
-open. Close/quit waits for accepted work, as with export.
+audio-only Preserve changes are marked approximate. Shipping's labels come from
+`captures_app::recording_editor_ui::estimate`: "Estimating…" before the first
+value, the previous value (muted, without a percentage) while a newer estimate is
+pending, "—" for failures (no error message), WebM and an invalid Maximum, and
+"≤ <cap>" for a valid typed Maximum. Estimation creates no History entry and never
+marks unsaved edits as saved. No estimate promises a byte budget. Both native hosts
+display nonzero percentage change versus immutable source bytes beside an estimate,
+preserving exact/approximate meaning. They follow shipping rounding (including
+negative half ties), hide unknown/zero baselines and rounded-zero deltas, and
+suppress the percentage while pending, failed, WebM or Maximum. Seek (including
+failure) retains the result; new items reset it. wgpu unit tests and AppKit CI cover
+the debounce, supersession, pending, failure and cap states; the private X11 smoke
+checks automatic sampled/exact labels at normal and minimum sizes without publishing
+an estimate to History. Physical macOS/Windows/Wayland acceptance remains open.
+Close/quit waits for accepted work, as with export.
 The shared recording comparison ABI retains independent before/after frames from
 a read-only encoding sample at the accepted source-relative position. As in
 shipping, both native editors show the comparison automatically while Compress or
@@ -1077,30 +1148,51 @@ preset; Est. size with a green/red delta pill) and **Audio** (System audio/Micro
 checkboxes that include a track, 0–200% volume, Convert to mono; GIF output shows only
 "GIFs do not include recorded audio."). The fixed save footer has Filename, "Saving to
 <folder>" with **Change…** (a folder picker), the filename field with its attached
-.mp4/.gif format, the status line, a thin progress bar, a Cancel named for the running
-operation, **Show in Folder** after a successful copy, a **Save as new file** switch,
-**Apply edits** and **Save** (a new copy, or the confirmed replacement of the original
-when the switch is off; it is locked on when the format changes or the source has no
-eligible original). Shipping copy and formatting come from
+.mp4/.gif/.webm format, the status line, a thin progress bar, a Cancel named for the
+running operation, **Show in Folder** after a successful save, a **Save as new file**
+switch and **Save**. Shipping copy and formatting come from
 `captures_app::recording_editor_ui` (AppKit: `captures_recording_editor_ui_v1`): titles,
 `formatEditorTime`, trim summary, `formatFileSize`, the Est. size states and delta,
 the dropped-frames warning (from the snapshot's additive `dropped_frames`),
 stage labels, saved messages, filename validation and every menu's labels and
 descriptions. As in shipping, Preserve quality is offered only for MP4: choosing GIF
 moves Preserve to Compress at the remembered preset (Highest by default), while an
-accepted Preserve GIF keeps showing its mode. Deliberate native differences remain:
-edits are staged and accepted with **Apply edits**, Est. size is explicit (**Estimate
-size**), replacing the original always asks for confirmation, WebM output is not offered, and AppKit keeps a Position
-slider where wgpu has a Position (ms) field with Seek. Physical audio playback
-acceptance remains open.
+accepted Preserve GIF keeps showing its mode. WebM hides Preserve and the Audio card
+as shipping does.
+**Save** follows shipping's semantics. The footer starts on the original's folder
+and filename (shipping `recordingUserFacingDefaults`: the permanent save, never
+private recovery media; a History-only recording is named
+`Captures_YYYY-MM-DD_HH-MM-SS_mmm` from its capture time). With **Save as new file**
+off, Save overwrites the original and its History item at once, without a
+confirmation. Turning the switch on names the copy `<original>-edited` (shipping
+`recordingEditedFileStem`) while the name and folder are still the original's, and
+turning it off restores the original name. Choosing another format turns it on and
+names an `-edited` file beside the original. Natively the switch is also locked on,
+with the `-edited` name, when the source has no replaceable original (a reference or
+a History-only recording): shipping would overwrite that file or promote recovery
+media, which the shared native replacement does not do. After a successful save,
+Save stays disabled until an edit, the name, folder, format or switch changes, as
+shipping's `alreadySaved` does; the saved toast (`Video saved — <size>.`) and
+**Show in Folder** follow both copies and replacements.
+**WebM** is offered as in shipping. Shipping's bundled FFmpeg has no libvpx, so its
+WebM export fails; natively the accepted preview keeps the MP4 settings, Est. size
+shows shipping's "—", the comparison is hidden, and Save shows shipping's error
+("media processing failed: WebM export is not available in the bundled media
+tools", `recording_editor_ui::WEBM_EXPORT_ERROR`) without encoding.
+Deliberate native differences remain: the edited preview decodes after a short
+settle delay rather than on a live `<video>`, renaming or moving while overwriting is
+not supported (Save with the switch off always replaces the original at its path),
+and AppKit keeps a Position slider where wgpu has a Position (ms) field with Seek.
+Physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
-frame, and unapplied values gate scrubbing/export. Failed edits keep
+frame, and values that have not applied yet gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses
 shared encoding, reports progress and accepts independent cancellation. It never
 replaces an existing file or the original History artifact. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
-Both native editors confirm replacement (**Save** with **Save as new file** off) with the opened session's exact
-permanent MP4/GIF path. Saved-path/format UI hints are not eligibility proofs:
+Both native editors replace the opened session's exact permanent MP4/GIF path
+(**Save** with **Save as new file** off) without a confirmation, as shipping does.
+Saved-path/format UI hints are not eligibility proofs:
 shared Rust verifies matching regular permanent and private recovery files and
 source identity. Serialized work reports progress and accepts cancellation during
 preparation; committed success can follow a late cancellation. Success rebases the
@@ -1109,7 +1201,8 @@ estimate and thumbnails, regenerates thumbnails, and reloads the existing Histor
 item. Ordinary failure preserves accepted state for retry; a `requires_reopen`
 failure disables media until close/reopen. Physical acceptance remains open.
 Close blocks accepted work; unsaved edits require explicit discard, and normal quit
-is refused until they are saved or closed. Recording-editor edit drafts are not implemented.
+is refused until they are saved or closed. Like shipping, the recording editor keeps no
+edit drafts; shipping's `RecordingDraftManifest` is capture recovery, which both hosts have.
 Both native workbenches list interrupted native capture bundles in a bounded History
 section separate from artifact rows. Recover/Discard use the shared per-root lease,
 expected identity, serialized worker, and an inline **Discard permanently?**
@@ -1136,20 +1229,20 @@ snapshots, and publication revalidates the opened metadata and file identity.
 The old recovery bytes remain available during publication, but the two directories
 are not crash/power-loss atomic: a process kill can leave new permanent media with
 old or hidden History. History-only and reference-only recordings are unsupported.
-No recording-editor edit drafts or undo are promised.
+Shipping's recording editor has no edit drafts or undo, so neither is a parity gap.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained
-decoded frames, source-relative seek, numeric trim, MP4/GIF format and quality,
-size estimation, progress/cancel, collision-safe Save new copy and dirty close/quit
+decoded frames, source-relative seek, numeric trim, MP4/GIF/WebM format and quality,
+automatic size estimation, progress/cancel, collision-safe Save new copy and dirty close/quit
 guards. AppKit's graphical trim handles use the shared allocation-free geometry and
-only stage the existing numeric values; pointer movement never seeks or decodes, and
-Apply/estimate/save gating is unchanged. AppKit now also stages independent volume
+only stage the existing numeric values; pointer movement never seeks or decodes, the
+edit applies live once the drag ends, and estimate/save gating is unchanged. AppKit now also stages independent volume
 and mute for trusted system/microphone tracks plus mono output in that same atomic
-Apply flow. GIF disables audio controls while retaining MP4 values, and the decoded
+live-edit flow. GIF disables audio controls while retaining MP4 values, and the decoded
 frame preview remains explicitly silent. AppKit also stages source-relative numeric
 crop and Original/1080p/720p or independent custom output dimensions through the
-same atomic Apply flow. Aspect-locked crop dimensions and resolution presets use the
+same atomic live-edit flow. Aspect-locked crop dimensions and resolution presets use the
 shared allocation-free geometry; the lock remains UI-only, and Original omits explicit
 output dimensions. AppKit's trim row also shows the shared fixed 12-frame full-source
 thumbnail strip. Generation runs once after open on the serialized worker, is retained
@@ -1170,14 +1263,14 @@ and caches one immutable full-source frame at the accepted source position. Eigh
 resize handles and interior movement call the shared source-pixel crop geometry and
 stage the existing numeric fields without per-pointer decoding or publication. The
 overlay maps top-down source coordinates through letterboxing in AppKit's flipped view;
-Apply remains the only publication boundary, while Done restores the exact prior
-accepted or motion frame. Source loading has the existing serialized cancel, close,
+crop gestures apply live when they end while the source frame stays shown, and Done
+shows the accepted (edited) preview. Source loading has the existing serialized cancel, close,
 item-generation and retry guards. Sound-selected GIF/no-track/inaudible mixes stay
 silent without opening a device; default-device failures remain visible for retry.
 Its display-only Fit/100% control uses the currently decoded accepted, motion or
 crop-source frame without a new decode. At 100%, one decoded pixel occupies one
 logical point inside a bounded two-axis native scroll view; smaller frames remain
-centered. Apply, Seek, Pause and frame delivery retain the item-local mode, while a
+centered. Edits, Seek, Pause and frame delivery retain the item-local mode, while a
 new History item defaults to Fit. Scrolling, scale changes and layout changes end an
 active crop gesture, and crop mapping uses the exact scrolled image rectangle.
 Windows/X11 implement the same edit controls through wgpu; private X11/software-GL
@@ -1614,10 +1707,21 @@ wgpu supports explicit `--reduced-motion` and reads Windows client-area animatio
 or the Linux Settings portal's standardized reduced-motion preference off the UI
 thread on live startup and workspace foreground return. Reads coalesce, never
 write settings, and retain the last known value if temporarily unavailable.
+Live wgpu also subscribes to changes for the life of the process
+(`captures_session::watch_reduced_motion`), so a change applies while the workspace
+stays unfocused: on Windows a hidden top-level window on its own thread receives the
+`WM_SETTINGCHANGE` broadcast for `SPI_SETCLIENTAREAANIMATION` (message-only windows
+miss broadcasts) and re-reads it; on Linux a session-bus thread takes the Settings
+portal's `SettingChanged` signal for `org.freedesktop.appearance` / `reduced-motion`
+and applies its value without another read. Neither polls. Where no notification
+source exists (no session bus or portal, or a portal that never emits the key), the
+foreground re-read remains the only refresh; macOS AppKit reads
+`accessibilityDisplayShouldReduceMotion` at each animation, so it is always current.
 Fixtures stay independent of the host preference. Linux desktops without that key
-use ordinary motion unless explicitly overridden. Changes while the workspace
-remains unfocused require returning to it; continuous OS change subscription and
-physical Windows/Linux accessibility acceptance remain open.
+use ordinary motion unless explicitly overridden. The private-X11 system-motion
+smoke checks startup, foreground refresh and unfocused `SettingChanged` signals; the
+Windows watcher is compiled only by Windows CI, and physical Windows/Linux
+accessibility acceptance remains open.
 Reduced motion switches immediately. AppKit
 uses native frame animation; wgpu repaints only while egui's transition is active.
 Both hosts also paint the shipping `glass-strong-solid` depth overlay on compact
@@ -1771,8 +1875,9 @@ AppKit intercepts focused recorder events before menu equivalents; wgpu observes
 root winit physical keys before egui loses PrintScreen, keypad or Super identity.
 Focused Preferences temporarily releases screenshot OS grabs, retaining desired
 bindings and restoring the latest saved mapping on blur. Registration failures
-leave capture routing suspended and report an error. Recording bindings remain
-storage-only. The private-X11 `--lifecycle --shortcut-editing`
+leave capture routing suspended and report an error. The recording bindings, then
+storage-only, now open the capture menu in Record mode (see the recording shortcut
+notes). The private-X11 `--lifecycle --shortcut-editing`
 test covers real input, collision rejection, persistence and global reactivation;
 AppKit XCTest covers controller/bridge semantics and both-appearance renders.
 Physical Mac external/media keys, Windows real input, Wayland and screen-reader
@@ -1881,14 +1986,70 @@ settings ABI: no session opens the region or window selector, or the capture men
 Full screen for display; a running or paused take takes the screenshot beside it; a
 take that is selecting, counting down, finalizing or in its editor refuses silently,
 like `screenshot_capture_is_blocked` (`recording.rs`). The shared shortcut routes pass
-the region, window, display and New Capture chords while a running take owns the
-capture flow, including while its controls are hidden. The recording shortcuts and tray
-items stay blocked and do nothing (`prepare_capture_selector_inner` returns
-`CaptureInProgress`, which they ignore), so a second recording cannot start. New Capture
+every chord to the host while a take owns the capture flow, including while its
+controls are hidden (see the busy capture slice below). The recording shortcuts and tray
+items do nothing there (`prepare_capture_selector_inner` returns `CaptureInProgress`,
+which they ignore), so a second recording cannot start. New Capture
 restores hidden controls; with the controls showing it reports "capture already in
 progress" in the "Captures" error dialog, as shipping's `open_capture_controls` does
 (`capture_error::new_capture_route`). Only New Capture restores hidden controls; the
 other tray items leave them hidden.
+
+The busy capture slice matches what shipping does with a capture shortcut or tray item
+while a capture is already open or in flight. `captures_app::capture_error::busy_route`
+holds the rule (AppKit reads it through the settings ABI's `busy_capture_route`), and
+the shared shortcut routes now deliver every chord to the host while a capture or
+recording owns the flow (`CaptureShortcuts::set_capture_busy`), so shortcuts and tray
+items take the same path:
+
+- **Recapture.** Over an open region or window selector (`overlay_visible` /
+  `should_recapture_visible_capture_ui`), Screenshot Region and Window open that
+  selector again, and New Capture, Screenshot Display and the Record items open the
+  capture menu (Record mode for Record), each on a frozen snapshot of the display under
+  the pointer taken with the old selector still on screen. With the menu open, the
+  shortcut of its own screenshot target (New Capture on Region) recaptures the menu the
+  same way (`should_recapture_open_capture_menu`); other targets and modes switch it in
+  place. That target is the one the menu opened on or its shortcuts and tray items last
+  set, like shipping's selection summary (`open_menu_screenshot_target`); a target picked
+  inside the menu does not change it. The old UI stays up until the new snapshot is ready, and a recaptured
+  selection never counts down (`screenshot_countdown_seconds_for_capture_ui`). wgpu
+  prepares the new session on the same capture generation and swaps the viewport when
+  it arrives; AppKit keeps the old panel on screen with `sharingType = .readOnly` so it
+  is in the snapshot, then closes it.
+- **Beside a recording.** Screenshot Region and Window over the take's screenshot
+  selector recapture it on its child generation; Screenshot Display saves the display
+  under the pointer at once with the selector in it, then closes the selector.
+- **Busy.** New Capture reports "capture already in progress" in the "Captures" dialog
+  during a screenshot countdown, preparation or capture outside a recording, and
+  during any recording state (`prepare_capture_selector_inner`), including a recording
+  countdown or finalize. Screenshot Display reports it too outside a recording, since it
+  opens the menu through the same path. Region, window and Record are refused silently
+  (`screenshot_capture_is_blocked`, `CaptureInProgress`).
+- **Concealed controls.** Shipping's `restore_hidden_recording_controls` shows the
+  recording controls whenever their window is off screen, so New Capture during a
+  screenshot beside a running or paused take brings back controls that the screenshot
+  concealed (the default, without "include recording controls"); only with the
+  controls showing does it report the busy take.
+
+Shipping's brief preparing and capturing gaps race its prefetch and session maps (a
+region shortcut there drops the stale session and starts again); native hosts treat
+them like a countdown. Private-X11 acceptance (`x11_capture_smoke.py --recapture`) presses
+the region shortcut over a live region selector and checks the new selector stays on the
+frozen desktop after it changes, and the saved pixels are that desktop under the old
+selector's veil, saved without a countdown; replaces
+the selector with the window selector, New Capture and Screenshot Display; and during a
+countdown checks the busy dialog and that other shortcuts start nothing. The
+`--target-shortcuts` smoke checks the busy Screenshot Display dialog during a menu
+countdown. The shared `busy_route` tests cover every action against every activity and
+recording state; wgpu unit tests cover how its capture states map to those activities
+and what each route requests, and AppKit XCTest covers the route through the settings
+ABI and the recapture preferences. `x11_recording_smoke.py --display-screenshot-only`
+checks, over the take's region selector, that New Capture brings the concealed controls
+back without closing the selector and that Screenshot Display saves the display at once
+without a countdown. The region and window recapture beside a recording and the menu
+recapture's snapshot pixels have no end-to-end smoke. wgpu reuses the selector's
+viewport for a recapture and repaints it when the new snapshot arrives. The AppKit side has not yet been built or run on macOS, and real macOS
+and Windows capture, Wayland and multi-monitor acceptance remain open.
 
 Each screenshot reuses the child generation above. Region and window open their normal
 selector over the take on the display under the pointer with the current screenshot
@@ -2142,7 +2303,7 @@ including every accepted movement in a frame, and previews the shared smoothed
 centerline. Input events are consumed once even during extra layout passes.
 Click-only dots, cancellation preserving redo, exact quadratic versus polyline
 pixels, off-canvas expansion and draft reopening have automated coverage.
-Resize/curve grips and other tools remain separate work.
+Resize, rotation, endpoint and curve grips and the other tools arrived in later slices.
 Windows/X11/Wayland share this host code; private X11 is the exercised UI, not
 physical input/accessibility acceptance.
 AppKit connects the same five drawing tools below.
@@ -2441,14 +2602,15 @@ open. Copy still uses full-resolution edited PNG pixels. Both actions retain the
 exercise section/resize visibility, pending-work gates, overwrite/new-file/adoption
 and estimate states; X11 export tests save from every section. Windows/Wayland
 presentation and physical AppKit acceptance remain open, rather than being inferred
-from shared code or rendered CI fixtures. The inspector layout still differs from
-Tauri (see the editor chrome slice). The comparison's split follows shipping
+from shared code or rendered CI fixtures. The inspector follows shipping's
+sections, with the remaining differences listed in the inspector sections slice. The comparison's split follows shipping
 `CompressionPreview`: the round handle drags on both hosts even with a drawing tool,
 the bottom strip and the focused split's range keys (arrows 0.1 %, Page Up/Down a
 tenth of the 6–94 % span, Home/End) are off while drawing or processing, and
 Preserve recentres it. Private X11 drags the handle and steps the keys; AppKit XCTests
 drive the same handle and keys.
-Remaining viewport controls and other drawing tools are not connected.
+The viewport controls and every shipping drawing tool are connected (see the viewport,
+drawing, Wand and brush slices).
 Recording editing remains open on both hosts; the
 screenshot-editor parity gate stays open.
 
@@ -2458,12 +2620,14 @@ share one prepared Rust session and desktop snapshot, retaining selections acros
 target switches. A display replacement invalidates stale preparation and local
 selections. Region confirmation reuses the existing audited crop/cursor policy;
 countdown refresh and the cancellation/commit boundary are unchanged. The
-controls include aspect selection, Enter/Escape and auto-start behavior, while
-Record remains explicitly disabled. Existing direct screenshot paths remain
+controls include aspect selection, Enter/Escape and auto-start behavior; Record,
+disabled in this first slice, is connected by the recording slices. Existing direct screenshot paths remain
 available. Global region/window/display keys now switch targets inside the open
 menu under its exact capture generation, without a new session or keyboard
-Full screen auto-start. Leaving selection clears held/pending target keys before
-preparation or countdown. Recording, physical
+Full screen auto-start, and New Capture switches it to Screenshot on Region. As in
+shipping, the shortcut of the screenshot target already selected (New Capture on
+Region) recaptures the menu instead (see the busy capture slice below). Leaving
+selection clears held/pending target keys before preparation or countdown. Recording, physical
 platform input/display acceptance and full capture-menu visual/accessibility
 parity remain open.
 
@@ -2479,19 +2643,41 @@ shipping 2.4 s. Full screen shows the display identity (OS name, W × H, and
 "· N FPS" in Record) instead of guidance. The recording row uses labelled
 FPS (60/30/15) / Max resolution selects, Show cursor / Show clicks / Desktop audio
 switches with On/Off/Unavailable text and unavailable-reason tooltips, coupled
-cursor/clicks, and the microphone select's "Selected microphone" and (wgpu, which
-enumerates after opening) "Loading microphones…" states. The primary button uses
+cursor/clicks, and the microphone select's "Selected microphone" and "Loading
+microphones…" states. The primary button uses
 the shipping labels and hides under auto-start unless a start failed; AppKit Record
 now honors auto-start like shipping and wgpu, while tray/shortcut Record Full Screen
 never auto-starts. Guidance uses the shipping copy and chip placement, stays until a
 window is selected, hides while dragging a region and fades within 28 points of the
 pointer (12-point leave slack). The wgpu region drag also settles at the release
-point when a slow frame batches the release with later motion. Neither host keeps
-the menu open while starting or switching displays, so "Capturing…", "Starting…" and
-"Switching…" are shared but not reachable; AppKit enumerates microphones before
-opening and never shows the loading row. The segmented indicators slide and the
-Record row arrives as shipped (see the motion slice below); wgpu segment icons,
-the Full screen display icon and Wayland remain open.
+point when a slow frame batches the release with later motion. The segmented
+indicators slide and the Record row arrives as shipped (see the motion slice below);
+both hosts draw the shared segment icons (wgpu `SegmentGlyph::Icon`), and Full screen
+now shows shipping's `.recording-display-icon` above the display identity: a 68 × 50
+glass tile (`--glass`, `--glass-border-strong`, `--r-xl`, `--glass-shadow`) holding the
+34-point display icon at a 1.4 stroke, one `--s-4` gap above the name, with the group
+still raised 60% of its height. Wayland remains open.
+
+The menu's in-flight states now follow shipping `RecordingSelector` on both hosts,
+through the shared `capture_menu::primary_action` state. A start shows "Capturing…"
+(Screenshot) or "Starting…" (Record) and disables the primary; under auto-start the
+hidden primary reappears for it. Shipping hides the selector as soon as
+`capture_selection_screenshot` begins, so a screenshot's "Capturing…" lasts only
+until the host closes the menu (a frame or so); a Record start keeps the menu up with
+"Starting…" until the take is prepared (the recovery bundle, and on AppKit the FFmpeg
+check), as `start_recording` does until its HUD is ready. Choosing another display in
+Full screen keeps the current menu, its snapshot and its selections, up with
+"Switching…" until the new display's session is ready, then replaces it (wgpu declares
+one viewport per monitor). While either is in flight, further starts, display changes
+and shortcut routing are ignored and Escape or Close still cancels; a failure still
+ends the capture with the host's error rather than shipping's inline menu error.
+Microphones enumerate as shipping `loadAudioDevices` does: once per menu, the first
+time it shows Record with a microphone available (no longer when the menu opens, and
+kept across a display switch), with the select disabled and "Loading microphones…" /
+"Loading microphone…" until the list arrives. Rust unit tests and AppKit XCTests (not
+run here) cover the labels, the disabled and hidden primary, blocked starts and the
+one-time microphone request; the private-X11 capture and recording smokes exercise
+the menu's start paths.
 Verified with Rust/XCTest source tests and private-X11 capture/recording smokes;
 AppKit compiles and runs only in macOS CI, and Windows presentation is unverified.
 
@@ -2587,7 +2773,10 @@ same shared session and selection geometry, with a private-X11 repeated-capture
 pixel/persistence gate. Wayland's host visibility/placement gate remains open.
 Neither this stage nor its synthetic input/render checks close the
 capture-overlay gate: real display/permission/session/VoiceOver verification,
-magnifier, blur and full capture-menu UI parity remain required.
+and full capture-menu UI parity remain required. Shipping's overlay has no magnifier and
+only dims (`capture.css`: "never blur"); the editor's Wand loupe, which both hosts have,
+is its only magnifier, and the glass panels' `backdrop-filter` stays with the other
+backdrop-blur work.
 
 Window capture begins with a behavior-preserving extraction of pixel-source
 policy into `captures-capture`. The shipping host uses the shared stack-occlusion

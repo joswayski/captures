@@ -229,8 +229,10 @@ its session position survives expansion and new captures without activating the
 workspace. Hovering the collapsed front card fans the rear cards outward; pressing
 and dragging keeps the fan open. macOS follows Reduce Motion; the Windows/Linux
 candidate reads the desktop animation preference at startup and when the workspace
-regains focus. Linux requires a portal exposing the reduced-motion setting;
-`--reduced-motion` can force it when that setting is unavailable.
+regains focus, and follows change notifications while it runs (Windows setting
+broadcasts, the Linux Settings portal's change signal). Linux requires a portal
+exposing the reduced-motion setting; `--reduced-motion` can force it when that
+setting is unavailable.
 Expanded native screenshot previews can offer the original file to another app
 as a COPY. An accepted external drop dismisses only its source card; cancellation
 and in-app drops retain it. A self-drop briefly shakes the card unless reduced
@@ -246,8 +248,14 @@ screenshot, History, Preferences, output-folder and Quit actions, plus configure
 New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared
 Screenshot and Record controls for Region, Window and Full screen, retaining selections when
 switching targets with the toolbar. While these controls are open, the configured
-region/window/display shortcuts switch mode and target in the same session; keyboard
-Full screen does not auto-start capture. As in the shipping app, the display
+region/window/display shortcuts and New Capture switch mode and target in the same session; keyboard
+Full screen does not auto-start capture. As in the shipping app, pressing the shortcut of
+the screenshot target the controls opened on or a shortcut last selected (New Capture for
+Region) freezes the controls into a new capture instead. Any capture shortcut or tray item over an open region or window
+selector does the same, opening its selector or these controls on a snapshot that shows the
+old one; that selection never counts down. Over a screenshot selector beside a recording,
+the region and window shortcuts do this too, and Screenshot Display saves the display with
+the selector in it at once. As in the shipping app, the display
 screenshot shortcut and tray Screenshot Display open these controls on Full screen
 with its display picker, and a failed capture shows a "Captures" error dialog
 instead of a History error. During a running or paused recording the region, window
@@ -255,11 +263,13 @@ and display screenshot shortcuts and tray items take that screenshot beside the 
 as the shipping app does: region and window open their selector on the display under
 the pointer, display captures that display directly, and each uses the screenshot
 countdown and leaves out the recording controls unless they are included in captures.
-The recording keeps running untouched. Focused Preferences and capture
-preparation/countdown suppress those shortcuts, an active recording ignores the
-recording shortcuts and tray items, and New Capture reports that a capture is already
-in progress. While recording controls are hidden, New Capture restores the same take
-and the screenshot shortcuts and tray items still take a screenshot. Native Preferences can edit all seven capture
+The recording keeps running untouched. Focused Preferences suppresses those shortcuts.
+While a screenshot outside a recording is preparing, counting down or capturing, New Capture
+and Screenshot Display report that a capture is already in progress and the other shortcuts and tray
+items do nothing. An active recording ignores the recording shortcuts and tray items, and
+New Capture reports that a capture is already in progress. While recording controls are
+hidden, or left out of a screenshot beside the take, New Capture brings them back, and
+the screenshot shortcuts and tray items still take a screenshot. Native Preferences can edit all seven capture
 and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
@@ -299,29 +309,33 @@ offers **Retry recording** or Delete. A resume that cannot reopen the microphone
 leaves the take paused so it can still be saved.
 The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
 with source-relative scrubbing, draggable trim handles, numeric trim/crop controls, custom output dimensions
-and MP4/GIF **Save new copy**. Crop dimensions start aspect-locked; unlock to change
-width and height independently. Apply edits accepts the format, quality and edits
-together before saving; failed updates leave the last accepted frame intact.
+and MP4/GIF saving. Crop dimensions start aspect-locked; unlock to change
+width and height independently. As in shipping, edits take effect as they are made:
+the edited preview updates once a drag ends or a typed value is committed, and
+failed updates leave the last accepted frame intact.
 Both native editors follow the shipping layout (**Edit GIF** for GIF sources). The save
-footer names the file, shows its folder with **Change…** and the .mp4/.gif format;
-after a successful copy, **Show in Folder** reveals it.
+footer starts with the original's name and folder, with **Change…** and the
+.mp4/.gif/.webm format; after a successful save, **Show in Folder** reveals it.
+WebM is offered as in shipping but, like shipping's bundled media tools, cannot
+encode it, so saving WebM shows shipping's error.
 The shared recording editor now also supports same-format replacement of an
 existing permanent MP4/GIF when History retains identical recovery media.
-Both native editors replace it when **Save** runs with **Save as new file** off,
-after confirming the opened session's exact saved path. Replacement is unavailable for recovery-only or
-reference-only recordings, staged edits or a different output format; the backend
+As in shipping, **Save** with **Save as new file** off replaces it without a
+confirmation; turning the switch on saves an `-edited` copy beside it. Replacement is
+unavailable for recovery-only or reference-only recordings (the switch then stays on),
+pending edits or a different output format; the backend
 also rejects missing or divergent recovery files. Success rebases the editor and
 updates the existing History item. Cancellation stops preparation but cannot undo
 publication once it begins. Ordinary failure keeps accepted edits; an uncertain
 result requires closing and reopening. This is not crash-atomic across the saved
 file and History. Saving with **Save as new file** on remains non-destructive.
-Trim handles stage changes without decoding on each pointer move; Apply updates
-the preview. Focused trim handles also accept arrow keys and Page Up/Page Down.
+Trim handles do not decode on each pointer move; the preview updates when the drag
+ends. Focused trim handles also accept arrow keys and Page Up/Page Down.
 Clicking the trim track seeks the accepted preview; **Reset trim** restores the full range.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and
 interior move. Crop handles follow the aspect lock; arrows move one source pixel,
-or ten with Shift. **Done cropping** restores the prior preview without accepting
-changes; Apply remains explicit. Loading this source frame can be canceled or retried.
+or ten with Shift. Crop changes apply when each gesture ends, and **Done cropping**
+shows the edited preview. Loading this source frame can be canceled or retried.
 Both native recording editors provide **Fit / 100%**, which changes only the
 displayed scale. At 100%, one decoded image pixel occupies one screen point; larger
 previews scroll within the preview area. Playback
@@ -345,11 +359,12 @@ Compress with Tiny, Smaller, Balanced, High or Highest, or Maximum file size.
 GIF palettes follow the preset: Tiny 64 colors, Smaller 96, Balanced 128, and
 High/Highest/Preserve 256. Maximum mode keeps that palette while saving at Preserve
 quality to fit the size cap; MP4 does not use it.
-**Estimate size** checks those accepted settings without publishing an export.
+As in shipping, **Est. size** updates automatically shortly after edits settle,
+without publishing an export; newer edits cancel an estimate in progress.
 Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
-audio-only Preserve changes show approximate sizes. Estimation can be canceled.
+audio-only Preserve changes show approximate sizes. WebM and failed estimates show "—".
 Both native recording editors show nonzero percentage changes versus the original
-recording beside accepted estimates; staged edits and Maximum mode hide the delta.
+recording beside estimates; pending estimates and Maximum mode hide the delta.
 Both native recording editors, like shipping, automatically encode a read-only
 before/after sample at the accepted frame while Compress or Maximum is accepted and
 playback is paused, drawn as a split with size badges, "% smaller" and Hide (**Show
@@ -358,15 +373,15 @@ file or History entry; staged edits hide it. The screenshot editor shows the sam
 comparison while Compress or Maximum is chosen and Export settings are open. Maximum mode shows the first encoded attempt, not
 necessarily the final capped save; output cadence may select neighboring frames.
 Both native recording editors offer **Maximum file size** for MP4/GIF, using
-decimal KB/MB/GB with a 100 KB minimum. Apply accepts the limit; the size label then
-shows the cap instead of an estimate. Save may reduce resolution, frame rate or
+decimal KB/MB/GB with a 100 KB minimum. The size label shows the cap instead of an
+estimate. Save may reduce resolution, frame rate or
 audio quality to fit, so its first-attempt preview is not a promise of final output.
 An unattainable limit fails without publishing a copy.
 Available system and microphone tracks each have an include checkbox and 0–200%
 volume, plus **Convert to mono**. Accepted settings apply to MP4 exports and Sound
 preview. GIF output shows that GIFs have no audio, without discarding the MP4 settings.
 Both native recording editors offer 8, 10, 12, 15 (default), 20, 24 or 30 FPS for
-GIF exports. Apply accepts the frame rate with the other edits; switching to MP4
+GIF exports. The frame rate applies with the other edits; switching to MP4
 keeps the GIF choice without changing MP4 cadence.
 Both native recording editors offer GIF **Maximum width** choices of 320, 480, 640,
 800 (default) or 1200 px, applied after crop and output sizing without upscaling.
@@ -383,13 +398,13 @@ file, and adds a distinct History item. A History failure retains the saved path
 Recording edits are not drafts: save or explicitly discard them before closing or
 quitting. AppKit connects a separate History editor with decoded source-relative
 frames, numeric trim and source-relative crop, Original/1080p/720p or independent
-custom output dimensions, accepted MP4/GIF settings, size estimation and cancellable
-**Save new copy**. Available system and microphone tracks have independent 0–200%
+custom output dimensions, MP4/GIF/WebM settings, automatic size estimation and
+cancellable **Save** with the same shipping save semantics as Windows/Linux. Available system and microphone tracks have independent 0–200%
 volume and mute controls plus mono output; audio applies to MP4 while GIF disables
 the controls without losing their MP4 values. Its graphical trim handles overlay an
 immutable 12-frame source-relative thumbnail strip and stage the same numeric values
-without seeking; loading can be canceled or retried without disabling editing, and
-Apply remains explicit. Play/Pause presents bounded accepted-edit motion frames and
+without seeking; the edited preview updates when the drag ends. Loading can be
+canceled or retried without disabling editing. Play/Pause presents bounded accepted-edit motion frames and
 a source-relative playhead without changing the accepted preview, edits, History or
 source. Like the shipping preview it plays the accepted MP4 mix with Sound on by
 default, on the default device; GIF and inaudible mixes stay silent without opening a device.
@@ -397,8 +412,9 @@ Optional Loop preview repeats the accepted trim without changing
 exports or dirty state; each lap reopens the decoders and is not gapless.
 **Adjust crop** loads one immutable full-source frame at the accepted position, then
 stages source-pixel crop changes with eight resize handles or interior movement without
-decoding on each pointer event. **Done cropping** restores the prior accepted or motion
-frame; only Apply publishes the staged values. Loading is cancellable and retryable.
+decoding on each pointer event. Crop changes apply when each gesture ends while the
+source frame stays shown; **Done cropping** shows the edited preview. Loading is
+cancellable and retryable.
 Fit or 100% applies to the accepted, paused/playback or crop-source frame without
 decoding again or changing edits, estimates, exports or History; each item defaults to Fit.
 Windows/X11 provide the same full-source graphical adjustment alongside numeric crop
@@ -485,13 +501,14 @@ when one is enabled. Editor workers can own explicit
 fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
 export and reopening use the same fonts. Typed commands create plain or preset text and edit
 content, type, alignment, color and plates transactionally. Both native hosts now
-connect a basic **Text** tool. Selected text's properties, including outlines and
+connect a basic **Text** tool. Selected text's properties, including its style and
 shadow color, opacity, blur and offsets, apply as you edit, as in the shipping
 editor; typing in one field is one undo step. Before placement, choose a
-named style, size and color; boxed styles center on the click. These defaults last
-only for that editor. Both hosts start at Rounded Box when its pinned font is
-offered, otherwise Standard, then Plain. New text starts in the annotation red,
-with an initial size scaled to the original capture (24–72). The bundle includes
+named style and size; boxed styles center on the click. As in the shipping editor,
+new text takes the drawing Color (annotation red until you change it). These
+defaults last only for that editor. Both hosts start at Rounded Box when its pinned
+font is offered, otherwise Standard, then Plain, with an initial size scaled to the
+original capture (24–72). The bundle includes
 Nunito and Liberation Sans, Serif and Mono (OFL 1.1); exact font
 bytes and license notices stay with the draft. Older drafts offer only their saved
 fonts; adding new fonts to an existing draft is not implemented.
@@ -688,7 +705,8 @@ Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual
 scale and preserves the viewport-center image point when dragged.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
-The native editor's inspector still differs from the shipping Tauri editor design.
+The inspector follows the shipping sections, labels and spacing; the macOS host
+still keeps some native field rows, and neither host matches its 320 px width yet.
 Native cloud sharing is not implemented. Its required flow starts from a mini-preview
 Share icon and opens a native upload/settings popup, including native sign-in and OS
 credential storage. The [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)
@@ -723,12 +741,13 @@ Release commits one undo step; Escape, focus loss or changing tools cancels the
 preview without editing. Properties shows a stroke or brush preview for drawing
 tools and Erase/Restore, and Apply crop pulses while a crop is staged. Physical-platform
 input acceptance remains parity work.
-Text controls support multiline content, pinned font families (listed as Sans serif,
-Serif, Monospace and Rounded), size, bold/italic and alignment buttons, swatch-row
-text and background colors, square/rounded background plates, outlines and a Drop
-shadow toggle. New-text and drawing default colors use the same swatch rows.
+Text controls support a style picker, multiline content, pinned font families (listed
+as Sans serif, Serif, Monospace and Rounded), size, bold/italic and alignment buttons,
+swatch-row text and background colors, a Text background plate and a Drop shadow
+toggle; outlined and rounded plates come from the Outlined and Rounded Box styles.
+Drawing default colors use the same swatch rows.
 Changes apply as you make them; a typing burst in one field is one undo step.
-Custom shadows and pinned-font named styles are connected, including style/size/color
+Custom shadows and pinned-font named styles are connected, including style/size
 choices for new text; new text also takes the drawing defaults' Drop shadow, as in
 the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.

@@ -62,6 +62,19 @@ enum CaptureShortcut: String {
         case .display, .recordDisplay: return .display
         }
     }
+
+    /// The capture action this shortcut stands for; tray items map to the same.
+    var captureAction: CaptureAction {
+        switch self {
+        case .newCapture: return .newCapture
+        case .region: return .screenshot(.region)
+        case .window: return .screenshot(.window)
+        case .display: return .screenshot(.display)
+        case .recordRegion: return .record(.region)
+        case .recordWindow: return .record(.window)
+        case .recordDisplay: return .record(.display)
+        }
+    }
 }
 
 private func wakeCaptureShortcuts() {
@@ -130,10 +143,11 @@ final class NativeCaptureShortcuts {
         _ = try? Self.request(["operation": "restore_only", "restore_only": restoreOnly])
     }
 
-    /// Route the display shortcut past a running recording's capture flow.
-    func setRecordingScreenshot(_ allowed: Bool) {
+    /// While a capture or recording owns the flow, deliver every chord so the
+    /// host can route it (`captures_app::capture_error::busy_route`).
+    func setCaptureBusy(_ busy: Bool) {
         guard !closed else { return }
-        _ = try? Self.request(["operation": "recording_screenshot", "allowed": allowed])
+        _ = try? Self.request(["operation": "capture_busy", "busy": busy])
     }
 
     func setSuspended(_ suspended: Bool) throws {

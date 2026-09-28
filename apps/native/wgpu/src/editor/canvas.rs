@@ -801,7 +801,6 @@ pub(super) fn show_curve_controls(
     let Some(handles) = canvas::curve_handles(shape) else {
         return;
     };
-    ui.separator();
     if handles.slider {
         let staged = view
             .curve_bend
@@ -809,18 +808,19 @@ pub(super) fn show_curve_controls(
             .filter(|(id, _)| *id == shape.base.id)
             .map_or(handles.bend_percent, |(_, value)| *value);
         let mut value = staged;
-        ui.label(canvas::CURVE_LABEL);
         let marks =
             canvas::CURVE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
-        let response = crate::primitives::RangeSlider::new(
-            ("curve-bend", shape.base.id.as_str()),
-            canvas::CURVE_LABEL,
-            ui.available_width().min(272.),
-            -100. ..=100.,
-            format!("{}%", value.round()),
-        )
-        .marks(&marks)
-        .show(ui, tokens, &mut value);
+        let response = super::inspector::labelled(ui, tokens, canvas::CURVE_LABEL, |ui| {
+            crate::primitives::RangeSlider::new(
+                ("curve-bend", shape.base.id.as_str()),
+                canvas::CURVE_LABEL,
+                ui.available_width(),
+                -100. ..=100.,
+                format!("{}%", value.round()),
+            )
+            .marks(&marks)
+            .show(ui, tokens, &mut value)
+        });
         if response.changed() {
             view.curve_bend = Some((shape.base.id.clone(), value));
         }
@@ -834,10 +834,16 @@ pub(super) fn show_curve_controls(
         {
             submit_curve(view, tx, id, CurveEdit::Bend { bend: value / 100. });
         }
-    } else if ui.button(handles.straighten_label).clicked() {
-        submit_curve(view, tx, shape.base.id.clone(), CurveEdit::Straighten);
+    } else {
+        // Shipping `.screenshot-property-actions` with one button.
+        let width = ((ui.available_width() - tokens.number("s-3")) / 2.).floor();
+        if super::inspector::action_button(ui, tokens, handles.straighten_label, width, true)
+            .clicked()
+        {
+            submit_curve(view, tx, shape.base.id.clone(), CurveEdit::Straighten);
+        }
     }
-    ui.small(canvas::CURVE_HELP);
+    super::inspector::hint(ui, tokens, canvas::CURVE_HELP);
 }
 
 /// `rgba(var(--trim-rgb), alpha)`.
