@@ -713,7 +713,7 @@ def recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, scre
         "show_cursor_in_screenshots": False, "screenshot_countdown_seconds": 2,
     }))
     background(0)
-    app = spawn(prefix, [str(binary), "--live", "--history-root", str(history),
+    app = spawn(prefix, [str(binary), "--live", "--open-history", "--history-root", str(history),
                          "--settings-file", str(settings), "--quit-after", "120"])
     root = wait(lambda: windows("Capture History"), "capture workspace")[0]
     time.sleep(2)
