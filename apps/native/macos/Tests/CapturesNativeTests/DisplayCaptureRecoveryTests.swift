@@ -5,11 +5,11 @@ import XCTest
 final class DisplayCaptureRecoveryTests: XCTestCase {
     func testScreenshotDisplayOpensTheCaptureMenuUnlessRecording() {
         // Shipping `start_capture_from_tray` and the display shortcut.
-        XCTAssertEqual(stillCaptureRoute(for: .display, recordingActive: false), .menu(.display))
-        XCTAssertEqual(stillCaptureRoute(for: .display, recordingActive: true), .capture(.display),
-            "a recording session captures the display directly")
-        XCTAssertEqual(stillCaptureRoute(for: .region, recordingActive: false), .capture(.region))
-        XCTAssertEqual(stillCaptureRoute(for: .window, recordingActive: true), .capture(.window))
+        XCTAssertEqual(stillCaptureRoute(for: .display, displayRoute: .captureMenu), .menu(.display))
+        XCTAssertEqual(stillCaptureRoute(for: .display, displayRoute: .captureDisplay),
+            .recordingScreenshot, "a running take captures the display directly")
+        XCTAssertEqual(stillCaptureRoute(for: .region, displayRoute: .captureMenu), .capture(.region))
+        XCTAssertEqual(stillCaptureRoute(for: .window, displayRoute: .captureDisplay), .capture(.window))
     }
 
     func testDisplayListIsListedAgainWhenEmptyOrStale() {

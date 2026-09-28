@@ -50,6 +50,27 @@ func displayListNeedsRefresh(listed: [String], pointer: String?) -> Bool {
     return !listed.contains(pointer)
 }
 
+/// A running or paused take accepts one display screenshot at a time; a take
+/// that is counting down, finalizing or busy with an action does not (shipping
+/// `screenshot_capture_is_blocked`).
+func displayScreenshotAvailableDuringRecording(routeState: String?, screenshotActive: Bool,
+                                               lifecycleBusy: Bool) -> Bool {
+    (routeState == "recording" || routeState == "paused") && !screenshotActive && !lifecycleBusy
+}
+
+/// Shipping hides the recording controls for a screenshot unless they are
+/// opted into captures (`conceal_capture_chrome_for_snapshot`).
+func recordingDisplayScreenshotHidesControls(includeControls: Bool) -> Bool {
+    !includeControls
+}
+
+/// A display screenshot taken beside a running recording.
+private struct RecordingDisplayShot {
+    let display: DisplayItem
+    let screen: NSScreen
+    let preferences: CapturePreferences
+}
+
 enum CaptureWindowRestoreAction: Equatable {
     case none
     case visible
@@ -208,6 +229,10 @@ final class LiveCaptureController: NSObject {
     private var recordingScreenshotCountdownPanel: ScreenshotCountdownPanel?
     private var recordingScreenshotSnapshotPending = false
     private var recordingScreenshotPreviewGeneration: UInt64?
+    /// Set while the recording screenshot is a display screenshot.
+    private var recordingDisplayShot: RecordingDisplayShot?
+    /// Last value published to the shortcut routes.
+    private var publishedRecordingDisplayRoute = false
     private var preparingRecording = false
     private var recordingPendingStart = false
     private var activeRecordingGeneration: UInt64?
@@ -309,9 +334,26 @@ final class LiveCaptureController: NSObject {
     /// The History error card's message, when it is showing one.
     var historyError: String? { statusAlert ? status.stringValue : nil }
 
-    /// Shipping `recording_session_is_active`: a recording owns the capture
-    /// flow, so Screenshot Display captures directly instead of opening the menu.
-    var recordingSessionActive: Bool { recordingSession != nil }
+    /// The shipping recording state Screenshot Display is routed on, or nil
+    /// without a recording session. The HUD mirrors the take's state.
+    var recordingRouteState: String? {
+        guard recordingSession != nil else { return nil }
+        guard !recordingPendingStart, let hud = recordingHUD else { return "countdown" }
+        return hud.hud.state
+    }
+
+    /// Where the display shortcut and tray "Screenshot Display" go now.
+    var displayCaptureRoute: DisplayCaptureRoute {
+        (try? DisplayCaptureRoute(recordingState: recordingRouteState))
+            ?? (recordingSession == nil ? .captureMenu : .ignore)
+    }
+
+    /// A running or paused take can take a display screenshot right now.
+    var recordingDisplayScreenshotAvailable: Bool {
+        displayScreenshotAvailableDuringRecording(routeState: recordingRouteState,
+            screenshotActive: recordingScreenshotGeneration != nil,
+            lifecycleBusy: recordingLifecycle.busy)
+    }
 
     @objc private func displaysChanged() {
         guard !capturing, !historyRoot.isEmpty else { return }
@@ -1906,6 +1948,7 @@ final class LiveCaptureController: NSObject {
     }
 
     private func finishRecordingScreenshot(restorePreview: Bool = true) {
+        recordingDisplayShot = nil
         recordingScreenshotTimer?.invalidate(); recordingScreenshotTimer = nil
         recordingScreenshotCountdownPanel?.close(); recordingScreenshotCountdownPanel = nil
         recordingScreenshotPanel?.close(); recordingScreenshotPanel = nil
@@ -1925,6 +1968,148 @@ final class LiveCaptureController: NSObject {
             hud.orderFrontRegardless()
         }
         updateRecordingMeter()
+    }
+
+    /// Shipping display shortcut and tray "Screenshot Display" during a
+    /// recording (`start_capture_inner(Display)`): capture the display under
+    /// the pointer with the screenshot countdown, without the recording
+    /// controls unless they are opted into captures, into History, the
+    /// clipboard and the mini previews. The take keeps running; only a child
+    /// of its capture flow is used. Refuses silently when the take is busy.
+    @discardableResult func captureDisplayWhileRecording() -> Bool {
+        guard recordingDisplayScreenshotAvailable, let hud = recordingHUD,
+              let parentGeneration = activeRecordingGeneration else { return false }
+        // Shipping looks the display up for every capture: the pointer's.
+        let pointer = pointerDisplayID()
+        guard let display = displays.first(where: { $0.id == pointer }) ?? recordingDisplay,
+              let screen = screen(for: display) else {
+            showCaptureError("Couldn’t start capture",
+                AppBridgeError.backend("The selected display is no longer available."))
+            return false
+        }
+        guard recordingLifecycle.begin() else { return false }
+        let generation: UInt64
+        do {
+            let response = try AppBridge.flow([
+                "operation": "begin_recording_screenshot",
+                "parent_generation": parentGeneration,
+                "seconds": 0,
+            ])
+            guard let value = response["generation"] as? NSNumber else {
+                throw AppBridgeError.invalidResponse
+            }
+            generation = value.uint64Value
+        } catch {
+            recordingLifecycle.end()
+            showCaptureError("Couldn’t start capture", error)
+            return false
+        }
+        recordingScreenshotGeneration = generation
+        recordingScreenshotSnapshotPending = false
+        hud.hud.setLifecycleActionsEnabled(false)
+        updateRecordingMeter()
+        status.stringValue = "Preparing screenshot… Press Escape to cancel."
+        run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
+            guard let self, self.recordingScreenshotGeneration == generation else { return }
+            do {
+                let preferences = try result.get()
+                self.recordingDisplayShot = RecordingDisplayShot(display: display, screen: screen,
+                    preferences: preferences)
+                self.recordingScreenshotPreviewGeneration = self.miniPreviews?.beginCapture(
+                    settings: preferences.miniPreviewSettings)
+                let hides = recordingDisplayScreenshotHidesControls(
+                    includeControls: preferences.includeRecordingControlsInCaptures)
+                if hides { self.recordingHUD?.orderOut(nil) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + (hides ? 0.3 : 0)) { [weak self] in
+                    self?.startRecordingDisplayCountdown(generation: generation)
+                }
+            } catch {
+                self.finishRecordingScreenshot()
+                self.showCaptureError("Couldn’t start capture", error)
+            }
+        }
+        return true
+    }
+
+    private func startRecordingDisplayCountdown(generation: UInt64) {
+        guard recordingScreenshotGeneration == generation, let shot = recordingDisplayShot else { return }
+        do {
+            _ = try AppBridge.flow([
+                "operation": "start_countdown",
+                "generation": generation,
+                "seconds": shot.preferences.countdown,
+            ])
+            if shot.preferences.countdown > 0 {
+                let countdown = ScreenshotCountdownPanel(screen: shot.screen, tokens: tokens,
+                    remaining: shot.preferences.countdown)
+                recordingScreenshotCountdownPanel = countdown
+                countdown.orderFrontRegardless()
+            }
+            // Cancellation must still poll while AppKit tracks a drag/control.
+            let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.tickRecordingDisplayScreenshot(generation: generation)
+            }
+            recordingScreenshotTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+            tickRecordingDisplayScreenshot(generation: generation)
+        } catch {
+            finishRecordingScreenshot()
+            showCaptureError("Screenshot failed", error)
+        }
+    }
+
+    private func tickRecordingDisplayScreenshot(generation: UInt64) {
+        guard recordingScreenshotGeneration == generation, let shot = recordingDisplayShot else { return }
+        do {
+            let state = try AppBridge.flow(["operation": "poll", "generation": generation])
+            guard state["current"] as? Bool == true else {
+                if let panel = recordingScreenshotCountdownPanel {
+                    recordingScreenshotCountdownPanel = nil; panel.closeAfterCancelling()
+                }
+                finishRecordingScreenshot()
+                status.stringValue = "Screenshot cancelled; recording continues."
+                return
+            }
+            guard let remaining = state["remaining"] as? Int else { throw AppBridgeError.invalidResponse }
+            recordingScreenshotCountdownPanel?.countdownContent.setRemaining(remaining)
+            guard remaining == 0, !recordingScreenshotSnapshotPending else { return }
+            recordingScreenshotSnapshotPending = true
+            recordingScreenshotCountdownPanel?.close()
+            recordingScreenshotCountdownPanel = nil
+            status.stringValue = "Capturing screenshot while recording…"
+            let preferences = shot.preferences
+            let displayID = shot.display.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.recordingScreenshotGeneration == generation else { return }
+                self.run({ [transport, historyRoot] in
+                    let result = try transport.request(["operation": "capture_display",
+                        "root": historyRoot, "display_id": displayID, "generation": generation,
+                        "include_cursor": preferences.includeCursor])
+                    guard let value = result["artifact"] as? [String: Any],
+                          let artifact = CaptureArtifact(value) else { throw AppBridgeError.invalidResponse }
+                    return artifact
+                }) { [weak self] result in
+                    guard let self, self.recordingScreenshotGeneration == generation else { return }
+                    switch result {
+                    case .success(let artifact):
+                        let previewGeneration = self.recordingScreenshotPreviewGeneration
+                        self.recordingScreenshotPreviewGeneration = nil
+                        self.finishRecordingScreenshot(restorePreview: false)
+                        self.miniPreviews?.present(artifact, on: displayID,
+                            settings: preferences.miniPreviewSettings,
+                            generation: previewGeneration)
+                        self.loadHistory(select: artifact.id)
+                        if preferences.autoCopy { self.copyImage(at: artifact.imagePath, artifactID: artifact.id) }
+                    case .failure(let error):
+                        self.finishRecordingScreenshot()
+                        self.showCaptureError("Screenshot failed", error)
+                    }
+                }
+            }
+        } catch {
+            finishRecordingScreenshot()
+            showCaptureError("Screenshot failed", error)
+        }
     }
 
     func hideRecordingControls() {
@@ -2083,6 +2268,7 @@ final class LiveCaptureController: NSObject {
     }
 
     private func updateRecordingMeter() {
+        defer { publishRecordingDisplayRoute() }
         guard let session = recordingSession, let hud = recordingHUD,
               let meter = recordingMeter else {
             recordingMeter?.setActive(false)
@@ -2093,6 +2279,15 @@ final class LiveCaptureController: NSObject {
             && recordingScreenshotGeneration == nil && !recordingPendingStart
             && hud.isVisible && !hud.hud.isHidden && !hud.hud.paused
             && !hud.hud.microphoneMuted && hud.hud.microphoneAvailable)
+    }
+
+    /// Tells the host when the display shortcut starts or stops routing to a
+    /// screenshot beside the take, so it can update the shortcut routes.
+    private func publishRecordingDisplayRoute() {
+        let available = recordingDisplayScreenshotAvailable
+        guard available != publishedRecordingDisplayRoute else { return }
+        publishedRecordingDisplayRoute = available
+        recordingControlsVisibilityChanged(recordingControlsHidden)
     }
 
     private func toggleRecordingMicrophone() {
@@ -2475,6 +2670,7 @@ final class LiveCaptureController: NSObject {
             previewCaptureGeneration = nil
         }
         snapshotPending = false; setBusy(false)
+        publishRecordingDisplayRoute()
         if restoreWindow { workspaceHidden?(false) }
         switch windowRestoration.finish(restoreRequested: restoreWindow) {
         case .none: break
