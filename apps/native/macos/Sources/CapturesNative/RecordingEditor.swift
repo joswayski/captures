@@ -798,7 +798,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let didSaveCopy: () -> Void
     private let didReplaceOriginal: (String) -> Void
     private let confirmDiscard: () -> Bool
-    private let confirmReplaceOriginal: (NSWindow, String, @escaping (Bool) -> Void) -> Void
     private let requestTermination: () -> Void
     private var tokens: Tokens
     private var generation = 0
@@ -808,7 +807,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var savedExport: Data?
     private var busy = false
     private var pickerOpen = false
-    private var awaitingReplaceConfirmation = false
     private var originalPath: String?
     private var requiresReopen = false
     private var activeCancel: NativeRecordingEditorCancel?
@@ -827,8 +825,28 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var comparisonWorkKey: String?
     private var comparisonFailure: String?
     /// Shipping's "Save as new file" (`makeCopy`): off saves over a
-    /// same-format original through the confirmed replacement.
+    /// same-format original, without a confirmation, as shipping does.
     private var saveAsNew = false
+    /// Shipping's footer defaults for the original (`recordingUserFacingDefaults`).
+    private var sourceDirectory = ""
+    private var sourceStem = ""
+    /// Live edits: staged values decode their preview once they settle.
+    private var applyWork: DispatchWorkItem?
+    private var applyWorkKey: String?
+    /// A staged identity that failed to apply; it is not retried until edited.
+    private var applyFailedKey: String?
+    /// A typed value is still being edited; it applies on Return or focus loss.
+    private var editingText = false
+    /// Shipping's debounced background estimate, once per accepted identity.
+    private var estimateWork: DispatchWorkItem?
+    private var estimateWorkKey: String?
+    private var estimateAttempt: String?
+    private var estimateCancel: NativeRecordingEditorCancel?
+    /// Operations waiting for a superseded background estimate to stop.
+    private var afterEstimate: [() -> Void] = []
+    /// What the last successful Save wrote; Save stays disabled until
+    /// anything changes (shipping's `alreadySaved`).
+    private var savedFingerprint: String?
     private var playbackState = RecordingPlaybackState.idle
     private var playbackCancel: NativeRecordingEditorCancel?
     private var playbackPositionMilliseconds: UInt64?
@@ -900,7 +918,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let outputWidth = TokenNumberField()
     private let outputHeight = TokenNumberField()
     private let geometryHelp = NSTextField(wrappingLabelWithString:
-        "Apply previews even-pixel sizes for the selected format and quality.")
+        "The preview uses even-pixel sizes for the selected format and quality.")
     private var stagedCrop: NativeRecordingCropRect?
     private var cropAspectUnlocked = false
     private var resolutionPreset = NativeRecordingResolutionPreset.original
@@ -964,8 +982,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let filenameField = NSTextField()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let progress = RecordingProgressBar()
-    private var applyButton: CaptureButton!
-    private var estimateButton: CaptureButton!
     private var saveButton: CaptureButton!
     private let saveAsNewRow = Surface()
     private let saveAsNewSwitch = NSSwitch()
@@ -999,13 +1015,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
          didSaveCopy: @escaping () -> Void = {},
          didReplaceOriginal: @escaping (String) -> Void = { _ in },
          confirmDiscard: (() -> Bool)? = nil,
-         confirmReplaceOriginal: ((NSWindow, String, @escaping (Bool) -> Void) -> Void)? = nil,
          requestTermination: @escaping () -> Void = { NSApp.terminate(nil) }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.didSaveCopy = didSaveCopy; self.didReplaceOriginal = didReplaceOriginal
         self.confirmDiscard = confirmDiscard ?? RecordingEditorController.confirmDiscardAlert
-        self.confirmReplaceOriginal = confirmReplaceOriginal
-            ?? RecordingEditorController.presentReplaceOriginalConfirmation
         self.requestTermination = requestTermination
         trimTimeline = RecordingTrimTimeline(tokens: tokens)
         cropOverlay = RecordingCropOverlay(tokens: tokens)
@@ -1047,13 +1060,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             return
         }
-        if artifactID != nil, busy || pickerOpen || awaitingReplaceConfirmation
+        if artifactID != nil, (busy && !estimating) || pickerOpen
             || dirty || cropAdjustmentActive {
             showError("Finish, cancel, save, or discard the current recording edits first.")
             window.makeKeyAndOrderFront(nil)
             completion?(false)
             return
         }
+        // Another recording supersedes a background estimate.
+        estimateCancel?.cancel()
+        resetLiveWork()
         generation += 1
         let current = generation
         artifactID = artifact.id; presentation = nil; savedEdit = nil; savedExport = nil
@@ -1080,10 +1096,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropOverlay.isHidden = true; cropOverlay.setEditingEnabled(false)
         stagedCrop = nil; cropAspectUnlocked = false
         resolutionPreset = .original; customOutput = false
+        format.selectItem(at: 0)
         setPreviewImage(nil)
         trimTimeline.clearThumbnails()
-        setDestinationDirectory(outputDirectory)
-        filenameField.stringValue = Self.defaultFilenameStem()
+        // Shipping's footer starts on the original's folder and filename.
+        let defaults = RecordingEditorCopy.saveDefaults(savedPath: artifact.savedPath,
+            path: artifact.mediaPath ?? "", createdAt: artifact.createdAt,
+            outputDirectory: outputDirectory)
+        sourceDirectory = defaults.directory; sourceStem = defaults.stem
+        setDestinationDirectory(defaults.directory)
+        filenameField.stringValue = defaults.stem
         titleLabel.stringValue = RecordingEditorCopy.title(
             mimeType: artifact.kind == "gif" ? "image/gif" : "video/mp4")
         sourceLabel.stringValue = "Opening recording…"
@@ -1103,7 +1125,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 self.busy = false
                 self.originalPath = value.originalSavePath
                 self.publish(value, initialize: true)
-                self.status.stringValue = "Original remains unchanged. Save creates a new copy."
+                // Without a replaceable original (a reference or a History-only
+                // recording), Save as new file is locked on with its `-edited`
+                // name, as shipping does for a format change.
+                if self.eligibleOriginalPath == nil {
+                    self.saveAsNew = true
+                    self.filenameField.stringValue = RecordingEditorCopy.editedStem(self.sourceStem)
+                }
+                self.status.stringValue = self.savingCopy
+                    ? "Original remains unchanged. Save creates a new copy." : ""
                 self.generateThumbnails(completion: { completion?(true) })
             case .failure(let error):
                 accepted = false
@@ -1136,7 +1166,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             showError("Pausing recording playback before quitting…")
             window.makeKeyAndOrderFront(nil); return false
         }
-        if busy || pickerOpen || awaitingReplaceConfirmation {
+        if estimating, afterEstimate.isEmpty { estimateCancel?.cancel() }
+        if (busy && !estimating) || pickerOpen {
             showError("Cancel or wait for the recording operation before quitting.")
             window.makeKeyAndOrderFront(nil); return false
         }
@@ -1159,7 +1190,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             return false
         }
-        if busy || pickerOpen || awaitingReplaceConfirmation {
+        if estimating, afterEstimate.isEmpty {
+            // Closing supersedes a background estimate, then closes once it stops.
+            supersedeEstimate { [weak self] in
+                guard let self else { return }
+                if self.windowShouldClose(self.window) { self.window.close() }
+            }
+            return false
+        }
+        if busy || pickerOpen {
             showError("Cancel or wait for the recording operation before closing.")
             return false
         }
@@ -1183,26 +1222,31 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             updateControls(); return
         }
+        // A typed value applies live once editing ends (Return or focus loss).
+        editingText = true
         invalidateComparison()
         if let field = notification.object as? NSTextField,
            field === systemVolume || field === microphoneVolume {
             syncVolumeSlider(field === systemVolume ? systemVolumeSlider : microphoneVolumeSlider,
                              from: field)
-            estimate = nil; updateControls(); return
+            updateControls(); return
         }
         if let field = notification.object as? NSTextField,
            [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
-            estimate = nil; updateControls(); return
+            updateControls(); return
         }
         if notification.object as? NSTextField === maximumSizeValue {
-            estimate = nil; updateControls(); return
+            updateControls(); return
         }
-        estimate = nil; syncTimelineFromFields(); updateControls()
+        syncTimelineFromFields(); updateControls()
     }
     func controlTextDidEndEditing(_ notification: Notification) {
-        guard let field = notification.object as? NSTextField,
-              [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) else { return }
-        commitCropField(field)
+        guard let field = notification.object as? NSTextField, field !== filenameField else { return }
+        editingText = false
+        if [cropX, cropY, cropWidth, cropHeight].contains(where: { $0 === field }) {
+            commitCropField(field)
+        }
+        updateControls()
     }
 
     private func buildUI() {
@@ -1327,7 +1371,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             guard let self else { return }
             (edge == .start ? self.trimStart : self.trimEnd).stringValue = String(milliseconds)
             self.invalidateComparison()
-            self.estimate = nil; self.updateControls()
+            self.updateControls()
         }
         trimTimeline.onSeek = { [weak self] milliseconds in self?.seek(to: milliseconds) }
         trimPanel.addSubview(trimTimeline)
@@ -1468,10 +1512,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimateDelta.layer?.cornerRadius = tokens.number("r-sm")
         estimateDelta.setAccessibilityLabel("Recording size estimate change")
         estimateDelta.toolTip = "Change versus the original recording file"
-        estimateButton = button("Estimate size", parent: qualityPanel) { [weak self] in
-            self?.estimateSize()
-        }
-        estimateButton.toolTip = "Percentage change compares the accepted estimate with the original recording file. Longer recordings use approximate encoded samples. No History entry or saved file is created."
 
         // Audio.
         card(audioPanel, parent: page)
@@ -1513,8 +1553,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         filenameField.font = .systemFont(ofSize: tokens.number("text-sm"))
         filenameField.lineBreakMode = .byTruncatingTail
         footer.addSubview(filenameField)
-        format.addItems(withTitles: [".mp4", ".gif"])
+        // Shipping's MP4 / GIF / WebM select.
+        format.addItems(withTitles: [".mp4", ".gif", ".webm"])
         format.item(at: 0)?.toolTip = "MP4"; format.item(at: 1)?.toolTip = "GIF"
+        format.item(at: 2)?.toolTip = "WebM"
         format.target = self; format.action = #selector(formatChanged)
         format.setAccessibilityLabel("Recording export format")
         footer.addSubview(format)
@@ -1537,8 +1579,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             self?.revealSavedCopy()
         }
         showInFolderButton.icon = .shipping("folder")
-        applyButton = button("Apply edits", parent: footer) { [weak self] in self?.applyEdits() }
-        applyButton.toolTip = "Update the preview before scrubbing or saving"
         saveButton = button("Save", parent: footer) { [weak self] in self?.saveOrReplace() }
         saveButton.primary = true
         saveButton.icon = .shipping("save")
@@ -1855,13 +1895,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let estimateWidth = min(max(56, estimateLabel.intrinsicContentSize.width + 4),
                                 max(56, content - 190))
         estimateLabel.frame = NSRect(x: padding, y: y + 6, width: estimateWidth, height: 18)
-        var x = estimateLabel.frame.maxX + gap
+        let x = estimateLabel.frame.maxX + gap
         if !estimateDelta.isHidden {
             let deltaWidth = estimateDelta.intrinsicContentSize.width + tokens.number("s-3") * 2
             estimateDelta.frame = NSRect(x: x, y: y + 6, width: deltaWidth, height: 18)
-            x = estimateDelta.frame.maxX + gap
         }
-        estimateButton.frame = NSRect(x: x, y: y, width: 112, height: fieldHeight)
         qualityPanel.frame.size = NSSize(width: width, height: y + fieldHeight + padding)
     }
 
@@ -1896,7 +1934,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let available = max(0, width - marginX * 2)
         let fieldHeight = tokens.number("h-md")
         // Right to left, as shipping: Save, then the native actions and Cancel.
-        let actions: [(NSView, CGFloat)] = [(saveButton, 104), (applyButton, 104),
+        let actions: [(NSView, CGFloat)] = [(saveButton, 104),
                                             (showInFolderButton, 146), (cancelButton, 156),
                                             (saveAsNewRow, 156)]
         let visible = actions.filter { !$0.0.isHidden }
@@ -2017,9 +2055,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackAudioEnabled = nil
         trimTimeline.setPlaybackPosition(nil)
-        setPreviewImage(NSImage(cgImage: value.image,
-                                size: NSSize(width: CGFloat(value.image.width),
-                                             height: CGFloat(value.image.height))))
+        let acceptedImage = NSImage(cgImage: value.image,
+                                    size: NSSize(width: CGFloat(value.image.width),
+                                                 height: CGFloat(value.image.height)))
+        // A live crop edit keeps Adjust crop on its source frame; Done shows
+        // the newly accepted preview.
+        if cropAdjustmentActive {
+            cropAdjustmentPriorImage = acceptedImage
+        } else {
+            setPreviewImage(acceptedImage)
+        }
         if let mimeType = value.snapshot.source["mime_type"] as? String {
             titleLabel.stringValue = RecordingEditorCopy.title(mimeType: mimeType)
         }
@@ -2069,7 +2114,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }
             refreshGeometryFields(source: source, preserveCustom: customOutput)
         }
-        format.selectItem(at: acceptedExport["format"] as? String == "gif" ? 1 : 0)
+        // WebM keeps its selection over the accepted MP4 preview settings.
+        if !(webmSelected && acceptedExport["format"] as? String == "mp4") {
+            format.selectItem(at: acceptedExport["format"] as? String == "gif" ? 1 : 0)
+        }
         let acceptedMaximum = (acceptedExport["max_size_bytes"] as? NSNumber)?.uint64Value
         maximumSizeEnabled = acceptedMaximum != nil
         if let acceptedMaximum {
@@ -2103,11 +2151,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 gifMaximumWidthControl.selectItem(withTitle: "Original")
             }
         }
+        // Shipping keeps the previous estimate until a newer one arrives.
         if initialize {
             savedEdit = canonicalEdit(value.snapshot.edit); savedExport = canonical(acceptedExport)
-        } else if canonicalEdit(old?.edit) != canonicalEdit(value.snapshot.edit)
-                    || canonical(old?.saveExport) != canonical(acceptedExport) {
-            estimate = nil
         }
         updateControls()
     }
@@ -2198,20 +2244,101 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             || canonical(stagedExport) != canonical(snapshot.saveExport)
     }
 
+    /// Staged values as one comparable identity.
+    private var stagedKey: String? {
+        guard let edit = canonicalEdit(stagedEdit), let export = canonical(stagedExport) else {
+            return nil
+        }
+        return edit.base64EncodedString() + "|" + export.base64EncodedString()
+    }
+
+    /// The accepted edit and export, which a background estimate describes.
+    private var acceptedKey: String? {
+        guard let snapshot = presentation?.snapshot,
+              let edit = canonicalEdit(snapshot.edit),
+              let export = canonical(snapshot.saveExport) else { return nil }
+        return edit.base64EncodedString() + "|" + export.base64EncodedString()
+    }
+
+    /// Staged edits could decode now (shipping has no Apply edits button).
+    var canApplyEdits: Bool {
+        presentation != nil && !(busy && !estimating) && !pickerOpen && !requiresReopen
+            && playbackState == .idle && pendingCropInputValid && stagedEdit != nil
+            && stagedExport != nil && (!maximumSizeEnabled || maximumSizeBytes != nil)
+            && stagedDiffers
+    }
+
+    /// Decode the staged edits now, superseding a background estimate. The
+    /// live timer calls this once edits settle; tests call it directly.
+    func applyPendingEdits() {
+        guard canApplyEdits else { return }
+        applyWork?.cancel(); applyWork = nil; applyWorkKey = nil
+        if estimating {
+            supersedeEstimate { [weak self] in self?.applyPendingEdits() }
+            return
+        }
+        applyEdits()
+    }
+
     private func applyEdits() {
         invalidateComparison()
         guard commitPendingCropInput() else {
             showError("Enter valid trim, crop, audio, and output values."); return
         }
-        window.makeFirstResponder(nil)
+        // An explicit flush while typing commits the field editor first; the
+        // live timer only runs once editing has ended, so it keeps focus.
+        if editingText { window.makeFirstResponder(nil) }
         guard !busy, let edit = stagedEdit, let export = stagedExport else {
             showError("Enter valid trim, crop, audio, and output values."); return
         }
-        let finishCropOnSuccess = cropAdjustmentActive
-        if !finishCropOnSuccess { restoreAcceptedPresentation() }
+        let key = stagedKey
+        // Adjust crop stays open over its source frame while edits apply.
+        if !cropAdjustmentActive { restoreAcceptedPresentation() }
         request(["operation": "update_preview", "edit": edit, "export": export],
-                activity: "Applying edits and decoding preview…",
-                finishCropOnSuccess: finishCropOnSuccess)
+                activity: "Updating the edited preview…",
+                settled: { [weak self] succeeded in
+                    // A failure, or a result the session normalises
+                    // differently, is not retried until the user edits again.
+                    guard let self, !succeeded || (self.stagedDiffers && self.stagedKey == key)
+                    else { return }
+                    self.applyFailedKey = key
+                })
+    }
+
+    /// Shipping applies every edit at once. Natively the edited preview
+    /// decodes once staged values settle: not mid-drag, mid-typing, or while
+    /// the worker or playback owns media. Their completion schedules again.
+    private func scheduleLiveApply() {
+        guard presentation != nil, stagedDiffers, !editingText, !requiresReopen,
+              let key = stagedKey, key != applyFailedKey,
+              !maximumSizeEnabled || maximumSizeBytes != nil else {
+            applyWork?.cancel(); applyWork = nil; applyWorkKey = nil
+            return
+        }
+        // Newer edits supersede a background estimate right away.
+        if estimating { estimateCancel?.cancel() }
+        guard applyWorkKey != key || applyWork == nil else { return }
+        applyWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.applyWork = nil; self.applyWorkKey = nil
+            if NSEvent.pressedMouseButtons != 0 {
+                self.scheduleLiveApply(); return
+            }
+            if self.busy || self.pickerOpen || self.playbackState != .idle { return }
+            self.applyPendingEdits()
+        }
+        applyWork = work; applyWorkKey = key
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + .milliseconds(RecordingEditorCopy.liveTiming.applyDelayMilliseconds),
+            execute: work)
+    }
+
+    private func resetLiveWork() {
+        applyWork?.cancel(); applyWork = nil; applyWorkKey = nil; applyFailedKey = nil
+        estimateWork?.cancel(); estimateWork = nil; estimateWorkKey = nil
+        estimateAttempt = nil; estimateCancel = nil; afterEstimate.removeAll()
+        editingText = false; savedFingerprint = nil
     }
 
     @objc private func seekChanged() {
@@ -2222,9 +2349,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     /// timeline click (shipping scrubs its video from the track).
     private func seek(to position: UInt64) {
         invalidateComparison()
+        if estimating, !stagedDiffers {
+            supersedeEstimate { [weak self] in self?.seek(to: position) }
+            return
+        }
         guard !busy, !stagedDiffers else {
             seekSlider.doubleValue = Double(presentation?.snapshot.positionMilliseconds ?? 0)
-            if stagedDiffers { showError("Apply staged recording changes before seeking.") }
+            if stagedDiffers { showError("Wait for the edited preview before seeking.") }
             return
         }
         let finishCropOnSuccess = cropAdjustmentActive
@@ -2235,7 +2366,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func request(_ object: [String: Any], activity: String,
-                         finishCropOnSuccess: Bool = false) {
+                         finishCropOnSuccess: Bool = false, settled: ((Bool) -> Void)? = nil) {
         guard !busy else { return }
         let current = generation; busy = true
         status.textColor = tokens.color("text-muted"); status.stringValue = activity
@@ -2246,8 +2377,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             switch result {
             case .success(let value):
                 if finishCropOnSuccess { self.finishCropAdjustment(restorePriorImage: false) }
+                self.applyFailedKey = nil
                 self.publish(value); self.status.stringValue = "Preview updated."
+                settled?(true)
             case .failure(let error):
+                settled?(false)
                 self.seekSlider.doubleValue = Double(self.presentation?.snapshot.positionMilliseconds ?? 0)
                 self.showError("Recording preview failed: \(error.localizedDescription)")
             }
@@ -2257,14 +2391,19 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func togglePlayback() {
         switch playbackState {
-        case .idle: startPlayback()
+        case .idle:
+            if estimating {
+                supersedeEstimate { [weak self] in self?.startPlayback() }
+                return
+            }
+            startPlayback()
         case .playing: pausePlayback()
         case .pausing: break
         }
     }
 
     @objc private func playbackLoopChanged() {
-        guard presentation != nil, !busy, !pickerOpen, playbackState != .pausing else {
+        guard presentation != nil, !busy || estimating, !pickerOpen, playbackState != .pausing else {
             playbackLoop.state = playbackLoopEnabled ? .on : .off
             return
         }
@@ -2274,7 +2413,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc private func playbackSoundChanged() {
-        guard presentation != nil, !busy, !pickerOpen, playbackState == .idle else {
+        guard presentation != nil, !busy || estimating, !pickerOpen, playbackState == .idle else {
             playbackSound.state = playbackSoundEnabled ? .on : .off
             return
         }
@@ -2397,22 +2536,76 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         refreshCaption()
     }
 
-    private func estimateSize() {
-        guard !busy, !stagedDiffers, presentation != nil,
+    /// Shipping estimates the accepted settings on its own: not Maximum
+    /// (which shows its cap), WebM or staged edits.
+    var canEstimate: Bool {
+        presentation != nil && !busy && !pickerOpen && !requiresReopen
+            && playbackState == .idle && !stagedDiffers && !maximumSizeEnabled && !webmSelected
+            && (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber) == nil
+    }
+
+    /// Estimate the accepted settings now; the debounce calls this, and so do tests.
+    func estimateSizeNow() {
+        guard canEstimate else { return }
+        estimateWork?.cancel(); estimateWork = nil; estimateWorkKey = nil
+        estimateAttempt = acceptedKey
+        estimateSize()
+    }
+
+    /// Shipping's background estimate, 600 ms after the accepted settings
+    /// settle, once per identity.
+    private func scheduleEstimate() {
+        guard presentation != nil, !estimating, !requiresReopen, !stagedDiffers,
+              !maximumSizeEnabled, !webmSelected,
               (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber) == nil,
-              let cancel = NativeRecordingEditorCancel() else { return }
-        let current = generation; busy = true; activeCancel = cancel; estimate = nil
+              let key = acceptedKey, key != estimateAttempt else {
+            if !estimating { estimateWork?.cancel(); estimateWork = nil; estimateWorkKey = nil }
+            return
+        }
+        guard estimateWorkKey != key || estimateWork == nil else { return }
+        estimateWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.estimateWork = nil; self.estimateWorkKey = nil
+            // The worker's completion updates controls and schedules again.
+            guard self.canEstimate, self.acceptedKey == key else { return }
+            self.estimateSizeNow()
+        }
+        estimateWork = work; estimateWorkKey = key
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + .milliseconds(RecordingEditorCopy.liveTiming.estimateDebounceMilliseconds),
+            execute: work)
+    }
+
+    /// Stop a background estimate that an operation supersedes, then run it.
+    private func supersedeEstimate(then action: @escaping () -> Void) {
+        afterEstimate.append(action)
+        estimateCancel?.cancel()
+        updateControls()
+    }
+
+    private func estimateSize() {
+        guard canEstimate, let cancel = NativeRecordingEditorCancel() else { return }
+        let current = generation; busy = true; estimateCancel = cancel
         estimating = true
-        status.textColor = tokens.color("text-muted")
-        status.stringValue = "Estimating accepted recording settings…"; updateControls()
+        updateControls()
         worker.estimate(cancel: cancel) { [weak self] result in
-            guard let self, self.generation == current else { return }
-            self.busy = false; self.activeCancel = nil; self.estimating = false
-            switch result {
-            case .success(let value): self.estimate = value; self.status.stringValue = "Estimate ready."
-            case .failure(let error): self.showError("Size estimate failed: \(error.localizedDescription)")
+            guard let self, self.generation == current, self.estimateCancel === cancel else { return }
+            self.busy = false; self.estimateCancel = nil; self.estimating = false
+            if cancel.isCancelled {
+                // Newer settings estimate again once they settle; the previous
+                // value stays visible meanwhile, as in shipping.
+                self.estimateAttempt = nil
+            } else if case .success(let value) = result {
+                self.estimate = value
+            } else {
+                // Shipping shows "—" for a failed estimate, not an error.
+                self.estimate = nil
             }
+            let actions = self.afterEstimate
+            self.afterEstimate.removeAll()
             self.updateControls()
+            actions.forEach { $0() }
         }
     }
 
@@ -2448,7 +2641,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     var comparisonApplies: Bool {
         guard let snapshot = presentation?.snapshot, !comparisonDismissed, !requiresReopen,
               playbackState == .idle, playbackPositionMilliseconds == nil,
-              !cropAdjustmentActive, !stagedDiffers else { return false }
+              !cropAdjustmentActive, !stagedDiffers, !webmSelected else { return false }
         let compresses = (snapshot.saveExport["quality"] as? String ?? "preserve") != "preserve"
             || snapshot.saveExport["max_size_bytes"] is NSNumber
         return compresses
@@ -2554,6 +2747,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func generateThumbnails(completion: (() -> Void)? = nil) {
+        if estimating {
+            supersedeEstimate { [weak self] in self?.generateThumbnails(completion: completion) }
+            return
+        }
         guard !busy, !pickerOpen, presentation != nil,
               let cancel = NativeRecordingEditorCancel() else { completion?(); return }
         let current = generation
@@ -2607,6 +2804,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if let error = RecordingEditorCopy.filenameError(filenameField.stringValue) {
             showError(error); return
         }
+        if webmSelected {
+            // Shipping's bundled FFmpeg has no libvpx; its WebM export fails here.
+            showError(RecordingEditorCopy.liveTiming.webmExportError); return
+        }
+        let fingerprint = saveFingerprint
         guard !destinationDirectory.isEmpty,
               let cancel = NativeRecordingEditorCancel() else { return }
         let gif = export["format"] as? String == "gif"
@@ -2628,6 +2830,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                         self.savedEdit = self.canonicalEdit(snapshot.edit)
                         self.savedExport = self.canonical(snapshot.saveExport)
                     }
+                    self.savedFingerprint = fingerprint
                     switch saved {
                     case .saved(let path):
                         let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size]
@@ -2649,93 +2852,92 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             })
     }
 
-    private static func presentReplaceOriginalConfirmation(
-        window: NSWindow, path: String, completion: @escaping (Bool) -> Void
-    ) {
-        let alert = NSAlert()
-        alert.messageText = "Replace the original recording?"
-        alert.informativeText = "This replaces the saved file at:\n\(path)\n\nThe existing History item will be updated. This cannot be undone."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Replace")
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { completion($0 == .alertFirstButtonReturn) }
-    }
-
-    private func confirmReplace() {
-        guard !busy, !pickerOpen, !awaitingReplaceConfirmation, !requiresReopen,
+    /// Shipping's Save with "Save as new file" off: the original is replaced
+    /// at once, without a confirmation.
+    private func replaceOriginal() {
+        guard !busy, !pickerOpen, !requiresReopen,
               playbackState == .idle, !stagedDiffers, !cropAdjustmentActive,
-              let snapshot = presentation?.snapshot, let path = eligibleOriginalPath else { return }
+              let snapshot = presentation?.snapshot, let path = eligibleOriginalPath,
+              let cancel = NativeRecordingEditorCancel() else { return }
         let current = generation, revision = snapshot.revision
-        let accepted = canonical(snapshot.saveExport)
-        awaitingReplaceConfirmation = true; updateControls()
-        confirmReplaceOriginal(window, path) { [weak self] confirmed in
-            guard let self else { return }
-            self.awaitingReplaceConfirmation = false
-            guard confirmed else { self.updateControls(); return }
-            guard self.generation == current, self.artifactID == snapshot.artifactID,
-                  !self.busy, !self.pickerOpen, !self.requiresReopen,
-                  self.playbackState == .idle, !self.stagedDiffers,
-                  self.eligibleOriginalPath == path,
-                  self.presentation?.snapshot.revision == revision,
-                  self.canonical(self.presentation?.snapshot.saveExport) == accepted,
-                  let cancel = NativeRecordingEditorCancel() else {
-                self.showError("Recording changed before replacement was confirmed. Try again.")
-                self.updateControls(); return
-            }
-            self.busy = true; self.activeCancel = cancel; self.replacing = true
-            self.progress.doubleValue = 0; self.progress.isHidden = false
-            self.status.textColor = self.tokens.color("text-muted")
-            self.status.stringValue = "Preparing replacement…"
-            self.updateControls()
-            self.worker.replaceOriginal(cancel: cancel, progress: { [weak self] value in
-                guard let self, self.generation == current,
-                      self.activeCancel === cancel else { return }
-                self.progress.doubleValue = Double(value.completedPerMille)
-                self.status.stringValue = value.message
-            }, completion: { [weak self] result in
-                guard let self, self.generation == current,
-                      self.activeCancel === cancel else { return }
-                self.busy = false; self.activeCancel = nil; self.progress.isHidden = true
-                self.replacing = false
-                switch result {
-                case .success(let replaced):
-                    guard replaced.path == path,
-                          replaced.presentation.snapshot.artifactID == snapshot.artifactID,
-                          replaced.presentation.snapshot.revision > revision else {
-                        self.markRequiresReopen("Replacement result did not match the original. Close and reopen this editor.")
-                        return
-                    }
-                    self.invalidateComparison()
-                    self.sourceFrameCache = nil; self.sourceFrameCancel = nil
-                    self.cropAdjustmentPriorImage = nil; self.cropAdjustmentActive = false
-                    self.cropOverlay.isHidden = true; self.cropOverlay.setEditingEnabled(false)
-                    self.trimTimeline.clearThumbnails(); self.thumbnailRetryAvailable = false
-                    self.estimate = nil
-                    self.qualityPreference = "preserve"; self.preserveQuality = true
-                    self.compressQuality = "highest"
-                    self.gifFramesPerSecond = 15; self.gifMaximumWidth = 800
-                    self.maximumSizeEnabled = false
-                    self.resolutionPreset = .original; self.customOutput = false
-                    self.stagedCrop = nil; self.cropAspectUnlocked = false
-                    self.savedEdit = nil; self.savedExport = nil
-                    self.publish(replaced.presentation, initialize: true)
-                    self.status.stringValue = "Replaced original: \(path)"
-                    self.didReplaceOriginal(snapshot.artifactID)
-                    self.generateThumbnails()
-                case .failure(let error):
-                    if (error as? RecordingReplaceError)?.requiresReopen == true {
-                        self.markRequiresReopen("Replacement state is uncertain: \(error.localizedDescription). Close and reopen this editor.")
-                        return
-                    }
-                    self.showError("Couldn’t replace original: \(error.localizedDescription)")
+        busy = true; activeCancel = cancel; replacing = true
+        progress.doubleValue = 0; progress.isHidden = false
+        status.textColor = tokens.color("text-muted")
+        status.stringValue = "Preparing replacement…"
+        updateControls()
+        worker.replaceOriginal(cancel: cancel, progress: { [weak self] value in
+            guard let self, self.generation == current,
+                  self.activeCancel === cancel else { return }
+            self.progress.doubleValue = Double(value.completedPerMille)
+            self.status.stringValue = value.message
+        }, completion: { [weak self] result in
+            guard let self, self.generation == current,
+                  self.activeCancel === cancel else { return }
+            self.busy = false; self.activeCancel = nil; self.progress.isHidden = true
+            self.replacing = false
+            switch result {
+            case .success(let replaced):
+                guard replaced.path == path,
+                      replaced.presentation.snapshot.artifactID == snapshot.artifactID,
+                      replaced.presentation.snapshot.revision > revision else {
+                    self.markRequiresReopen("Replacement result did not match the original. Close and reopen this editor.")
+                    return
                 }
-                self.updateControls()
-            })
-        }
+                self.invalidateComparison()
+                self.sourceFrameCache = nil; self.sourceFrameCancel = nil
+                self.cropAdjustmentPriorImage = nil; self.cropAdjustmentActive = false
+                self.cropOverlay.isHidden = true; self.cropOverlay.setEditingEnabled(false)
+                self.trimTimeline.clearThumbnails(); self.thumbnailRetryAvailable = false
+                self.estimate = nil; self.estimateAttempt = nil; self.applyFailedKey = nil
+                self.qualityPreference = "preserve"; self.preserveQuality = true
+                self.compressQuality = "highest"
+                self.gifFramesPerSecond = 15; self.gifMaximumWidth = 800
+                self.maximumSizeEnabled = false
+                self.resolutionPreset = .original; self.customOutput = false
+                self.stagedCrop = nil; self.cropAspectUnlocked = false
+                self.savedEdit = nil; self.savedExport = nil
+                self.publish(replaced.presentation, initialize: true)
+                // Shipping's save toast and Show in Folder follow the save,
+                // and Save stays disabled until anything changes.
+                let gif = replaced.presentation.snapshot.saveExport["format"] as? String == "gif"
+                let size = (replaced.presentation.snapshot.source["size_bytes"] as? NSNumber)?
+                    .uint64Value ?? 0
+                self.status.textColor = self.tokens.color("positive-text")
+                self.status.stringValue = RecordingEditorCopy.saved(gif: gif, sizeBytes: size)
+                    ?? "Replaced original: \(path)"
+                self.status.toolTip = path
+                self.lastSavedPath = path
+                self.savedFingerprint = self.saveFingerprint
+                self.didReplaceOriginal(snapshot.artifactID)
+                self.generateThumbnails()
+            case .failure(let error):
+                if (error as? RecordingReplaceError)?.requiresReopen == true {
+                    self.markRequiresReopen("Replacement state is uncertain: \(error.localizedDescription). Close and reopen this editor.")
+                    return
+                }
+                self.showError("Couldn’t replace original: \(error.localizedDescription)")
+            }
+            self.updateControls()
+        })
     }
 
     /// Save writes a new copy: chosen, or required by the format or source.
     var savingCopy: Bool { saveAsNew || eligibleOriginalPath == nil || requiresReopen }
+
+    /// Shipping offers WebM, which its bundled FFmpeg cannot encode: the
+    /// accepted preview keeps MP4 settings and Save reports shipping's error.
+    private var webmSelected: Bool { format.indexOfSelectedItem == 2 }
+
+    /// What Save would write now, compared with the last successful save.
+    private var saveFingerprint: String? {
+        guard let key = acceptedKey else { return nil }
+        return [key, savingCopy ? "copy" : "replace", destinationPath].joined(separator: "|")
+    }
+
+    /// Shipping disables Save after a successful save until anything changes.
+    private var alreadySaved: Bool {
+        savedFingerprint != nil && savedFingerprint == saveFingerprint
+    }
 
     /// Compress or Maximum is accepted, so a hidden comparison can come back.
     private var acceptedCompresses: Bool {
@@ -2744,17 +2946,31 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func saveOrReplace() {
-        if savingCopy { saveNewCopy() } else { confirmReplace() }
+        if estimating {
+            // Save supersedes a background estimate and runs once it stops.
+            supersedeEstimate { [weak self] in self?.saveOrReplace() }
+            return
+        }
+        if savingCopy { saveNewCopy() } else { replaceOriginal() }
     }
 
+    /// Shipping `updateMakeCopy`: the `-edited` name follows the switch while
+    /// the filename and folder are still the original's.
     @objc private func saveAsNewChanged() {
-        saveAsNew = saveAsNewSwitch.state == .on
+        let copy = saveAsNewSwitch.state == .on
+        let edited = RecordingEditorCopy.editedStem(sourceStem)
+        if copy, filenameField.stringValue == sourceStem, destinationDirectory == sourceDirectory {
+            filenameField.stringValue = edited
+        } else if !copy, filenameField.stringValue == edited {
+            filenameField.stringValue = sourceStem
+        }
+        saveAsNew = copy
         lastSavedPath = nil
         updateControls()
     }
 
     private var eligibleOriginalPath: String? {
-        guard let path = originalPath, !path.isEmpty,
+        guard !webmSelected, let path = originalPath, !path.isEmpty,
               let format = presentation?.snapshot.saveExport["format"] as? String,
               ["mp4", "gif"].contains(format),
               URL(fileURLWithPath: path).pathExtension.lowercased() == format else { return nil }
@@ -2770,7 +2986,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func chooseDestination() {
-        guard !busy else { return }
+        guard !busy || estimating else { return }
         pickerOpen = true; updateControls()
         // Shipping's "Change…" picks the folder; the filename field names the file.
         let panel = NSOpenPanel(); panel.title = "Choose save location"
@@ -2797,19 +3013,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         destination.toolTip = path
     }
 
-    /// `<folder>/<filename>.<mp4|gif>`, as the save footer shows it.
+    /// `<folder>/<filename>.<mp4|gif|webm>`, as the save footer shows it.
     private var destinationPath: String {
-        let ext = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
+        let ext = webmSelected ? "webm" : format.indexOfSelectedItem == 1 ? "gif" : "mp4"
         return URL(fileURLWithPath: destinationDirectory, isDirectory: true)
             .appendingPathComponent("\(filenameField.stringValue).\(ext)").path
-    }
-
-    /// Matches the wgpu host's default `Captures_<local time>_edited` stem.
-    private static func defaultFilenameStem(now: Date = Date()) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return "Captures_\(formatter.string(from: now))_edited"
     }
 
     @objc private func cropEnabledChanged() {
@@ -2822,7 +3030,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             stagedCrop = nil
             if cropAdjustmentActive { finishCropAdjustment(restorePriorImage: true) }
         }
-        estimate = nil; refreshGeometryFields(source: source, preserveCustom: customOutput)
+        refreshGeometryFields(source: source, preserveCustom: customOutput)
         updateControls()
     }
 
@@ -2890,9 +3098,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard hasPendingCropInput else { return true }
         guard let crop = pendingCropCandidate(), let snapshot = presentation?.snapshot,
               let source = sourceDimensions(snapshot) else {
-            estimate = nil; return false
+            return false
         }
-        stagedCrop = crop; estimate = nil
+        stagedCrop = crop
         refreshGeometryFields(source: source, preserveCustom: customOutput)
         return true
     }
@@ -2901,6 +3109,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         invalidateComparison()
         if cropAdjustmentActive {
             finishCropAdjustment(restorePriorImage: true); updateControls(); return
+        }
+        if estimating {
+            supersedeEstimate { [weak self] in self?.toggleCropAdjustment() }
+            return
         }
         guard !busy, !pickerOpen, playbackState == .idle, cropEnabled.state == .on,
               stagedCrop != nil, !hasPendingCropInput,
@@ -2964,7 +3176,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropOverlay.lockAspect = !cropAspectUnlocked
         cropOverlay.isHidden = false
         status.textColor = tokens.color("text-muted")
-        status.stringValue = "Adjust the source crop, then Apply edits or choose Done cropping."
+        status.stringValue = "Drag to crop the source, then choose Done cropping."
     }
 
     private func finishCropAdjustment(restorePriorImage: Bool) {
@@ -2986,7 +3198,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard cropAdjustmentActive, !hasPendingCropInput,
               let snapshot = presentation?.snapshot,
               let source = sourceDimensions(snapshot) else { return }
-        stagedCrop = crop; estimate = nil
+        stagedCrop = crop
         refreshGeometryFields(source: source, preserveCustom: customOutput)
         updateControls()
     }
@@ -3007,13 +3219,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             refreshGeometryFields(source: source, preserveCustom: false,
                                   preservePendingCrop: true)
         }
-        estimate = nil; updateControls()
+        updateControls()
     }
 
     @objc private func formatChanged() {
-        // Shipping `updateOutputFormat`: another format always saves a new file.
+        // Shipping `updateOutputFormat`: another format always saves a new
+        // `-edited` file beside the original.
         let sourceGIF = presentation?.snapshot.source["mime_type"] as? String == "image/gif"
-        if (format.indexOfSelectedItem == 1) != sourceGIF { saveAsNew = true }
+        if webmSelected || (format.indexOfSelectedItem == 1) != sourceGIF, !saveAsNew {
+            saveAsNew = true
+            filenameField.stringValue = RecordingEditorCopy.editedStem(sourceStem)
+            setDestinationDirectory(sourceDirectory)
+        }
         // Shipping offers Preserve quality only for MP4 and moves a GIF to
         // Compress at the remembered preset; Maximum keeps its limit.
         if format.indexOfSelectedItem == 1, !maximumSizeEnabled, preserveQuality {
@@ -3021,17 +3238,17 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             selectQualityPreset(compressQuality)
             qualityPreference = compressQuality
         }
-        estimate = nil; updateControls(); layout()
+        updateControls(); layout()
     }
     @objc private func gifFrameRateChanged() {
         let title = gifFrameRate.titleOfSelectedItem ?? "15 FPS"
         gifFramesPerSecond = UInt16(title.split(separator: " ").first.map(String.init) ?? "15") ?? 15
-        estimate = nil; updateControls()
+        updateControls()
     }
     @objc private func gifMaximumWidthChanged() {
         let title = gifMaximumWidthControl.titleOfSelectedItem ?? "800 px"
         gifMaximumWidth = UInt32(title.split(separator: " ").first.map(String.init) ?? "800") ?? 800
-        estimate = nil; updateControls()
+        updateControls()
     }
     @objc private func qualityModeChanged() {
         switch qualityMode.selectedItem?.representedObject as? String {
@@ -3048,7 +3265,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         // Shipping: a new quality mode shows a hidden comparison again.
         comparisonDismissed = false; comparisonAttempt = nil
         invalidateComparison()
-        estimate = nil; updateControls(); layout()
+        updateControls(); layout()
     }
     @objc private func maximumSizeUnitChanged() {
         guard let title = maximumSizeUnits.titleOfSelectedItem,
@@ -3059,14 +3276,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             maximumSizeValue.stringValue = unit.value(bytes)
         }
         maximumSizeUnit = unit
-        estimate = nil; updateControls(); layout()
+        updateControls(); layout()
     }
     @objc private func qualityChanged() {
         compressQuality = selectedQualityPreset
         qualityPreference = compressQuality
-        estimate = nil; updateControls()
+        updateControls()
     }
-    @objc private func stageChanged() { invalidateComparison(); estimate = nil; updateControls() }
+    @objc private func stageChanged() { invalidateComparison(); updateControls() }
 
     @objc private func volumeSliderChanged(_ sender: NSSlider) {
         let field = sender === systemVolumeSlider ? systemVolume : microphoneVolume
@@ -3082,7 +3299,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard let duration = presentation?.snapshot.durationMilliseconds, duration > 0 else { return }
         trimStart.stringValue = "0"; trimEnd.stringValue = String(duration)
         invalidateComparison()
-        estimate = nil; syncTimelineFromFields(); updateControls()
+        syncTimelineFromFields(); updateControls()
     }
 
     /// The selected Compress preset's shared value (`highest` … `tiny`).
@@ -3199,8 +3416,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if stagedDiffers || cropAdjustmentActive || playbackState != .idle {
             invalidateComparison()
         }
-        let available = presentation != nil && !busy && !pickerOpen
-            && !awaitingReplaceConfirmation && !requiresReopen && playbackState == .idle
+        // A background estimate never holds edits: they supersede it.
+        let blocked = busy && (!estimating || !afterEstimate.isEmpty)
+        let available = presentation != nil && !blocked && !pickerOpen
+            && !requiresReopen && playbackState == .idle
         let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
             && validMaximum
@@ -3217,7 +3436,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         // GIF keeps showing its mode until changed.
         if let preserveItem = qualityMode.itemArray.first(where: {
             $0.representedObject as? String == "preserve" }) {
-            preserveItem.isHidden = gif && mode != "preserve"
+            preserveItem.isHidden = (gif || webmSelected) && mode != "preserve"
         }
         qualityMode.isEnabled = available
         qualityModeHelp.stringValue = qualityMode.selectedItem?.toolTip ?? ""
@@ -3248,7 +3467,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let hasSystem = presentation?.snapshot.hasSystemAudio == true
         let hasMicrophone = presentation?.snapshot.hasMicrophoneAudio == true
         let hasAudio = hasSystem || hasMicrophone
-        audioPanel.isHidden = !hasAudio
+        // Shipping shows the Audio card for MP4 and the GIF note, not WebM.
+        audioPanel.isHidden = !hasAudio || webmSelected
         gifAudioNote.isHidden = !gif
         audioPanel.layer?.backgroundColor = tokens.color(gif ? "caution-surface" : "surface-raised").cgColor
         audioPanel.layer?.borderColor = tokens.color(gif ? "caution-surface" : "border-subtle").cgColor
@@ -3304,8 +3524,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         cropOverlay.interceptsPendingInput = cropAdjustmentActive && available
             && hasPendingCropInput
         cropOverlay.setEditingEnabled(cropAdjustmentActive && available && !hasPendingCropInput)
-        playbackLoop.isEnabled = presentation != nil && !busy && !pickerOpen
-            && !awaitingReplaceConfirmation && !requiresReopen
+        playbackLoop.isEnabled = presentation != nil && !blocked && !pickerOpen
+            && !requiresReopen
             && playbackState != .pausing
         playbackSound.isEnabled = available
             && playbackState == .idle
@@ -3315,7 +3535,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             playbackButton?.icon = .shipping("resume")
             playbackButton?.setAccessibilityLabel(playbackSoundEnabled
                 ? "Play recording preview with sound" : "Play silent recording preview")
-            playbackButton?.toolTip = stagedDiffers ? "Apply staged edits before playing."
+            playbackButton?.toolTip = stagedDiffers ? "Updating the edited preview…"
                 : "Play the accepted trim and mix with Sound on."
             playbackButton?.isEnabled = available && valid && !stagedDiffers
                 && !cropAdjustmentActive
@@ -3332,26 +3552,23 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             playbackButton?.isEnabled = false
         }
         playbackButton?.isHidden = cropAdjustmentActive || preview.image == nil
-        applyButton?.isEnabled = available && valid && stagedDiffers
         seekSlider.isEnabled = available && valid && !stagedDiffers
         changeButton?.isEnabled = available
-        estimateButton?.isHidden = maximumSizeEnabled
-        estimateButton?.isEnabled = available && valid && !stagedDiffers && !maximumSizeEnabled
         let copy = savingCopy
-        saveButton?.isEnabled = available && valid && !stagedDiffers
+        saveButton?.isEnabled = available && valid && !stagedDiffers && !alreadySaved
             && (copy ? !filenameField.stringValue.isEmpty : !cropAdjustmentActive)
         // The accessible name says what Save does now.
-        saveButton?.setAccessibilityLabel(copy ? "Save new copy" : "Replace original…")
+        saveButton?.setAccessibilityLabel(copy ? "Save new copy" : "Replace original")
         saveButton?.toolTip = copy
-            ? "Creates a separate copy. The original and existing files are never replaced."
-            : "Confirm replacement of \(eligibleOriginalPath ?? "") and its History item."
+            ? "Save as a new file and leave the original untouched."
+            : "Save the edits over \(eligibleOriginalPath ?? "the original") and its History item."
         saveAsNewSwitch.state = copy ? .on : .off
         saveAsNewSwitch.isEnabled = available && eligibleOriginalPath != nil
         saveAsNewRow.toolTip = eligibleOriginalPath == nil
             ? (originalPath == nil ? "No saved original file is available."
                 : "Changing formats always creates a new file")
             : "Save as a new file and leave the original untouched"
-        showComparisonButton?.isHidden = !(comparisonDismissed && acceptedCompresses)
+        showComparisonButton?.isHidden = !(comparisonDismissed && acceptedCompresses) || webmSelected
         showComparisonLabel.isHidden = showComparisonButton?.isHidden ?? true
         showComparisonButton?.isEnabled = available
         cancelButton?.isHidden = activeCancel == nil
@@ -3368,8 +3585,6 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             cancelTitle = "Cancel source preview"
         } else if comparisonCancel === activeCancel {
             cancelTitle = "Cancel comparison"
-        } else if estimating {
-            cancelTitle = "Cancel estimate"
         } else if replacing {
             cancelTitle = "Cancel replacement"
         } else {
@@ -3390,17 +3605,16 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         } else {
             trimRangeLabel.stringValue = ""; trimSelectedLabel.stringValue = ""
         }
-        // Est. size uses the shared presentation (pending, staged, cap, estimate).
+        // Est. size uses the shared shipping presentation: the typed cap,
+        // "—" for WebM or a failure, and the previous value while pending.
         var input: [String: Any] = [
             "estimating": estimating,
-            "unapplied": stagedDiffers,
-            "invalid_maximum": maximumSizeEnabled && !validMaximum,
+            "webm": webmSelected,
+            "maximum": maximumSizeEnabled,
             "estimate_exact": estimate?.exact ?? false,
             "original_bytes": (presentation?.snapshot.source["size_bytes"] as? NSNumber)?.uint64Value ?? 0,
         ]
-        if let cap = (presentation?.snapshot.saveExport["max_size_bytes"] as? NSNumber)?.uint64Value {
-            input["maximum_bytes"] = cap
-        }
+        if maximumSizeEnabled, let cap = maximumSizeBytes { input["maximum_bytes"] = cap }
         if let estimate { input["estimate_bytes"] = estimate.sizeBytes }
         let shown = RecordingEditorCopy.estimate(input)
         estimateLabel.stringValue = shown.label
@@ -3413,6 +3627,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewNote.isHidden = cropAdjustmentActive || comparison != nil
             || !(presentation?.snapshot.export["max_size_bytes"] is NSNumber)
         scheduleComparisonIfNeeded()
+        scheduleLiveApply()
+        scheduleEstimate()
         publishComparison()
         refreshCaption()
         relayoutIfNeeded()
@@ -3444,7 +3660,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         guard let snapshot = presentation?.snapshot else { return }
         if cropAdjustmentActive {
             let position = sourceFrameCache?.positionMilliseconds ?? snapshot.positionMilliseconds
-            sourceLabel.stringValue = "Uncropped source · \(time(position)) · \(snapshot.width) × \(snapshot.height) · Drag to stage the crop, then Apply edits."
+            sourceLabel.stringValue = "Uncropped source · \(time(position)) · \(snapshot.width) × \(snapshot.height) · Drag to crop the source."
         } else if let comparison {
             sourceLabel.stringValue = "Encoded · accepted \(time(comparison.positionMilliseconds)) · \(comparison.after.width) × \(comparison.after.height)"
         } else {
@@ -3463,7 +3679,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         comparisonDismissed = false; comparisonAttempt = nil; saveAsNew = false
         invalidateComparison()
         generation += 1; artifactID = nil; presentation = nil; activeCancel = nil
-        originalPath = nil; requiresReopen = false; awaitingReplaceConfirmation = false
+        originalPath = nil; requiresReopen = false
+        estimateCancel?.cancel(); resetLiveWork()
         thumbnailCancel = nil; thumbnailRetryAvailable = false
         playbackCancel = nil; playbackState = .idle
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false

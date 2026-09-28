@@ -342,7 +342,7 @@ Use `--external-image-only` for multi-file startup, canonical aliases, retained
 errors, exact imported pixels, source preservation, saved-draft refusal/restoration
 and same-ID source reload after explicit discard.
 Use `apps/native/x11_recording_editor_smoke.py --external-media` with `--binary`,
-`--output` and `--appearance` for a mixed still/GIF/MP4/WebM batch, staged edits
+`--output` and `--appearance` for a mixed still/GIF/MP4/WebM batch, live edits
 through alias refocus, closed-source reopen, immutable sources and real WebM-to-MP4
 export. It uses a private X11 session and disposable data, not physical acceptance.
 Use `--history-shortcuts-only` for document Undo/Redo keys, exact restored layers,
@@ -365,11 +365,13 @@ and `python3-xlib`, then run:
 
 For the frame-based recording editor, run the following with both `dark` and
 `light`. It creates a known-color recording in disposable History, opens the real
-editor and checks source-relative seeks, rejected edits, trim, asymmetric crop and
-independent output sizing. Decoded MP4/GIF pixels verify crop origin and scaling,
-even output dimensions, MP4 encoder-capped versus explicit GIF sizes, format-change
-save gates and unchanged source bytes. Review the minimum-size/error
-captures as well as the applied preview:
+editor and checks source-relative seeks, rejected live edits, trim, asymmetric crop and
+independent output sizing. Edits apply live as in shipping (there is no Apply edits
+or Estimate size button); the smoke waits for the editor's Working title to settle.
+Decoded MP4/GIF pixels verify crop origin and scaling, even output dimensions, MP4
+encoder-capped versus explicit GIF sizes, failed-edit save gates and unchanged source
+bytes. `--replace-original` checks that Save overwrites the original without a
+confirmation. Review the minimum-size/error captures as well as the applied preview:
 
 ```sh
 /usr/bin/python3 apps/native/x11_recording_editor_smoke.py \

@@ -867,8 +867,8 @@ original origin. Release, Escape, lost pointer/focus and layout changes end the
 gesture without rolling back staged values. Handles accept focused arrow keys
 (1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second). They never
 decode or publish media during drag: numeric values and the range update together,
-while the accepted frame remains unchanged until the existing Apply/Seek actions.
-Unapplied trim continues to gate seek, estimation and save. The wgpu track now
+and, as in shipping, the edit applies live once the drag ends (see live edits below).
+Until the edited preview decodes, pending trim gates seek, estimation and save. The wgpu track now
 displays the shared 12-frame full-source thumbnail strip, center-cropped vertically
 to the compact row. Excluded ranges are dimmed and grips retain the same hit regions.
 Generation runs once on the serialized worker after open, with independent cancel
@@ -893,7 +893,7 @@ shared accepted-mix audio API; silent v1 remains unchanged. One metadata event p
 operation reports whether audio is actually enabled. GIF/no-track/muted/zero-gain mixes use silent playback
 without a device. Audible MP4 uses the default output device; device failures remain
 visible and require an explicit Sound-off retry to play silently. Loop reopens both
-decoders each lap and is not gapless. Sound survives Apply/Seek/Pause/errors but
+decoders each lap and is not gapless. Sound survives edits/Seek/Pause/errors but
 does not change edits, estimates, dirty identity, exports or History. Private-X11
 checks capture real CPAL output through an isolated PulseAudio sink, not physical
 speakers. AppKit host tests exercise the same v2 metadata and lifecycle contract;
@@ -912,8 +912,9 @@ and paused motion frame. Eight handles and interior move use shared source-pixel
 geometry and the current aspect lock; arrows nudge one pixel, Shift ten. Release,
 Escape, focus loss and layout changes end the gesture without reverting staged
 values. Loading is cancellable/retryable; the still is cached until accepted seek
-changes position. **Done cropping** restores the prior display, while Apply is the
-only publication boundary and playback is gated during adjustment. This host path
+changes position. Crop gestures apply live when they end while Adjust crop stays on
+the cached source frame; **Done cropping** shows the accepted (edited) preview, and
+playback is gated during adjustment. This host path
 is shared by Windows/X11/Wayland; automated real-media interaction is exercised on
 X11, not physical Windows/Wayland acceptance. The AppKit host path is described below.
 Typed dimensions commit on Enter/focus loss so partial input does not change the
@@ -921,9 +922,9 @@ ratio. The lock is an input preference, not an export edit. Custom output width/
 remain independent (no output aspect lock). Original, 1080p maximum and 720p maximum presets
 reuse shared `MaxResolution::constrain`: cap height without upscaling, preserve
 the current crop's aspect ratio and round to even pixels. Presets stay selected
-after Apply/seek so later crop changes recompute the dimensions; Custom overrides
-the preset and disabling Custom restores it. Apply edits stages these
-values together with format/quality and previews the accepted export configuration.
+after edits and seeks so later crop changes recompute the dimensions; Custom overrides
+the preset and disabling Custom restores it. These values apply live together with
+format/quality and preview the accepted export configuration.
 Shared GIF encoding honors both explicit dimensions, including square-pixel aspect and proportional
 size-budget retries, instead of silently ignoring output height. Re-encoded MP4 on
 Windows/Linux fits within 3840 × 2160 (portrait: 2160 × 3840); format-aware preview
@@ -933,7 +934,7 @@ Both native recording previews have display-only **Fit / 100%**. Fit retains the
 existing scaling; 100% maps each decoded pixel to one logical screen point and
 scrolls overflowing pixels inside the preview. Smaller images stay centered.
 This applies to accepted, motion and crop-source frames without media I/O, edits,
-estimate invalidation or History changes. Apply/Seek retain the mode; another item
+estimate invalidation or History changes. Edits and seeks retain the mode; another item
 defaults to Fit. Crop gestures use the scrolled image rectangle and end on scroll,
 scale or layout changes. Motion remains capped at 1280 × 720 regardless of display
 scale. Physical AppKit input/accessibility and Windows/Wayland/mixed-DPI acceptance
@@ -941,18 +942,18 @@ are still open.
 Available system/microphone tracks have 0–200% volume, an include (unmute) checkbox
 per track and a Convert to mono control. Availability comes from the accepted session's trusted audio
 identity, not caller-provided track flags. Audio stages with geometry/format and
-uses the same Apply/save/dirty guards; failed updates preserve staged controls
+uses the same live-edit/save/dirty guards; failed updates preserve staged controls
 and accepted output state. Accepted audio also feeds opt-in Sound preview. GIF replaces
 the audio rows with the shipping note while keeping settings for a later MP4 export.
 No-track recordings show no Audio card. Private X11 smoke uses
 distinct stereo tones in a retained playback mix plus separate system/mic tracks,
 then measures decoded export frequencies/amplitudes, mono channel count, mute,
 GIF silence, restored MP4 settings and History audio identity.
-Both native hosts offer 8/10/12/15/20/24/30 GIF FPS (default 15), staged
-through the existing accepted export/Apply boundary. It participates in save,
+Both native hosts offer 8/10/12/15/20/24/30 GIF FPS (default 15), applied live
+through the accepted export boundary. It participates in save,
 playback, estimate and dirty guards, survives an MP4 roundtrip without modifying
-MP4 cadence, and resets for a new item. Failed Apply retains both the accepted
-frame and the staged correction. Private X11 light/dark coverage exports 24 and
+MP4 cadence, and resets for a new item. A failed live edit retains both the accepted
+frame and the staged correction, and is not retried until edited again. Private X11 light/dark coverage exports 24 and
 72 frames over the same three-second source at 8 and 24 FPS, checks duration,
 dimensions, colors, source/History immutability, failure/retry and minimum layout.
 AppKit real-media coverage exercises the same asymmetric trim at both cadences;
@@ -961,7 +962,7 @@ Both native hosts offer shipping-compatible GIF maximum widths of
 320/480/640/800/1200 pixels (default 800). The cap applies after crop and
 preset/custom output sizing, never upscales, and always recomputes from the
 independently retained MP4 base instead of compounding an accepted GIF reduction.
-Apply/save/seek/failure/dirty/new-item behavior stays on the existing boundary.
+Live-edit/save/seek/failure/dirty/new-item behavior stays on the existing boundary.
 Private X11 light/dark coverage saves 800/1200/320 px GIFs from a 1600×900 source,
 restores 1600×900 MP4, and checks source/History immutability. AppKit CI exercises
 the same sizing lifecycle and real GIF dimensions. Physical acceptance remains open.
@@ -970,18 +971,20 @@ limits: Tiny 64, Smaller 96, Balanced 128 and High/Highest/Preserve 256 colors. 
 palette control is added. Maximum uses the remembered quality for the palette while
 forcing Preserve export quality; MP4 omits the GIF field without losing the choice.
 Private X11 exports a high-color source at Tiny and High and checks decoded colors,
-Apply/save gating and source/History immutability. AppKit CI distinguishes 64- and
+live-edit/save gating and source/History immutability. AppKit CI distinguishes 64- and
 256-color saved GIFs while retaining the high-color edit-preview pixels, including
-failed Apply and accepted preview/save identity. Physical macOS/Windows/Wayland
+a failed live edit and accepted preview/save identity. Physical macOS/Windows/Wayland
 verification remains open.
-Unapplied format/quality gates save and seek alongside geometric edits; failed
-updates retain all accepted state and preserve staged values for correction.
+Format/quality edits apply live alongside geometric edits and gate save and seek
+until their preview decodes; failed updates retain all accepted state and preserve
+staged values for correction.
 Save uses the accepted configuration, and format/quality-only changes require
 save or explicit discard. Both native hosts' **Maximum file size** controls accept a decimal
 KB/MB/GB cap of at least 100000 bytes through the shared v2 `save_export` contract.
-Maximum mode uses Preserve quality, shows the accepted cap instead of sampling an
-estimate, and keeps the previous quality preference for leaving maximum mode.
-Changing units preserves whole bytes; invalid/partial input gates Apply, playback,
+Maximum mode uses Preserve quality, shows the typed cap (or shipping's "—" while it
+is invalid) instead of sampling an estimate, and keeps the previous quality
+preference for leaving maximum mode.
+Changing units preserves whole bytes; invalid/partial input never applies and gates playback,
 seek and save. Budget-only changes participate in accepted/dirty identity.
 Still and motion previews use the budget-free `preview_export`; a visible warning
 explains that fitting retries may lower resolution, cadence or audio quality.
@@ -990,23 +993,39 @@ Private X11 covers capped MP4, a real GIF retry with different saved dimensions,
 unattainable export and light/dark normal/minimum controls. AppKit CI covers the
 same accepted-save lifecycle, real capped outputs and native rendered states;
 physical macOS/Windows/Wayland acceptance remains open and no parity gate closes.
-**Estimate size** explicitly runs the shared Tauri estimator on the accepted
-edit/export configuration through the same serialized worker. Copied bytes and
+**Live edits.** As in shipping, there is no **Apply edits** button: trim, crop,
+resize, format, quality, GIF and audio edits take effect as they are made. Shipping
+renders edits on a live `<video>`; natively the edited preview decodes on the
+serialized worker once staged values settle for the shared
+`recording_editor_ui::LIVE_APPLY_DELAY_MS` (250 ms): after a drag or held pointer is
+released, and after typed values commit on Return or focus loss. The existing guards
+remain: edits wait for decoding, encoding and playback, invalid values never apply,
+and a failed edit keeps the accepted frame and the staged correction without
+retrying until the user edits again. Pending edits gate seek, playback and Save
+until the preview decodes. Accepted-versus-saved dirty state, History and the
+close/quit discard guard are unchanged.
+**Est. size** is automatic, as in shipping: the shared Tauri estimator runs on the
+accepted edit/export configuration `recording_editor_ui::ESTIMATE_DEBOUNCE_MS`
+(600 ms, shipping's debounce) after the accepted settings settle, once per identity,
+on the serialized worker. There is no **Estimate size** button and no Cancel for it:
+newer edits, Save, Play, Seek, source crop, thumbnails and close supersede and cancel
+a running estimate, which then runs again for the new settings. Copied bytes and
 fully encoded short ranges report exact byte counts; longer sampled ranges and
-audio-only Preserve changes are marked approximate. Staged edits hide the previous
-result and gate estimation until Apply. A successful changed preview invalidates
-the result; a seek retains it. Estimation has independent cancellation and error/retry,
-creates no History entry, and never marks unsaved edits as saved. No estimate promises
-a byte budget. Both native hosts display nonzero percentage change versus immutable
-source bytes beside an accepted estimate, preserving exact/approximate meaning.
-They follow shipping rounding (including negative half ties), hide unknown/zero
-baselines and rounded-zero deltas, and suppress the percentage during staged,
-pending, failed-estimate or Maximum states. Seek (including failure) retains the
-result; changed Apply and new items invalidate it. Private X11 covers sampled/exact
-normal/minimum labels and minimum-window estimate error/retry without publishing an
-estimate to History. AppKit CI covers exact/approximate light/dark normal/minimum
-labels and the same lifecycle. Physical macOS/Windows/Wayland acceptance remains
-open. Close/quit waits for accepted work, as with export.
+audio-only Preserve changes are marked approximate. Shipping's labels come from
+`captures_app::recording_editor_ui::estimate`: "Estimating…" before the first
+value, the previous value (muted, without a percentage) while a newer estimate is
+pending, "—" for failures (no error message), WebM and an invalid Maximum, and
+"≤ <cap>" for a valid typed Maximum. Estimation creates no History entry and never
+marks unsaved edits as saved. No estimate promises a byte budget. Both native hosts
+display nonzero percentage change versus immutable source bytes beside an estimate,
+preserving exact/approximate meaning. They follow shipping rounding (including
+negative half ties), hide unknown/zero baselines and rounded-zero deltas, and
+suppress the percentage while pending, failed, WebM or Maximum. Seek (including
+failure) retains the result; new items reset it. wgpu unit tests and AppKit CI cover
+the debounce, supersession, pending, failure and cap states; the private X11 smoke
+checks automatic sampled/exact labels at normal and minimum sizes without publishing
+an estimate to History. Physical macOS/Windows/Wayland acceptance remains open.
+Close/quit waits for accepted work, as with export.
 The shared recording comparison ABI retains independent before/after frames from
 a read-only encoding sample at the accepted source-relative position. As in
 shipping, both native editors show the comparison automatically while Compress or
@@ -1037,30 +1056,51 @@ preset; Est. size with a green/red delta pill) and **Audio** (System audio/Micro
 checkboxes that include a track, 0–200% volume, Convert to mono; GIF output shows only
 "GIFs do not include recorded audio."). The fixed save footer has Filename, "Saving to
 <folder>" with **Change…** (a folder picker), the filename field with its attached
-.mp4/.gif format, the status line, a thin progress bar, a Cancel named for the running
-operation, **Show in Folder** after a successful copy, a **Save as new file** switch,
-**Apply edits** and **Save** (a new copy, or the confirmed replacement of the original
-when the switch is off; it is locked on when the format changes or the source has no
-eligible original). Shipping copy and formatting come from
+.mp4/.gif/.webm format, the status line, a thin progress bar, a Cancel named for the
+running operation, **Show in Folder** after a successful save, a **Save as new file**
+switch and **Save**. Shipping copy and formatting come from
 `captures_app::recording_editor_ui` (AppKit: `captures_recording_editor_ui_v1`): titles,
 `formatEditorTime`, trim summary, `formatFileSize`, the Est. size states and delta,
 the dropped-frames warning (from the snapshot's additive `dropped_frames`),
 stage labels, saved messages, filename validation and every menu's labels and
 descriptions. As in shipping, Preserve quality is offered only for MP4: choosing GIF
 moves Preserve to Compress at the remembered preset (Highest by default), while an
-accepted Preserve GIF keeps showing its mode. Deliberate native differences remain:
-edits are staged and accepted with **Apply edits**, Est. size is explicit (**Estimate
-size**), replacing the original always asks for confirmation, WebM output is not offered, and AppKit keeps a Position
-slider where wgpu has a Position (ms) field with Seek. Physical audio playback
-acceptance remains open.
+accepted Preserve GIF keeps showing its mode. WebM hides Preserve and the Audio card
+as shipping does.
+**Save** follows shipping's semantics. The footer starts on the original's folder
+and filename (shipping `recordingUserFacingDefaults`: the permanent save, never
+private recovery media; a History-only recording is named
+`Captures_YYYY-MM-DD_HH-MM-SS_mmm` from its capture time). With **Save as new file**
+off, Save overwrites the original and its History item at once, without a
+confirmation. Turning the switch on names the copy `<original>-edited` (shipping
+`recordingEditedFileStem`) while the name and folder are still the original's, and
+turning it off restores the original name. Choosing another format turns it on and
+names an `-edited` file beside the original. Natively the switch is also locked on,
+with the `-edited` name, when the source has no replaceable original (a reference or
+a History-only recording): shipping would overwrite that file or promote recovery
+media, which the shared native replacement does not do. After a successful save,
+Save stays disabled until an edit, the name, folder, format or switch changes, as
+shipping's `alreadySaved` does; the saved toast (`Video saved — <size>.`) and
+**Show in Folder** follow both copies and replacements.
+**WebM** is offered as in shipping. Shipping's bundled FFmpeg has no libvpx, so its
+WebM export fails; natively the accepted preview keeps the MP4 settings, Est. size
+shows shipping's "—", the comparison is hidden, and Save shows shipping's error
+("media processing failed: WebM export is not available in the bundled media
+tools", `recording_editor_ui::WEBM_EXPORT_ERROR`) without encoding.
+Deliberate native differences remain: the edited preview decodes after a short
+settle delay rather than on a live `<video>`, renaming or moving while overwriting is
+not supported (Save with the switch off always replaces the original at its path),
+and AppKit keeps a Position slider where wgpu has a Position (ms) field with Seek.
+Physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
-frame, and unapplied values gate scrubbing/export. Failed edits keep
+frame, and values that have not applied yet gate scrubbing/export. Failed edits keep
 the staged values available for correction. MP4/GIF Save new copy uses
 shared encoding, reports progress and accepts independent cancellation. It never
 replaces an existing file or the original History artifact. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
-Both native editors confirm replacement (**Save** with **Save as new file** off) with the opened session's exact
-permanent MP4/GIF path. Saved-path/format UI hints are not eligibility proofs:
+Both native editors replace the opened session's exact permanent MP4/GIF path
+(**Save** with **Save as new file** off) without a confirmation, as shipping does.
+Saved-path/format UI hints are not eligibility proofs:
 shared Rust verifies matching regular permanent and private recovery files and
 source identity. Serialized work reports progress and accepts cancellation during
 preparation; committed success can follow a late cancellation. Success rebases the
