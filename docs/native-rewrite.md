@@ -69,8 +69,13 @@ workbench window and the wgpu "Capture History | Preferences" tab strip are gone
 Opening a window that is already open shows, restores and focuses it; closing one
 leaves the others. Tray/menu-bar items, capture-menu setting links, Preferences'
 **Capture History…** button and empty relaunches route to the matching window;
-reopen follows shipping's priority (setup, then History, then Preferences, else
-open Preferences). Setup completion hides the setup window, as shipping does;
+reopen follows shipping's priority (setup, then an open editor, then History, then
+Preferences, else open Preferences). A visible launch follows shipping's
+`interactive_launch_action` (`captures_app::app_windows::interactive_launch`): setup
+while it is unfinished, the launch notice on a quiet (login) launch, no window
+besides the editors when opening files, and otherwise Preferences alone; wgpu's
+`--open-history` opens History instead for the automated exercises, and a failed
+file open shows History with the error. Setup completion hides the setup window, as shipping does;
 wgpu keeps History open instead when no tray host exists, so Captures stays
 reachable, and without a tray closing the last open window quits. Captures hide
 Preferences along with History. Titles, sizes and breakpoints live in
@@ -83,10 +88,10 @@ History stacks Delete all under its heading and uses one card column, Preference
 hides its section nav, stacks inline rows and uses two-column grids, and the
 560px-tall setup window drops its lede (`max-height: 600px`). wgpu keeps setup and
 History in the one root window (setup is retitled and resized into History when it
-completes; the two never coexist) and opens Preferences as a child window. The wgpu
-visible launch still opens History rather than shipping's Preferences, and reopen
-does not yet focus an open editor window. Private X11 exercises cover the wgpu
-windows; the AppKit windows, reflow and focus are verified only by XCTest.
+completes; the two never coexist) and opens Preferences as a child window. Private
+X11 exercises cover the wgpu windows, the Preferences-only visible launch and reopen
+focusing an open editor; the AppKit windows, launch, reflow and focus are verified
+only by XCTest.
 
 Preferences now offer the shipping Default microphone select (Off plus enumerated
 inputs; wgpu enumerates when the menu first opens, AppKit off the main thread),

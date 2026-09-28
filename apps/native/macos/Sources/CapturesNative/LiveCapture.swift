@@ -2904,6 +2904,12 @@ final class LiveCaptureController: NSObject {
     }
     func refreshHistory() { loadHistory() }
 
+    /// The visible screenshot or recording editor window, which reopen focuses
+    /// before History (shipping `primary_app_window_priority`).
+    var visibleEditorWindow: NSWindow? {
+        [screenshotEditor?.window, recordingEditor?.window].compactMap { $0 }.first { $0.isVisible }
+    }
+
     func openImages(_ paths: [String]) {
         pendingOpenImages.append(contentsOf: paths)
         // loadInitial owns root discovery and the first History reload.
