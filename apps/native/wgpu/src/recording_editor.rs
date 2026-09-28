@@ -1813,7 +1813,7 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
                     ..
                 } => {
                     view.crop_gesture = None;
-                    if !ui.clip_rect().contains(pos) {
+                    if !pressed_here(ui, pos) {
                         continue;
                     }
                     let handle = handle_positions(view.crop.unwrap())
@@ -2431,6 +2431,18 @@ fn show_overlay_play(
 ///
 /// `rect` is the whole row. Trim grips sit outside the selected interval so
 /// even a 1 ms selection leaves distinct start/end hit regions inside it.
+/// Whether a raw pointer press belongs to gestures drawn in `ui`: inside its
+/// clip and not on a layer above it. An open select's listbox is its own
+/// foreground area (not an egui `Popup`), so a press on one of its rows over
+/// the timeline or the crop must choose the row, not seek or drag beneath it.
+fn pressed_here(ui: &egui::Ui, pos: egui::Pos2) -> bool {
+    ui.clip_rect().contains(pos)
+        && ui
+            .ctx()
+            .layer_id_at(pos)
+            .is_none_or(|layer| layer == ui.layer_id())
+}
+
 fn show_trim_timeline(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -2529,7 +2541,7 @@ fn show_trim_timeline(
                 } => {
                     view.trim_gesture = None;
                     view.scrub = None;
-                    if !ui.clip_rect().contains(pos) {
+                    if !pressed_here(ui, pos) {
                         continue;
                     }
                     if let Some(index) = handles(view.start_ms, view.end_ms)
@@ -5828,6 +5840,65 @@ mod tests {
         ));
         assert!(!view.busy && !view.history_changed);
         assert_eq!(view.estimate_label(), "—");
+    }
+
+    #[test]
+    fn a_listbox_over_the_timeline_takes_the_press_instead_of_a_seek() {
+        // An open select's listbox is a foreground area, not an egui Popup:
+        // choosing a row that overlaps the track must not scrub beneath it.
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let grip = tokens.number("s-6");
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(400. + 2. * grip, 24.));
+        let at = rect.center();
+        for covered in [false, true] {
+            let ctx = egui::Context::default();
+            let mut view = opened();
+            let duration = view.presented.as_ref().unwrap().source.duration_ms.unwrap();
+            let position = view.position_ms;
+            let frame = |view: &mut View, events| {
+                let mut seek = None;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800., 200.),
+                        )),
+                        events,
+                        focused: true,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        seek = seek.or(show_trim_timeline(ui, &tokens, view, duration, rect));
+                        if covered {
+                            egui::Area::new(ui.scope_id().with("listbox"))
+                                .order(egui::Order::Foreground)
+                                .fixed_pos(at - egui::vec2(60., 20.))
+                                .show(ui.ctx(), |ui| {
+                                    ui.allocate_exact_size(
+                                        egui::vec2(120., 40.),
+                                        egui::Sense::click(),
+                                    );
+                                });
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                seek
+            };
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![egui::Event::PointerMoved(at)]);
+            let pressed = frame(&mut view, vec![trim_pointer(at, true)]);
+            let released = frame(&mut view, vec![trim_pointer(at, false)]);
+            assert_eq!(pressed, None);
+            if covered {
+                assert_eq!(released, None, "the listbox row owns the press");
+                assert_eq!(view.position_ms, position);
+            } else {
+                assert_eq!(released, Some(1550), "an uncovered track click seeks");
+            }
+            assert!(view.scrub.is_none() && view.trim_gesture.is_none());
+        }
     }
 
     #[test]
