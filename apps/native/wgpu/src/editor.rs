@@ -2979,9 +2979,11 @@ fn handle_viewport_input(ui: &egui::Ui, view: &mut View, available: egui::Rect) 
         return false;
     }
     let events = ui.input(|input| input.events.clone());
-    let anchor = ui
-        .input(|input| input.pointer.hover_pos())
-        .filter(|point| available.contains(*point));
+    // Wheel zoom and pans start only over the canvas itself, not over a
+    // popover or listbox that covers it.
+    let anchor = ui.input(|input| input.pointer.hover_pos()).filter(|point| {
+        available.contains(*point) && crate::primitives::pressed_on_layer(ui, *point)
+    });
     let has_command_wheel = events.iter().any(|event| {
         matches!(event,
         egui::Event::MouseWheel { modifiers, .. } if (modifiers.command || modifiers.ctrl) && anchor.is_some())
@@ -3017,6 +3019,7 @@ fn handle_viewport_input(ui: &egui::Ui, view: &mut View, available: egui::Rect) 
                 modifiers,
                 ..
             } if available.contains(pos)
+                && crate::primitives::pressed_on_layer(ui, pos)
                 && (button == egui::PointerButton::Middle
                     || (button == egui::PointerButton::Primary
                         && (modifiers.command || modifiers.ctrl))) =>
@@ -3165,7 +3168,10 @@ fn show_layer_canvas(
                     ..
                 } if !view.pending => {
                     view.cancel_layer_gesture();
+                    // A press on a foreground area over the canvas (the layer
+                    // settings popover, a select listbox) belongs to it.
                     if !available.contains(pos)
+                        || !crate::primitives::pressed_on_layer(ui, pos)
                         || !preview.contains(pos)
                         || expand_button.is_some_and(|button| button.contains(pos))
                     {
@@ -9323,6 +9329,233 @@ mod tests {
         assert!(view.selected_layer.is_none() && view.pending_layer_selection.is_none());
     }
 
+    /// A layer document with one unlocked rectangle, selected in Layers.
+    fn covered_canvas_view(ctx: &egui::Context) -> (View, String) {
+        let mut value = presented(false);
+        value.pixels = Arc::new(RgbaImage::new(200, 100));
+        let document = Arc::make_mut(&mut value.document);
+        document.width = 200.;
+        document.height = 100.;
+        let id = document
+            .create_closed_shape(ClosedShapeCreate {
+                shape: ClosedShapeKind::Rectangle,
+                start: Point { x: 20., y: 20. },
+                end: Point { x: 80., y: 60. },
+                style: ElementStyle::default(),
+                opacity: 100.,
+            })
+            .unwrap();
+        let mut view = View::default();
+        view.receive(ctx, Ok(value));
+        view.pending = false;
+        view.section = Section::Layers;
+        view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
+        (view, id)
+    }
+
+    #[test]
+    fn a_popover_over_the_layer_canvas_takes_the_press_instead_of_a_pick() {
+        // The layer settings popover is a foreground area, not an egui Popup:
+        // a press on it over the canvas must not pick or drag the layer below.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+        let inside = egui::pos2(125., 120.);
+        for covered in [false, true] {
+            let ctx = egui::Context::default();
+            let (mut view, id) = covered_canvas_view(&ctx);
+            view.select_layer(Some("capture-background".into()));
+            let (tx, rx) = mpsc::channel();
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        events,
+                        focused: true,
+                        ..Default::default()
+                    },
+                    |_| {
+                        let mut ui = egui::Ui::new(
+                            ctx.clone(),
+                            egui::Id::unique("covered-layer-canvas"),
+                            egui::UiBuilder::new().max_rect(screen),
+                        );
+                        let tokens = crate::tokens::load().into_values().next().unwrap();
+                        let intercepted = handle_viewport_input(&ui, view, screen);
+                        show_layer_canvas(
+                            &mut ui,
+                            &tokens,
+                            view,
+                            &tx,
+                            screen,
+                            preview,
+                            intercepted,
+                        );
+                        if covered {
+                            egui::Area::new(egui::Id::unique("popover"))
+                                .order(egui::Order::Foreground)
+                                .fixed_pos(inside - egui::vec2(40., 15.))
+                                .show(&ctx, |ui| {
+                                    ui.allocate_exact_size(
+                                        egui::vec2(80., 30.),
+                                        egui::Sense::click(),
+                                    );
+                                });
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            let button = |button, pressed, command| egui::Event::PointerButton {
+                pos: inside,
+                button,
+                pressed,
+                modifiers: egui::Modifiers {
+                    command,
+                    ctrl: command,
+                    ..Default::default()
+                },
+            };
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![egui::Event::PointerMoved(inside)]);
+            frame(
+                &mut view,
+                vec![button(egui::PointerButton::Primary, true, false)],
+            );
+            frame(
+                &mut view,
+                vec![button(egui::PointerButton::Primary, false, false)],
+            );
+            assert!(rx.try_recv().is_err() && view.layer_gesture.is_none());
+            // Middle-button pans also start only on the canvas itself.
+            frame(
+                &mut view,
+                vec![button(egui::PointerButton::Middle, true, false)],
+            );
+            let panning = view.viewport_pan.is_some();
+            frame(
+                &mut view,
+                vec![button(egui::PointerButton::Middle, false, false)],
+            );
+            if covered {
+                assert_eq!(
+                    view.selected_layer.as_deref(),
+                    Some("capture-background"),
+                    "the popover owns the press"
+                );
+                assert!(!panning);
+            } else {
+                assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+                assert!(panning, "an uncovered middle press pans");
+            }
+        }
+    }
+
+    #[test]
+    fn an_open_select_over_the_canvas_takes_presses_and_keys_like_a_popup() {
+        // The export bar's selects open their listboxes over the canvas.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+        let trigger = egui::Rect::from_min_size(egui::pos2(100., 60.), egui::vec2(100., 28.));
+        // The canvas sits below the bar that holds the trigger.
+        let canvas = egui::Rect::from_min_max(egui::pos2(0., 95.), screen.max);
+        let ctx = egui::Context::default();
+        let (mut view, id) = covered_canvas_view(&ctx);
+        view.select_layer(Some(id.clone()));
+        let (tx, rx) = mpsc::channel();
+        let options = ['a', 'b', 'c', 'd'].map(|value| {
+            crate::primitives::SelectOption::new(value, if value == 'a' { "A" } else { "Other" })
+        });
+        let value = std::cell::Cell::new('a');
+        let frame = |view: &mut View, events| {
+            let mut rows = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    focused: true,
+                    ..Default::default()
+                },
+                |_| {
+                    let tokens = crate::tokens::load().into_values().next().unwrap();
+                    handle_document_shortcuts(&ctx, view, &tx);
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("select-over-canvas"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(trigger), |ui| {
+                        let output = crate::primitives::Select::new("over-canvas", "Letters", 100.)
+                            .show(ui, &tokens, &options, &value.get());
+                        rows = output.rows;
+                        if let Some(chosen) = output.chosen {
+                            value.set(chosen);
+                        }
+                    });
+                    let intercepted = handle_viewport_input(&ui, view, canvas);
+                    show_layer_canvas(&mut ui, &tokens, view, &tx, canvas, preview, intercepted);
+                },
+            );
+            output.textures_delta.clear();
+            rows
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let arrow = egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut view, vec![]);
+        let open = trigger.center();
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(open), button(open, true)],
+        );
+        frame(&mut view, vec![button(open, false)]);
+        let rows = frame(&mut view, vec![]);
+        assert!(egui::Popup::is_any_open(&ctx));
+        // A row over empty canvas (the rectangle spans x 110..140): uncovered,
+        // this press would deselect the layer.
+        let (index, at) = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (index, egui::pos2(170., row.center().y)))
+            .find(|(index, at)| rows[*index].contains(*at) && preview.contains(*at))
+            .expect("a listbox row over the canvas");
+        frame(&mut view, vec![arrow.clone()]);
+        assert!(
+            rx.try_recv().is_err(),
+            "an open listbox's arrows must not nudge the selected layer"
+        );
+        frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        frame(&mut view, vec![button(at, false)]);
+        frame(&mut view, vec![]);
+        assert_eq!(value.get(), options[index].value, "the row takes the click");
+        assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+        assert!(view.layer_gesture.is_none() && rx.try_recv().is_err());
+        assert!(!egui::Popup::is_any_open(&ctx));
+        frame(&mut view, vec![arrow]);
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(Job::Apply(Request::Layer {
+                    edit: LayerEdit::Translate { .. },
+                    ..
+                }))
+            ),
+            "with the listbox closed, arrows nudge again"
+        );
+    }
+
     #[test]
     fn layer_canvas_rotation_handle_previews_cancels_and_commits_transactionally() {
         let ctx = egui::Context::default();
@@ -11058,7 +11291,7 @@ mod tests {
     }
 
     #[test]
-    fn import_rejects_unusable_color_metadata_instead_of_relabeling_pixels() {
+    fn import_rejects_unusable_profiles_instead_of_relabeling_pixels() {
         use image::ImageEncoder;
         let data = tempfile::tempdir().unwrap();
         let path = data.path().join("profile.png");
@@ -11084,11 +11317,11 @@ mod tests {
             .write_image_data(&[64, 128, 192, 73])
             .unwrap();
         fs::write(&path, encoded).unwrap();
-        assert!(
-            decode_import(&path)
-                .unwrap_err()
-                .contains("color metadata is not supported")
-        );
+        // Gamma-only PNGs convert through their transfer, like the webview.
+        let decoded = decode_import(&path).unwrap();
+        for (actual, expected) in decoded.as_raw().iter().zip([137u8, 188, 225, 73]) {
+            assert!(actual.abs_diff(expected) <= 1, "{actual} != {expected}");
+        }
     }
 
     #[test]
@@ -11124,7 +11357,7 @@ mod tests {
         fs::write(&path, b"GIF89a").unwrap();
         assert_eq!(
             decode_import(&path).unwrap_err(),
-            "Choose a PNG, JPEG, WebP or TIFF image."
+            "image.data could not be loaded."
         );
         fs::write(&path, b"not an image").unwrap();
         assert!(decode_import(&path).is_err());

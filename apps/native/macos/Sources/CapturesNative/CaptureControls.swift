@@ -151,12 +151,15 @@ enum CaptureMenuPolicy {
 
     static func menu(mode: UnifiedCaptureMode, autoStart: Bool, canExcludeControls: Bool,
                      controlsExcluded: Bool, error: Bool = false,
+                     inFlight: CaptureControlsView.InFlight? = nil,
                      state: RecordingControlState,
                      availability: RecordingControlAvailability?) throws -> Menu {
         let value = try request([
             "operation": "menu", "mode": mode == .record ? "recording" : "screenshot",
             "auto_start": autoStart, "can_exclude_controls": canExcludeControls,
-            "controls_excluded": controlsExcluded, "state": ["error": error],
+            "controls_excluded": controlsExcluded,
+            "state": ["error": error, "starting": inFlight == .starting,
+                      "switching_display": inFlight == .switching],
             "options": ["show_cursor": state.showCursor, "highlight_clicks": state.highlightClicks,
                         "system_audio": state.systemAudio],
             "available": ["cursor_control": availability?.cursor ?? false,
@@ -670,6 +673,10 @@ final class CaptureNoteLink: NSButton {
 }
 
 final class CaptureControlsView: NSView {
+    /// A start or display switch the owner has sent and the menu still shows
+    /// (shipping `starting` / `switchingDisplay`).
+    enum InFlight { case starting, switching }
+
     private let tokens: Tokens
     private let autoStart: Bool
     private let visibility: CaptureControlsVisibility
@@ -688,6 +695,15 @@ final class CaptureControlsView: NSView {
     private let resolutionMenu: ClosurePopUpButton
     private let microphoneMenu: ClosurePopUpButton
     private var microphoneIDs: [String?] = []
+    private var microphoneDevices: [NativeMicrophoneDevice]
+    /// Shipping `devicesLoading`: the select is disabled and shows the
+    /// loading rows until `setMicrophones`.
+    private(set) var microphonesLoading = false
+    private var microphonesLoaded: Bool
+    /// Enumerates microphones the first time the menu shows Record (shipping
+    /// `loadAudioDevices`); the owner answers with `setMicrophones`.
+    var loadMicrophones: (() -> Void)?
+    private(set) var inFlight: InFlight?
     private var panelDragOffset: NSPoint?
     /// Shipping `.capture-segmented-indicator`s for the mode and target switches.
     let modeIndicator = NSView()
@@ -720,6 +736,7 @@ final class CaptureControlsView: NSView {
     var noteLinks: [CaptureNoteLink] { noteViews.compactMap { $0 as? CaptureNoteLink } }
     var primaryTitle: String { captureButton.title }
     var primaryHidden: Bool { captureButton.isHidden }
+    var primaryEnabled: Bool { captureButton.isEnabled }
 
     init(frame: NSRect, tokens: Tokens, autoStart: Bool, displayTitles: [String],
          selectedDisplay: Int, recordingState: RecordingControlState = RecordingControlState(
@@ -727,9 +744,11 @@ final class CaptureControlsView: NSView {
             highlightClicks: false, systemAudio: false, microphoneDeviceID: nil),
          recordingAvailability: RecordingControlAvailability? = nil,
          microphoneDevices: [NativeMicrophoneDevice] = [],
+         microphonesLoaded: Bool = true,
          visibility: CaptureControlsVisibility = .excludedByDefault) {
         self.tokens = tokens; self.autoStart = autoStart; self.visibility = visibility
         self.recordingState = recordingState; self.recordingAvailability = recordingAvailability
+        self.microphoneDevices = microphoneDevices; self.microphonesLoaded = microphonesLoaded
         aspectMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
         displayMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
         fpsMenu = ClosurePopUpButton(frame: .zero, pullsDown: false)
@@ -838,7 +857,7 @@ final class CaptureControlsView: NSView {
             addSubview(indicator, positioned: .below, relativeTo: below)
         }
         for button in [screenshot, record] + Array(targetButtons.values) { button.slidingSegment = true }
-        configureRecordingRow(microphoneDevices: microphoneDevices)
+        configureRecordingRow()
         selectTarget(.region, notify: false)
         selectMode(.screenshot, notify: false)
     }
@@ -903,7 +922,7 @@ final class CaptureControlsView: NSView {
         fieldLabels.append(label); addSubview(label)
     }
 
-    private func configureRecordingRow(microphoneDevices: [NativeMicrophoneDevice]) {
+    private func configureRecordingRow() {
         let copy = CaptureMenuPolicy.copy
         let columns = Self.fieldColumns
         fieldLabel(copy.fpsLabel, column: columns[0])
@@ -952,8 +971,7 @@ final class CaptureControlsView: NSView {
         }
         fieldLabel(copy.microphoneLabel, column: (x: Self.microphoneX,
             width: max(116, frame.width - Self.microphoneX - 16)))
-        configureMicrophoneMenu(devices: microphoneDevices,
-            available: recordingAvailability?.microphone ?? false)
+        configureMicrophoneMenu()
     }
 
     private func toggleRecordingOption(_ key: String) {
@@ -978,7 +996,29 @@ final class CaptureControlsView: NSView {
     private func refreshMenu() {
         menuState = try? CaptureMenuPolicy.menu(mode: mode, autoStart: autoStart,
             canExcludeControls: visibility.canExclude, controlsExcluded: visibility.excluded,
-            state: recordingState, availability: recordingAvailability)
+            inFlight: inFlight, state: recordingState, availability: recordingAvailability)
+    }
+
+    /// Shows "Capturing…"/"Starting…" or "Switching…" (nil ends it) while the
+    /// owner's start or display switch runs. Starting disables the primary.
+    func setInFlight(_ value: InFlight?) {
+        guard inFlight != value else { return }
+        inFlight = value
+        refreshMenu(); updatePrimary()
+    }
+
+    /// Devices for the microphone select, ending "Loading microphones…".
+    func setMicrophones(_ devices: [NativeMicrophoneDevice]) {
+        microphoneDevices = devices; microphonesLoaded = true; microphonesLoading = false
+        rebuildMicrophoneItems()
+    }
+
+    private func requestMicrophonesIfNeeded() {
+        guard mode == .record, recordingAvailability?.microphone == true, !microphonesLoaded,
+              !microphonesLoading, let loadMicrophones else { return }
+        microphonesLoading = true
+        rebuildMicrophoneItems()
+        loadMicrophones()
     }
 
     private func updateRecordingControls() {
@@ -1010,7 +1050,7 @@ final class CaptureControlsView: NSView {
         captureButton.readyPing = recording
         captureButton.setAccessibilityLabel(menuState?.primaryAccessibilityLabel
             ?? (recording ? "Start recording" : "Take screenshot"))
-        captureButton.isEnabled = captureEnabled
+        captureButton.isEnabled = captureEnabled && inFlight != .starting
         captureButton.isHidden = menuState?.primaryHidden ?? autoStart
         captureButton.needsDisplay = true
     }
@@ -1078,6 +1118,7 @@ final class CaptureControlsView: NSView {
         slideIndicator(modeIndicator, to: mode == .record ? recordButton : screenshotButton)
         updateRecordingControls()
         if arriving { playRecordingRowEntrance() }
+        requestMicrophonesIfNeeded()
         if notify { switchMode(mode) }
     }
 
@@ -1143,19 +1184,31 @@ final class CaptureControlsView: NSView {
         updatePrimary()
     }
 
-    private func configureMicrophoneMenu(devices: [NativeMicrophoneDevice], available: Bool) {
+    private func configureMicrophoneMenu() {
         microphoneMenu.frame = NSRect(x: Self.microphoneX, y: Self.fieldControlY,
             width: max(116, frame.width - Self.microphoneX - 16), height: 36)
         microphoneMenu.tokens = tokens
         microphoneMenu.setAccessibilityLabel(CaptureMenuPolicy.copy.microphoneLabel)
-        microphoneMenu.isEnabled = available
         microphoneMenu.autoenablesItems = false
-        // AppKit enumerates devices before the menu opens, so it never shows
-        // the shipping "Loading microphones…" row.
-        let options = try? CaptureMenuPolicy.microphones(available: available, loading: false,
-            selected: recordingState.microphoneDeviceID, devices: devices)
+        rebuildMicrophoneItems()
+        microphoneMenu.bindChange { [weak self] index in
+            self?.selectMicrophone(index, notify: true)
+        }
+        addSubview(microphoneMenu)
+    }
+
+    /// Shipping microphone options: while devices enumerate (after the menu
+    /// first shows Record) the select is disabled, lists "Loading
+    /// microphones…" and names a saved device "Loading microphone…".
+    private func rebuildMicrophoneItems() {
+        let available = recordingAvailability?.microphone ?? false
+        microphoneMenu.isEnabled = available && !microphonesLoading
+        let options = try? CaptureMenuPolicy.microphones(available: available,
+            loading: microphonesLoading, selected: recordingState.microphoneDeviceID,
+            devices: microphoneDevices)
         let entries = options?.entries ?? [CaptureMenuPolicy.MicrophoneEntry(id: nil,
             label: available ? "Off" : "Unavailable", enabled: true)]
+        microphoneMenu.removeAllItems()
         microphoneIDs = entries.map(\.id)
         microphoneMenu.addItems(withTitles: entries.map(\.label))
         for (index, entry) in entries.enumerated() {
@@ -1165,10 +1218,6 @@ final class CaptureControlsView: NSView {
             $0 == recordingState.microphoneDeviceID
         }) ?? 0
         microphoneMenu.selectItem(at: selected)
-        microphoneMenu.bindChange { [weak self] index in
-            self?.selectMicrophone(index, notify: true)
-        }
-        addSubview(microphoneMenu)
     }
 }
 
@@ -1182,6 +1231,35 @@ private final class UnifiedCaptureCanvas: NSView {
     override func mouseMoved(with event: NSEvent) { selector?.mouseMoved(with: event) }
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: selector?.target == .region ? .crosshair : .pointingHand)
+    }
+}
+
+/// Shipping `.recording-display-icon`: a 68 × 50 glass tile holding the 34 pt
+/// Full screen icon, above the display name.
+final class DisplayIdentityIcon: NSView {
+    private let tokens: Tokens
+    override var isFlipped: Bool { true }
+
+    init(tokens: Tokens) {
+        self.tokens = tokens
+        super.init(frame: NSRect(x: 0, y: 0, width: 68, height: 50))
+        wantsLayer = true
+        layer?.backgroundColor = tokens.color("glass").cgColor
+        layer?.borderColor = tokens.color("glass-border-strong").cgColor
+        layer?.borderWidth = 1
+        layer?.cornerRadius = tokens.number("r-xl")
+        // `--glass-shadow`'s dominant 0 16px 44px layer.
+        layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
+        layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -16)
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        tokens.color("glass-text").setStroke()
+        ShippingIcons.stroke("target-display",
+            in: NSRect(x: (bounds.width - 34) / 2, y: (bounds.height - 34) / 2, width: 34, height: 34),
+            width: 1.4)
     }
 }
 
@@ -1202,6 +1280,7 @@ final class UnifiedCaptureSelectionView: NSView {
     let controls: CaptureControlsView
     private let selectionLabel = NSTextField(labelWithString: "")
     private let guidance: CaptureGuidanceChip
+    private let identityIcon: DisplayIdentityIcon
     private let identityName = NSTextField(labelWithString: "")
     private let identityDetail = NSTextField(labelWithString: "")
     private let displayIdentity: CaptureDisplayIdentity?
@@ -1228,12 +1307,14 @@ final class UnifiedCaptureSelectionView: NSView {
             systemAudio: false, microphoneDeviceID: nil),
          recordingAvailability: RecordingControlAvailability? = nil,
          microphoneDevices: [NativeMicrophoneDevice] = [],
+         microphonesLoaded: Bool = true,
          visibility: CaptureControlsVisibility = .excludedByDefault,
          displayIdentity: CaptureDisplayIdentity? = nil) {
         self.tokens = tokens; self.autoStart = autoStart; self.targets = targets
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
         self.changeDisplay = changeDisplay; self.displayIdentity = displayIdentity
         guidance = CaptureGuidanceChip(tokens: tokens)
+        identityIcon = DisplayIdentityIcon(tokens: tokens)
         currentDisplayTitle = displayTitles.indices.contains(selectedDisplay)
             ? displayTitles[selectedDisplay] : "Full screen"
         region = RegionSelection(bounds: CapturesSelectionBounds(width: frame.width, height: frame.height))
@@ -1242,7 +1323,8 @@ final class UnifiedCaptureSelectionView: NSView {
             y: frame.height - 112, width: controlsWidth, height: 86), tokens: tokens,
             autoStart: autoStart, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
             recordingState: recordingState, recordingAvailability: recordingAvailability,
-            microphoneDevices: microphoneDevices, visibility: visibility)
+            microphoneDevices: microphoneDevices, microphonesLoaded: microphonesLoaded,
+            visibility: visibility)
         super.init(frame: frame)
         wantsLayer = true; layer?.backgroundColor = NSColor.clear.cgColor
         if let image {
@@ -1254,7 +1336,8 @@ final class UnifiedCaptureSelectionView: NSView {
         canvas.frame = bounds; canvas.selector = self; canvas.setAccessibilityElement(false)
         addSubview(canvas)
         addSubview(guidance)
-        // Shipping `recording-display-identity`: shadowed text, no chip.
+        addSubview(identityIcon)
+        // Shipping `recording-display-identity`: the icon tile, then shadowed text.
         for (label, size, weight, color) in [
             (identityName, tokens.number("text-2xl"), NSFont.Weight.semibold, "glass-text"),
             (identityDetail, tokens.number("text-md"), NSFont.Weight.regular, "glass-text-muted"),
@@ -1277,7 +1360,10 @@ final class UnifiedCaptureSelectionView: NSView {
         controls.switchTarget = { [weak self] target in self?.setTarget(target) }
         controls.switchMode = { [weak self] mode in self?.setMode(mode) }
         controls.changeAspect = { [weak self] index in self?.setAspect(index) }
-        controls.changeDisplay = { [weak self] index in self?.changeDisplay(index) }
+        controls.changeDisplay = { [weak self] index in
+            guard let self, self.controls.inFlight == nil else { return }
+            self.changeDisplay(index)
+        }
         controls.openPreference = { [weak self] setting in self?.openPreference(setting) }
         controls.stateChanged = { [weak self] in self?.update() }
         controls.confirm = { [weak self] in self?.confirmSelection() }
@@ -1293,6 +1379,9 @@ final class UnifiedCaptureSelectionView: NSView {
     var guidanceFrame: NSRect { guidance.frame }
     var guidanceChip: CaptureGuidanceChip { guidance }
     var isDisplayIdentityVisible: Bool { !identityName.isHidden }
+    /// The shipping `.recording-display-icon` tile, when Full screen shows it.
+    var displayIdentityIconFrame: NSRect? { identityIcon.isHidden ? nil : identityIcon.frame }
+    var displayIdentityNameFrame: NSRect { identityName.frame }
     var displayIdentityText: String { "\(identityName.stringValue) · \(identityDetail.stringValue)" }
     var controlsState: UnifiedCaptureControlsState {
         UnifiedCaptureControlsState(mode: mode, target: target, aspectIndex: aspectIndex)
@@ -1383,7 +1472,11 @@ final class UnifiedCaptureSelectionView: NSView {
         }
     }
 
-    func confirmSelection() { if let choice { confirm(choice) } }
+    /// Shipping `start()` returns while a start or display switch is in flight.
+    func confirmSelection() {
+        guard controls.inFlight == nil, let choice else { return }
+        confirm(choice)
+    }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
@@ -1495,6 +1588,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private func updateDisplayIdentity() {
         let visible = target == .display
         identityName.isHidden = !visible; identityDetail.isHidden = !visible
+        identityIcon.isHidden = !visible
         guard visible else { return }
         let fallback = currentDisplayTitle.components(separatedBy: " · ")
         let identity = displayIdentity.flatMap {
@@ -1506,10 +1600,13 @@ final class UnifiedCaptureSelectionView: NSView {
         identityName.stringValue = identity.name; identityDetail.stringValue = identity.detail
         identityName.sizeToFit(); identityDetail.sizeToFit()
         let gap = tokens.number("s-4")
-        let height = identityName.frame.height + gap + identityDetail.frame.height
+        let iconHeight = identityIcon.frame.height
+        let height = iconHeight + gap + identityName.frame.height + gap + identityDetail.frame.height
         let top = (bounds.height / 2 - height * 0.6).rounded()
         let width = min(bounds.width - 32, max(280, identityName.frame.width, identityDetail.frame.width))
-        identityName.frame = NSRect(x: (bounds.width - width) / 2, y: top,
+        identityIcon.frame.origin = NSPoint(x: ((bounds.width - identityIcon.frame.width) / 2).rounded(),
+            y: top)
+        identityName.frame = NSRect(x: (bounds.width - width) / 2, y: top + iconHeight + gap,
             width: width, height: identityName.frame.height)
         identityDetail.frame = NSRect(x: (bounds.width - width) / 2,
             y: identityName.frame.maxY + gap, width: width, height: identityDetail.frame.height)
@@ -1570,6 +1667,7 @@ final class UnifiedCapturePanel: NSPanel {
             highlightClicks: false, systemAudio: false, microphoneDeviceID: nil),
          recordingAvailability: RecordingControlAvailability? = nil,
          microphoneDevices: [NativeMicrophoneDevice] = [],
+         microphonesLoaded: Bool = true,
          visibility: CaptureControlsVisibility = .excludedByDefault,
          displayIdentity: CaptureDisplayIdentity? = nil) {
         selector = UnifiedCaptureSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size),
@@ -1577,7 +1675,8 @@ final class UnifiedCapturePanel: NSPanel {
             hitTest: hitTest, displayTitles: displayTitles, selectedDisplay: selectedDisplay,
             confirm: confirm, cancel: cancel, changeDisplay: changeDisplay,
             recordingState: recordingState, recordingAvailability: recordingAvailability,
-            microphoneDevices: microphoneDevices, visibility: visibility,
+            microphoneDevices: microphoneDevices, microphonesLoaded: microphonesLoaded,
+            visibility: visibility,
             displayIdentity: displayIdentity)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         title = "Captures Capture Controls"

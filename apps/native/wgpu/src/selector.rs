@@ -75,7 +75,8 @@ pub struct Selector {
     aspect: Aspect,
     drag: Option<Drag>,
     /// "Click and drag to select a region" after a click that selected nothing.
-    feedback_until: Option<std::time::Instant>,
+    /// egui input time (seconds) when the click feedback ends.
+    feedback_until: Option<f64>,
     /// Shipping `selectionFeedback`: counts empty clicks while the feedback
     /// lasts; each one re-keys the guidance chip (nudge again), 0 is none.
     feedback_attempt: u32,
@@ -208,20 +209,24 @@ impl Selector {
         let capturable = drag_stopped && self.end();
         let auto_confirm = drag_stopped && created && capturable && auto_start;
         if auto_start && (response.clicked() || (drag_stopped && created && !capturable)) {
-            self.feedback_until = Some(std::time::Instant::now() + SELECTION_FEEDBACK);
+            let now = ui.input(|input| input.time);
+            self.feedback_until = Some(now + SELECTION_FEEDBACK.as_secs_f64());
             self.feedback_attempt = self.feedback_attempt.saturating_add(1);
         } else if response.drag_started() {
             self.feedback_until = None;
             self.feedback_attempt = 0;
         }
 
+        // Frame time, like the chip's own fades: a wall clock would expire the
+        // feedback early whenever frames arrive late.
         if let Some(until) = self.feedback_until {
-            let remaining = until.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
+            let remaining = until - ui.input(|input| input.time);
+            if remaining <= 0. {
                 self.feedback_until = None;
                 self.feedback_attempt = 0;
             } else {
-                ui.ctx().request_repaint_after(remaining);
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(remaining));
             }
         }
         // AppKit's size badge label: present only for a capturable region.

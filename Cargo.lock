@@ -678,6 +678,7 @@ dependencies = [
  "file-id",
  "global-hotkey",
  "image",
+ "jpeg-encoder",
  "moxcms",
  "png 0.18.1",
  "serde",
@@ -689,6 +690,8 @@ dependencies = [
  "trash",
  "uuid",
  "winreg 0.55.0",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

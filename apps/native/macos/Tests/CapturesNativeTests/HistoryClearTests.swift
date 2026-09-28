@@ -278,16 +278,33 @@ final class HistoryClearTests: XCTestCase {
         try waitUntil { restoreTitle() == "Restored" }
         XCTAssertEqual(previews.presentedArtifactIDs, ["item-0"])
 
-        // An unreadable preview reports the error and leaves no card.
+        // An unreadable preview reports the error on its card, like shipping's
+        // `.history-card-error`, and leaves no preview behind.
         previews.dismiss("item-0")
+        let actionsTop = try XCTUnwrap(grid.card(at: 0)).actionButtons[1].frame.minY
+        let baseHeight = try XCTUnwrap(grid.card(at: 0)).frame.height
         loader.setFailing(true)
         try clickRestore()
-        try waitUntil {
-            restoreTitle() == "Restore" && root.subviews.contains {
-                ($0 as? NSTextField)?.stringValue.hasPrefix("Couldn’t restore screenshot") == true
-            }
-        }
+        try waitUntil { restoreTitle() == "Restore" && grid.card(at: 0)?.errorBox.isHidden == false }
+        let failed = try XCTUnwrap(grid.card(at: 0))
+        XCTAssertFalse(failed.errorLabel.stringValue.isEmpty)
+        XCTAssertFalse(root.subviews.contains {
+            ($0 as? NSTextField)?.stringValue.hasPrefix("Couldn’t restore screenshot") == true
+        }, "the workspace status line stays clear")
+        XCTAssertGreaterThan(failed.frame.height, baseHeight, "the error grows its row")
+        XCTAssertEqual(failed.actionButtons[1].frame.minY, actionsTop, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(failed.errorBox.frame.minY, failed.actionButtons[1].frame.maxY)
+        XCTAssertLessThanOrEqual(failed.errorBox.frame.maxY, failed.frame.height)
+        let sibling = try XCTUnwrap(grid.card(at: 1))
+        XCTAssertEqual(sibling.frame.height, failed.frame.height, accuracy: 0.5,
+                       "cards in a grown row stretch together")
+        XCTAssertTrue(sibling.errorBox.isHidden)
         XCTAssertTrue(previews.presentedArtifactIDs.isEmpty)
+        // The next action on that card clears it.
+        loader.setFailing(false)
+        try clickRestore()
+        try waitUntil { restoreTitle() == "Restored" && grid.card(at: 0)?.errorBox.isHidden == true }
+        XCTAssertEqual(try XCTUnwrap(grid.card(at: 0)).frame.height, baseHeight, accuracy: 0.5)
         XCTAssertEqual(transport.saveCount, 0)
         XCTAssertEqual(transport.deletedIDs, [], "Restore never changes History")
     }

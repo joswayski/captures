@@ -340,6 +340,20 @@ struct SelectMemory {
     menu: egui::Vec2,
 }
 
+/// Whether a raw pointer press at `pos` belongs to gestures drawn in `ui`:
+/// inside its clip and not on an interactable layer above it. Custom gestures
+/// that read `PointerButton` events (instead of a widget `Response`, which egui
+/// already hit-tests by layer) must check this, so a press on an open
+/// [`Select`] listbox, a popover or any other foreground area over them picks
+/// that control instead of also starting a gesture beneath it.
+pub fn pressed_on_layer(ui: &egui::Ui, pos: egui::Pos2) -> bool {
+    ui.clip_rect().contains(pos)
+        && ui
+            .ctx()
+            .layer_id_at(pos)
+            .is_none_or(|layer| layer == ui.layer_id())
+}
+
 /// Shipping `CustomSelect`: a field-style trigger and a listbox with option
 /// descriptions. The focused trigger (or an open listbox) takes ArrowUp/Down,
 /// Home/End, Enter/Space and Escape through `captures_app::controls::select`.
@@ -825,6 +839,19 @@ impl<'a> Select<'a> {
         }
         if !state.open {
             memory.menu = egui::Vec2::ZERO;
+        }
+        // The listbox is our own foreground area, so mirror it into egui's popup
+        // slot: surfaces that gate pointer gestures and shortcuts on
+        // `Popup::is_any_open` treat an open select like any other menu. Never
+        // displace a real popup (it already makes `is_any_open` true).
+        let listbox = id.with("listbox");
+        let ctx = ui.ctx();
+        if state.open {
+            if !egui::Popup::is_any_open(ctx) || egui::Popup::is_id_open(ctx, listbox) {
+                egui::Popup::open_id(ctx, listbox);
+            }
+        } else if egui::Popup::is_id_open(ctx, listbox) {
+            egui::Popup::close_id(ctx, listbox);
         }
         memory.state = state;
         ui.data_mut(|data| data.insert_temp(memory_id, memory));
@@ -1609,6 +1636,10 @@ mod tests {
             rows[0].top() > trigger.bottom(),
             "the listbox opens below the trigger"
         );
+        assert!(
+            egui::Popup::is_any_open(&ctx),
+            "an open listbox gates surfaces like any egui popup"
+        );
         let beta = rows[1].center();
         run(
             vec![egui::Event::PointerMoved(beta), press(beta, true)],
@@ -1616,6 +1647,10 @@ mod tests {
         );
         run(vec![press(beta, false)], &mut value);
         assert_eq!(value, 'b');
+        assert!(
+            !egui::Popup::is_any_open(&ctx),
+            "choosing releases the popup"
+        );
         run(
             vec![egui::Event::PointerMoved(center), press(center, true)],
             &mut value,
@@ -1631,7 +1666,45 @@ mod tests {
         run(vec![press(outside, false)], &mut value);
         let (_, rows) = run(vec![], &mut value);
         assert!(rows.is_empty(), "a press outside closes the listbox");
+        assert!(!egui::Popup::is_any_open(&ctx));
         assert_eq!(value, 'b');
+
+        // Opening never displaces a real egui popup that is already open.
+        let menu = egui::Id::unique("real-menu");
+        egui::Popup::open_id(&ctx, menu);
+        run(
+            vec![egui::Event::PointerMoved(center), press(center, true)],
+            &mut value,
+        );
+        egui::Popup::open_id(&ctx, menu);
+        run(vec![press(center, false)], &mut value);
+        egui::Popup::open_id(&ctx, menu);
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(rows.len(), 2);
+        assert!(egui::Popup::is_id_open(&ctx, menu));
+    }
+
+    #[test]
+    fn a_press_on_a_foreground_area_is_not_on_the_layer_beneath() {
+        let (ctx, _) = setup();
+        let covered = egui::pos2(100., 100.);
+        let open = egui::pos2(300., 300.);
+        let mut seen = Vec::new();
+        // A new area is invisible for its first pass.
+        for _ in 0..3 {
+            frame(&ctx, vec![], |ui| {
+                seen = [covered, open, egui::pos2(-10., -10.)]
+                    .map(|pos| pressed_on_layer(ui, pos))
+                    .to_vec();
+                egui::Area::new(egui::Id::unique("over"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(covered - egui::vec2(20., 20.))
+                    .show(ui.ctx(), |ui| {
+                        ui.allocate_exact_size(egui::vec2(40., 40.), egui::Sense::click());
+                    });
+            });
+        }
+        assert_eq!(seen, [false, true, false]);
     }
 
     #[test]
