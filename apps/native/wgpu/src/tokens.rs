@@ -10,6 +10,9 @@ pub struct Tokens {
     /// `--ease-*` control points; see `captures_app::motion`.
     #[serde(default)]
     easings: BTreeMap<String, [f64; 4]>,
+    /// `box-shadow` tokens as layers; see [`crate::effects::BoxShadow`].
+    #[serde(default)]
+    shadows: BTreeMap<String, Vec<crate::effects::BoxShadow>>,
 }
 
 impl captures_app::motion::MotionTokens for Tokens {
@@ -39,6 +42,11 @@ impl Tokens {
     }
     pub fn number(&self, name: &str) -> f32 {
         self.numbers[name]
+    }
+    /// A shipping `box-shadow` (`shadow-sm`, `glass-shadow`,
+    /// `thumbnail-card-shadow`, …), first layer on top.
+    pub fn shadow(&self, name: &str) -> &[crate::effects::BoxShadow] {
+        &self.shadows[name]
     }
 
     /// A shipping animation resolved against these tokens. Every motion's
@@ -155,6 +163,15 @@ mod tests {
             for transition in captures_app::motion::Transition::ALL {
                 assert!(transition.resolve(tokens).is_some());
             }
+            for shadow in [
+                "shadow-sm",
+                "shadow-md",
+                "glass-shadow",
+                "thumbnail-card-shadow",
+            ] {
+                assert!(!tokens.shadow(shadow).is_empty(), "{shadow}");
+            }
+            assert_eq!(tokens.shadow("thumbnail-card-shadow")[0].blur, 14.);
         }
         for theme in crate::options::THEMES {
             assert_eq!(

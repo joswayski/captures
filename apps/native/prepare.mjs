@@ -104,6 +104,29 @@ export function easing(value) {
   return parts;
 }
 
+// CSS `box-shadow` lists (`--shadow-*`, `--glass-shadow`) as offset/blur/
+// spread/color layers, first layer on top. Only `<x> <y> [blur [spread]]
+// <color>` layers are accepted, so a new syntax (inset, var()) fails the build.
+export function boxShadow(value) {
+  // Filter functions such as `drop-shadow()` are not box-shadow lists.
+  if (/^[a-z-]+\(/i.test(value.trim()) || !/rgba?\(|#/.test(value)) return null;
+  return value.split(/,(?![^(]*\))/).map(layer => {
+    const match = /^\s*((?:-?[\d.]+(?:px)?\s+){2,4})(rgba?\([^)]*\)|#[\da-f]{6})\s*$/i.exec(layer);
+    if (!match) throw new Error(`Unsupported box-shadow ${value}`);
+    const [x, y, blur = 0, spread = 0] = match[1].trim().split(/\s+/).map(parseFloat);
+    if (blur < 0) throw new Error(`Invalid box-shadow ${value}`);
+    return { x, y, blur, spread, color: color(match[2]) };
+  });
+}
+
+// Component-scoped shadow custom properties the native cards also paint.
+// Read from the shipping rule so the value cannot drift from the CSS.
+export function componentShadows(css) {
+  const card = /\.thumbnail-stack\s*\{[^}]*?--thumbnail-card-shadow:\s*([^;]+);/.exec(css);
+  if (!card) throw new Error('Missing --thumbnail-card-shadow');
+  return { 'thumbnail-card-shadow': boxShadow(card[1].replace(/\s+/g, ' ').trim()) };
+}
+
 export function particleFixture() {
   let seed = 739;
   const particles = buildThumbnailDustParticles(284, 160, {
@@ -118,6 +141,7 @@ export function particleFixture() {
 export async function prepare(destination, testDestination) {
   const design = await readFile(resolve(root, 'shared/design.css'), 'utf8');
   const palette = await readFile(resolve(root, 'shared/themes.css'), 'utf8');
+  const preview = await readFile(resolve(root, 'apps/desktop/ui/src/styles/mini-preview.css'), 'utf8');
   const variants = {};
   for (const appearance of ['light', 'dark']) {
     for (const theme of themes) {
@@ -126,6 +150,10 @@ export async function prepare(destination, testDestination) {
         colors: Object.fromEntries(Object.entries(raw).flatMap(([key, value]) => color(value) ? [[key, color(value)]] : [])),
         numbers: Object.fromEntries(Object.entries(raw).flatMap(([key, value]) => /^-?[\d.]+(px|ms)?$/.test(value) ? [[key, parseFloat(value)]] : [])),
         easings: Object.fromEntries(Object.entries(raw).flatMap(([key, value]) => key.startsWith('ease-') ? [[key, easing(value)]] : [])),
+        shadows: {
+          ...Object.fromEntries(Object.entries(raw).flatMap(([key, value]) => /(^|-)shadow(-|$)/.test(key) && boxShadow(value) ? [[key, boxShadow(value)]] : [])),
+          ...componentShadows(preview),
+        },
         raw,
       };
     }

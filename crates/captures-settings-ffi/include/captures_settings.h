@@ -292,6 +292,10 @@ double captures_preview_gravity_v1(CapturesPreviewMonitor monitor, size_t count,
 typedef struct { double dx, dy, slot_dy, rotation_deg, scale_x, scale_y; } CapturesPreviewPilePose;
 bool captures_preview_pile_pose_v1(const char *id, size_t depth, bool hovered,
     double gravity, bool top_anchor, CapturesPreviewPilePose *output);
+/* Row-major 3x3 projective map, card-centre offsets (y down) to posed-centre offsets. */
+bool captures_preview_pile_projection_v1(const char *id, size_t depth, bool hovered,
+    double gravity, bool top_anchor, double output[9]);
+double captures_preview_pile_media_blur_v1(size_t depth, bool hovered);
 
 /* Pure compact-card shade policy. Paint glass-strong-solid at this opacity.
  * Depth zero is undimmed. Expanded cards never use this overlay. */

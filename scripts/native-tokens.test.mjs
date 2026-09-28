@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { declarations, resolveTokens, color, easing, themes, particleFixture, parseArguments, prepare } from '../apps/native/prepare.mjs';
+import { declarations, resolveTokens, color, easing, boxShadow, componentShadows, themes, particleFixture, parseArguments, prepare } from '../apps/native/prepare.mjs';
 
 test('native tokens preserve light overrides, palette overrides and fixed media colors', async () => {
   const design = await readFile(new URL('../shared/design.css', import.meta.url), 'utf8');
@@ -42,6 +42,31 @@ test('native tokens carry every ease token as cubic-bezier control points', asyn
     assert.deepEqual(variant.easings['ease-in-out'], [0.45, 0, 0.55, 1]);
     assert.equal(variant.numbers['dur-4'], 280);
   }
+});
+
+test('native tokens carry box-shadow layers, including the preview card shadow', async t => {
+  assert.deepEqual(boxShadow('0 16px 44px rgba(0, 0, 0, 0.44), 0 2px 8px rgba(0, 0, 0, 0.3)'), [
+    { x: 0, y: 16, blur: 44, spread: 0, color: [0, 0, 0, 0.44] },
+    { x: 0, y: 2, blur: 8, spread: 0, color: [0, 0, 0, 0.3] },
+  ]);
+  assert.equal(boxShadow('drop-shadow(0 4px 10px rgba(0, 0, 0, 0.32))'), null);
+  assert.throws(() => boxShadow('inset 0 1px 2px rgba(0, 0, 0, 0.3)'), /Unsupported box-shadow/);
+  assert.throws(() => boxShadow('0 1px 2px rgba(0, 0, 0, 0.3), inset 0 0 1px #ffffff'), /Unsupported box-shadow/);
+  assert.throws(() => componentShadows('.other { --x: 1; }'), /Missing/);
+  const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  await prepare(temporary);
+  const tokens = JSON.parse(await readFile(join(temporary, 'tokens.json'), 'utf8'));
+  for (const variant of Object.values(tokens)) {
+    assert.deepEqual(variant.shadows['thumbnail-card-shadow'], [
+      { x: 0, y: 6, blur: 14, spread: 0, color: [0, 0, 0, 0.38] },
+      { x: 0, y: 2, blur: 5, spread: 0, color: [0, 0, 0, 0.26] },
+    ]);
+    assert.equal(variant.shadows['glass-shadow'].length, 2);
+    assert.equal(variant.shadows['tooltip-shadow'], undefined);
+  }
+  assert.deepEqual(tokens['dark-cobalt'].shadows['shadow-sm'], [{ x: 0, y: 2, blur: 6, spread: 0, color: [0, 0, 0, 0.32] }]);
+  assert.equal(tokens['light-cobalt'].shadows['shadow-sm'].length, 2);
 });
 
 test('unsupported CSS, missing variables and cycles fail rather than silently changing native colors', () => {
