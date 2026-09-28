@@ -229,8 +229,10 @@ its session position survives expansion and new captures without activating the
 workspace. Hovering the collapsed front card fans the rear cards outward; pressing
 and dragging keeps the fan open. macOS follows Reduce Motion; the Windows/Linux
 candidate reads the desktop animation preference at startup and when the workspace
-regains focus. Linux requires a portal exposing the reduced-motion setting;
-`--reduced-motion` can force it when that setting is unavailable.
+regains focus, and follows change notifications while it runs (Windows setting
+broadcasts, the Linux Settings portal's change signal). Linux requires a portal
+exposing the reduced-motion setting; `--reduced-motion` can force it when that
+setting is unavailable.
 Expanded native screenshot previews can offer the original file to another app
 as a COPY. An accepted external drop dismisses only its source card; cancellation
 and in-app drops retain it. A self-drop briefly shakes the card unless reduced
