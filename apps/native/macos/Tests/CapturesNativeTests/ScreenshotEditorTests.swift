@@ -122,7 +122,7 @@ final class ScreenshotEditorTests: XCTestCase {
             rail[3].performClick(nil)
             XCTAssertFalse(flyout.isHidden, "Shapes opens its flyout")
             XCTAssertEqual(flyout.frame.minX, rail[3].frame.maxX + 10)
-            XCTAssertEqual(flyout.frame.size, NSSize(width: 6 + 3 * 44 + 2 * 4, height: 6 + 2 * 44 + 4 + 6),
+            XCTAssertEqual(flyout.frame.size, NSSize(width: 6 + 3 * 44 + 2 * 4 + 6, height: 6 + 2 * 44 + 4 + 6),
                            "three 44pt columns, --s-2 gaps and --s-3 padding")
             XCTAssertEqual(flyout.buttons.map { $0.button.toolTip ?? "" },
                            ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"])
@@ -1002,7 +1002,9 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-compact-fit-\(appearance)")
             let controls: [NSView] = [try popup("Crop aspect", in: controller.root),
                 try table("Screenshot layers", in: controller.root),
-                try rangeSlider("New drawing stroke width", in: controller.root)]
+                // Like shipping, a closed shape with Stroke off hides Size;
+                // Opacity is always shown for the default Rectangle.
+                try rangeSlider("New drawing opacity", in: controller.root)]
             for control in [try button("Change…", in: controller.root), try button("Save", in: controller.root),
                             try copyButton(in: controller.root)] as [NSView] {
                 XCTAssertNil(control.enclosingScrollView, "export actions are pinned, not scrolled")
@@ -4077,9 +4079,10 @@ final class ScreenshotEditorTests: XCTestCase {
             try field("New drawing shadow x offset", in: controller.root),
             try field("New drawing shadow y offset", in: controller.root),
         ]
-        let shadowBounds = shadowInputs.map(\.frame).reduce(NSRect.null) { $0.union($1) }
-        settings.scrollToVisible(shadowBounds.insetBy(dx: 0, dy: -22))
+        // The 320 pt column stacks the group taller than the runner's viewport,
+        // so each expanded input is revealed in turn.
         for input in shadowInputs {
+            input.scrollToVisible(input.bounds)
             XCTAssertTrue(input.visibleRect.contains(input.bounds), "expanded \(input) is fully visible")
         }
         try render(controller.root, name: "screenshot-editor-new-drawing-shadow-retained-light")
