@@ -1736,7 +1736,9 @@ pub fn show_overflow_cues(
         let response = ui.interact(
             rect,
             ui.scope_id().with(("overflow-cue", above)),
-            egui::Sense::click(),
+            // Own drag hit-testing too: the clipped image below the cue
+            // otherwise starts an outbound file drag on this same press.
+            egui::Sense::click_and_drag(),
         );
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
         let corners = if above {
@@ -3163,6 +3165,54 @@ mod tests {
             assert_eq!(chips, mesh, "{kind:?}");
             output.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn overflow_cues_own_presses_over_draggable_images() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(340., 600.));
+        let frame = |events| {
+            ctx.begin_pass(raw(screen, events));
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::unique("cue-over-image"),
+                egui::UiBuilder::new().max_rect(screen),
+            );
+            // Like an expanded card, the underlying image starts its native
+            // drag on press, not after a movement threshold.
+            let image = ui.interact(screen, ui.scope_id().with("image"), egui::Sense::DRAG);
+            let slots = show_overflow_cues(
+                &mut ui,
+                &tokens,
+                screen,
+                captures_app::preview::StackOverflow {
+                    above: true,
+                    below: true,
+                },
+                false,
+            );
+            let dragged = image.drag_started_by(egui::PointerButton::Primary);
+            ctx.end_pass().textures_delta.clear();
+            (dragged, slots)
+        };
+        for (point, slots) in [(egui::pos2(170., 17.), -1), (egui::pos2(170., 583.), 1)] {
+            frame(moved(point));
+            assert_eq!(
+                frame(pointer(point, true)),
+                (false, None),
+                "cue must not start a file drag"
+            );
+            assert_eq!(frame(pointer(point, false)), (false, Some(slots)));
+        }
+        let image = egui::pos2(80., 250.);
+        frame(moved(image));
+        assert_eq!(
+            frame(pointer(image, true)),
+            (true, None),
+            "exposed image must still drag"
+        );
+        frame(pointer(image, false));
     }
 
     fn run_cues(
