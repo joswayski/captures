@@ -66,29 +66,21 @@ fn paint_icon(ui: &egui::Ui, tokens: &Tokens, area: egui::Rect, icon: Icon, tone
         );
     }
     let ink = tokens.color(ink);
-    let stroke = Stroke::new(1.8, ink);
     let c = area.center();
     match icon {
-        Icon::App => {
-            // Viewfinder corners around a dot: the capture mark.
-            for (sx, sy) in [(-1., -1.), (1., -1.), (-1., 1.), (1., 1.)] {
-                let corner = c + egui::vec2(7. * sx, 7. * sy);
-                painter.line_segment([corner, corner - egui::vec2(4. * sx, 0.)], stroke);
-                painter.line_segment([corner, corner - egui::vec2(0., 4. * sy)], stroke);
-            }
-            painter.circle_filled(c, 2.2, ink);
-        }
-        Icon::Check => {
-            painter.line_segment([c + egui::vec2(-5., 0.), c + egui::vec2(-1., 4.)], stroke);
-            painter.line_segment([c + egui::vec2(-1., 4.), c + egui::vec2(6., -4.)], stroke);
-        }
-        Icon::Warning => {
-            let top = c + egui::vec2(0., -7.);
-            let left = c + egui::vec2(-7.5, 6.);
-            let right = c + egui::vec2(7.5, 6.);
-            painter.add(egui::Shape::closed_line(vec![top, right, left], stroke));
-            painter.line_segment([c + egui::vec2(0., -2.), c + egui::vec2(0., 1.5)], stroke);
-            painter.circle_filled(c + egui::vec2(0., 3.8), 1., ink);
+        Icon::App | Icon::Check | Icon::Warning => {
+            let name = match icon {
+                Icon::App => "capture",
+                Icon::Check => "check",
+                _ => "warning",
+            };
+            crate::capture_controls::paint_icon(
+                painter,
+                name,
+                egui::Rect::from_center_size(c, egui::Vec2::splat(18.)),
+                1.8,
+                ink,
+            );
         }
         Icon::Spinner => {
             let start = (ui.input(|input| input.time) as f32 * TAU / 0.72) % TAU;

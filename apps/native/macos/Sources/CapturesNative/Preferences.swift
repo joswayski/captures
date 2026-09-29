@@ -2128,6 +2128,7 @@ final class BrandMarkView: NSView {
         tokens.color("theme-accent").setFill()
         NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
         tokens.color("theme-accent-ink").setStroke()
+        tokens.color("theme-accent-ink").setFill()
         ShippingIcons.stroke("capture", in: NSRect(x: (bounds.width - 16) / 2, y: (bounds.height - 16) / 2,
             width: 16, height: 16))
     }

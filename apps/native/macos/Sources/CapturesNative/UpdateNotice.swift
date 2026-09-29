@@ -305,11 +305,13 @@ final class UpdateNoticeModel {
     }
 }
 
-/// Header icon: tone fill with an SF Symbol or a spinner.
+/// Shipping header glyphs and 14-point CSS-style spinner; no SF Symbol substitutes.
 final class UpdateNoticeIconView: NSView {
+    let iconName: String?
+    private let ink: NSColor
+    override var isFlipped: Bool { true }
+
     init(frame: NSRect, icon: String, tone: String, tokens: Tokens) {
-        super.init(frame: frame)
-        wantsLayer = true
         let fill: String, ink: String
         switch tone {
         case "accent": fill = "theme-accent"; ink = "theme-accent-ink"
@@ -317,30 +319,40 @@ final class UpdateNoticeIconView: NSView {
         case "signal": fill = "theme-signal"; ink = "theme-signal-ink"
         default: fill = "surface-sunken"; ink = "text"
         }
+        self.ink = tokens.color(ink)
+        switch icon {
+        case "spinner": iconName = nil
+        case "check": iconName = "check"
+        case "warning": iconName = "warning"
+        default: iconName = "capture"
+        }
+        super.init(frame: frame)
+        wantsLayer = true
         layer?.backgroundColor = tokens.color(fill).cgColor
         layer?.cornerRadius = tokens.number("r-lg")
         if tone == "neutral" { layer?.borderWidth = 1; layer?.borderColor = tokens.color("border").cgColor }
         setAccessibilityElement(false)
         if icon == "spinner" {
-            let spinner = NSProgressIndicator(frame: NSRect(x: (frame.width - 16) / 2, y: (frame.height - 16) / 2, width: 16, height: 16))
-            spinner.style = .spinning; spinner.controlSize = .small; spinner.isIndeterminate = true
-            spinner.startAnimation(nil)
-            addSubview(spinner)
-            return
+            let spinner = CAShapeLayer()
+            spinner.frame = NSRect(x: (frame.width - 14) / 2, y: (frame.height - 14) / 2, width: 14, height: 14)
+            spinner.path = CGPath(ellipseIn: NSRect(x: 1, y: 1, width: 12, height: 12), transform: nil)
+            spinner.fillColor = nil; spinner.strokeColor = self.ink.cgColor
+            spinner.lineWidth = 2; spinner.strokeEnd = 0.75
+            let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
+            rotation.fromValue = 0; rotation.toValue = 2 * Double.pi
+            rotation.duration = 0.72; rotation.repeatCount = .infinity
+            spinner.add(rotation, forKey: "update-spin")
+            layer?.addSublayer(spinner)
         }
-        let symbol: String
-        switch icon {
-        case "check": symbol = "checkmark"
-        case "warning": symbol = "exclamationmark.triangle"
-        default: symbol = "viewfinder"
-        }
-        let image = NSImageView(frame: NSRect(x: (frame.width - 18) / 2, y: (frame.height - 18) / 2, width: 18, height: 18))
-        image.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .semibold))
-        image.contentTintColor = tokens.color(ink)
-        addSubview(image)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let iconName else { return }
+        ink.setStroke(); ink.setFill()
+        ShippingIcons.stroke(iconName,
+            in: NSRect(x: (bounds.width - 18) / 2, y: (bounds.height - 18) / 2, width: 18, height: 18))
+    }
 }
 
 /// Link-only text: clicks call the action instead of opening a browser.

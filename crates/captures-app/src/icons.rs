@@ -50,6 +50,10 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
+        "warning" => &[
+            "M10.29 4.86 1.82 19a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 4.86a2 2 0 0 0-3.42 0Z",
+            "M12 9.5v5.2M12 17.6h.01",
+        ],
         "history" => &["M3 12a9 9 0 1 0 3-6.7L3 8", "M3 3v5h5M12 7v5l3 2"],
         // These shipping SVGs use a 16-unit viewBox. `polylines`
         // normalizes them to the native hosts' shared 24-unit coordinate space.
@@ -551,6 +555,8 @@ mod tests {
         let app = include_str!("../../../apps/desktop/ui/src/App.tsx");
         for (name, component) in [
             ("external-link", "ExternalPreferenceIcon"),
+            ("warning", "WarningIcon"),
+            ("capture", "CaptureIcon"),
             ("close", "CloseIcon"),
             ("trash", "TrashIcon"),
             ("edit", "EditIcon"),
@@ -609,6 +615,7 @@ mod tests {
             "hide-controls",
             "close",
             "check",
+            "warning",
             "restore",
             "copy",
             "save",

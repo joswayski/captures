@@ -79,7 +79,8 @@ enum ShippingIcons {
     /// Stroke a named icon into `rect`, round strokes
     /// `width` units wide (1.8 unless the shipping CSS sets another).
     static func stroke(_ name: String, in rect: NSRect, width: CGFloat = 1.8, flipped: Bool = true) {
-        for line in polylines(name) where line.count > 1 {
+        let lines = polylines(name)
+        for (index, line) in lines.enumerated() where line.count > 1 {
             let path = NSBezierPath()
             path.lineWidth = width * rect.width / 24
             path.lineCapStyle = .round; path.lineJoinStyle = .round
@@ -89,7 +90,9 @@ enum ShippingIcons {
                                                 : rect.maxY - point.y * rect.height / 24)
                 if index == 0 { path.move(to: mapped) } else { path.line(to: mapped) }
             }
-            path.stroke()
+            // `.capture-icon-spark` is filled, unlike the viewfinder corners.
+            if name == "capture" && index == lines.count - 1 { path.fill() }
+            else { path.stroke() }
         }
     }
 }
