@@ -64,14 +64,47 @@ final class StatusItemTests: XCTestCase {
         withExtendedLifetime(handler) {}
     }
 
-    func testStatusItemUsesNativeTemplateIconAndCanEmitPixelEvidence() throws {
+    func testStatusTemplateKeepsOnlyLightNeutralForegroundAndItsAlpha() throws {
+        _ = NSApplication.shared
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: 22, pixelsHigh: 22, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        for y in 0..<22 {
+            for x in 0..<22 {
+                let color: NSColor = x < 6 ? .black : x < 11 ? NSColor(deviceWhite: 1, alpha: 0.5)
+                    : x < 16 ? .red : NSColor(deviceWhite: 0.68, alpha: 1)
+                bitmap.setColor(color, atX: x, y: y)
+            }
+        }
+        let source = NSImage(size: NSSize(width: 22, height: 22))
+        source.addRepresentation(bitmap)
+        let template = try XCTUnwrap(statusItemTemplate(source: source))
+        let pixels = try XCTUnwrap(template.representations.first as? NSBitmapImageRep)
+        for x in [2, 13, 19] {
+            XCTAssertEqual(try XCTUnwrap(pixels.colorAt(x: x, y: 10)).alphaComponent, 0,
+                           "dark background, saturated color and sub-threshold gray are transparent")
+        }
+        let foreground = try XCTUnwrap(pixels.colorAt(x: 8, y: 10)?.usingColorSpace(.deviceRGB))
+        XCTAssertEqual(foreground.alphaComponent, 0.5, accuracy: 0.01)
+        XCTAssertEqual(foreground.redComponent, 1, accuracy: 0.01)
+        XCTAssertTrue(template.isTemplate)
+    }
+
+    func testStatusItemUsesProductTemplateIconAndCanEmitPixelEvidence() throws {
         _ = NSApplication.shared
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         defer { NSStatusBar.system.removeStatusItem(item) }
         let button = try XCTUnwrap(item.button)
         configureStatusItemButton(button)
         XCTAssertEqual(button.accessibilityLabel(), "Captures")
-        XCTAssertTrue(button.image?.isTemplate == true || button.title == "C")
+        let image = try XCTUnwrap(button.image, "the product resource must load, not use the fallback")
+        XCTAssertTrue(image.isTemplate)
+        XCTAssertEqual(image.size, NSSize(width: 22, height: 22))
+        let pixels = try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
+        XCTAssertEqual(try XCTUnwrap(pixels.colorAt(x: 0, y: 0)).alphaComponent, 0)
+        XCTAssertGreaterThan(try XCTUnwrap(pixels.colorAt(x: 11, y: 11)).alphaComponent, 0,
+                             "the product's central spark is present")
 
         guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
         button.layoutSubtreeIfNeeded()

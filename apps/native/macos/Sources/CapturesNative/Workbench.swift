@@ -804,9 +804,40 @@ enum BusyCaptureOutcome: Equatable {
     case inProgress(message: String)
 }
 
+/// Use the shipping product asset and macos_tray_icon's foreground selection.
+/// AppKit resamples the PNG; no system-symbol substitution or separate artwork.
+func statusItemTemplate(source: NSImage) -> NSImage? {
+    let size = NSSize(width: 22, height: 22)
+    guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 22, pixelsHigh: 22,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+        let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    context.imageInterpolation = .high
+    source.draw(in: NSRect(origin: .zero, size: size), from: .zero,
+                operation: .copy, fraction: 1)
+    NSGraphicsContext.restoreGraphicsState()
+    for y in 0..<22 {
+        for x in 0..<22 {
+            guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            let minimum = min(color.redComponent, color.greenComponent, color.blueComponent)
+            let maximum = max(color.redComponent, color.greenComponent, color.blueComponent)
+            let foreground = minimum >= 180.0 / 255 && maximum - minimum <= 55.0 / 255
+            bitmap.setColor(foreground ? NSColor(deviceWhite: 1, alpha: color.alphaComponent) : .clear,
+                            atX: x, y: y)
+        }
+    }
+    let image = NSImage(size: size)
+    image.addRepresentation(bitmap)
+    image.isTemplate = true
+    image.accessibilityDescription = "Captures"
+    return image
+}
+
 func configureStatusItemButton(_ button: NSStatusBarButton) {
-    if let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Captures") {
-        image.isTemplate = true
+    if let url = NativeResources.bundle.url(forResource: "tray-source", withExtension: "png"),
+       let source = NSImage(contentsOf: url), let image = statusItemTemplate(source: source) {
         button.image = image
     } else {
         button.title = "C"
