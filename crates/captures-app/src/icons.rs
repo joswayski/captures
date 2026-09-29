@@ -11,6 +11,8 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         "pause" => &["M8 5v14M16 5v14"],
         "resume" => &["m8 5 11 7-11 7Z"],
         "restart" => &["M4 11a8 8 0 1 1 2 5.3", "M4 5v6h6"],
+        // Vector counterpart to shipping's font-dependent clockwise `↻`.
+        "loop" => &["M20 11a8 8 0 1 0-2 5.3", "M20 5v6h-6"],
         "capture" => &[
             "M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2",
             "M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z",
@@ -551,6 +553,18 @@ mod tests {
     }
 
     #[test]
+    fn loop_arrow_points_clockwise_on_the_right() {
+        let loop_paths = paths("loop").unwrap();
+        let arc = flatten(loop_paths[0]);
+        assert_eq!(arc[0][0], [20., 11.]);
+        assert!(close(*arc[0].last().unwrap(), [18., 16.3]));
+        assert_eq!(
+            flatten(loop_paths[1]),
+            vec![vec![[20., 5.], [20., 11.], [14., 11.]]]
+        );
+    }
+
+    #[test]
     fn preview_paths_match_shipping_svg_sources() {
         let app = include_str!("../../../apps/desktop/ui/src/App.tsx");
         for (name, component) in [
@@ -605,6 +619,7 @@ mod tests {
             "pause",
             "resume",
             "restart",
+            "loop",
             "capture",
             "target-region",
             "target-window",

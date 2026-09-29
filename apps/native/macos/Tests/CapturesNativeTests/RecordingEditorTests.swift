@@ -983,8 +983,9 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(seek.doubleValue, 0, "layout coverage keeps the playhead at source start")
         XCTAssertTrue(play.circular && play.iconOnly, "Play is the shipping overlay circle")
         // Shipping `.recording-preview-loop`: quiet pill toggles, not checkboxes.
-        XCTAssertEqual((loop as? RecordingPreviewToggle)?.leadingGlyph, "↻")
-        XCTAssertNil((sound as? RecordingPreviewToggle)?.leadingGlyph)
+        XCTAssertEqual((loop as? RecordingPreviewToggle)?.leadingIcon, "loop")
+        XCTAssertFalse(ShippingIcons.polylines("loop").isEmpty)
+        XCTAssertNil((sound as? RecordingPreviewToggle)?.leadingIcon)
         XCTAssertNotNil(sound as? RecordingPreviewToggle)
         XCTAssertEqual(loop.state, .off, "Loop preview starts off")
         loop.performClick(nil)

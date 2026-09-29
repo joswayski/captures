@@ -2115,8 +2115,8 @@ fn toolbar_toggle(
     response
 }
 
-/// `.recording-preview-loop`: the toggle with its circular-arrow icon, drawn
-/// because the bundled fonts have no loop glyph.
+/// `.recording-preview-loop`: the toggle with a shared vector circular arrow,
+/// independent of the host's font coverage for the shipping `↻` character.
 fn loop_toggle(ui: &mut egui::Ui, tokens: &Tokens, on: bool, enabled: bool) -> egui::Response {
     let label = "Loop preview";
     let font = egui::FontId::proportional(tokens.number("text-sm"));
@@ -2167,25 +2167,13 @@ fn loop_toggle(ui: &mut egui::Ui, tokens: &Tokens, on: bool, enabled: bool) -> e
         );
     }
     let center = egui::pos2(rect.left() + padding + icon / 2., rect.center().y);
-    let radius = icon / 2. - 1.;
-    let stroke = egui::Stroke::new(1.4, color);
-    let points: Vec<_> = (0..=20)
-        .map(|step| {
-            let angle = -0.35 + step as f32 / 20. * 1.6 * std::f32::consts::PI;
-            center + radius * egui::vec2(angle.cos(), angle.sin())
-        })
-        .collect();
-    let tip = *points.last().unwrap();
-    painter.add(egui::Shape::line(points, stroke));
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            tip + egui::vec2(-3.2, 0.2),
-            tip + egui::vec2(1.6, -2.6),
-            tip + egui::vec2(1.2, 2.8),
-        ],
+    crate::capture_controls::paint_icon(
+        painter,
+        "loop",
+        egui::Rect::from_center_size(center, egui::Vec2::splat(icon)),
+        2.8,
         color,
-        egui::Stroke::NONE,
-    ));
+    );
     painter.galley(
         egui::pos2(
             rect.left() + padding + icon + gap,
