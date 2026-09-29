@@ -1095,6 +1095,13 @@ def main():
                         for _ in range(4):
                             click(preview, 170, 17, activate=False)
                             time.sleep(.45)
+                        # The oldest card starts at (28, 28). Its upper-left
+                        # image is the fixture's dark quadrant. Check before
+                        # moving the pointer: stale scroll pixels must not need
+                        # a mouse event to repaint (the old position is a gap).
+                        wait(lambda: run("import", "-window", preview, "-crop", "1x1+100+40",
+                                         "-depth", "8", "rgb:-") == bytes(BACKGROUNDS[0][0]),
+                             "oldest card repaints without pointer motion")
                         shot(preview, f"{prefix}-overflow-oldest")
                         click(preview, 170, 89, activate=False)
                         expected_pixels = rgb(stack_entries[0].parent / "capture.png")

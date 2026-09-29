@@ -7016,6 +7016,10 @@ impl Live {
                                 .show(ui, |ui| {
                                     if let Some(delta) = cue_scroll {
                                         ui.scroll_with_delta(egui::vec2(0., -delta));
+                                        // ScrollArea applies the offset after this
+                                        // pass paints. Present the new card positions
+                                        // without waiting for another pointer event.
+                                        ui.ctx().request_repaint();
                                     }
                                     let (content, _) = ui.allocate_exact_size(
                                         egui::vec2(ui.available_width(), scroll_content_height),

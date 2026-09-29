@@ -23,6 +23,14 @@ movement/automatic anchor changes and physical platform/accessibility acceptance
 also remain open. Use `docs/native-rewrite.md` and current code together: an
 unchecked acceptance gate does not mean its implementation is missing.
 
+The wgpu overflow-cue fix prevents presses from also starting a native file drag
+on the clipped image underneath, and repaints the applied scroll offset without
+waiting for pointer movement. The private-X11 eight-card test now reaches and
+copies the oldest card with four clicks, including a stationary-pointer pixel
+assertion. Full-stack acceptance is still open: subsequent placement cases have
+failed hover-brightness and compact-pile pointer-follow assertions. Windows and
+Wayland execution remain unverified; AppKit's separate button handling is unchanged.
+
 ## User direction and delivery state
 
 Continue native UI/UX parity with the shipping Tauri app, specifically its mini
