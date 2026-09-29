@@ -729,6 +729,8 @@ pub enum Transition {
     PreviewMediaFilter,
     /// `.thumbnail-card img`: the hover `transform: scale()` over `0.22s ease`.
     PreviewMediaScale,
+    /// `.icon-button`: hover background and foreground over `0.14s ease`.
+    PreviewIconHover,
     /// `.icon-button::after`: card icon tooltips fade and nudge over `0.12s ease`.
     PreviewIconTooltip,
     /// `.thumbnail-stack-control[data-tooltip]::after`: the stack toolbar tip
@@ -788,13 +790,14 @@ const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::SegmentLabel,
         Self::Tooltip,
         Self::PreviewMediaFilter,
         Self::PreviewMediaScale,
+        Self::PreviewIconHover,
         Self::PreviewIconTooltip,
         Self::PreviewStackTooltip,
         Self::PreviewEditorRing,
@@ -819,6 +822,7 @@ impl Transition {
             Self::Tooltip => "tooltip",
             Self::PreviewMediaFilter => "preview_media_filter",
             Self::PreviewMediaScale => "preview_media_scale",
+            Self::PreviewIconHover => "preview_icon_hover",
             Self::PreviewIconTooltip => "preview_icon_tooltip",
             Self::PreviewStackTooltip => "preview_stack_tooltip",
             Self::PreviewEditorRing => "preview_editor_ring",
@@ -849,6 +853,7 @@ impl Transition {
             Self::Tooltip => token("dur-1", "ease-standard"),
             Self::PreviewMediaFilter => (Timing::Millis(180.), CSS_EASE),
             Self::PreviewMediaScale | Self::PreviewEditorRing => (Timing::Millis(220.), CSS_EASE),
+            Self::PreviewIconHover => (Timing::Millis(140.), CSS_EASE),
             Self::PreviewIconTooltip => (Timing::Millis(120.), CSS_EASE),
             Self::PreviewStackTooltip => token("dur-1", "ease-out"),
             Self::PreviewEditorRingLeave => (Timing::Millis(550.), Easing::Token("ease-standard")),
@@ -1354,6 +1359,12 @@ mod tests {
         assert_eq!(
             catalog["transitions"]["preview_media_filter"]["easing"]["bezier"][1],
             0.1
+        );
+        let icon_hover = Transition::PreviewIconHover.resolve(&Shipping).unwrap();
+        assert_eq!(icon_hover.duration_ms, 140.);
+        assert_eq!(
+            icon_hover.easing,
+            CubicBezier::new(0.25, 0.1, 0.25, 1.).unwrap()
         );
         // The ring leave matches the shipping presence leave timer.
         assert_eq!(

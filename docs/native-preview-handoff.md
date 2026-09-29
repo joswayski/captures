@@ -1,5 +1,28 @@
 # Native preview handoff — 2026-09-25
 
+## Ownership and status correction — 2026-09-29
+
+Jose transferred ownership to
+https://ampcode.com/threads/T-01a0ebd4-7a1a-7378-8cd9-965f189579d0.
+The previous threads stopped; the storage-full orb has no unpublished source
+commits. Its short-lived continuation had only an unused hover-transition catalog
+edit, now superseded by the implementation here. Start from fetched `origin/main`,
+not either old orb's local checkout.
+
+**The delivery and next-work notes below are historical, not a current backlog.**
+#808 and #809 are merged. Later work, including #837, #865 and #872, added
+media blur, shadows, metadata, clipboard/editor badges, stale-pointer guards,
+toolbar morphs, pile perspective/depth blur/stagger and exit/settle motion.
+Do not reimplement those features. #807 and #613 remain separate open sharing
+work; Share/sign-in is still excluded from this preview slice.
+
+This slice restores the shipping Delete hover colors (white on signal) and
+140 ms icon-color easing on both hosts. Remaining control details include icon
+lift/growth and main-action hover transitions. Backdrop blur, cross-display pile
+movement/automatic anchor changes and physical platform/accessibility acceptance
+also remain open. Use `docs/native-rewrite.md` and current code together: an
+unchecked acceptance gate does not mean its implementation is missing.
+
 ## User direction and delivery state
 
 Continue native UI/UX parity with the shipping Tauri app, specifically its mini

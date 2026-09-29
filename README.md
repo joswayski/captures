@@ -213,8 +213,10 @@ a stack with expand/collapse, scrolling with Show older/newer edge cues and Clea
 all; dismissing previews leaves
 history and exports intact. Expanded cards now use the Tauri layout: full-bleed
 images and idle dimensions, hover-only corner icons and centered Copy/Save actions,
-with controls mirrored for right-side placement. Hover dims the image; blur,
-editor-presence pills and animated transitions remain open.
+with controls mirrored for right-side placement. Hover blurs and dims the image;
+cards show byte sizes, clipboard confirmation and editor-presence pills. Delete
+uses a white icon on the signal-colored hover background. Native previews also
+animate arrival, dismissal, pile expansion and settling, respecting reduced motion.
 After export, Show in Folder selects the saved file in the file manager (on Linux
 through the desktop's FileManager1 service, or by opening its folder when none
 answers) instead of saving another copy; a missing export leaves the capture available.
@@ -240,8 +242,9 @@ motion is enabled. Unsaved captures use retained temporary files cleaned on the
 next startup; saved exports are never removed by drag cleanup. X11 transfers and
 the isolated Wayland protocol are tested on disposable desktops. Physical macOS,
 Windows OLE, mixed-DPI and full Wayland capture-host acceptance remain open.
-Cross-display movement, automatic top/bottom anchor changes,
-3D fan styling, stagger and the remaining preview effects are still unconnected.
+The pile includes 3D tilt, depth blur, shadows and staggered fan motion.
+Cross-display movement, automatic top/bottom anchor changes, backdrop blur and
+remaining control-transition details still need parity work and platform acceptance.
 Rear cards use fixed-glass depth shading; front and idle expanded images stay unshaded.
 Live native hosts expose menu-bar/tray New Capture,
 screenshot, History, Preferences, output-folder and Quit actions, plus configured
