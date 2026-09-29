@@ -27,9 +27,14 @@ The wgpu overflow-cue fix prevents presses from also starting a native file drag
 on the clipped image underneath, and repaints the applied scroll offset without
 waiting for pointer movement. The private-X11 eight-card test now reaches and
 copies the oldest card with four clicks, including a stationary-pointer pixel
-assertion. Full-stack acceptance is still open: subsequent placement cases have
-failed hover-brightness and compact-pile pointer-follow assertions. Windows and
-Wayland execution remain unverified; AppKit's separate button handling is unchanged.
+assertion. The full private-X11 `--stack` smoke now passes all six cases after
+correcting two harness races: idle pixels must match the known fixture color
+(two identical reads could both be unfinished frames), and synthetic pile drags
+must pace enter/press like the existing click helper before moving outside the
+hit target. Pixel tolerances, exact Copy comparisons, drag distance, stationary
+position, focus and file-preservation assertions remain unchanged. This is
+software-rendered evidence, not physical-desktop acceptance. Windows and Wayland
+execution remain unverified; AppKit's separate button handling is unchanged.
 
 ## User direction and delivery state
 
