@@ -4789,14 +4789,13 @@ fn show_export_row(
                         .x
                 });
                 let center = response.rect.center() - egui::vec2(text / 2. + 10., 0.);
-                ui.painter().add(egui::Shape::line(
-                    vec![
-                        center + egui::vec2(-4., 0.),
-                        center + egui::vec2(-1., 3.),
-                        center + egui::vec2(4., -3.),
-                    ],
-                    egui::Stroke::new(1.8, tokens.color("positive-text")),
-                ));
+                crate::capture_controls::paint_icon(
+                    ui.painter(),
+                    "check",
+                    egui::Rect::from_center_size(center, egui::Vec2::splat(16.)),
+                    1.8,
+                    tokens.color("positive-text"),
+                );
             }
             if response.clicked() {
                 view.copy(tx);
@@ -4911,25 +4910,16 @@ fn export_disclosure(
             rect.right() - tokens.number("s-4") - chevron / 2.,
             rect.center().y,
         );
-        let half = chevron / 4.;
-        let direction = if open { -1. } else { 1. };
-        let stroke = egui::Stroke::new(
-            1.6,
+        crate::capture_controls::paint_icon(
+            painter,
+            if open {
+                "editor-chevron-up"
+            } else {
+                "editor-chevron-down"
+            },
+            egui::Rect::from_center_size(center, egui::Vec2::splat(15.)),
+            1.8,
             tokens.color(if hovered { "text" } else { "text-muted" }),
-        );
-        painter.line_segment(
-            [
-                center + egui::vec2(-half, -half / 2. * direction),
-                center + egui::vec2(0., half / 2. * direction),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                center + egui::vec2(0., half / 2. * direction),
-                center + egui::vec2(half, -half / 2. * direction),
-            ],
-            stroke,
         );
         if response.has_focus() {
             crate::primitives::focus_indicated(ui.ctx());

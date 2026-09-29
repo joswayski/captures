@@ -844,12 +844,15 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-export-bar-pending-\(appearance)")
             worker.completePendingEncode()
             XCTAssertEqual(copies, 1)
-            XCTAssertEqual(copy.title, "✓ Copied"); XCTAssertEqual(copy.accessibilityLabel(), "Copied")
+            XCTAssertEqual(copy.title, "Copied"); XCTAssertEqual(copy.accessibilityLabel(), "Copied")
+            if case .shipping(let name)? = copy.icon { XCTAssertEqual(name, "check") }
+            else { XCTFail("copy confirmation uses the shared check icon") }
             XCTAssertTrue(copy.isEnabled); XCTAssertTrue(save.isEnabled)
             try render(controller.root, name: "screenshot-editor-export-bar-copied-\(appearance)")
             waitUntil(timeout: ScreenshotEditorController.exportConfirmationDuration + 2) {
                 copy.title == "Copy image"
             }
+            XCTAssertNil(copy.icon)
             XCTAssertTrue(worker.requests.isEmpty)
         }
     }
@@ -879,9 +882,13 @@ final class ScreenshotEditorTests: XCTestCase {
             let panel = try XCTUnwrap(descendants(in: controller.root).first {
                 !($0 is CaptureButton) && $0.accessibilityLabel() == "Export settings" })
             XCTAssertTrue(panel.isHidden)
+            let chevron = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorExportChevron }.first)
+            XCTAssertEqual(chevron.glyph, "editor-chevron-down")
+            XCTAssertNil(chevron.hitTest(.zero), "the disclosure owns icon clicks")
             try showOutput(in: controller.root)
             XCTAssertFalse(panel.isHidden)
             XCTAssertTrue(controller.exportSettingsOpen)
+            XCTAssertEqual(chevron.glyph, "editor-chevron-up")
             XCTAssertEqual(controller.exportBarHeight, 208)
             XCTAssertTrue(labels(in: controller.root).contains("≈ 240 KB"))
             XCTAssertTrue(labels(in: controller.root).contains("−20%"))
@@ -7419,7 +7426,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
     private func copyButton(in view: NSView) throws -> CaptureButton {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
-            .first { $0.title == "Copy image" || $0.title == "✓ Copied" })
+            .first { $0.title == "Copy image" || $0.title == "Copied" })
     }
 
     private func saveAsNewSwitch(in view: NSView) throws -> NSSwitch {

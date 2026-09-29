@@ -1175,6 +1175,20 @@ private final class EditorPassthroughLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// Decorative disclosure arrow; the containing button owns input and accessibility.
+final class EditorExportChevron: NSView {
+    override var isFlipped: Bool { true }
+    var expanded = false { didSet { needsDisplay = true } }
+    var ink = NSColor.labelColor { didSet { needsDisplay = true } }
+    var glyph: String { expanded ? "editor-chevron-up" : "editor-chevron-down" }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        ink.setStroke()
+        ShippingIcons.stroke(glyph,
+            in: NSRect(x: (bounds.width - 15) / 2, y: (bounds.height - 15) / 2, width: 15, height: 15))
+    }
+}
+
 private final class EditorInlineTextView: NSTextView {
     var onEscape: (() -> Void)?
     var onBlur: (() -> Void)?
@@ -1353,7 +1367,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputLocation = NSTextField(labelWithString: "")
     private let exportDisclosureTitle = EditorPassthroughLabel(labelWithString: "Export settings")
     private let exportSummary = EditorPassthroughLabel(labelWithString: "")
-    private let exportChevron = EditorPassthroughLabel(labelWithString: "▾")
+    private let exportChevron = EditorExportChevron()
     private let exportFilenameCaption = NSTextField(labelWithString: "Filename")
     private let exportSavingToCaption = NSTextField(labelWithString: "Saving to")
     private let exportStatus = NSTextField(labelWithString: "")
@@ -3022,8 +3036,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportSummary.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
         exportSummary.lineBreakMode = .byTruncatingTail
         exportSummary.setAccessibilityLabel("Export summary")
-        exportChevron.alignment = .center
-        [exportDisclosureTitle, exportSummary, exportChevron].forEach { exportDisclosure.addSubview($0) }
+        exportChevron.setAccessibilityElement(false)
+        [exportDisclosureTitle as NSView, exportSummary, exportChevron].forEach { exportDisclosure.addSubview($0) }
 
         exportFilenameCaption.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         exportSavingToCaption.font = .systemFont(ofSize: tokens.number("text-xs"))
@@ -4367,8 +4381,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportEstimateValue.textColor = tokens.color(estimatePending ? "text-subtle" : "text")
         exportEstimateDelta.stringValue = bar?.deltaLabel ?? ""
         exportEstimateDelta.textColor = tokens.color((bar?.deltaPercent ?? 0) < 0 ? "positive-text" : "caution-text")
-        let copyTitle = copyConfirmed ? "✓ Copied" : "Copy image"
+        let copyTitle = copyConfirmed ? "Copied" : "Copy image"
         if copyImageButton.title != copyTitle { copyImageButton.title = copyTitle }
+        copyImageButton.icon = copyConfirmed ? .shipping("check") : nil
         copyImageButton.setAccessibilityLabel(copyConfirmed ? "Copied" : "Copy image")
         showInFolderButton.isHidden = lastSavedPath == nil
         exportSaveButton.toolTip = bar?.hint
@@ -4414,7 +4429,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func toggleExportSettings() {
         exportSettingsOpen.toggle()
-        exportChevron.stringValue = exportSettingsOpen ? "▴" : "▾"
+        exportChevron.expanded = exportSettingsOpen
         exportDisclosure.toolTip = exportSettingsOpen ? "Hide export settings" : "Show export settings"
         exportDisclosure.setAccessibilityExpanded(exportSettingsOpen)
         layoutEditor()
@@ -6614,7 +6629,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         for label in [exportFilenameCaption, saveAsNewLabel, exportDisclosureTitle] {
             label.textColor = tokens.color("text")
         }
-        for label in [exportSavingToCaption, outputLocation, exportSummary, exportChevron, outputDimensions] {
+        exportChevron.ink = tokens.color("text-subtle")
+        for label in [exportSavingToCaption, outputLocation, exportSummary, outputDimensions] {
             label.textColor = tokens.color("text-subtle")
         }
         for group in exportGroups.values { group.caption.textColor = tokens.color("text-muted") }

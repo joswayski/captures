@@ -91,6 +91,8 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         "chevron-up" => &["m6 15 6-6 6 6"],
         "chevron-down" => &["m6 9 6 6 6-6"],
         // Screenshot editor chrome (`EditorIcon` in `ScreenshotEditor.tsx`).
+        "editor-chevron-down" => &["m7 9 5 5 5-5"],
+        "editor-chevron-up" => &["m7 15 5-5 5 5"],
         "select" => &["m5 3 13 9-7 2-3 7Z"],
         "crop" => &["M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12"],
         "trim" => &[
@@ -590,6 +592,20 @@ mod tests {
     }
 
     #[test]
+    fn editor_disclosure_matches_shipping_path_and_rotated_expansion() {
+        let editor = include_str!("../../../apps/desktop/ui/src/ScreenshotEditor.tsx");
+        assert!(editor.contains(paths("editor-chevron-down").unwrap()[0]));
+        let down = polylines("editor-chevron-down").unwrap();
+        let up = polylines("editor-chevron-up").unwrap();
+        let rotated: Vec<_> = down[0]
+            .iter()
+            .rev()
+            .map(|p| [24. - p[0], 24. - p[1]])
+            .collect();
+        assert_eq!(up[0], rotated);
+    }
+
+    #[test]
     fn sixteen_unit_preview_icons_normalize_to_twenty_four_units() {
         let external = polylines("external-link").unwrap();
         assert_eq!(external[0][0], [9.75, 4.5]);
@@ -643,6 +659,8 @@ mod tests {
             "preview-overflow-down",
             "chevron-up",
             "chevron-down",
+            "editor-chevron-up",
+            "editor-chevron-down",
             "align-left",
             "align-center",
             "align-right",
