@@ -638,7 +638,7 @@ impl View {
         self.request_estimate(tx);
     }
 
-    /// Live edits: once staged values settle (no held pointer or gesture),
+    /// Live edits: once staged values settle (no typing, held pointer or gesture),
     /// decode the edited preview. Shipping applies every edit immediately.
     fn drive_apply(&mut self, ctx: &egui::Context, tx: &Sender<Job>, holding: bool) {
         let Some(p) = &self.presented else {
@@ -660,7 +660,13 @@ impl View {
         }
         let delay = Duration::from_millis(recording_editor_ui::LIVE_APPLY_DELAY_MS);
         let now = Instant::now();
-        let holding = holding || self.trim_gesture.is_some() || self.crop_gesture.is_some();
+        // Like AppKit's editingText guard: an expired debounce must not start
+        // a worker and disable a field while the user is still typing in it.
+        let typing = ctx
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
+        let holding =
+            holding || typing || self.trim_gesture.is_some() || self.crop_gesture.is_some();
         let due = match &self.apply_due {
             Some((pending, due)) if *pending == key && !holding => *due,
             _ => {
@@ -4265,6 +4271,76 @@ mod tests {
         // Renders must not race the automatic estimate of the opened state.
         view.estimate_attempt = view.estimate_key();
         view
+    }
+
+    #[test]
+    fn live_apply_waits_for_numeric_typing_to_finish() {
+        let tokens = crate::tokens::load().into_iter().next().unwrap().1;
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let size = egui::vec2(960., 1800.);
+        let (_, controls) = probe_frame(&ctx, &tokens, &mut view, size, vec![]);
+        let field = probed(&controls, "Start (ms)");
+        let point = egui::pos2(field.left() + 16., field.center().y);
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![egui::Event::PointerMoved(point), trim_pointer(point, true)],
+        );
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![trim_pointer(point, false)],
+        );
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![
+                trim_key(egui::Key::End),
+                trim_key(egui::Key::Backspace),
+                egui::Event::Text("15".into()),
+            ],
+        );
+        assert_eq!(view.start_ms, 15);
+        let (tx, jobs) = mpsc::channel();
+        view.drive_apply(&ctx, &tx, false);
+        view.apply_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_apply(&ctx, &tx, false);
+        assert!(
+            jobs.try_recv().is_err(),
+            "pausing mid-number must not decode and disable the field"
+        );
+        assert!(!view.busy);
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![egui::Event::Text("00".into())],
+        );
+        assert_eq!(view.start_ms, 1500, "the rest of the number stays editable");
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![trim_key(egui::Key::Enter)],
+        );
+        view.drive_apply(&ctx, &tx, false);
+        view.apply_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_apply(&ctx, &tx, false);
+        let Job::Apply(RecordingEditorRequest::UpdatePreview { edit, .. }) =
+            jobs.try_recv().unwrap()
+        else {
+            panic!("finished typing queues the preview");
+        };
+        assert_eq!(edit.trim_start_ms, 1500);
     }
 
     #[test]

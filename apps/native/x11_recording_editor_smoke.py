@@ -157,8 +157,24 @@ def main():
 
     def field(window, x, y, value):
         click(window, x, y)
+        type_value(value)
+
+    def type_value(value):
         run("xdotool", "key", "ctrl+a")
         run("xdotool", "type", "--clearmodifiers", "--delay", "35", "--", str(value))
+        # X11 accepting the key events is not the renderer accepting the text.
+        # Sending Enter immediately can commit an older frame's value. Read
+        # back the focused field before committing; never retry lost typing.
+        subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
+            input=b"waiting for typed field", check=True, timeout=5)
+
+        def accepted():
+            run("xdotool", "key", "ctrl+a", "ctrl+c")
+            copied = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+                env=env, capture_output=True, timeout=5)
+            return copied.returncode == 0 and copied.stdout.decode() == str(value)
+
+        wait(accepted, f"field accepted {value!r} before Enter")
         run("xdotool", "key", "Return", "sleep", ".3")
 
     def close(window):
@@ -300,9 +316,7 @@ def main():
 
     def fill(window, name, value):
         press(window, name)
-        run("xdotool", "key", "ctrl+a")
-        run("xdotool", "type", "--clearmodifiers", "--delay", "35", "--", str(value))
-        run("xdotool", "key", "Return", "sleep", ".3")
+        type_value(value)
 
     def choose(window, name, item):
         """Open a select and click an item, matched by label prefix."""
