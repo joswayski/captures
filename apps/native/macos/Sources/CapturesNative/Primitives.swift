@@ -107,19 +107,22 @@ enum TokenSelectStyle {
 }
 
 /// Shipping `CustomSelect` on AppKit: a token-drawn trigger over
-/// `NSPopUpButton`, whose native menu keeps arrow, Return, Escape and
-/// type-select keyboard handling and VoiceOver semantics. An item's tool tip
-/// is shown as its description (shipping `<small>`) while the menu is open.
+/// `NSPopUpButton` (its items, selection, target/action and VoiceOver name)
+/// that opens `TokenSelectListView`, shipping's `.custom-select-listbox`, in
+/// place of the native menu. The listbox shows each item's tool tip as its
+/// description (shipping `<small>`), and shared `captures_app::controls::select`
+/// drives its keys (ArrowUp/Down, Home/End, Enter/Space, Escape) and placement.
 final class ClosurePopUpButton: NSPopUpButton {
     var tokens: Tokens! { didSet { needsDisplay = true } }
     var selectStyle: TokenSelectStyle = .field { didSet { needsDisplay = true } }
     var change: ((Int) -> Void)?
     private var pointerInside = false
     private var pointerTracking: NSTrackingArea?
-    private var popUpObserver: NSObjectProtocol?
-    private var menuEndObserver: NSObjectProtocol?
-    /// Plain titles of described items while the menu is open.
-    private var plainTitles: [(NSMenuItem, String)] = []
+    /// The open listbox and its child window.
+    private(set) var listbox: TokenSelectListView?
+    private var listboxWindow: NSPanel?
+    private var listboxMonitor: Any?
+    var isListboxOpen: Bool { listbox != nil }
 
     @objc func selectedValue() { change?(indexOfSelectedItem) }
 
@@ -128,49 +131,135 @@ final class ClosurePopUpButton: NSPopUpButton {
     }
 
     deinit {
-        for observer in [popUpObserver, menuEndObserver].compactMap({ $0 }) {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        if let listboxMonitor { NSEvent.removeMonitor(listboxMonitor) }
+        listboxWindow?.orderOut(nil)
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         focusRingType = .none
-        guard popUpObserver == nil else { return }
-        popUpObserver = NotificationCenter.default.addObserver(
-            forName: NSPopUpButton.willPopUpNotification, object: self, queue: .main
-        ) { [weak self] _ in self?.describeItems() }
-        menuEndObserver = NotificationCenter.default.addObserver(
-            forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard let self, notification.object as? NSMenu === self.menu else { return }
-            self.restoreItems()
+        if window == nil { closeListbox() }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        if acceptsFirstResponder { window?.makeFirstResponder(self) }
+        if isListboxOpen { closeListbox() } else { openListbox() }
+    }
+
+    /// Space, VoiceOver's press and a programmatic click open the listbox.
+    override func performClick(_ sender: Any?) {
+        guard isEnabled else { return }
+        if isListboxOpen { closeListbox() } else { openListbox() }
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        performClick(nil); return true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let keys: [UInt16: String] = [125: "arrow_down", 126: "arrow_up", 115: "home", 119: "end",
+                                      36: "enter", 76: "enter", 49: "space", 53: "escape"]
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option])
+        if isEnabled, modifiers.isEmpty, let key = keys[event.keyCode], handleSelectKey(key) { return }
+        if event.keyCode == 48 { closeListbox() }
+        super.keyDown(with: event)
+    }
+
+    /// Shipping `CustomSelect` trigger keys from `captures_app::controls::select`.
+    /// Returns whether the select used the key.
+    @discardableResult
+    func handleSelectKey(_ key: String) -> Bool {
+        guard isEnabled, numberOfItems > 0 else { return false }
+        let selected = max(0, indexOfSelectedItem)
+        guard let outcome = ControlsBridge.selectKey(
+            open: isListboxOpen, active: listbox?.active ?? selected, selected: selected,
+            disabled: itemArray.map { !$0.isEnabled || $0.isSeparatorItem || $0.isHidden }, key: key)
+        else { return false }
+        if outcome.open {
+            if isListboxOpen { listbox?.active = outcome.active } else { openListbox(active: outcome.active) }
+            listbox?.revealActive()
+        }
+        if let chosen = outcome.chosen { choose(chosen) }
+        if !outcome.open { closeListbox() }
+        return outcome.handled
+    }
+
+    /// Select an item as a click in the listbox does, reporting the change.
+    func choose(_ index: Int) {
+        closeListbox()
+        guard (0..<numberOfItems).contains(index), let option = self.item(at: index), option.isEnabled else { return }
+        // Like the native menu, choosing reports even the current item.
+        selectItem(at: index)
+        needsDisplay = true
+        _ = sendAction(action, to: target)
+    }
+
+    /// Open shipping's listbox below (or above) the trigger, highlighting
+    /// `active` (default: the selected item).
+    func openListbox(active: Int? = nil) {
+        guard let window, isEnabled, !isListboxOpen, let tokens, numberOfItems > 0 else { return }
+        let options = itemArray.map { item in
+            TokenSelectListView.Option(title: item.title, detail: item.toolTip.flatMap { $0.isEmpty ? nil : $0 },
+                                       image: item.image,
+                                       enabled: item.isEnabled && !item.isSeparatorItem && !item.isHidden)
+        }
+        let list = TokenSelectListView(tokens: tokens, glass: selectStyle == .glass, options: options,
+                                       selected: indexOfSelectedItem)
+        list.active = active ?? max(0, indexOfSelectedItem)
+        list.choose = { [weak self] index in self?.choose(index) }
+        let content = list.contentSize(minimumWidth: bounds.width)
+        let trigger = window.convertToScreen(convert(bounds, to: nil))
+        let screen = (window.screen ?? NSScreen.main)?.visibleFrame ?? trigger.insetBy(dx: -400, dy: -400)
+        // Shipping `placeCustomSelectMenu`, in y-down points of the visible screen.
+        let layout = ControlsBridge.selectLayout(
+            trigger: NSRect(x: trigger.minX - screen.minX, y: screen.maxY - trigger.maxY,
+                            width: trigger.width, height: trigger.height),
+            menuSize: content, viewport: screen.size, optionCount: options.count)
+        let height = min(content.height, layout.maxHeight)
+        let frame = NSRect(x: screen.minX + layout.left, y: screen.maxY - layout.top - height,
+                           width: layout.width, height: height)
+        let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: true)
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.level = window.level
+        let scroll = NSScrollView(frame: NSRect(origin: .zero, size: frame.size))
+        scroll.drawsBackground = false; scroll.hasVerticalScroller = content.height > height
+        scroll.scrollerStyle = .overlay; scroll.useTokenScrollers(tokens)
+        scroll.wantsLayer = true
+        scroll.layer?.cornerRadius = tokens.number("r-lg"); scroll.layer?.masksToBounds = true
+        scroll.layer?.borderWidth = 1
+        scroll.layer?.borderColor = tokens.color(selectStyle == .glass ? "glass-border" : "border").cgColor
+        scroll.layer?.backgroundColor = tokens.color(selectStyle == .glass ? "glass-raised" : "surface-overlay").cgColor
+        list.frame = NSRect(x: 0, y: 0, width: frame.width, height: content.height)
+        scroll.documentView = list
+        panel.contentView = scroll
+        window.addChildWindow(panel, ordered: .above)
+        listbox = list; listboxWindow = panel
+        list.revealActive()
+        needsDisplay = true
+        // A click elsewhere closes the listbox, like shipping's outside press.
+        listboxMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+            [weak self] event in
+            guard let self, let panel = self.listboxWindow else { return event }
+            if event.window !== panel && !(event.window === self.window
+                && self.bounds.contains(self.convert(event.locationInWindow, from: nil))) {
+                self.closeListbox()
+            }
+            return event
         }
     }
 
-    /// Two-line items while the menu is open: the label, then its description
-    /// in secondary text. `restoreItems` puts the plain titles back.
-    func describeItems() {
-        restoreItems()
-        let font = menu?.font ?? NSFont.menuFont(ofSize: 0)
-        for item in itemArray {
-            guard let detail = item.toolTip, !detail.isEmpty else { continue }
-            plainTitles.append((item, item.title))
-            let title = NSMutableAttributedString(string: item.title, attributes: [.font: font])
-            title.append(NSAttributedString(string: "\n" + detail, attributes: [
-                .font: NSFont.systemFont(ofSize: max(10, font.pointSize - 2)),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]))
-            item.attributedTitle = title
-        }
-    }
-
-    func restoreItems() {
-        for (item, title) in plainTitles {
-            item.attributedTitle = nil
-            item.title = title
-        }
-        plainTitles = []
+    func closeListbox() {
+        if let listboxMonitor { NSEvent.removeMonitor(listboxMonitor) }
+        listboxMonitor = nil
+        guard let panel = listboxWindow else { listbox = nil; return }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
+        listboxWindow = nil; listbox = nil
+        needsDisplay = true
     }
 
     override func updateTrackingAreas() {
@@ -186,14 +275,16 @@ final class ClosurePopUpButton: NSPopUpButton {
         let accepted = super.becomeFirstResponder(); needsDisplay = true; return accepted
     }
     override func resignFirstResponder() -> Bool {
-        let accepted = super.resignFirstResponder(); needsDisplay = true; return accepted
+        let accepted = super.resignFirstResponder()
+        if accepted { closeListbox() }
+        needsDisplay = true; return accepted
     }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let tokens else { return }
         let radius = tokens.number("r-md")
         let alpha: CGFloat = isEnabled ? 1 : 0.5
-        let focused = window?.firstResponder === self
+        let focused = window?.firstResponder === self || isListboxOpen
         let hovered = isEnabled && pointerInside
         let fill: NSColor, border: NSColor, ink: NSColor, glyph: NSColor
         switch selectStyle {
@@ -245,10 +336,178 @@ final class ClosurePopUpButton: NSPopUpButton {
             let down = glyphRect.minY + y * scale
             return NSPoint(x: glyphRect.minX + x * scale, y: isFlipped ? down : bounds.height - down)
         }
+        // Shipping turns the chevron over while the listbox is open.
+        let (edge, tip): (CGFloat, CGFloat) = isListboxOpen ? (10, 6) : (6, 10)
         let chevron = NSBezierPath()
-        chevron.move(to: point(4, 6)); chevron.line(to: point(8, 10)); chevron.line(to: point(12, 6))
+        chevron.move(to: point(4, edge)); chevron.line(to: point(8, tip)); chevron.line(to: point(12, edge))
         chevron.lineWidth = 1.7 * scale; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
         glyph.withAlphaComponent(alpha).setStroke(); chevron.stroke()
+    }
+}
+
+/// Shipping `.custom-select-listbox` for `ClosurePopUpButton`: `--s-2`
+/// padding, rows with `--s-4` side padding and the label in `--text-sm`,
+/// a description in `--text-xs` `--text-faint` under it (shipping `<small>`),
+/// a check on the selected option and `--surface-hover` behind the active
+/// one; the glass variant uses the media palette. Rows follow the pointer and
+/// a click chooses. Row heights never depend on fonts.
+final class TokenSelectListView: NSView {
+    struct Option {
+        let title: String
+        let detail: String?
+        let image: NSImage?
+        let enabled: Bool
+    }
+
+    override var isFlipped: Bool { true }
+    let tokens: Tokens
+    let glass: Bool
+    let options: [Option]
+    let selected: Int
+    var active = 0 { didSet { if active != oldValue { needsDisplay = true } } }
+    var choose: (Int) -> Void = { _ in }
+    private var pointerTracking: NSTrackingArea?
+
+    /// 30 pt rows, 46 pt with a description, taller for a preview chip.
+    static func rowHeight(_ option: Option) -> CGFloat {
+        let height: CGFloat = option.detail == nil ? 30 : 46
+        guard let image = option.image else { return height }
+        return max(height, image.size.height + 12)
+    }
+
+    init(tokens: Tokens, glass: Bool, options: [Option], selected: Int) {
+        self.tokens = tokens; self.glass = glass; self.options = options; self.selected = selected
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.list)
+        setAccessibilityLabel("Options")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var padding: CGFloat { tokens.number("s-2") }
+
+    func rowRect(_ index: Int) -> NSRect {
+        var y = padding
+        for previous in options.prefix(max(0, index)) { y += Self.rowHeight(previous) }
+        let height = options.indices.contains(index) ? Self.rowHeight(options[index]) : 0
+        return NSRect(x: padding, y: y, width: max(0, bounds.width - 2 * padding), height: height)
+    }
+
+    /// The listbox's natural size: its widest option (up to shipping's
+    /// 360 pt) and at least the trigger's width, and every row.
+    func contentSize(minimumWidth: CGFloat) -> NSSize {
+        let label = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let small = NSFont.systemFont(ofSize: tokens.number("text-xs"))
+        var widest: CGFloat = 0
+        for option in options {
+            var width = (option.title as NSString).size(withAttributes: [.font: label]).width
+            if let detail = option.detail {
+                width = max(width, (detail as NSString).size(withAttributes: [.font: small]).width)
+            }
+            if let image = option.image { width += image.size.width + tokens.number("s-4") }
+            widest = max(widest, width)
+        }
+        // Row padding, shipping's `--s-6` gap and the 14 pt check column.
+        widest += 2 * tokens.number("s-4") + tokens.number("s-6") + 14 + 2 * padding
+        let height = options.reduce(2 * padding) { $0 + Self.rowHeight($1) }
+        return NSSize(width: ceil(max(minimumWidth, min(widest, 360))), height: height)
+    }
+
+    func index(at point: NSPoint) -> Int? {
+        options.indices.first { rowRect($0).contains(point) }
+    }
+
+    /// Keep the active option in view as keys move it.
+    func revealActive() {
+        guard options.indices.contains(active) else { return }
+        scrollToVisible(rowRect(active).insetBy(dx: 0, dy: -padding))
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let tracking = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                                      owner: self, userInfo: nil)
+        addTrackingArea(tracking); pointerTracking = tracking
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        if let index = index(at: convert(event.locationInWindow, from: nil)), options[index].enabled {
+            active = index
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        guard let index = index(at: convert(event.locationInWindow, from: nil)), options[index].enabled else { return }
+        choose(index)
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        options.indices.map { index in
+            let frame = window?.convertToScreen(convert(rowRect(index), to: nil)) ?? .zero
+            return NSAccessibilityElement.element(withRole: .menuItem, frame: frame,
+                                                  label: options[index].title, parent: self)
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let text = tokens.color(glass ? "glass-text" : "text")
+        let muted = tokens.color(glass ? "glass-text-muted" : "text-muted")
+        let faint = tokens.color(glass ? "glass-text-subtle" : "text-faint")
+        let dark = tokens.color("text").brightnessComponent > 0.5
+        let check = tokens.color(glass || dark ? "theme-accent" : "theme-accent-readable")
+        let inset = tokens.number("s-4")
+        for (index, option) in options.enumerated() {
+            let row = rowRect(index)
+            guard row.intersects(dirtyRect) else { continue }
+            let chosen = index == selected
+            let highlighted = index == active && option.enabled
+            if highlighted {
+                tokens.color(glass ? "glass-hover" : "surface-hover").setFill()
+                NSBezierPath(roundedRect: row, xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm")).fill()
+            }
+            let alpha: CGFloat = option.enabled ? 1 : 0.5
+            var x = row.minX + inset
+            if let image = option.image {
+                image.draw(in: NSRect(x: x, y: row.midY - image.size.height / 2,
+                                      width: image.size.width, height: image.size.height),
+                           from: .zero, operation: .sourceOver, fraction: alpha, respectFlipped: true, hints: nil)
+                x += image.size.width + inset
+            }
+            let width = max(0, row.maxX - inset - 14 - tokens.number("s-6") - x)
+            let label = NSAttributedString(string: option.title, attributes: [
+                .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: chosen ? .medium : .regular),
+                .foregroundColor: (chosen || highlighted ? text : muted).withAlphaComponent(alpha),
+            ])
+            let labelHeight = ceil(label.size().height)
+            var top = row.midY - labelHeight / 2
+            if let detail = option.detail {
+                let small = NSAttributedString(string: detail, attributes: [
+                    .font: NSFont.systemFont(ofSize: tokens.number("text-xs")),
+                    .foregroundColor: faint.withAlphaComponent(alpha),
+                ])
+                let smallHeight = ceil(small.size().height)
+                top = row.midY - (labelHeight + 2 + smallHeight) / 2
+                small.draw(with: NSRect(x: x, y: top + labelHeight + 2, width: width, height: smallHeight),
+                           options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            }
+            label.draw(with: NSRect(x: x, y: top, width: width, height: labelHeight),
+                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            guard chosen else { continue }
+            // The selected option's check (`> span:last-child`).
+            let box = NSRect(x: row.maxX - inset - 14, y: row.midY - 7, width: 14, height: 14)
+            let mark = NSBezierPath()
+            mark.move(to: NSPoint(x: box.minX + 3, y: box.minY + 7.5))
+            mark.line(to: NSPoint(x: box.minX + 6, y: box.minY + 10.5))
+            mark.line(to: NSPoint(x: box.minX + 11, y: box.minY + 4))
+            mark.lineWidth = 1.7; mark.lineCapStyle = .round; mark.lineJoinStyle = .round
+            check.withAlphaComponent(alpha).setStroke(); mark.stroke()
+        }
     }
 }
 
@@ -276,6 +535,34 @@ enum ControlsBridge {
         let result = try? request(bounded(["operation": "number_step", "text": text, "up": up],
                                           min: min, max: max))
         return result?["text"] as? String
+    }
+
+    /// Shipping `CustomSelect` trigger keys: the next open state, active
+    /// option and any chosen option, and whether the key was used.
+    static func selectKey(open: Bool, active: Int, selected: Int, disabled: [Bool],
+                          key: String) -> (open: Bool, active: Int, chosen: Int?, handled: Bool)? {
+        guard let result = try? request(["operation": "select_key", "open": open, "active": active,
+                                         "selected": selected, "disabled": disabled, "key": key]),
+              let isOpen = result["open"] as? Bool, let next = (result["active"] as? NSNumber)?.intValue,
+              let handled = result["handled"] as? Bool else { return nil }
+        return (isOpen, next, (result["chosen"] as? NSNumber)?.intValue, handled)
+    }
+
+    /// Shipping `placeCustomSelectMenu` in y-down viewport points.
+    static func selectLayout(trigger: NSRect, menuSize: NSSize, viewport: NSSize,
+                             optionCount: Int) -> (left: CGFloat, top: CGFloat, width: CGFloat, maxHeight: CGFloat) {
+        let result = try? request([
+            "operation": "select_layout",
+            "trigger": [trigger.minX, trigger.minY, trigger.width, trigger.height].map { Double($0) },
+            "menu_width": Double(menuSize.width), "menu_height": Double(menuSize.height),
+            "viewport_width": Double(viewport.width), "viewport_height": Double(viewport.height),
+            "option_count": optionCount,
+        ])
+        func number(_ key: String, _ fallback: CGFloat) -> CGFloat {
+            (result?[key] as? NSNumber).map { CGFloat($0.doubleValue) } ?? fallback
+        }
+        return (number("left", trigger.minX), number("top", trigger.maxY + 6),
+                number("width", max(trigger.width, menuSize.width)), number("max_height", 240))
     }
 
     /// Whether Decrease and Increase are disabled at the bounds.

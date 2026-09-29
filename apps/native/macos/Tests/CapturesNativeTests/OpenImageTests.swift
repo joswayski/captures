@@ -72,11 +72,7 @@ final class OpenImageTests: XCTestCase {
                 .appendingPathComponent("external-open-dark-editor-normal.png"))
         }
         let controls = try XCTUnwrap(editor.contentView)
-        for (label, value) in [("Crop X", "7"), ("Crop Y", "11"),
-                               ("Crop width", "120"), ("Crop height", "80")] {
-            try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
-                .first { $0.accessibilityLabel() == label }).stringValue = value
-        }
+        try stageCrop(NSRect(x: 7, y: 11, width: 120, height: 80), in: editor)
         try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
             .first { $0.title == "Apply crop" }).performClick(nil)
         // The window title stays the same (drafts autosave); the crop shows in the fields.
@@ -194,11 +190,7 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual(try canvasSize(in: controls), "\(first.width)×\(first.height)",
                        "the editor must show the exact preview artifact")
 
-        for (label, value) in [("Crop X", "7"), ("Crop Y", "11"),
-                               ("Crop width", "120"), ("Crop height", "80")] {
-            try XCTUnwrap(descendants(controls).compactMap { $0 as? NSTextField }
-                .first { $0.accessibilityLabel() == label }).stringValue = value
-        }
+        try stageCrop(NSRect(x: 7, y: 11, width: 120, height: 80), in: editor)
         try XCTUnwrap(descendants(controls).compactMap { $0 as? CaptureButton }
             .first { $0.title == "Apply crop" }).performClick(nil)
         let cropped = { self.descendants(controls).compactMap { ($0 as? NSTextField)?.stringValue }
@@ -550,6 +542,17 @@ final class OpenImageTests: XCTestCase {
             return field.stringValue.filter(\.isNumber)
         }
         return "\(try value("Canvas width"))×\(try value("Canvas height"))"
+    }
+
+    /// Stage a crop as a canvas drag does with the rail's Crop tool active.
+    private func stageCrop(_ rect: NSRect, in editor: NSWindow) throws {
+        let controller = try XCTUnwrap(editor.delegate as? ScreenshotEditorController)
+        if !controller.cropOverlay.croppingEnabled {
+            try XCTUnwrap(descendants(controller.root).compactMap { $0 as? CaptureButton }
+                .first { $0.accessibilityLabel() == "Crop (C)" }).performClick(nil)
+        }
+        XCTAssertTrue(controller.cropOverlay.croppingEnabled)
+        controller.stageCropSelection(rect)
     }
 
     private func descendants(_ view: NSView) -> [NSView] {

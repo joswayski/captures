@@ -158,11 +158,14 @@ and a token listbox with option descriptions, placed and driven by shared
 Preferences, the capture menu, the region aspect picker and the recording editor. An
 open wgpu listbox counts as an egui popup, and raw-pointer gestures (editor canvas and
 viewport, recording timeline and crop) ignore presses on any foreground layer above
-them, so a row or popover over a canvas takes the click and keys instead of the canvas;
-AppKit's native menu tracking already does this. AppKit's token `ClosurePopUpButton` trigger replaces the
-capture menu's glass popups and the recording editor's stock popups; its native
-menu keeps AppKit keyboard handling (no Home/End) and shows descriptions as a second
-line. The screenshot editor's selects use the same primitives: Crop's Aspect ratio,
+them, so a row or popover over a canvas takes the click and keys instead of the canvas.
+AppKit's token `ClosurePopUpButton` trigger replaces the
+capture menu's glass popups and the recording editor's stock popups and opens the same
+token listbox (`TokenSelectListView`, glass in the capture menu) in a child window
+instead of a native menu, so its rows take their own clicks: each option's description
+sits under its label in `--text-xs` faint text, the selected option carries a check,
+and the shared select model drives its keys (including Home/End) and placement through
+`captures_controls_v1`. The screenshot editor's selects use the same primitives: Crop's Aspect ratio,
 the selected text's Font, the export bar's Output size (with shipping's option
 descriptions) and format suffix on both hosts, plus AppKit's Save quality, Compress
 and file-size unit, which already did. The text style pickers draw shipping's
@@ -397,13 +400,14 @@ output previews, save-new-copy and rectangle/ellipse drawing. AppKit now also
 connects annotation styles ([#637](https://github.com/joswayski/captures/pull/637))
 and Line/Arrow/Pen ([#638](https://github.com/joswayski/captures/pull/638)), matching
 the existing wgpu command boundary. Both hosts connect crop gestures and clipboard
-output. AppKit's Draw crop retains shared Rust `CropDrag` geometry through an
+output. AppKit's Crop tool retains shared Rust `CropDrag` geometry through an
 independent UI-thread C owner; no worker session, JSON or file access occurs during
 pointer feedback. Free/preset ratios and Shift latching use the same shared rules
-as wgpu. The preview and numeric fields track one candidate; Apply sends one crop
-transaction, while Cancel/Escape, focus loss, leaving Geometry or closing restores
-the pre-mode fields. Viewport changes cancel an active pointer gesture without
-committing the candidate. Dragging does not dirty drafts or invalidate encoded output.
+as wgpu. The preview and the read-only Width/Height track one selection; Apply crop
+sends one crop transaction (a rejected crop stays staged), Clear or Escape drops the
+selection with the tool still ready, and leaving the tool or closing cancels it.
+Focus loss and viewport changes cancel only an active pointer gesture, without
+committing the selection. Dragging does not dirty drafts or invalidate encoded output.
 Physical AppKit pointer/mixed-DPI acceptance remains open.
 The AppKit drawing slice passed 136 Swift tests in macOS CI;
 its light/dark transient, committed, dot and minimum-size error fixtures were inspected.
@@ -568,7 +572,7 @@ it. Recenter becomes the fixed-glass pill shown only while pan leaves the canvas
 mostly off screen. The Geometry/Layers/Draw tabs are gone: the rail's tool chooses
 the inspector. The rail uses the shipping labels (Eraser (B)), 38-point buttons with
 2-point gaps, hover and accent states and immediate glass hover tips; wgpu shows the
-Shapes corner cue and a three-column icon flyout, AppKit a menu with the shape icons.
+Shapes corner cue and shipping's three-column icon flyout (44-point buttons).
 Inspector sections open with the tool name (Crop, Freehand, Eraser…) or shipping's
 Layers heading with a count and Add image layer; layer rows show the shipping names
 and kinds with eye and lock quick actions (lock also selects its row). wgpu editor
@@ -614,15 +618,21 @@ paragraphs. wgpu draws every row from `editor/inspector.rs` with the shared
 such as 37.5 now commits as typed when focus leaves). While the rail's Crop is
 active, wgpu stays ready for a new selection after Apply crop, Clear or Escape, as
 shipping does, and a selection starts only once a press becomes a drag. AppKit follows
-shipping's order, spacing and labels for the selected layer (Shift rotation snap
-first, with its hint and rule), selected text (the Text style picker showing the
-current treatment, Text, Font beside Size, format buttons, Text color, Text
-background, Drop shadow), Text defaults (no Color row), the Eraser copy and the
-crop Aspect ratio, but still differs: selected-text shadow fields, annotation style
-controls and drawing defaults keep native label-beside-field rows and number fields
-(no sliders), its Crop keeps X/Y/Width/Height fields and Draw crop, it has no
-grouped-shape picker, and the inspector remains 272 points wide (wgpu 230) rather
-than shipping's 320 px column.
+the same order, spacing, labels and control types: the selected layer (Shift rotation
+snap first, with its hint and rule), selected text, annotation style and the drawing
+and text defaults use `EditorMarkedSlider` `RangeSlider`s with value readouts (Stroke
+width and Size 2–40 px, Opacity 0–100%, shadow Opacity 0–100% and Blur 0–100 px),
+check rows and one shared `EditorDropShadowFields` (Shadow color swatches, the two
+sliders and the X/Y offset `TokenNumberField` pair, ±500 whole pixels committed on
+Enter, leaving the field or a stepper, like shipping's `commitOffset`); unchanged
+settings keep their authored precision. Shift rotation snap (1–180), New text size and
+the selected text's Size (8–512) are `TokenNumberField` NumberInputs whose steppers and
+ArrowUp/ArrowDown keys step like the layer Width/Height/X/Y fields. Drawing tools open with the grouped-shape
+picker (`EditorShapePicker`, three 40-point columns) and the rail's Shapes button
+opens the three-column flyout. Its Crop shows the Aspect ratio select, then the
+dragged selection's read-only Width/Height with Clear and Apply crop, or the drag
+hint; the selection comes only from a canvas drag. Both hosts use shipping's 320 px
+sidebar column (AppKit panels start `--s-5` inside it; wgpu's panel is 320 points).
 X11 smokes cover both appearances; AppKit is covered by XCTest only.
 Both hosts expose a zoom preset menu with Fit, 50%, 100% and 200%. Its selected
 value tracks custom percentages from steps, wheel and magnification; obsolete

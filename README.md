@@ -551,15 +551,15 @@ The Windows/Linux candidate opens screenshots from History in a native crop,
 canvas-size and draft editor with undo/redo. Both native hosts place their scrolling
 inspector to the right of the canvas and center the image in Fit mode without
 upscaling small captures. Both use the shipping header and tool rail, and the
-shipping sidebar: Layers always sits above the current tool's properties, while
-the property controls themselves still differ from the shipping Tauri editor. Both editor windows resize
+shipping sidebar: Layers always sits above the current tool's properties. Both editor windows resize
 down to 760×540, with scrollable inspector controls. A shipping-style export bar spans
 the bottom of both editors in every section: an **Export settings** disclosure whose
 summary reads like `PNG · 1920 × 1080 · ≈ 240 KB`, the filename with a format suffix
 menu, **Saving to** with **Change…**, **Copy image** (briefly **Copied**), a
-**Save as new file** switch and **Save**. **Draw crop** selects directly on the
-preview with free or preset aspect ratios and Shift ratio locking. Apply commits
-the selection; Cancel or Escape leaves the document unchanged. Layer rows show a grip,
+**Save as new file** switch and **Save**. The **Crop** tool selects directly on the
+preview with free or preset aspect ratios and Shift ratio locking, then shows the
+selection's size with **Clear** and **Apply crop**. Apply commits the selection;
+Clear or Escape leaves the document unchanged. Layer rows show a grip,
 a live preview, the name and kind, and eye, lock and ⋯ actions. Drag a row to
 reorder it (one undo step) and double-click an image row to rename it. The ⋯ menu
 holds blend mode, opacity, image transforms, Bring to front and Send to back, Merge
@@ -602,9 +602,9 @@ Closing can save or keep the previous draft; explicit Discard edits restores the
 current History image. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
 cover both appearances, persisted drafts, real preview pixels and error recovery.
 AppKit now connects the same crop, canvas-resize and draft operations in its own
-window. **Draw crop** also uses the shared aspect presets and Shift ratio locking;
-the candidate stays separate from the document until Apply, and Cancel/Escape
-restores the prior fields. Numeric crop fields and the overlay stay synchronized.
+window. Its **Crop** tool also uses the shared aspect presets and Shift ratio locking;
+the selection stays separate from the document until **Apply crop**, and **Clear**
+or Escape drops it.
 It includes native image-layer controls, lossless rotate/flip actions, and
 PNG/JPEG/WebP output previews without saving. Both native export settings offer
 **Tiny, Smaller, Balanced, High and Highest** compression presets alongside custom
@@ -706,8 +706,8 @@ Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual
 scale and preserves the viewport-center image point when dragged.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
-The inspector follows the shipping sections, labels and spacing; the macOS host
-still keeps some native field rows, and neither host matches its 320 px width yet.
+The inspector follows the shipping sections, controls, labels and spacing in the
+shipping 320 px sidebar column on both hosts.
 Native cloud sharing is not implemented. Its required flow starts from a mini-preview
 Share icon and opens a native upload/settings popup, including native sign-in and OS
 credential storage. The [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented)

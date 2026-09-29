@@ -54,6 +54,8 @@ final class EditorMarkedSlider: NSView {
 
     override var isFlipped: Bool { true }
     static let height: CGFloat = 64
+    /// A slider without marks: the name and readout over the track.
+    static let plainHeight: CGFloat = 44
     private static let thumb: CGFloat = 14
     private static let markWidth: CGFloat = 64
     let slider: TokenSlider
@@ -187,6 +189,13 @@ final class EditorFormatButton: NSButton {
         didSet { needsDisplay = true; setAccessibilityValue(active) }
     }
     var pressed: (() -> Void)?
+    /// Icon side in points; nil uses the text format copy's side.
+    var iconSide: CGFloat? { didSet { needsDisplay = true } }
+    /// Shipping `.screenshot-tool-flyout button`: transparent until hovered,
+    /// `--r-md` corners and no border.
+    var borderless = false { didSet { needsDisplay = true } }
+    private var pointerInside = false
+    private var pointerTracking: NSTrackingArea?
 
     init(glyph: Glyph, label: String, tokens: Tokens) {
         self.glyph = glyph; self.tokens = tokens
@@ -203,21 +212,36 @@ final class EditorFormatButton: NSButton {
 
     @objc private func activateFormat() { pressed?() }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); pointerTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { pointerInside = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { pointerInside = false; needsDisplay = true }
+
     override func draw(_ dirtyRect: NSRect) {
         let alpha: CGFloat = isEnabled ? 1 : 0.45
-        let radius = tokens.number("r-sm")
+        let hovered = isEnabled && pointerInside
+        let radius = tokens.number(borderless ? "r-md" : "r-sm")
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         let ink: NSColor
         if active {
             tokens.color("theme-accent").withAlphaComponent(alpha).setFill(); shape.fill()
             tokens.color("theme-accent").withAlphaComponent(alpha).setStroke()
             ink = tokens.color("theme-accent-ink").withAlphaComponent(alpha)
+            shape.lineWidth = 1; shape.stroke()
+        } else if borderless {
+            if hovered { tokens.color("surface-hover").setFill(); shape.fill() }
+            ink = tokens.color(hovered ? "text" : "text-muted").withAlphaComponent(alpha)
         } else {
-            tokens.color("control").withAlphaComponent(alpha).setFill(); shape.fill()
+            tokens.color(hovered ? "control-hover" : "control").withAlphaComponent(alpha).setFill(); shape.fill()
             tokens.color("border-subtle").withAlphaComponent(alpha).setStroke()
-            ink = tokens.color("text-muted").withAlphaComponent(alpha)
+            ink = tokens.color(hovered ? "text" : "text-muted").withAlphaComponent(alpha)
+            shape.lineWidth = 1; shape.stroke()
         }
-        shape.lineWidth = 1; shape.stroke()
         switch glyph {
         case .bold, .italic:
             var font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
@@ -227,7 +251,8 @@ final class EditorFormatButton: NSButton {
             let size = text.size()
             text.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2))
         case .icon(let name):
-            let side = CGFloat((EditorChrome.copy["text_format"] as? [String: Any])?["icon"] as? Double ?? 14)
+            let side = iconSide
+                ?? CGFloat((EditorChrome.copy["text_format"] as? [String: Any])?["icon"] as? Double ?? 14)
             ink.setStroke()
             ShippingIcons.stroke(name, in: NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2,
                                                   width: side, height: side))
@@ -438,4 +463,294 @@ struct NativeInlineTextLayout: Equatable {
         outlined = element["outlined"] as? Bool ?? false
         opacity = number(element, "opacity") ?? 100
     }
+}
+
+/// Shipping grouped shapes (`SHAPE_GROUP_ITEMS`): the Properties
+/// `.screenshot-shape-picker` (three columns of 40 pt buttons, `--s-2` apart)
+/// or, with `flyout`, the rail's `.screenshot-tool-flyout` (three 44 pt
+/// columns in a raised card with `--s-3` padding). The current shape is
+/// accent-filled; choosing one reports its key. Frames never depend on fonts.
+final class EditorShapePicker: NSView {
+    override var isFlipped: Bool { true }
+    let flyout: Bool
+    private(set) var buttons: [(key: String, button: EditorFormatButton)] = []
+    /// The shape key the user chose.
+    var chosen: (String) -> Void = { _ in }
+    var tokens: Tokens {
+        didSet { buttons.forEach { $0.button.tokens = tokens }; restyle(); layoutButtons() }
+    }
+    /// The active shape key.
+    var current = "" {
+        didSet { buttons.forEach { $0.button.active = $0.key == current } }
+    }
+    var isEnabled = true {
+        didSet { buttons.forEach { $0.button.isEnabled = isEnabled; $0.button.needsDisplay = true } }
+    }
+
+    /// Picker rows are 40 pt; flyout buttons are 44 pt squares.
+    var side: CGFloat { flyout ? 44 : 40 }
+    var padding: CGFloat { flyout ? tokens.number("s-3") : 0 }
+
+    init(tokens: Tokens, shapes: [EditorChrome.Tool], flyout: Bool) {
+        self.tokens = tokens; self.flyout = flyout
+        super.init(frame: NSRect(x: 0, y: 0, width: 252, height: 0))
+        wantsLayer = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group); setAccessibilityLabel(flyout ? "Shapes" : "Shape")
+        for shape in shapes {
+            let button = EditorFormatButton(glyph: .icon(shape.icon), label: shape.label, tokens: tokens)
+            button.toolTip = shape.name
+            button.iconSide = flyout ? 22 : 18
+            button.borderless = flyout
+            let key = shape.key
+            button.pressed = { [weak self] in
+                guard let self, self.isEnabled else { return }
+                self.current = key
+                self.chosen(key)
+            }
+            buttons.append((key: key, button: button)); addSubview(button)
+        }
+        restyle()
+        frame.size = pickerSize(width: 252)
+        layoutButtons()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var rows: Int { (buttons.count + 2) / 3 }
+
+    /// The picker's size at `width`; a flyout keeps its fixed three columns.
+    func pickerSize(width: CGFloat) -> NSSize {
+        let gap = tokens.number("s-2")
+        let height = 2 * padding + CGFloat(rows) * side + CGFloat(max(0, rows - 1)) * gap
+        return NSSize(width: flyout ? 2 * padding + 3 * side + 2 * gap : width, height: height)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutButtons()
+    }
+
+    private func restyle() {
+        guard flyout else { return }
+        layer?.cornerRadius = tokens.number("r-lg")
+        layer?.borderWidth = 1
+        layer?.borderColor = tokens.color("border-subtle").cgColor
+        layer?.backgroundColor = tokens.color("surface-overlay").cgColor
+    }
+
+    private func layoutButtons() {
+        let gap = tokens.number("s-2")
+        let width = flyout ? side : max(0, (bounds.width - 2 * gap) / 3)
+        for (index, entry) in buttons.enumerated() {
+            entry.button.frame = NSRect(x: padding + CGFloat(index % 3) * (width + gap),
+                                        y: padding + CGFloat(index / 3) * (side + gap),
+                                        width: width, height: side)
+        }
+    }
+}
+
+/// Shipping `DropShadowFields` settings (`.screenshot-drop-shadow-settings`),
+/// shown under the "Drop shadow" check row and indented to its label: the
+/// Shadow color `ColorField`, the Opacity (0–100%) and Blur (0–100 px)
+/// `RangeSlider`s, then the X/Y offset `NumberInput` pair (±500, whole
+/// pixels). Swatches and sliders apply as they change; an offset applies on
+/// Enter, on leaving its field or from a stepper, clamped and rounded like
+/// shipping's `commitOffset`. Frames depend only on the width.
+final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
+    struct Value: Equatable {
+        var color: String
+        var opacity: Double
+        var blur: Double
+        var offsetX: Double
+        var offsetY: Double
+    }
+
+    /// The 15 pt check box plus its 8 pt gap: the settings align with the label.
+    static let indent: CGFloat = 23
+    static let blurMaximum = 100.0
+    static let offsetMaximum = 500.0
+    private static let gap: CGFloat = 12
+    private static let label: CGFloat = 22
+    private static let fieldHeight: CGFloat = 30
+
+    override var isFlipped: Bool { true }
+    let colorLegend = NSTextField(labelWithString: "Shadow color")
+    let swatches: ColorSwatchRow
+    let opacitySlider: EditorMarkedSlider
+    let blurSlider: EditorMarkedSlider
+    let offsetXLegend = NSTextField(labelWithString: "X offset")
+    let offsetYLegend = NSTextField(labelWithString: "Y offset")
+    let offsetXField = TokenNumberField()
+    let offsetYField = TokenNumberField()
+    private let formatter: NumberFormatter
+    /// The shown shadow. Controls update it before reporting `changed`.
+    private(set) var shadowValue = Value(color: "#000000", opacity: 35, blur: 12, offsetX: 0, offsetY: 8)
+    /// A control changed `shadowValue`: "color", "opacity", "blur", "offsetX" or "offsetY".
+    var changed: (String) -> Void = { _ in }
+    var tokens: Tokens {
+        didSet {
+            swatches.tokens = tokens; opacitySlider.tokens = tokens; blurSlider.tokens = tokens
+            offsetXField.tokens = tokens; offsetYField.tokens = tokens
+            restyle()
+        }
+    }
+    var isEnabled = true {
+        didSet {
+            swatches.isEnabled = isEnabled
+            opacitySlider.isEnabled = isEnabled; blurSlider.isEnabled = isEnabled
+            offsetXField.isEnabled = isEnabled; offsetYField.isEnabled = isEnabled
+        }
+    }
+
+    /// The height of the settings at `width`.
+    static func height(width: CGFloat, tokens: Tokens) -> CGFloat {
+        label + ColorSwatchRow.height(width: width, compact: false, tokens: tokens)
+            + 2 * (gap + EditorMarkedSlider.plainHeight) + gap + label + fieldHeight
+    }
+
+    /// `name` prefixes accessible names ("" gives shipping's "Shadow blur";
+    /// "Text" gives "Text shadow blur"), so several instances stay distinct.
+    init(tokens: Tokens, formatter: NumberFormatter, name: String = "") {
+        self.tokens = tokens; self.formatter = formatter
+        func accessible(_ base: String) -> String { name.isEmpty ? base : "\(name) \(base.lowercased())" }
+        swatches = ColorSwatchRow(tokens: tokens, label: accessible("Shadow color"), compact: false)
+        opacitySlider = EditorMarkedSlider(tokens: tokens, title: "Opacity",
+            accessibilityLabel: accessible("Shadow opacity"), range: 0...100, value: 35, marks: []) {
+            "\(Int($0))%"
+        }
+        blurSlider = EditorMarkedSlider(tokens: tokens, title: "Blur",
+            accessibilityLabel: accessible("Shadow blur"), range: 0...EditorDropShadowFields.blurMaximum, value: 12,
+            marks: []) {
+            "\(Int($0)) px"
+        }
+        super.init(frame: NSRect(x: 0, y: 0, width: 229, height: 0))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group); setAccessibilityLabel(accessible("Shadow settings"))
+        for legend in [colorLegend, offsetXLegend, offsetYLegend] {
+            legend.setAccessibilityElement(false); addSubview(legend)
+        }
+        addSubview(swatches); addSubview(opacitySlider); addSubview(blurSlider)
+        swatches.changed = { [weak self] color in
+            guard let self, self.isEnabled else { return }
+            self.shadowValue.color = color; self.changed("color")
+        }
+        opacitySlider.changed = { [weak self] opacity in
+            guard let self else { return }
+            self.shadowValue.opacity = opacity; self.changed("opacity")
+        }
+        blurSlider.changed = { [weak self] blur in
+            guard let self else { return }
+            self.shadowValue.blur = blur; self.changed("blur")
+        }
+        for (field, axis) in [(offsetXField, "X"), (offsetYField, "Y")] {
+            field.setAccessibilityLabel(accessible("Shadow \(axis) offset"))
+            field.alignment = .left
+            field.formatter = nil
+            field.placeholderString = "0"
+            field.minimum = { -EditorDropShadowFields.offsetMaximum }
+            field.maximum = { EditorDropShadowFields.offsetMaximum }
+            field.delegate = self
+            field.target = self; field.action = #selector(offsetCommitted(_:))
+            field.cell?.sendsActionOnEndEditing = true
+            field.stepped = { [weak self] stepped in self?.commitOffset(stepped) }
+            addSubview(field)
+        }
+        restyle()
+        show(shadowValue)
+        setFrameSize(NSSize(width: 229, height: Self.height(width: 229, tokens: tokens)))
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Show `shadowValue` without reporting a change; a field being typed in keeps its text.
+    func show(_ value: Value) {
+        shadowValue = value
+        swatches.selectedHex = value.color
+        opacitySlider.value = value.opacity
+        blurSlider.value = value.blur
+        for (field, offset) in [(offsetXField, value.offsetX), (offsetYField, value.offsetY)]
+            where field.currentEditor() == nil {
+            field.stringValue = format(offset)
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutFields()
+    }
+
+    private func layoutFields() {
+        let width = bounds.width
+        var y: CGFloat = 0
+        colorLegend.frame = NSRect(x: 0, y: y, width: width, height: 20)
+        let swatchHeight = ColorSwatchRow.height(width: width, compact: false, tokens: tokens)
+        swatches.frame = NSRect(x: 0, y: y + Self.label, width: width, height: swatchHeight)
+        y = swatches.frame.maxY + Self.gap
+        opacitySlider.frame = NSRect(x: 0, y: y, width: width, height: EditorMarkedSlider.plainHeight)
+        y = opacitySlider.frame.maxY + Self.gap
+        blurSlider.frame = NSRect(x: 0, y: y, width: width, height: EditorMarkedSlider.plainHeight)
+        y = blurSlider.frame.maxY + Self.gap
+        // Shipping `.screenshot-number-pair`: two columns `--s-4` apart.
+        let column = max(0, (width - tokens.number("s-4")) / 2)
+        let second = column + tokens.number("s-4")
+        offsetXLegend.frame = NSRect(x: 0, y: y, width: column, height: 20)
+        offsetYLegend.frame = NSRect(x: second, y: y, width: column, height: 20)
+        offsetXField.frame = NSRect(x: 0, y: y + Self.label, width: column, height: Self.fieldHeight)
+        offsetYField.frame = NSRect(x: second, y: y + Self.label, width: column, height: Self.fieldHeight)
+        offsetXField.updateSteppers(); offsetYField.updateSteppers()
+    }
+
+    private func restyle() {
+        for legend in [colorLegend, offsetXLegend, offsetYLegend] {
+            legend.font = .systemFont(ofSize: tokens.number("text-sm"))
+            legend.textColor = tokens.color("text-muted")
+        }
+        offsetXField.tokens = tokens; offsetYField.tokens = tokens
+        needsDisplay = true
+    }
+
+    private func format(_ offset: Double) -> String {
+        let rounded = offset.rounded()
+        return formatter.string(from: NSNumber(value: rounded)) ?? String(Int(rounded))
+    }
+
+    private func parse(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\u{2212}", with: "-")
+        guard let parsed = formatter.number(from: trimmed)?.doubleValue ?? Double(trimmed),
+              parsed.isFinite else { return nil }
+        return parsed
+    }
+
+    @objc private func offsetCommitted(_ sender: TokenNumberField) { commitOffset(sender) }
+
+    /// Shipping `NumberInput` steps on ArrowUp/ArrowDown while editing.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard let field = control as? TokenNumberField else { return false }
+        if commandSelector == #selector(NSResponder.moveUp(_:)) { field.step(up: true); return true }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) { field.step(up: false); return true }
+        return false
+    }
+
+    private func show(_ text: String, in field: TokenNumberField) {
+        if field.stringValue != text { field.stringValue = text }
+        if let editor = field.currentEditor(), editor.string != text { editor.string = text }
+    }
+
+    /// Shipping `commitOffset`: a finite entry clamps to ±500 and rounds; an
+    /// unparsable one keeps the previous offset.
+    private func commitOffset(_ field: TokenNumberField) {
+        guard isEnabled else { return }
+        let axisX = field === offsetXField
+        let current = axisX ? shadowValue.offsetX : shadowValue.offsetY
+        guard let parsed = parse(field.currentEditor()?.string ?? field.stringValue) else {
+            show(format(current), in: field); return
+        }
+        let offset = min(Self.offsetMaximum, max(-Self.offsetMaximum, parsed.rounded()))
+        show(format(offset), in: field)
+        guard offset != current else { return }
+        if axisX { shadowValue.offsetX = offset } else { shadowValue.offsetY = offset }
+        changed(axisX ? "offsetX" : "offsetY")
+    }
+
 }

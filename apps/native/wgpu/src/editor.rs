@@ -2116,7 +2116,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     show_export_bar(ui, tokens, view, tx);
     egui::Panel::right("editor-geometry")
         .resizable(false)
-        .exact_size(230.)
+        .exact_size(320.)
         .show(ui, |ui| {
             // Shipping `.screenshot-sidebar`: Layers above Properties, always.
             // Live fields stay enabled while a job runs; their edits queue.

@@ -1,8 +1,8 @@
 //! Behaviour of the shipping UI primitives (`CustomSelect.tsx`,
 //! `NumberInput.tsx`, `RangeSlider.tsx`, `lib/customSelectMenu.ts`) for the
-//! native hosts: select keyboard navigation and menu placement (wgpu; AppKit
-//! menus keep native keys), number stepping (both hosts; AppKit through
-//! `captures_controls_v1`), and slider track positions. Hosts only draw.
+//! native hosts: select keyboard navigation and menu placement and number
+//! stepping (both hosts; AppKit through `captures_controls_v1`), and slider
+//! track positions. Hosts only draw.
 
 use serde::Serialize;
 
