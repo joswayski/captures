@@ -20,7 +20,7 @@ unimplemented. Later slice notes supersede earlier notes about missing behavior.
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
-| Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview with per-card errors, the capture menu's Capturing/Starting/Switching states, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
+| Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview with per-card errors, the capture menu's Capturing/Starting/Switching states and inline start/switch errors, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
 | Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and sway and a staggered hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback, permission recovery on a denied capture, OS reduced-motion change notifications (wgpu on Windows/Linux) | Remaining Preferences parity, remaining preview effects (backdrop blur), physical setup/login, permission revocation and installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, curve and endpoint grips, Fit/100%/zoom steps/wheel and magnify zoom/pan/Recenter, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts (all four families offered on every draft, pinned on first use; missing glyphs fall back to other bundled faces, then installed fonts) and shared new-text drop shadow, the shipping Erase/Restore brush ring, Trim edges hover preview, Wand loupe, the shipping header/rail and export bar (copy, overwrite Save, save-new-copy) | Remaining text parity (shipping's OS font stacks versus bundled faces, IME), Tauri inspector design parity; remaining recording-editor parity |
@@ -2726,8 +2726,32 @@ check), as `start_recording` does until its HUD is ready. Choosing another displ
 Full screen keeps the current menu, its snapshot and its selections, up with
 "Switching…" until the new display's session is ready, then replaces it (wgpu declares
 one viewport per monitor). While either is in flight, further starts, display changes
-and shortcut routing are ignored and Escape or Close still cancels; a failure still
-ends the capture with the host's error rather than shipping's inline menu error.
+and shortcut routing are ignored and Escape or Close still cancels.
+
+A failed Record start or display switch now keeps the menu open on both hosts, as
+shipping `RecordingSelector` does when `start_recording` or `select_capture_display`
+returns an error: the in-flight label ends, the mode, target, region, window, aspect and
+Record options stay, a switch returns to the display it was on (its session, snapshot
+and select value), and the error shows inline until the next start or switch clears it,
+so the user can retry or choose something else. Under auto-start the hidden primary
+returns as Retry capture / Retry recording. The error is shipping's
+`.recording-selector-error`: the panel's last row, a full-width band under the note
+with a `--danger-border` top rule, `rgba(--theme-signal-rgb, 0.16)`,
+`--theme-signal-text` at `--text-sm`, `--s-4 --s-5` padding and the panel's `--r-2xl`
+bottom corners (wgpu `capture_controls::show_error_band`, AppKit
+`CaptureMenuErrorBand`, which also posts a VoiceOver announcement for `role="alert"`).
+Inline, as in shipping: the recording toolchain check, a vanished display, target
+validation, the recording draft (`RecordingSession::prepare`, on AppKit also the
+FFmpeg check) and the new display's session or snapshot. The host dialog stays only
+where shipping's selector is already gone: a screenshot capture (shipping hides the
+selector first), the countdown or HUD after a prepared take, and failures opening the
+menu. Escape with a menu select open matches shipping on wgpu: shipping's selector
+takes Escape on `window` in the capture phase, so one press closes an open
+`CustomSelect` and cancels the capture ("lets one Escape close an open control and
+cancel the selector exactly once"), and wgpu reads Escape before its select and closes
+the listbox on the same press. AppKit's `NSPopUpButton` menu tracking consumes the
+first Escape natively (it closes only the menu) and a second press cancels, an accepted
+platform-native difference. Verified with wgpu unit tests and AppKit XCTest sources.
 Microphones enumerate as shipping `loadAudioDevices` does: once per menu, the first
 time it shows Record with a microphone available (no longer when the menu opens, and
 kept across a display switch), with the select disabled and "Loading microphones…" /

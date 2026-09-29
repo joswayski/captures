@@ -3374,6 +3374,7 @@ impl Live {
                         SelectorKind::Controls,
                     ) =>
                 {
+                    self.controls_error = None;
                     let Some(flow) = &mut self.flow else {
                         continue;
                     };
@@ -3401,24 +3402,25 @@ impl Live {
                         SelectorKind::Controls,
                     ) =>
                 {
+                    // Shipping clears the menu's error as a start begins.
+                    self.controls_error = None;
                     if !self.recording_toolchain_ready {
                         // The menu stays open and shows this inline, like shipping.
-                        self.controls_error =
-                            Some(self.recording_toolchain_error.clone().unwrap_or_else(|| {
-                                "FFmpeg and ffprobe verification is still in progress.".into()
-                            }));
-                        self.controls.lock().unwrap().end_in_flight();
-                        self.selector_scope_generation
-                            .store(generation, Ordering::Release);
+                        let error = self.recording_toolchain_error.clone().unwrap_or_else(|| {
+                            "FFmpeg and ffprobe verification is still in progress.".into()
+                        });
+                        self.keep_controls_open_with_error(ctx, error);
                         continue;
                     }
+                    // Shipping `start_recording` restores the selection and
+                    // returns these to the menu (`validate_target`, the draft).
                     let Some(display) = self
                         .displays
                         .iter()
                         .find(|display| Some(&display.id) == self.display_id.as_ref())
                         .cloned()
                     else {
-                        self.fail_recording(
+                        self.keep_controls_open_with_error(
                             ctx,
                             "The recording display is no longer available.".into(),
                         );
@@ -3433,7 +3435,7 @@ impl Live {
                     ) {
                         Ok(options) => options,
                         Err(error) => {
-                            self.fail_recording(ctx, error);
+                            self.keep_controls_open_with_error(ctx, error);
                             continue;
                         }
                     };
@@ -3641,24 +3643,25 @@ impl Live {
                     SelectorKind::Controls,
                 ) =>
                 {
+                    // Shipping `switchDisplay` clears the error first and
+                    // shows any failure inline on the current display.
+                    self.controls_error = None;
                     if !self.displays.iter().any(|display| display.id == display_id) {
-                        self.selector_scope_generation
-                            .store(generation, Ordering::Release);
-                        self.controls_error =
-                            Some("The selected display is no longer available.".into());
-                        self.controls.lock().unwrap().end_in_flight();
+                        self.keep_controls_open_with_error(
+                            ctx,
+                            "The selected display is no longer available.".into(),
+                        );
                         continue;
                     }
-                    self.display_id = Some(display_id);
-                    let Some(target) =
-                        capture_target(frame, &self.displays, self.display_id.as_deref())
+                    let Some(target) = capture_target(frame, &self.displays, Some(&display_id))
                     else {
-                        self.fail_capture(
+                        self.keep_controls_open_with_error(
                             ctx,
                             "The selected display is unavailable for capture controls.".into(),
                         );
                         continue;
                     };
+                    self.display_id = Some(display_id);
                     // The old menu stays up showing "Switching…" until the new
                     // display's session is ready (shipping `switchDisplay`).
                     self.controls_switch_from = self
@@ -4030,7 +4033,9 @@ impl Live {
                             }
                         }
                         Err(error) => {
-                            self.fail_recording(ctx, error);
+                            // Shipping `initialize_recording_session` failures
+                            // keep the menu open with the inline error.
+                            self.keep_controls_open_with_error(ctx, error);
                         }
                     }
                 }
@@ -5287,10 +5292,10 @@ impl Live {
                             if !expected.is_some_and(|display| {
                                 same_display_geometry(display, session.display())
                             }) {
-                                self.fail_capture(
-                                    ctx,
-                                    "The selected display changed while preparing windows.".into(),
-                                );
+                                let error = "The selected display changed while preparing windows.";
+                                if !(controls && self.fail_controls_switch(ctx, error.into())) {
+                                    self.fail_capture(ctx, error.into());
+                                }
                                 continue;
                             }
                             self.window_texture = session.frozen_image().map(|image| {
@@ -5349,7 +5354,11 @@ impl Live {
                             ctx.request_repaint();
                         }
                         Err(error) => {
-                            self.fail_capture(ctx, error);
+                            // Shipping `select_capture_display` restores the
+                            // previous display and reports inline.
+                            if !(controls && self.fail_controls_switch(ctx, error.clone())) {
+                                self.fail_capture(ctx, error);
+                            }
                         }
                     }
                 }
@@ -5826,6 +5835,43 @@ impl Live {
     fn fail_capture(&mut self, ctx: &egui::Context, error: String) {
         self.finish_capture(ctx, false);
         self.capture_failed(error);
+    }
+
+    /// Shipping `RecordingSelector`'s failed `start_recording` or
+    /// `select_capture_display`: the menu stays open on its current display
+    /// with its selections, the in-flight label ends and the error shows
+    /// inline until the next start or switch, so the user can retry or pick
+    /// something else. No dialog.
+    fn keep_controls_open_with_error(&mut self, ctx: &egui::Context, error: String) {
+        self.status = format!("{error} Retry or choose again. Press Escape to cancel.");
+        self.controls_error = Some(error);
+        self.controls.lock().unwrap().end_in_flight();
+        // The next UI pass that declares the menu republishes its shortcut
+        // scope for this generation.
+        self.capture_phase = Some(CapturePhase::ControlsSelecting);
+        request_hidden_root_paint(ctx);
+        ctx.request_repaint();
+    }
+
+    /// A display switch failed: return the menu to the display it was on
+    /// (shipping restores the previous selection and keeps `session.display`)
+    /// with the inline error. Returns false when no switch was in flight, so
+    /// the caller ends the capture as before.
+    fn fail_controls_switch(&mut self, ctx: &egui::Context, error: String) -> bool {
+        if !self.controls_switching_display {
+            return false;
+        }
+        let Some((from, session, texture)) = self.controls_switch_from.take() else {
+            return false;
+        };
+        self.controls_switching_display = false;
+        self.display_id = Some(session.display().id.clone());
+        self.countdown_target = Some(from);
+        self.previews.capture_target = Some(from);
+        self.window_session = Some(session);
+        self.window_texture = texture;
+        self.keep_controls_open_with_error(ctx, error);
+        true
     }
 
     /// Ends a recording flow that could not continue and reports why.
@@ -10011,6 +10057,103 @@ mod tests {
         );
         assert_eq!(live.recording_hud_error.line(None), None);
         live.capture_phase = None;
+        live.flush();
+    }
+
+    #[test]
+    fn failed_menu_starts_and_switches_keep_the_menu_open_with_an_inline_error() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        let display = |id: &str, x: i32| DisplayDescriptor {
+            id: id.into(),
+            name: id.into(),
+            x,
+            y: 0,
+            width: 1280,
+            height: 720,
+            scale_factor: 1.,
+            is_primary: x == 0,
+        };
+        let target = |monitor| CaptureTarget {
+            monitor,
+            position: egui::pos2(monitor as f32 * 1280., 0.),
+            size: egui::vec2(1280., 720.),
+            preview_bounds: None,
+        };
+        live.displays = vec![display("left", 0), display("right", 1280)];
+
+        // Shipping `start_recording` restores the selection on a failed
+        // draft and the menu shows the error: no dialog, no History card.
+        live.display_id = Some("left".into());
+        live.countdown_target = Some(target(0));
+        live.capture_phase = Some(CapturePhase::RecordingPreparing {
+            target: capture_controls::Target::Display,
+        });
+        live.controls
+            .lock()
+            .unwrap()
+            .begin_in_flight(capture_controls::InFlight::Starting);
+        live.keep_controls_open_with_error(&ctx, "Could not create the draft.".into());
+        assert_eq!(live.capture_phase, Some(CapturePhase::ControlsSelecting));
+        assert_eq!(
+            live.controls_error.as_deref(),
+            Some("Could not create the draft.")
+        );
+        assert_eq!(live.controls.lock().unwrap().in_flight(), None);
+        assert_eq!(live.take_capture_failure(), None);
+        assert!(live.error.is_none());
+        assert_eq!(live.display_id.as_deref(), Some("left"));
+
+        // A failed switch returns the menu to the display it was on, with
+        // its session and snapshot, like `select_capture_display`.
+        live.controls_error = None;
+        live.display_id = Some("right".into());
+        live.countdown_target = Some(target(1));
+        live.previews.capture_target = Some(target(1));
+        live.window_session = None;
+        live.controls_switching_display = true;
+        live.controls_switch_from = Some((
+            target(0),
+            Arc::new(WindowSession::fixture(display("left", 0))),
+            None,
+        ));
+        live.capture_phase = Some(CapturePhase::ControlsPreparing);
+        live.controls
+            .lock()
+            .unwrap()
+            .begin_in_flight(capture_controls::InFlight::Switching);
+        assert!(live.fail_controls_switch(&ctx, "Could not capture the display.".into()));
+        assert_eq!(live.capture_phase, Some(CapturePhase::ControlsSelecting));
+        assert_eq!(live.display_id.as_deref(), Some("left"));
+        assert_eq!(live.countdown_target.map(|target| target.monitor), Some(0));
+        assert_eq!(
+            live.previews.capture_target.map(|target| target.monitor),
+            Some(0)
+        );
+        assert_eq!(
+            live.window_session
+                .as_ref()
+                .map(|session| session.display().id.as_str()),
+            Some("left")
+        );
+        assert!(!live.controls_switching_display);
+        assert!(live.controls_switch_from.is_none());
+        assert_eq!(live.controls.lock().unwrap().in_flight(), None);
+        assert_eq!(
+            live.controls_error.as_deref(),
+            Some("Could not capture the display.")
+        );
+        assert_eq!(live.take_capture_failure(), None);
+
+        // Without a switch in flight the caller ends the capture as before.
+        assert!(!live.fail_controls_switch(&ctx, "Later failure".into()));
+        assert_eq!(
+            live.controls_error.as_deref(),
+            Some("Could not capture the display.")
+        );
+        live.capture_phase = None;
+        live.window_session = None;
         live.flush();
     }
 

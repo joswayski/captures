@@ -219,6 +219,11 @@ impl CaptureControls {
         self.in_flight = None;
     }
 
+    #[cfg(test)]
+    pub(crate) fn begin_in_flight(&mut self, in_flight: InFlight) {
+        self.in_flight = Some(in_flight);
+    }
+
     pub fn recording_selection(&self) -> RecordingSelection {
         self.recording.clone()
     }
@@ -634,11 +639,7 @@ impl CaptureControls {
                                 );
                             }
                             if let Some(error) = view.error {
-                                ui.label(
-                                    RichText::new(error)
-                                        .small()
-                                        .color(tokens.color("danger-text")),
-                                );
+                                show_error_band(ui, tokens, error);
                             }
                         });
                     });
@@ -1465,6 +1466,57 @@ fn close_button(ui: &mut egui::Ui, tokens: &Tokens) -> egui::Response {
 }
 
 /// Shipping `.capture-selector-divider`: a 1 × 24 px `--glass-border` rule.
+/// Shipping `.recording-selector-error` (`role="alert"`): the panel's last row
+/// after a failed start or display switch. A full-width band under the note
+/// with a `--danger-border` top rule, the signal tint at 16%,
+/// `--theme-signal-text` at `--text-sm`, `--s-4 --s-5` padding and the panel's
+/// `--r-2xl` bottom corners. It stays until the next start or switch.
+fn show_error_band(ui: &mut egui::Ui, tokens: &Tokens, error: &str) {
+    // The panel frame's inner margin, which the band spans like shipping's
+    // unpadded panel.
+    let edge = tokens.number("s-4");
+    let (pad_x, pad_y) = (tokens.number("s-5"), tokens.number("s-4"));
+    // The note's own `--s-4` bottom padding sits above the band.
+    ui.add_space((tokens.number("s-4") - ui.spacing().item_spacing.y).max(0.));
+    let width = ui.available_width() + 2. * edge;
+    let ink = tokens.color("theme-signal-text");
+    let galley = ui.painter().layout(
+        error.to_owned(),
+        egui::FontId::proportional(tokens.number("text-sm")),
+        ink,
+        (width - 2. * pad_x).max(1.),
+    );
+    let height = galley.size().y + 2. * pad_y;
+    // The frame's bottom margin completes the band's height.
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), (height - edge).max(0.)),
+        egui::Sense::hover(),
+    );
+    let band = egui::Rect::from_min_size(
+        egui::pos2(rect.left() - edge, rect.top()),
+        egui::vec2(width, height),
+    );
+    let radius = tokens.number("r-2xl") as u8;
+    let painter = ui.painter();
+    painter.rect_filled(
+        band,
+        egui::CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: radius,
+            se: radius,
+        },
+        tokens.color("theme-signal").gamma_multiply(0.16),
+    );
+    painter.hline(
+        band.x_range(),
+        band.top() + 0.5,
+        Stroke::new(1., tokens.color("danger-border")),
+    );
+    painter.galley(band.min + egui::vec2(pad_x, pad_y), galley, ink);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, error));
+}
+
 fn divider(ui: &mut egui::Ui, tokens: &Tokens) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1., 24.), egui::Sense::hover());
     ui.painter()
@@ -1591,6 +1643,23 @@ mod tests {
         auto_start: bool,
         error: Option<&str>,
     ) -> (Option<Action>, Vec<(String, egui::Rect)>) {
+        let (action, texts, _) =
+            render_shapes(ctx, controls, size, events, panel_id, auto_start, error);
+        (action, texts)
+    }
+
+    type Fills = Vec<(Color32, egui::Rect)>;
+
+    /// [`render`], plus every filled rectangle with its fill.
+    fn render_shapes(
+        ctx: &egui::Context,
+        controls: &mut CaptureControls,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        panel_id: egui::Id,
+        auto_start: bool,
+        error: Option<&str>,
+    ) -> (Option<Action>, Vec<(String, egui::Rect)>, Fills) {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let display = display();
         let displays = [
@@ -1632,24 +1701,25 @@ mod tests {
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
-        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>, fills: &mut Fills) {
             match shape {
                 egui::Shape::Text(text) => {
                     texts.push((text.galley.text().to_owned(), text.visual_bounding_rect()));
                 }
+                egui::Shape::Rect(rect) => fills.push((rect.fill, rect.rect)),
                 egui::Shape::Vec(shapes) => {
                     for shape in shapes {
-                        collect(shape, texts);
+                        collect(shape, texts, fills);
                     }
                 }
                 _ => {}
             }
         }
-        let mut texts = Vec::new();
+        let (mut texts, mut fills) = (Vec::new(), Vec::new());
         for clipped in &output.shapes {
-            collect(&clipped.shape, &mut texts);
+            collect(&clipped.shape, &mut texts, &mut fills);
         }
-        (action, texts)
+        (action, texts, fills)
     }
 
     fn painted(texts: &[(String, egui::Rect)], text: &str) -> Option<egui::Rect> {
@@ -2175,6 +2245,172 @@ mod tests {
         controls.action_mode = ActionMode::Recording;
         let (_, _, texts) = settle(&mut controls, false, None);
         assert!(painted(&texts, "Start recording").is_some());
+    }
+
+    #[test]
+    fn failed_start_keeps_the_menu_and_selections_with_the_shipping_error_band() {
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let mut controls = CaptureControls::recording_fixture();
+        controls.region.exercise(
+            0,
+            Bounds {
+                width: 1000.,
+                height: 720.,
+            },
+        );
+        let region = controls.region().expect("fixture region");
+        let (ctx, panel_id, _) = settle(&mut controls, false, None);
+        let size = egui::vec2(1280., 900.);
+        let (action, _) = render(
+            &ctx,
+            &mut controls,
+            size,
+            vec![key(egui::Key::Enter)],
+            panel_id,
+            false,
+            None,
+        );
+        assert_eq!(action, Some(Action::StartRecording(Target::Region(region))));
+        assert_eq!(controls.in_flight(), Some(InFlight::Starting));
+
+        // The host keeps the menu open: the in-flight state ends and the
+        // error shows inline; the mode, target and region are untouched.
+        controls.end_in_flight();
+        let error = "Could not create the recording draft.";
+        let (_, texts, fills) = render_shapes(
+            &ctx,
+            &mut controls,
+            size,
+            vec![],
+            panel_id,
+            false,
+            Some(error),
+        );
+        assert!(painted(&texts, "Starting…").is_none(), "{texts:?}");
+        assert!(painted(&texts, "Start recording").is_some(), "{texts:?}");
+        assert_eq!(controls.action_mode, ActionMode::Recording);
+        assert_eq!(controls.mode(), TargetMode::Region);
+        assert_eq!(controls.region(), Some(region));
+
+        // Shipping `.recording-selector-error`: the last row, spanning the
+        // panel under the note, tinted with the signal at 16%.
+        let text = painted(&texts, error).expect("inline error");
+        let note = painted(&texts, capture_menu::confirm_note(false).text).expect("note");
+        assert!(text.top() > note.bottom(), "{text:?} below {note:?}");
+        // The Area is still fading in (test time is frozen), so match the
+        // band by geometry and hue rather than its exact premultiplied fill.
+        let (tint, band) = fills
+            .iter()
+            .filter(|(_, rect)| rect.contains_rect(text) && rect.top() > note.bottom())
+            .min_by(|a, b| a.1.area().total_cmp(&b.1.area()))
+            .copied()
+            .unwrap_or_else(|| panic!("error band {text:?} {fills:?}"));
+        assert!(
+            tint.r() > 2 * tint.g() && tint.r() > 2 * tint.b(),
+            "signal tint {tint:?}"
+        );
+        let panel = fills
+            .iter()
+            .map(|(_, rect)| *rect)
+            .filter(|rect| rect.width() < size.x && *rect != band && rect.contains_rect(band))
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .expect("the band sits inside the panel");
+        assert!(
+            (band.left() - panel.left()).abs() <= 1.5,
+            "{band:?} in {panel:?}"
+        );
+        assert!(
+            (band.right() - panel.right()).abs() <= 1.5,
+            "{band:?} in {panel:?}"
+        );
+        assert!(
+            (band.bottom() - panel.bottom()).abs() <= 1.5,
+            "{band:?} in {panel:?}"
+        );
+        assert!(band.contains_rect(text), "{text:?} inside {band:?}");
+        assert!(
+            (text.left() - band.left() - tokens.number("s-5")).abs() <= 2.,
+            "--s-5 inline padding"
+        );
+
+        // Retry: the same start is offered again and clears nothing else.
+        let (action, _) = render(
+            &ctx,
+            &mut controls,
+            size,
+            vec![key(egui::Key::Enter)],
+            panel_id,
+            false,
+            Some(error),
+        );
+        assert_eq!(action, Some(Action::StartRecording(Target::Region(region))));
+        controls.end_in_flight();
+        // Under auto-start the hidden primary returns as Retry recording.
+        let (_, _, texts) = settle(&mut controls, true, Some(error));
+        assert!(painted(&texts, "Retry recording").is_some(), "{texts:?}");
+        // Or pick something else: another target still acts.
+        controls.mode = TargetMode::Display;
+        let (action, _) = render(
+            &ctx,
+            &mut controls,
+            size,
+            vec![key(egui::Key::Enter)],
+            panel_id,
+            false,
+            Some(error),
+        );
+        assert_eq!(action, Some(Action::StartRecording(Target::Display)));
+    }
+
+    #[test]
+    fn escape_with_an_open_menu_select_closes_it_and_cancels_once_like_shipping() {
+        // Shipping's selector listens for Escape on `window` in the capture
+        // phase, so one press closes an open CustomSelect and cancels the
+        // capture ("lets one Escape close an open control and cancel the
+        // selector exactly once"). The wgpu menu keeps that order.
+        let mut controls = CaptureControls {
+            mode: TargetMode::Display,
+            ..Default::default()
+        };
+        let (ctx, panel_id, texts) = settle(&mut controls, false, None);
+        let size = egui::vec2(1280., 900.);
+        // The display identity also paints the name; the trigger is in the
+        // toolbar below it.
+        let trigger = texts
+            .iter()
+            .filter(|(text, _)| text == "Fixture display")
+            .map(|(_, rect)| *rect)
+            .max_by(|a, b| a.top().total_cmp(&b.top()))
+            .expect("display select trigger");
+        let at = trigger.center();
+        let press = |controls: &mut CaptureControls, events| {
+            render(&ctx, controls, size, events, panel_id, false, None).0
+        };
+        assert_eq!(
+            press(
+                &mut controls,
+                vec![egui::Event::PointerMoved(at), pointer_button(at, true)]
+            ),
+            None
+        );
+        assert_eq!(press(&mut controls, vec![pointer_button(at, false)]), None);
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        assert!(egui::Popup::is_any_open(&ctx), "the listbox is open");
+        assert!(
+            painted(&texts, "Secondary — 1000×720").is_some(),
+            "{texts:?}"
+        );
+
+        assert_eq!(
+            press(&mut controls, vec![key(egui::Key::Escape)]),
+            Some(Action::Cancel),
+            "one Escape cancels the capture"
+        );
+        assert!(
+            !egui::Popup::is_any_open(&ctx),
+            "the same Escape closed the listbox"
+        );
+        assert_eq!(controls.in_flight(), None);
     }
 
     #[test]
