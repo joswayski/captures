@@ -539,14 +539,12 @@ def main():
                 def sample():
                     return run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
 
-                def settled():
-                    # The card's arrival animation may still be running: sample
-                    # only once two reads 100ms apart agree.
-                    first = sample()
-                    time.sleep(.1)
-                    return first if sample() == first else None
-
-                idle_pixel = wait(settled, "settled idle preview pixel")
+                # Two equal reads can both precede thumbnail decode/arrival.
+                # This point lies in the capture fixture's flat dark quadrant;
+                # require its actual color rather than using an unfinished
+                # frame as the reference for all subsequent hover assertions.
+                idle_pixel = bytes(BACKGROUNDS[0][0])
+                wait(lambda: sample() == idle_pixel, "settled idle preview pixel")
                 shot(preview, f"{prefix}-chrome-idle")
                 run("xdotool", "mousemove", "--sync", "--window", preview, "60", str(card_top + 72))
                 # Shipping hover eases `blur(2px) brightness(.5) scale(1.015)` in
@@ -1042,7 +1040,12 @@ def main():
                     other = wait(lambda: windows("Preview drag focus"), "drag focus fixture")[0]
                     run("xdotool", "windowminimize", root,
                         "windowactivate", "--sync", other, "windowfocus", "--sync", other)
-                    run("xdotool", "mousemove", "--window", preview, "170", "132", "mousedown", "1")
+                    # Like click(), let enter and press reach distinct frames.
+                    # Otherwise software rendering can batch the press with
+                    # later steps already outside the narrow pile hit target.
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "169", "132",
+                        "mousemove_relative", "--sync", "1", "0", "sleep", ".15",
+                        "mousedown", "1", "sleep", ".15")
                     for step in range(1, 9):
                         run("xdotool", "mousemove", str(start_x + 170 + dx * step // 8),
                             str(start_y + 132 + dy * step // 8))
