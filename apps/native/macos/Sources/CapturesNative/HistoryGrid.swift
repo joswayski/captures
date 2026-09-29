@@ -301,52 +301,24 @@ final class HistoryButton: NSButton {
     }
 }
 
-/// Shipping 24-unit icon paths (`EditIcon`, `SaveIcon`, `TrashIcon`, `HistoryIcon`;
-/// `RestoreIcon` and `CheckIcon` from the shared set).
+/// All History glyphs use the same shipping path data as the wgpu host.
 enum HistoryGlyph {
     static func draw(_ glyph: HistoryButton.Glyph, in rect: NSRect, color: NSColor, flipped: Bool) {
-        let path = NSBezierPath()
-        path.lineWidth = 1.7 * rect.width / 24
-        path.lineCapStyle = .round; path.lineJoinStyle = .round
-        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-            NSPoint(x: rect.minX + x * rect.width / 24,
-                    y: flipped ? rect.minY + y * rect.height / 24 : rect.maxY - y * rect.height / 24)
-        }
-        func line(_ points: [(CGFloat, CGFloat)]) {
-            path.move(to: point(points[0].0, points[0].1))
-            points.dropFirst().forEach { path.line(to: point($0.0, $0.1)) }
-        }
+        let name: String
         switch glyph {
-        case .trash:
-            line([(4, 7), (20, 7)]); line([(9, 7), (9, 4), (15, 4), (15, 7)])
-            line([(18, 7), (17, 20), (7, 20), (6, 7)]); line([(10, 11), (10, 16)]); line([(14, 11), (14, 16)])
-        case .edit:
-            line([(4, 16), (3, 21), (8, 20), (19, 9), (15, 5), (4, 16)]); line([(13.5, 6.5), (17.5, 10.5)])
-        case .save:
-            line([(5, 4), (17, 4), (19, 6), (19, 20), (5, 20), (5, 4)])
-            line([(8, 4), (8, 10), (16, 10), (16, 4)]); line([(8, 20), (8, 14), (16, 14), (16, 20)])
-        case .restore, .check:
-            for points in ShippingIcons.polylines(glyph == .restore ? "restore" : "check") where points.count > 1 {
-                line(points.map { ($0.x, $0.y) })
-            }
+        case .trash: name = "trash"
+        case .edit: name = "edit"
+        case .save: name = "save"
+        case .restore: name = "restore"
+        case .check: name = "check"
         }
-        color.setStroke(); path.stroke()
+        color.setStroke()
+        ShippingIcons.stroke(name, in: rect, width: 1.7, flipped: flipped)
     }
 
     static func drawHistory(in rect: NSRect, color: NSColor, flipped: Bool) {
-        let path = NSBezierPath()
-        path.lineWidth = 1.6 * rect.width / 24
-        path.lineCapStyle = .round; path.lineJoinStyle = .round
-        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-            NSPoint(x: rect.minX + x * rect.width / 24,
-                    y: flipped ? rect.minY + y * rect.height / 24 : rect.maxY - y * rect.height / 24)
-        }
-        let radius = 9 * rect.width / 24
-        path.appendOval(in: NSRect(x: point(12, 12).x - radius, y: point(12, 12).y - radius,
-                                   width: radius * 2, height: radius * 2))
-        path.move(to: point(3, 3)); path.line(to: point(3, 8)); path.line(to: point(8, 8))
-        path.move(to: point(12, 7)); path.line(to: point(12, 12)); path.line(to: point(15, 14))
-        color.setStroke(); path.stroke()
+        color.setStroke()
+        ShippingIcons.stroke("history", in: rect, width: 1.6, flipped: flipped)
     }
 }
 

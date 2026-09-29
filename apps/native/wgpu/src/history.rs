@@ -1006,53 +1006,16 @@ fn button(
 /// Shipping 24-unit Lucide-style paths, scaled into `rect`.
 fn glyph(painter: &egui::Painter, glyph: Glyph, rect: Rect, stroke: Stroke) {
     let p = |x: f32, y: f32| rect.min + Vec2::new(x, y) * (rect.width() / 24.);
-    let path = |points: &[(f32, f32)]| {
-        for pair in points.windows(2) {
-            painter.line_segment([p(pair[0].0, pair[0].1), p(pair[1].0, pair[1].1)], stroke);
-        }
+    let name = match glyph {
+        Glyph::Trash => "trash",
+        Glyph::Edit => "edit",
+        Glyph::Save => "save",
+        Glyph::History => "history",
+        Glyph::Named(name) => name,
     };
-    match glyph {
-        Glyph::Trash => {
-            path(&[(4., 7.), (20., 7.)]);
-            path(&[(9., 7.), (9., 4.), (15., 4.), (15., 7.)]);
-            path(&[(18., 7.), (17., 20.), (7., 20.), (6., 7.)]);
-            path(&[(10., 11.), (10., 16.)]);
-            path(&[(14., 11.), (14., 16.)]);
-        }
-        Glyph::Edit => {
-            path(&[
-                (4., 16.),
-                (3., 21.),
-                (8., 20.),
-                (19., 9.),
-                (15., 5.),
-                (4., 16.),
-            ]);
-            path(&[(13.5, 6.5), (17.5, 10.5)]);
-        }
-        Glyph::Save => {
-            path(&[
-                (5., 4.),
-                (17., 4.),
-                (19., 6.),
-                (19., 20.),
-                (5., 20.),
-                (5., 4.),
-            ]);
-            path(&[(8., 4.), (8., 10.), (16., 10.), (16., 4.)]);
-            path(&[(8., 20.), (8., 14.), (16., 14.), (16., 20.)]);
-        }
-        Glyph::History => {
-            painter.circle_stroke(p(12., 12.), 9. * rect.width() / 24., stroke);
-            path(&[(3., 3.), (3., 8.), (8., 8.)]);
-            path(&[(12., 7.), (12., 12.), (15., 14.)]);
-        }
-        Glyph::Named(name) => {
-            for line in captures_app::icons::polylines(name).unwrap_or_default() {
-                let points = line.iter().map(|[x, y]| p(*x, *y)).collect();
-                painter.add(egui::Shape::line(points, stroke));
-            }
-        }
+    for line in captures_app::icons::polylines(name).expect("shared History icon") {
+        let points = line.iter().map(|[x, y]| p(*x, *y)).collect();
+        painter.add(egui::Shape::line(points, stroke));
     }
 }
 
