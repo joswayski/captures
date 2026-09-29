@@ -568,6 +568,22 @@ def main():
 
                 wait(lambda: edge_spread() >= 4, "hover blurs the media edge")
                 shot(preview, f"{prefix}-chrome-hover")
+                # The unsaved Delete icon is the outer top action. Its hover
+                # must use mustard's signal fill (#ef4650), not raised glass.
+                delete_x = 28 + (248 if placement.endswith("right") else 8)
+                delete_y = card_top + 8
+                run("xdotool", "mousemove", "--sync", "--window", preview,
+                    str(delete_x + 14), str(delete_y + 14))
+                def delete_fill():
+                    return run("import", "-window", preview, "-crop",
+                               f"1x1+{delete_x + 4}+{delete_y + 14}", "-depth", "8", "rgb:-")
+                signal = bytes.fromhex("ef4650")
+                wait(lambda: all(abs(a - b) <= 2 for a, b in zip(delete_fill(), signal)),
+                     "Delete hover uses the signal background")
+                shot(preview, f"{prefix}-delete-hover")
+                run("xdotool", "mousemove", "--sync", "--window", preview, "60", str(card_top + 72))
+                wait(lambda: max(abs(a - b) for a, b in zip(delete_fill(), signal)) > 40,
+                     "Delete loses destructive fill when the pointer leaves")
                 run("xdotool", "mousemove", "--sync", "640", "440")
                 wait(lambda: sample() == idle_pixel, "preview media returns to idle after hover")
                 if args.drag_only:

@@ -57,7 +57,9 @@ final class MiniPreviewButton: NSButton {
     private(set) var morphSwap: Double = 0
     private var morphAnimation: (start: CFTimeInterval, width: Double, swap: Double, target: Double)?
     private var iconPopStart: CFTimeInterval?
-    /// Drives self-drawn motion (the morph and the icon pop) while it runs.
+    private(set) var iconHover: Double = 0
+    private var iconHoverAnimation: (start: CFTimeInterval, from: Double, target: Double)?
+    /// Drives self-drawn morph, icon pop and hover colors while they run.
     private var ticker: Timer?
     /// Shipping instant glass tip (`data-tooltip`). Labelled actions have none;
     /// the system tooltip is never used.
@@ -129,10 +131,21 @@ final class MiniPreviewButton: NSButton {
         RunLoop.main.add(timer, forMode: .common); ticker = timer
     }
 
-    /// Advance the morph and the icon pop; the ticker stops once both rest.
+    /// Advance self-drawn motion; the ticker stops once all transitions rest.
     private func tick() {
         let now = CACurrentMediaTime()
         var running = false
+        if let hover = iconHoverAnimation {
+            let spec = NativeMotion.transition("preview_icon_hover", tokens: tokens)
+            let elapsed = now - hover.start
+            if spec.duration > 0, elapsed < spec.duration {
+                iconHover = hover.from + (hover.target - hover.from) * NativeMotion.ease(spec.timing, elapsed / spec.duration)
+                running = true
+            } else {
+                iconHover = hover.target; iconHoverAnimation = nil
+            }
+            needsDisplay = true
+        }
         if let morph = morphAnimation {
             let elapsed = now - morph.start
             func value(_ name: String, from: Double) -> Double {
@@ -164,6 +177,7 @@ final class MiniPreviewButton: NSButton {
             guard isHidden, !oldValue else { return }
             // Hidden chrome cannot stay hovered or keep its tip on screen.
             hovered = false; editorJustOpened = false
+            iconHover = 0; iconHoverAnimation = nil
             tooltipChanged?(self, false)
         }
     }
@@ -221,12 +235,43 @@ final class MiniPreviewButton: NSButton {
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
     override func mouseEntered(with event: NSEvent) {
-        hovered = true; applyHoverShape(); needsDisplay = true
+        hovered = true; applyIconHover(); applyHoverShape(); needsDisplay = true
         tooltipChanged?(self, showsTooltip)
     }
     override func mouseExited(with event: NSEvent) {
-        hovered = false; editorJustOpened = false; applyHoverShape(); needsDisplay = true
+        hovered = false; editorJustOpened = false; applyIconHover(); applyHoverShape(); needsDisplay = true
         tooltipChanged?(self, showsTooltip)
+    }
+    private func applyIconHover() {
+        guard boxShadowToken == "shadow-sm" else { return }
+        let target: Double = hovered && isEnabled && !isHidden ? 1 : 0
+        let spec = NativeMotion.transition("preview_icon_hover", tokens: tokens)
+        if window?.isVisible == true, spec.duration > 0, iconHover != target {
+            iconHoverAnimation = (CACurrentMediaTime(), iconHover, target)
+            startTicker()
+        } else {
+            iconHover = target; iconHoverAnimation = nil
+        }
+    }
+
+    /// Shipping `.icon-button.delete:hover` uses white on the signal fill,
+    /// not the ordinary raised-glass hover used by Close and Edit.
+    var chromeBackground: NSColor {
+        if primary { return tokens.color("theme-accent") }
+        if boxShadowToken == "shadow-sm" {
+            let rest = tokens.color("glass-strong")
+            return rest.blended(withFraction: isEnabled ? iconHover : 0,
+                                of: tokens.color(kind == .trash ? "theme-signal" : "glass-raised")) ?? rest
+        }
+        return tokens.color(hovered || cell?.isHighlighted == true ? "glass-raised" : "glass-strong")
+    }
+    var chromeForeground: NSColor {
+        if primary { return tokens.color("theme-accent-ink") }
+        if kind == .trash {
+            let rest = tokens.color("theme-signal-text")
+            return rest.blended(withFraction: isEnabled ? iconHover : 0, of: .white) ?? rest
+        }
+        return tokens.color("glass-text")
     }
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
@@ -302,17 +347,15 @@ final class MiniPreviewButton: NSButton {
     }
     override func draw(_ dirtyRect: NSRect) {
         if kind == .edit && editorPresent { drawEditorPill(); return }
-        let active = cell?.isHighlighted == true
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                 xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
         if let hoverLabel, morphWidth > 0 || morphSwap > 0 {
             drawMorph(hoverLabel)
             return
         }
-        (primary ? tokens.color("theme-accent") : tokens.color(hovered || active ? "glass-raised" : "glass-strong")).setFill()
+        chromeBackground.setFill()
         path.fill(); (primary ? NSColor.clear : tokens.color("glass-border")).setStroke(); path.stroke()
-        let color = primary ? tokens.color("theme-accent-ink")
-            : kind == .trash ? tokens.color("theme-signal-text") : tokens.color("glass-text")
+        let color = chromeForeground
         color.setStroke(); color.setFill()
         var iconX: CGFloat = 6
         if !title.isEmpty && bounds.width > 40 {

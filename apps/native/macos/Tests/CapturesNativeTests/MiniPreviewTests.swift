@@ -61,6 +61,47 @@ final class MiniPreviewTests: XCTestCase {
         try write(render(panel), name: "mini-preview-single-saved-reveal.png")
     }
 
+    func testDeleteHoverUsesSignalAndWhiteThenClearsWhenHidden() throws {
+        _ = NSApplication.shared
+        let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.white)])
+        defer { panel.close() }
+        let card = try XCTUnwrap(panel.previewView.card(for: "card"))
+        let hover = try hoverEvent(for: panel)
+        card.mouseEntered(with: hover)
+        let controls = card.subviews.compactMap { $0 as? MiniPreviewButton }
+        let delete = try XCTUnwrap(controls.first { $0.kind == .trash })
+        let edit = try XCTUnwrap(controls.first { $0.kind == .edit })
+        func assertColor(_ actual: NSColor, _ expected: NSColor, file: StaticString = #filePath, line: UInt = #line) {
+            let actual = actual.usingColorSpace(.sRGB)!, expected = expected.usingColorSpace(.sRGB)!
+            XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.01, file: file, line: line)
+            XCTAssertEqual(actual.greenComponent, expected.greenComponent, accuracy: 0.01, file: file, line: line)
+            XCTAssertEqual(actual.blueComponent, expected.blueComponent, accuracy: 0.01, file: file, line: line)
+            XCTAssertEqual(actual.alphaComponent, expected.alphaComponent, accuracy: 0.01, file: file, line: line)
+        }
+        assertColor(delete.chromeBackground, tokens.color("glass-strong"))
+        assertColor(delete.chromeForeground, tokens.color("theme-signal-text"))
+        delete.mouseEntered(with: hover)
+        try waitUntil { delete.iconHover == 1 }
+        assertColor(delete.chromeBackground, tokens.color("theme-signal"))
+        assertColor(delete.chromeForeground, .white)
+        try write(render(panel), name: "mini-preview-delete-hover.png")
+        delete.mouseExited(with: hover)
+        try waitUntil { delete.iconHover == 0 }
+        assertColor(delete.chromeBackground, tokens.color("glass-strong"))
+        edit.mouseEntered(with: hover)
+        try waitUntil { edit.iconHover == 1 }
+        assertColor(edit.chromeBackground, tokens.color("glass-raised"))
+        delete.mouseEntered(with: hover)
+        try waitUntil { delete.iconHover == 1 }
+        card.mouseExited(with: hover)
+        XCTAssertEqual(delete.iconHover, 0, "hidden controls must not retain destructive hover chrome")
+        card.mouseEntered(with: hover)
+        assertColor(delete.chromeBackground, tokens.color("glass-strong"))
+        delete.isEnabled = false
+        delete.mouseEntered(with: hover)
+        XCTAssertEqual(delete.iconHover, 0)
+    }
+
     func testHoverChromeMirrorsAndSaveUpdatesWithoutMovingCenterActions() throws {
         _ = NSApplication.shared
         for right in [false, true] {

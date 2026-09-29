@@ -1840,9 +1840,30 @@ fn control(
     let response = ui.interact(rect, id, egui::Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let visible = reveal || response.has_focus();
+    let hover_id = id.with("icon-hover");
+    let icon_hover = if visible && enabled {
+        crate::motion::eased_bool(
+            ui.ctx(),
+            hover_id,
+            tooltip.is_some() && response.hovered(),
+            &tokens.transition(captures_app::motion::Transition::PreviewIconHover),
+        )
+    } else {
+        // Hiding chrome or disabling the action clears its hover immediately.
+        ui.ctx().animate_bool_with_time(hover_id, false, 0.)
+    };
     if visible {
         let fill = if primary {
             tokens.color("theme-accent")
+        } else if tooltip.is_some() {
+            tokens.color("glass-strong").lerp_to_gamma(
+                tokens.color(if matches!(icon, Icon::Trash) {
+                    "theme-signal"
+                } else {
+                    "glass-raised"
+                }),
+                icon_hover,
+            )
         } else if response.hovered() {
             tokens.color("glass-raised")
         } else {
@@ -1872,7 +1893,9 @@ fn control(
             tokens.color("theme-accent-ink")
         } else if enabled {
             if matches!(icon, Icon::Trash) {
-                tokens.color("theme-signal-text")
+                tokens
+                    .color("theme-signal-text")
+                    .lerp_to_gamma(Color32::WHITE, icon_hover)
             } else {
                 tokens.color("glass-text")
             }
@@ -2499,6 +2522,93 @@ mod tests {
             );
             assert!(bounds.iter().all(|bounds| rect.contains_rect(*bounds)));
             output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn icon_hover_uses_destructive_colors_only_for_delete_and_reverses() {
+        for reduced in [false, true] {
+            for icon in [Icon::Trash, Icon::Close] {
+                let ctx = egui::Context::default();
+                let tokens = crate::tokens::load()["dark-mustard"].clone();
+                let rect = egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(28., 28.));
+                let frame = |time, hovered, enabled| {
+                    let mut input = raw(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160., 160.)),
+                        moved(if hovered {
+                            rect.center()
+                        } else {
+                            egui::pos2(120., 120.)
+                        }),
+                    );
+                    input.time = Some(time);
+                    ctx.begin_pass(input);
+                    crate::motion::set_reduced(&ctx, reduced);
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("hover-test"),
+                        egui::UiBuilder::new(),
+                    );
+                    control(
+                        &mut ui,
+                        &tokens,
+                        rect,
+                        "icon",
+                        "Action",
+                        icon,
+                        true,
+                        enabled,
+                        false,
+                        Some((false, reduced)),
+                    );
+                    let mut output = ctx.end_pass();
+                    output.textures_delta.clear();
+                    let fill = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(shape) if shape.rect == rect => Some(shape.fill),
+                            _ => None,
+                        })
+                        .unwrap();
+                    let ink = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Path(path)
+                            if path.points.iter().all(|point| rect.contains(*point)) =>
+                        {
+                            Some(path.stroke.color.clone())
+                        }
+                        _ => None,
+                    });
+                    (fill, ink)
+                };
+                let rest = tokens.color("glass-strong");
+                assert_eq!(frame(0., false, true).0, rest);
+                frame(0.01, false, true);
+                frame(0.02, true, true);
+                let halfway = frame(0.08, true, true).0;
+                let expected = tokens.color(if icon == Icon::Trash {
+                    "theme-signal"
+                } else {
+                    "glass-raised"
+                });
+                if !reduced {
+                    assert_ne!(halfway, rest);
+                    assert_ne!(halfway, expected, "the hover must ease rather than jump");
+                }
+                let (fill, ink) = frame(0.4, true, true);
+                assert_eq!(fill, expected);
+                if icon == Icon::Trash {
+                    assert_eq!(ink, Some(egui::epaint::ColorMode::Solid(Color32::WHITE)));
+                }
+                frame(0.5, false, true);
+                assert_eq!(frame(0.8, false, true).0, rest);
+                frame(0.9, true, false);
+                assert_eq!(
+                    frame(1.2, true, false).0,
+                    rest,
+                    "disabled controls must not advertise an action"
+                );
+            }
         }
     }
 
