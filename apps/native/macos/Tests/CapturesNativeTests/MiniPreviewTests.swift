@@ -6,6 +6,18 @@ import CCapturesSettings
 final class MiniPreviewTests: XCTestCase {
     private let tokens = Tokens.variants["dark-mustard"]!
 
+    func testPreviewKindsResolveSharedShippingGeometry() {
+        XCTAssertEqual(MiniPreviewButtonKind.allCases.map(\.iconName),
+                       ["close", "trash", "edit", "copy", "save", "folder", "preview-stack", "close", "check"])
+        for kind in MiniPreviewButtonKind.allCases {
+            XCTAssertFalse(ShippingIcons.polylines(kind.iconName).isEmpty, kind.iconName)
+        }
+        XCTAssertEqual(ShippingIcons.polylines("preview-overflow-up"),
+                       [[NSPoint(x: 5.25, y: 15), NSPoint(x: 12, y: 8.25), NSPoint(x: 18.75, y: 15)]])
+        XCTAssertEqual(ShippingIcons.polylines("check"),
+                       [[NSPoint(x: 5, y: 12), NSPoint(x: 9, y: 16), NSPoint(x: 19, y: 6)]])
+    }
+
     func testCoordinateConversionPreservesNegativeOriginAndTopLeftGeometry() {
         let monitor = CapturesPreviewMonitor(work_x: -2880, work_y: 50,
             work_width: 2880, work_height: 1700, full_x: -2880, full_y: -100,

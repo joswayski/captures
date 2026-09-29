@@ -50,6 +50,16 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
+        "history" => &["M3 12a9 9 0 1 0 3-6.7L3 8", "M3 3v5h5M12 7v5l3 2"],
+        // These shipping preview SVGs use a 16-unit viewBox. `polylines`
+        // normalizes them to the native hosts' shared 24-unit coordinate space.
+        "preview-stack" => &[
+            "m3 5.5 5-2.75 5 2.75-5 2.75L3 5.5Z",
+            "m3.5 8.5 4.5 2.5 4.5-2.5",
+            "m4.5 11 3.5 2 3.5-2",
+        ],
+        "preview-overflow-up" => &["M3.5 10 8 5.5 12.5 10"],
+        "preview-overflow-down" => &["M3.5 6 8 10.5 12.5 6"],
         // Text alignment (`EditorIcon` `align-*`).
         "align-left" => &["M5 6h14M5 10h10M5 14h14M5 18h10"],
         "align-center" => &["M5 6h14M8 10h8M5 14h14M8 18h8"],
@@ -173,7 +183,17 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
 
 /// Every named icon's polylines in 24-unit space (y down).
 pub fn polylines(name: &str) -> Option<Vec<Vec<[f32; 2]>>> {
-    Some(paths(name)?.iter().flat_map(|d| flatten(d)).collect())
+    let mut lines: Vec<Vec<[f32; 2]>> = paths(name)?.iter().flat_map(|d| flatten(d)).collect();
+    if matches!(
+        name,
+        "preview-stack" | "preview-overflow-up" | "preview-overflow-down"
+    ) {
+        for point in lines.iter_mut().flatten() {
+            point[0] *= 1.5;
+            point[1] *= 1.5;
+        }
+    }
+    Some(lines)
 }
 
 /// Flatten SVG path data to polylines. Curves and arcs become short segments.
@@ -523,6 +543,45 @@ mod tests {
     }
 
     #[test]
+    fn preview_paths_match_shipping_svg_sources() {
+        let app = include_str!("../../../apps/desktop/ui/src/App.tsx");
+        for (name, component) in [
+            ("close", "CloseIcon"),
+            ("trash", "TrashIcon"),
+            ("edit", "EditIcon"),
+            ("save", "SaveIcon"),
+            ("check", "CheckIcon"),
+            ("history", "HistoryIcon"),
+            ("preview-stack", "PreviewStackIcon"),
+            ("preview-overflow-up", "ThumbnailOverflowChevron"),
+            ("preview-overflow-down", "ThumbnailOverflowChevron"),
+        ] {
+            let body = app.split_once(&format!("function {component}(")).unwrap().1;
+            let body = body.split_once("\n}").unwrap().0;
+            for path in paths(name).unwrap() {
+                assert!(body.contains(&format!("\"{path}\"")), "{component}: {path}");
+            }
+        }
+    }
+
+    #[test]
+    fn sixteen_unit_preview_icons_normalize_to_twenty_four_units() {
+        assert_eq!(polylines("preview-stack").unwrap()[0][0], [4.5, 8.25]);
+        assert_eq!(
+            polylines("preview-overflow-up").unwrap()[0],
+            [[5.25, 15.], [12., 8.25], [18.75, 15.]]
+        );
+        assert_eq!(
+            polylines("preview-overflow-down").unwrap()[0],
+            [[5.25, 9.], [12., 15.75], [18.75, 9.]]
+        );
+        assert_eq!(
+            polylines("check").unwrap()[0],
+            [[5., 12.], [9., 16.], [19., 6.]]
+        );
+    }
+
+    #[test]
     fn every_named_icon_flattens_to_drawable_paths() {
         for name in [
             "pause",
@@ -543,6 +602,10 @@ mod tests {
             "save",
             "folder",
             "edit",
+            "history",
+            "preview-stack",
+            "preview-overflow-up",
+            "preview-overflow-down",
             "chevron-up",
             "chevron-down",
             "align-left",

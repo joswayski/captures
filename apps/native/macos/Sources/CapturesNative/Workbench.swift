@@ -76,16 +76,17 @@ enum ShippingIcons {
         return result
     }
 
-    /// Stroke a named icon into `rect` (flipped view coordinates), round strokes
+    /// Stroke a named icon into `rect`, round strokes
     /// `width` units wide (1.8 unless the shipping CSS sets another).
-    static func stroke(_ name: String, in rect: NSRect, width: CGFloat = 1.8) {
+    static func stroke(_ name: String, in rect: NSRect, width: CGFloat = 1.8, flipped: Bool = true) {
         for line in polylines(name) where line.count > 1 {
             let path = NSBezierPath()
             path.lineWidth = width * rect.width / 24
             path.lineCapStyle = .round; path.lineJoinStyle = .round
             for (index, point) in line.enumerated() {
                 let mapped = NSPoint(x: rect.minX + point.x * rect.width / 24,
-                                     y: rect.minY + point.y * rect.height / 24)
+                                     y: flipped ? rect.minY + point.y * rect.height / 24
+                                                : rect.maxY - point.y * rect.height / 24)
                 if index == 0 { path.move(to: mapped) } else { path.line(to: mapped) }
             }
             path.stroke()
@@ -367,39 +368,13 @@ final class CaptureButton: NSButton {
             tokens.color(isEnabled ? "theme-signal" : "glass-text-subtle").setFill()
             NSBezierPath(roundedRect: NSRect(x: rect.midX - 5.5, y: rect.midY - 5.5, width: 11, height: 11),
                          xRadius: 2, yRadius: 2).fill()
-        case .editorSelect, .editorCrop, .editorText, .editorShapes, .editorArrow, .editorPen, .editorBackground:
-            // The shipping EditorIcon silhouettes, in their 24-unit coordinate space.
-            func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-                NSPoint(x: rect.minX + x * rect.width / 24, y: rect.minY + y * rect.height / 24)
-            }
-            let path = NSBezierPath()
-            path.lineWidth = 1.75 * rect.width / 24
-            path.lineCapStyle = .round; path.lineJoinStyle = .round
-            func line(_ points: [(CGFloat, CGFloat)]) {
-                path.move(to: point(points[0].0, points[0].1))
-                points.dropFirst().forEach { path.line(to: point($0.0, $0.1)) }
-            }
-            switch icon {
-            case .editorSelect: line([(5, 3), (18, 12), (11, 14), (8, 21), (5, 3)])
-            case .editorCrop:
-                line([(7, 3), (7, 17), (9, 19), (21, 19)]); line([(3, 7), (17, 7), (19, 9), (19, 21)])
-            case .editorText:
-                line([(5, 5), (19, 5)]); line([(12, 5), (12, 19)]); line([(8, 19), (16, 19)])
-            case .editorShapes:
-                path.appendRoundedRect(NSRect(origin: point(3.5, 8.5), size: NSSize(width: rect.width * 11 / 24, height: rect.height * 11 / 24)), xRadius: 1, yRadius: 1)
-                path.appendOval(in: NSRect(origin: point(10, 4.5), size: NSSize(width: rect.width * 10.5 / 24, height: rect.height * 10.5 / 24)))
-            case .editorArrow: line([(4, 20), (20, 4)]); line([(12, 4), (20, 4), (20, 12)])
-            case .editorPen:
-                path.move(to: point(4, 16))
-                path.curve(to: point(12, 13), controlPoint1: point(8, 9), controlPoint2: point(10, 8))
-                path.curve(to: point(20, 9), controlPoint1: point(14, 18), controlPoint2: point(16, 17))
-                line([(4, 20), (20, 20)])
-            case .editorBackground:
-                line([(14.8, 20.5), (6, 11.4), (14.9, 2.3), (21.7, 9.1), (11, 19.8), (8.2, 17)])
-                line([(8.6, 11.8), (12.2, 15.4)]); line([(4, 21), (12, 21)])
-            default: break
-            }
-            path.stroke()
+        case .editorSelect: ShippingIcons.stroke("select", in: rect, width: 1.75)
+        case .editorCrop: ShippingIcons.stroke("crop", in: rect, width: 1.75)
+        case .editorText: ShippingIcons.stroke("text", in: rect, width: 1.75)
+        case .editorShapes: ShippingIcons.stroke("shapes", in: rect, width: 1.75)
+        case .editorArrow: ShippingIcons.stroke("arrow", in: rect, width: 1.75)
+        case .editorPen: ShippingIcons.stroke("pen", in: rect, width: 1.75)
+        case .editorBackground: ShippingIcons.stroke("remove-bg", in: rect, width: 1.75)
         case .record where readyPing:
             let dot = NSRect(x: rect.midX - 5, y: rect.midY - 5, width: 10, height: 10)
             if let ping = readyPingPose() {

@@ -1452,11 +1452,12 @@ fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, rect: egui::Rect) {
         egui::pos2(rect.left() + padding.x, rect.center().y - icon / 2.),
         egui::vec2(icon, icon),
     );
-    paint_icon(
+    paint_icon_with(
         ui.painter(),
         Icon::Check,
         icon_rect,
         Color32::from_rgb(0x7f, 0xd7, 0x9c),
+        2.4 * icon / 24.,
     );
     ui.painter().galley(
         egui::pos2(
@@ -1779,21 +1780,19 @@ pub fn show_overflow_cues(
             egui::StrokeKind::Inside,
         );
         let chevron = egui::Rect::from_center_size(rect.center(), egui::vec2(16., 16.));
-        let point = |x: f32, y: f32| {
-            egui::pos2(
-                chevron.left() + x / 16. * chevron.width(),
-                chevron.top() + y / 16. * chevron.height(),
-            )
-        };
-        let points = if above {
-            [point(3.5, 10.), point(8., 5.5), point(12.5, 10.)]
+        let name = if above {
+            "preview-overflow-up"
         } else {
-            [point(3.5, 6.), point(8., 10.5), point(12.5, 6.)]
+            "preview-overflow-down"
         };
-        ui.painter().add(egui::Shape::line(
-            points.to_vec(),
-            Stroke::new(2., tokens.color("glass-text")),
-        ));
+        for line in captures_app::icons::polylines(name).expect("shared overflow icon") {
+            ui.painter().add(egui::Shape::line(
+                line.iter()
+                    .map(|[x, y]| chevron.min + egui::vec2(*x, *y) * (16. / 24.))
+                    .collect(),
+                Stroke::new(2., tokens.color("glass-text")),
+            ));
+        }
         if response.has_focus() {
             crate::primitives::focus_indicated(ui.ctx());
             ui.painter().rect_stroke(
@@ -1989,7 +1988,8 @@ fn action_icon_pop(
 }
 
 fn paint_icon(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color32) {
-    paint_icon_with(p, icon, rect, color, 1.8);
+    let view_box = if icon == Icon::Stack { 16. } else { 24. };
+    paint_icon_with(p, icon, rect, color, 1.8 * rect.width() / view_box);
 }
 
 /// Shipping 24-unit icons at `rect` with a `width` point stroke.
@@ -2000,92 +2000,21 @@ fn paint_icon_with(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color
             rect.top() + y / 24. * rect.height(),
         )
     };
-    let stroke = Stroke::new(width, color);
-    let line = |points: &[(f32, f32)]| {
-        p.add(egui::Shape::line(
-            points.iter().map(|&(x, y)| q(x, y)).collect(),
-            stroke,
-        ))
+    let name = match icon {
+        Icon::Close => "close",
+        Icon::Check => "check",
+        Icon::Edit => "edit",
+        Icon::Trash => "trash",
+        Icon::Copy => "copy",
+        Icon::Save => "save",
+        Icon::Folder => "folder",
+        Icon::Stack => "preview-stack",
     };
-    match icon {
-        Icon::Close => {
-            line(&[(6., 6.), (18., 18.)]);
-            line(&[(18., 6.), (6., 18.)]);
-        }
-        Icon::Check => {
-            line(&[(5., 12.), (9., 16.), (19., 6.)]);
-        }
-        Icon::Edit => {
-            line(&[
-                (4., 16.),
-                (3., 21.),
-                (8., 20.),
-                (19., 9.),
-                (15., 5.),
-                (4., 16.),
-                (8., 20.),
-            ]);
-            line(&[(13.5, 6.5), (17.5, 10.5)]);
-        }
-        Icon::Trash => {
-            line(&[(4., 7.), (20., 7.)]);
-            line(&[(9., 7.), (9., 4.), (15., 4.), (15., 7.)]);
-            line(&[(18., 7.), (17., 20.), (7., 20.), (6., 7.)]);
-            line(&[(10., 11.), (10., 16.)]);
-            line(&[(14., 11.), (14., 16.)]);
-        }
-        Icon::Copy => {
-            p.rect_stroke(
-                egui::Rect::from_min_max(q(8., 8.), q(19., 19.)),
-                2.,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            line(&[
-                (16., 8.),
-                (16., 6.),
-                (14., 4.),
-                (6., 4.),
-                (4., 6.),
-                (4., 14.),
-                (6., 16.),
-                (8., 16.),
-            ]);
-        }
-        Icon::Save => {
-            line(&[
-                (5., 4.),
-                (17., 4.),
-                (19., 6.),
-                (19., 20.),
-                (5., 20.),
-                (5., 4.),
-            ]);
-            line(&[(8., 4.), (8., 10.), (16., 10.), (16., 4.)]);
-            line(&[(8., 20.), (8., 14.), (16., 14.), (16., 20.)]);
-        }
-        Icon::Folder => {
-            line(&[
-                (3., 7.),
-                (3., 17.),
-                (5., 19.),
-                (19., 19.),
-                (21., 17.),
-                (21., 9.),
-                (19., 7.),
-                (12., 7.),
-                (10., 5.),
-                (5., 5.),
-                (3., 7.),
-            ]);
-            p.circle_stroke(q(16.5, 13.5), rect.width() * 2.5 / 24., stroke);
-            line(&[(18.3, 15.3), (20.5, 17.5)]);
-        }
-        Icon::Stack => {
-            line(&[(4., 9.), (12., 4.), (20., 9.), (12., 14.), (4., 9.)]);
-            line(&[(4., 13.), (12., 18.), (20., 13.)]);
-            line(&[(4., 17.), (12., 22.), (20., 17.)]);
-        }
+    for points in captures_app::icons::polylines(name).expect("shared preview icon") {
+        p.add(egui::Shape::line(
+            points.iter().map(|&[x, y]| q(x, y)).collect(),
+            Stroke::new(width, color),
+        ));
     }
 }
 
@@ -2296,6 +2225,40 @@ fn cover_uv(image: egui::Vec2, target: egui::Vec2) -> egui::Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_icons_map_into_their_rect_with_shipping_stroke_scale() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput::default());
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        let rect = egui::Rect::from_min_size(egui::pos2(13., 29.), egui::vec2(16., 16.));
+        paint_icon(&painter, Icon::Check, rect, Color32::WHITE);
+        paint_icon(&painter, Icon::Stack, rect, Color32::WHITE);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let paths: Vec<_> = output
+            .shapes
+            .into_iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Path(path) = shape.shape {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(paths.len(), 4);
+        for (actual, expected) in paths[0].points.iter().zip([
+            egui::pos2(13. + 10. / 3., 37.),
+            egui::pos2(19., 29. + 32. / 3.),
+            egui::pos2(13. + 38. / 3., 33.),
+        ]) {
+            assert!(actual.distance(expected) < 0.001);
+        }
+        assert!((paths[0].stroke.width - 1.2).abs() < 0.001);
+        assert_eq!(paths[1].points[0], egui::pos2(16., 34.5));
+        assert!((paths[1].stroke.width - 1.8).abs() < 0.001);
+    }
 
     #[test]
     fn self_drop_shake_settles_at_420ms_and_obeys_reduced_motion() {

@@ -709,6 +709,8 @@ Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual
 scale and preserves the viewport-center image point when dragged.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
+Preview controls, History actions and screenshot-editor tools use shared shipping
+icon paths on both native hosts, rather than platform-specific approximations.
 The inspector follows the shipping sections, controls, labels and spacing in the
 shipping 320 px sidebar column on both hosts.
 Native cloud sharing is not implemented. Its required flow starts from a mini-preview

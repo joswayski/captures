@@ -25,7 +25,22 @@ private final class MiniPreviewImageView: NSView {
     }
 }
 
-enum MiniPreviewButtonKind { case close, trash, edit, copy, save, folder, collapse, clear, check }
+enum MiniPreviewButtonKind: CaseIterable {
+    case close, trash, edit, copy, save, folder, collapse, clear, check
+
+    var iconName: String {
+        switch self {
+        case .close, .clear: return "close"
+        case .trash: return "trash"
+        case .edit: return "edit"
+        case .copy: return "copy"
+        case .save: return "save"
+        case .folder: return "folder"
+        case .collapse: return "preview-stack"
+        case .check: return "check"
+        }
+    }
+}
 
 /// Preview-only control so this floating chrome does not inherit Workbench button styling.
 final class MiniPreviewButton: NSButton {
@@ -393,7 +408,7 @@ final class MiniPreviewButton: NSButton {
         color.setStroke(); color.setFill()
         // Padding `3px 9px 3px 7px` inside a 1 px border; an 11 pt icon at 2.2 units.
         let icon = NSRect(x: 8, y: (bounds.height - 11) / 2, width: 11, height: 11)
-        drawIcon(in: icon, lineWidth: 2.2 * 11 / 24)
+        drawIcon(in: icon, lineWidth: 2.2)
         let text = NSAttributedString(string: editorLabel, attributes: [
             .font: pillFont, .foregroundColor: color])
         NSGraphicsContext.saveGraphicsState()
@@ -409,26 +424,9 @@ final class MiniPreviewButton: NSButton {
     }
 
     private func drawIcon(in r: NSRect, lineWidth: CGFloat = 1.8) {
-        let p = NSBezierPath(); p.lineWidth = lineWidth; p.lineCapStyle = .round; p.lineJoinStyle = .round
-        func line(_ a: NSPoint, _ b: NSPoint) { p.move(to: a); p.line(to: b) }
-        switch kind {
-        case .close, .clear: line(NSPoint(x:r.minX+3,y:r.minY+3), NSPoint(x:r.maxX-3,y:r.maxY-3)); line(NSPoint(x:r.maxX-3,y:r.minY+3), NSPoint(x:r.minX+3,y:r.maxY-3))
-        case .trash: p.appendRoundedRect(NSRect(x:r.minX+4,y:r.minY+2,width:8,height:10), xRadius: 1, yRadius: 1); line(NSPoint(x:r.minX+2,y:r.maxY-3),NSPoint(x:r.maxX-2,y:r.maxY-3)); line(NSPoint(x:r.minX+6,y:r.maxY-1),NSPoint(x:r.minX+10,y:r.maxY-1))
-        case .edit: line(NSPoint(x:r.minX+3,y:r.minY+3),NSPoint(x:r.maxX-3,y:r.maxY-3)); line(NSPoint(x:r.minX+2,y:r.minY+2),NSPoint(x:r.minX+6,y:r.minY+3))
-        case .copy: p.appendRoundedRect(NSRect(x:r.minX+2,y:r.minY+2,width:9,height:10),xRadius:1,yRadius:1); p.appendRoundedRect(NSRect(x:r.minX+5,y:r.minY+5,width:9,height:9),xRadius:1,yRadius:1)
-        case .save: p.appendRoundedRect(r.insetBy(dx:2,dy:2),xRadius:1,yRadius:1); line(NSPoint(x:r.midX,y:r.maxY-3),NSPoint(x:r.midX,y:r.minY+5)); line(NSPoint(x:r.midX-3,y:r.minY+8),NSPoint(x:r.midX,y:r.minY+5)); line(NSPoint(x:r.midX+3,y:r.minY+8),NSPoint(x:r.midX,y:r.minY+5))
-        case .folder: p.appendRoundedRect(NSRect(x:r.minX+1,y:r.minY+3,width:14,height:10),xRadius:2,yRadius:2); line(NSPoint(x:r.minX+2,y:r.maxY-3),NSPoint(x:r.minX+7,y:r.maxY-3))
-        case .check: MiniPreviewClipboardChip.appendCheck(to: p, in: r)
-        case .collapse:
-            p.move(to: NSPoint(x: r.minX + 2, y: r.maxY - 5))
-            for point in [NSPoint(x: r.midX, y: r.maxY - 1), NSPoint(x: r.maxX - 2, y: r.maxY - 5),
-                          NSPoint(x: r.midX, y: r.maxY - 9), NSPoint(x: r.minX + 2, y: r.maxY - 5)] { p.line(to: point) }
-            for y in [r.minY + 6, r.minY + 3] {
-                line(NSPoint(x: r.minX + 2, y: y), NSPoint(x: r.midX, y: y - 4))
-                line(NSPoint(x: r.midX, y: y - 4), NSPoint(x: r.maxX - 2, y: y))
-            }
-        }
-        p.stroke()
+        ShippingIcons.stroke(kind.iconName, in: r,
+                             width: kind == .collapse ? lineWidth * 1.5 : lineWidth,
+                             flipped: isFlipped)
     }
 }
 
@@ -458,15 +456,6 @@ final class MiniPreviewClipboardChip: NSView {
                       height: ceil(max(size.height, 12) + 6))
     }
 
-    /// The shipping check glyph (24-unit viewBox `m5 12 4 4L19 6`) in an
-    /// unflipped rect.
-    static func appendCheck(to path: NSBezierPath, in r: NSRect) {
-        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-            NSPoint(x: r.minX + r.width * x / 24, y: r.maxY - r.height * y / 24)
-        }
-        path.move(to: point(5, 12)); path.line(to: point(9, 16)); path.line(to: point(19, 6))
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                 xRadius: bounds.height / 2, yRadius: bounds.height / 2)
@@ -474,10 +463,8 @@ final class MiniPreviewClipboardChip: NSView {
         NSColor(srgbRed: 53 / 255, green: 163 / 255, blue: 93 / 255, alpha: 0.55).setStroke()
         pill.lineWidth = 1; pill.stroke()
         let icon = NSRect(x: tokens.number("s-4"), y: (bounds.height - 12) / 2, width: 12, height: 12)
-        let check = NSBezierPath(); check.lineWidth = 1.2
-        check.lineCapStyle = .round; check.lineJoinStyle = .round
-        Self.appendCheck(to: check, in: icon)
-        NSColor(srgbRed: 0x7f / 255, green: 0xd7 / 255, blue: 0x9c / 255, alpha: 1).setStroke(); check.stroke()
+        NSColor(srgbRed: 0x7f / 255, green: 0xd7 / 255, blue: 0x9c / 255, alpha: 1).setStroke()
+        ShippingIcons.stroke("check", in: icon, width: 2.4, flipped: isFlipped)
         let label = text
         label.draw(at: NSPoint(x: icon.maxX + tokens.number("s-2"),
                                y: (bounds.height - label.size().height) / 2))
@@ -1282,13 +1269,9 @@ final class MiniPreviewOverflowCue: NSButton {
         tokens.color("glass-border").setStroke(); path.lineWidth = 1; path.stroke()
         // Shipping 16-unit chevron (`M3.5 10 8 5.5 12.5 10` / `M3.5 6 8 10.5 12.5 6`).
         let box = NSRect(x: (bounds.width - 16) / 2, y: (bounds.height - 16) / 2, width: 16, height: 16)
-        let ys: (CGFloat, CGFloat) = above ? (10, 5.5) : (6, 10.5)
-        let chevron = NSBezierPath(); chevron.lineWidth = 2
-        chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
-        chevron.move(to: NSPoint(x: box.minX + 3.5, y: box.minY + ys.0))
-        chevron.line(to: NSPoint(x: box.minX + 8, y: box.minY + ys.1))
-        chevron.line(to: NSPoint(x: box.minX + 12.5, y: box.minY + ys.0))
-        tokens.color("glass-text").setStroke(); chevron.stroke()
+        tokens.color("glass-text").setStroke()
+        ShippingIcons.stroke(above ? "preview-overflow-up" : "preview-overflow-down",
+                             in: box, width: 3, flipped: isFlipped)
         if window?.firstResponder === self {
             tokens.color("theme-accent").setStroke()
             let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: r, yRadius: r)
