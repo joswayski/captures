@@ -4319,7 +4319,11 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testShapeToolOverlayPassesEmptyCanvasThroughAndRetainsOwnedTransforms() throws {
         _ = NSApplication.shared
+        // hitTest takes superview coordinates. Match the real viewport's
+        // flipped Surface parent instead of an unattached top-level view.
+        let container = Surface(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
         let parent = EditorViewportGestureView(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        container.addSubview(parent)
         let drawing = EditorDrawOverlay(frame: parent.bounds)
         drawing.canvasSize = parent.bounds.size; drawing.drawingEnabled = true
         let overlay = EditorSelectionOverlay(frame: parent.bounds)
