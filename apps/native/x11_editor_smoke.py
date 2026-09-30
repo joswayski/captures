@@ -2172,6 +2172,40 @@ def main():
             toolbar_click("redo")
             save_layers(lambda values: len(values[-1]["controls"]) == 2, "curve point redo")
 
+            # Lock blocks canvas dots, not the shipping Properties commands.
+            layer_click(0, "lock")
+            locked = save_layers(lambda values: values[-1]["locked"], "locked line")[-1]
+            assert len(locked["controls"]) == 2
+            document_drag((180, 150), (140, 110))
+            document_double_click((280, 150))
+            assert save_layers(lambda values: values[-1] == locked, "locked canvas gestures ignored")[-1] == locked
+            layer_click(0)  # The blocked canvas press cleared UI selection.
+            properties_end()
+            shot(editor, "locked-curve-straighten")
+            end_click(80, 82)
+            straight = save_layers(lambda values: values[-1]["controls"] == [], "locked Properties Straighten")[-1]
+            assert straight == dict(locked, controls=[])
+            toolbar_click("undo")
+            assert save_layers(lambda values: values[-1] == locked, "locked Straighten is one undo step")[-1] == locked
+            properties_end()
+            end_click(80, 82)
+            save_layers(lambda values: values[-1]["controls"] == [], "straighten before bending")
+            properties_end()
+            shot(editor, "locked-curve-slider")
+            # One accepted keyboard edit; subsequent presses need renewed focus
+            # while the existing curve inspector disables itself for worker jobs.
+            end_slider(96, "Home", x=INSPECTOR_WIDTH // 2)
+            bent = save_layers(lambda values: len(values[-1]["controls"]) == 1 and
+                               values[-1]["controls"][0] == {"x": 380, "y": -250}, "locked Curve -100 percent")[-1]
+            assert bent == dict(locked, controls=[{"x": 380, "y": -250}])
+            # Restore the earlier curve before the remainder of the canvas suite.
+            for _ in range(2):
+                toolbar_click("undo")
+            assert save_layers(lambda values: values[-1] == locked, "undo locked Properties edits")[-1] == locked
+            layer_click(0, "lock")
+            save_layers(lambda values: not values[-1]["locked"], "unlock line for canvas suite")
+            properties_start()
+
             # Expand canvas: a second line hangs past the right edge.
             draw_tool("line")
             document_drag((520, 300), (720, 300))
@@ -2248,6 +2282,8 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["curve-starter-drag", "curve-point-double-click-remove", "curve-undo-redo",
+                           "locked-canvas-curve-guard", "locked-properties-straighten", "locked-properties-bend",
+                           "locked-properties-undo",
                            "expand-canvas-action", "expand-canvas-single-undo", "xdnd-drop-guide-top",
                            "xdnd-drop-placed-above", "drop-single-undo", "curve-draft-reopen",
                            "original-unchanged"],

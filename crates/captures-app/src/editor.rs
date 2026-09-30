@@ -1955,7 +1955,16 @@ impl Document {
                 }
             }
             LayerEdit::Curve { edit } => {
-                if !locked && let Element::Shape(shape) = &mut self.elements[index] {
+                // Shipping permits Curve and Straighten in Properties on locked
+                // layers, but still blocks canvas dot and path gestures.
+                let property = matches!(
+                    edit,
+                    crate::editor_canvas::CurveEdit::Bend { .. }
+                        | crate::editor_canvas::CurveEdit::Straighten
+                );
+                if (!locked || property)
+                    && let Element::Shape(shape) = &mut self.elements[index]
+                {
                     crate::editor_canvas::apply_curve_edit(shape, edit)?;
                 }
             }

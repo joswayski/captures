@@ -659,7 +659,9 @@ Resizing uses an outline-only preview and commits on release.
 Selected lines and arrows show curve dots: drag a dot to bend the stroke, double-click
 the path to add a point and double-click a point to remove it. Layers offers a Curve
 slider for straight or single-bend strokes and Straighten for multi-point ones. Curves
-survive saves and drafts. A selected layer that hangs past the canvas shows an
+survive saves and drafts. Like shipping, Curve and Straighten remain available in
+Properties on locked or hidden layers; locked layers still reject canvas-dot edits.
+A selected layer that hangs past the canvas shows an
 **Expand canvas** action; hovering previews the grown canvas and one click grows it as
 a single undo step. Dropping PNG, JPEG, WebP or TIFF files on the canvas adds image
 layers where the placement guide shows (Place above/left/right/below, or stacked);

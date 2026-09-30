@@ -34,6 +34,15 @@ X11 checks compare fixed title pixels against moving fields for image, shape,
 Text and Crop at the minimum size, in both appearances. AppKit XCTest checks the
 same separation, resizing and reachable fields. Physical-platform gates stay open.
 
+Curve and Straighten Properties now remain available for locked or hidden lines
+and arrows on both hosts, matching shipping. Shared Rust permits these two
+property edits without permitting locked canvas-dot dragging, insertion or
+removal. Core tests cover exact geometry, undo and draft retention; host tests
+check usable fields without canvas dots, and the X11 canvas suite exercises the
+locked-line commands. Physical macOS/Windows/Wayland acceptance remains open.
+The Curve inspector still disables during worker edits; wgpu can lose keyboard
+focus between consecutive steps. This slice does not fix that input gap.
+
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |

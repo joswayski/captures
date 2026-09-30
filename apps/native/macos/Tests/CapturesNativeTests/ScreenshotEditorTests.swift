@@ -8303,6 +8303,49 @@ extension ScreenshotEditorTests {
         XCTAssertEqual(edit["kind"] as? String, "straighten")
     }
 
+    func testLockedCurvesKeepPropertiesButNotCanvasDots() throws {
+        _ = NSApplication.shared
+        for visible in [false, true] {
+            var line = shapeLayer(id: "line", x: 180, y: 150)
+            line["locked"] = true; line["visible"] = visible
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [line],
+                extra: ["curve_handles": ["line": curveHandlesValue()]]))
+            let controller = fittedController(worker)
+            defer { controller.window.orderOut(nil) }
+            try showLayers(in: controller.root)
+            let curve = try XCTUnwrap(controller.curveControls)
+            XCTAssertFalse(curve.isHiddenOrHasHiddenAncestor)
+            XCTAssertTrue(curve.bendSlider.isEnabled)
+            XCTAssertNil(controller.selectionOverlay.curveHandles)
+            XCTAssertFalse(controller.selectionOverlay.rotationEnabled)
+            XCTAssertFalse(controller.selectionOverlay.resizeEnabled)
+            XCTAssertTrue(worker.requests.isEmpty, "showing locked fields is not an edit")
+            worker.response = { _ in
+                self.snapshot(id: "shot", layers: [line], extra: ["curve_handles": ["line":
+                    self.curveHandlesValue(slider: false,
+                        controls: [["x": 280, "y": 210], ["x": 480, "y": 110]])]])
+            }
+            curve.bendSlider.doubleValue = -35
+            _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+            waitUntil { worker.requests.count == 1 && !controller.state.busy }
+            let edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+            XCTAssertEqual(edit["kind"] as? String, "bend")
+            XCTAssertEqual(edit["bend"] as? Double, -0.35)
+            XCTAssertEqual(worker.requests.last?["id"] as? String, "line")
+            XCTAssertFalse(curve.straightenButton.isHiddenOrHasHiddenAncestor)
+            XCTAssertTrue(curve.straightenButton.isEnabled)
+            XCTAssertNil(controller.selectionOverlay.curveHandles)
+            curve.straightenButton.scrollToVisible(curve.straightenButton.bounds)
+            try render(controller.root, name: "screenshot-editor-locked-curve-\(visible)")
+            curve.straightenButton.performClick(nil)
+            waitUntil { worker.requests.count == 2 && !controller.state.busy }
+            XCTAssertEqual(((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])?["kind"] as? String,
+                           "straighten")
+            XCTAssertNil(controller.selectionOverlay.curveHandles)
+            XCTAssertTrue(controller.state.snapshot?.layers.first?.locked == true)
+        }
+    }
+
     func testFileDropShowsTheSharedGuideAndImportsAtThePointerSample() throws {
         _ = NSApplication.shared
         let background: [String: Any] = [

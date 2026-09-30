@@ -1302,7 +1302,7 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(edit, LayerEdit::Curve { .. }));
-        // Locked layers keep their geometry.
+        // Locked layers still reject canvas curve-dot drags.
         let mut locked = reopened.clone();
         locked
             .edit_layer("line", LayerEdit::Lock { locked: true })
@@ -1312,10 +1312,71 @@ mod tests {
             .edit_layer(
                 "line",
                 LayerEdit::Curve {
-                    edit: CurveEdit::Straighten,
+                    edit: CurveEdit::Move {
+                        handle: CurveHandle::Control { index: 0 },
+                        point: Point { x: 70., y: 80. },
+                    },
                 },
             )
             .unwrap();
         assert_eq!(locked, before);
+    }
+
+    #[test]
+    fn locked_curve_properties_edit_without_enabling_canvas_edits() {
+        for shape in ["line", "arrow"] {
+            for visible in [false, true] {
+                let mut stroke = line(
+                    shape,
+                    vec![Point { x: 30., y: 40. }, Point { x: 80., y: 10. }],
+                );
+                stroke.base.locked = true;
+                stroke.base.visible = visible;
+                let mut document = Document::new_capture("fixture:base", 200., 120., None);
+                document.elements.push(Element::Shape(stroke.clone()));
+                let mut history = crate::editor::DocumentHistory::new(document);
+                let mut bent = history.current().clone();
+                bent.edit_layer(
+                    "line",
+                    LayerEdit::Curve {
+                        edit: CurveEdit::Bend { bend: 0.25 },
+                    },
+                )
+                .unwrap();
+                let mut expected = stroke.clone();
+                expected.controls = vec![Point { x: 60., y: 45. }];
+                assert_eq!(bent.elements[1], Element::Shape(expected.clone()));
+                history.commit(bent.clone());
+                history.undo();
+                assert_eq!(history.current().elements[1], Element::Shape(stroke));
+                history.redo();
+                assert_eq!(history.current(), &bent);
+                for edit in [
+                    CurveEdit::Insert {
+                        point: Point { x: 70., y: 75. },
+                    },
+                    CurveEdit::Remove { index: 0 },
+                    CurveEdit::Move {
+                        handle: CurveHandle::Control { index: 0 },
+                        point: Point { x: 70., y: 75. },
+                    },
+                ] {
+                    bent.edit_layer("line", LayerEdit::Curve { edit }).unwrap();
+                    assert_eq!(bent, *history.current(), "locked canvas edits are ignored");
+                }
+                bent.edit_layer(
+                    "line",
+                    LayerEdit::Curve {
+                        edit: CurveEdit::Straighten,
+                    },
+                )
+                .unwrap();
+                expected.controls.clear();
+                assert_eq!(bent.elements[1], Element::Shape(expected));
+                let reopened: Document =
+                    serde_json::from_str(&serde_json::to_string(&bent).unwrap()).unwrap();
+                assert_eq!(reopened, bent, "lock and visibility survive the draft");
+            }
+        }
     }
 }

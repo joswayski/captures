@@ -5671,12 +5671,10 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
                     "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
                 ),
             );
-            if !shape.base.locked {
-                ui.add_enabled_ui(!view.pending, |ui| {
-                    ui.spacing_mut().item_spacing.y = tokens.number("s-5");
-                    canvas::show_curve_controls(ui, tokens, view, tx, shape);
-                });
-            }
+            ui.add_enabled_ui(!view.pending, |ui| {
+                ui.spacing_mut().item_spacing.y = tokens.number("s-5");
+                canvas::show_curve_controls(ui, tokens, view, tx, shape);
+            });
         }
         Element::Path(path) => {
             show_annotation(ui, tokens, view, tx, &path.base.id, &path.style, false);
@@ -12767,6 +12765,134 @@ mod tests {
             egui::Color32::TRANSPARENT,
             "clipped to a circle"
         );
+    }
+
+    #[test]
+    fn locked_curve_inspector_submits_bend_and_straighten_without_canvas_handles() {
+        use captures_app::editor_canvas::CurveEdit;
+        for kind in [OpenShapeKind::Line, OpenShapeKind::Arrow] {
+            for multipoint in [false, true] {
+                let ctx = egui::Context::default();
+                ctx.enable_accesskit();
+                let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+                let (mut view, id) = canvas_view(
+                    &ctx,
+                    Point { x: 20., y: 50. },
+                    Point { x: 180., y: 50. },
+                    kind,
+                );
+                let document = Arc::make_mut(&mut view.presented.as_mut().unwrap().document);
+                let Element::Shape(shape) = document.elements.last_mut().unwrap() else {
+                    panic!()
+                };
+                shape.base.locked = true;
+                if multipoint {
+                    shape.controls = vec![Point { x: 60., y: 75. }, Point { x: 130., y: 25. }];
+                }
+                let label = if multipoint {
+                    captures_app::editor_canvas::straighten_label(shape)
+                } else {
+                    "Curve"
+                };
+                let document = document.clone();
+                assert!(
+                    canvas::selected_curve(&view).is_none(),
+                    "lock still hides canvas dots"
+                );
+                let (tx, rx) = mpsc::channel();
+                assert!(!canvas::double_click(
+                    &mut view,
+                    &tx,
+                    &document,
+                    Point { x: 100., y: 50. },
+                    6.
+                ));
+                let frame = |view: &mut View, events| {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(320., 1600.),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| show_layer_properties(ui, &tokens, view, &tx),
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                frame(&mut view, vec![]);
+                let output = frame(&mut view, vec![]);
+                let node = &output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some(label))
+                    .expect("locked curve property stays present")
+                    .1;
+                assert!(!node.is_disabled());
+                let bounds = node.bounds().unwrap();
+                let pos = egui::pos2(
+                    ((bounds.x0 + bounds.x1) / 2.) as f32,
+                    ((bounds.y0 + bounds.y1) / 2.) as f32,
+                );
+                assert!(
+                    rx.try_recv().is_err(),
+                    "showing locked Properties is not an edit"
+                );
+                frame(&mut view, vec![egui::Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    frame(
+                        &mut view,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                }
+                if !multipoint {
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "clicking the zero midpoint is not an edit"
+                    );
+                    frame(
+                        &mut view,
+                        vec![egui::Event::Key {
+                            key: egui::Key::End,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                }
+                let Ok(Job::Apply(Request::Layer {
+                    id: target,
+                    edit: LayerEdit::Curve { edit },
+                })) = rx.try_recv()
+                else {
+                    panic!("locked inspector applies one curve edit")
+                };
+                assert_eq!(target, id);
+                assert_eq!(
+                    edit,
+                    if multipoint {
+                        CurveEdit::Straighten
+                    } else {
+                        CurveEdit::Bend { bend: 1. }
+                    }
+                );
+                assert!(rx.try_recv().is_err());
+                assert_eq!(view.pending_layer_selection.as_deref(), Some(id.as_str()));
+                assert!(canvas::selected_curve(&view).is_none());
+            }
+        }
     }
 
     #[test]

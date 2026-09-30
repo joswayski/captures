@@ -5814,7 +5814,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func curveCanvasLayer(_ id: String, edit: [String: Any]) {
         guard !state.busy, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
-              !layer.locked else { return }
+              !layer.locked || edit["kind"] as? String == "bend" || edit["kind"] as? String == "straighten" else { return }
         command(["operation": "layer", "id": id, "edit": ["action": "curve", "edit": edit]],
                 message: "Editing curve…", preferredSelection: id)
     }
@@ -6556,7 +6556,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let curve = selectedLayer.flatMap { state.snapshot?.curveHandles[$0.id] }
         selectionOverlay.curveHandles = selectionOverlay.resizeEnabled ? curve : nil
         selectionOverlay.expandPreview = selectedLayer.flatMap { state.snapshot?.canvasExpand[$0.id] }
-        curveControls?.setHandles(selectedLayer?.locked == false ? curve : nil)
+        curveControls?.setHandles(curve)
         publishLayerGeometry()
         if layerMenuID != nil && layerMenuID != selectedLayerID { closeLayerMenu() }
         if renamingLayerID != nil && renamingLayerID != selectedLayerID { finishLayerRename(commit: true) }
