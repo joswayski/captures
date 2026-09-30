@@ -69,10 +69,10 @@ final class StatusItemTests: XCTestCase {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
             pixelsWide: 22, pixelsHigh: 22, bitsPerSample: 8, samplesPerPixel: 4,
             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-            bytesPerRow: 0, bitsPerPixel: 0))
+            bitmapFormat: .alphaNonpremultiplied, bytesPerRow: 0, bitsPerPixel: 0))
         for y in 0..<22 {
             for x in 0..<22 {
-                let color: NSColor = x < 6 ? .black : x < 11 ? NSColor(deviceWhite: 1, alpha: 0.5)
+                let color: NSColor = x < 6 ? .black : x < 11 ? NSColor(deviceWhite: 1, alpha: y < 11 ? 0.5 : 0.25)
                     : x < 16 ? .red : NSColor(deviceWhite: 0.68, alpha: 1)
                 bitmap.setColor(color, atX: x, y: y)
             }
@@ -88,6 +88,9 @@ final class StatusItemTests: XCTestCase {
         let foreground = try XCTUnwrap(pixels.colorAt(x: 8, y: 10)?.usingColorSpace(.deviceRGB))
         XCTAssertEqual(foreground.alphaComponent, 0.5, accuracy: 0.01)
         XCTAssertEqual(foreground.redComponent, 1, accuracy: 0.01)
+        let faint = try XCTUnwrap(pixels.colorAt(x: 8, y: 16)?.usingColorSpace(.deviceRGB))
+        XCTAssertEqual(faint.alphaComponent, 0.25, accuracy: 0.01)
+        XCTAssertEqual(faint.redComponent, 1, accuracy: 0.01)
         XCTAssertTrue(template.isTemplate)
     }
 

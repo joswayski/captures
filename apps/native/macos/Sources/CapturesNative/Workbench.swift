@@ -805,34 +805,41 @@ enum BusyCaptureOutcome: Equatable {
 }
 
 /// Use the shipping product asset and macos_tray_icon's foreground selection.
-/// AppKit resamples the PNG; no system-symbol substitution or separate artwork.
+/// Core Graphics resamples the PNG; no system-symbol substitution or separate artwork.
 func statusItemTemplate(source: NSImage) -> NSImage? {
     let size = NSSize(width: 22, height: 22)
     guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 22, pixelsHigh: 22,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-        let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = context
-    context.imageInterpolation = .high
-    source.draw(in: NSRect(origin: .zero, size: size), from: .zero,
-                operation: .copy, fraction: 1)
-    NSGraphicsContext.restoreGraphicsState()
+        colorSpaceName: .deviceRGB, bitmapFormat: .alphaNonpremultiplied,
+        bytesPerRow: 22 * 4, bitsPerPixel: 32),
+        let pixels = bitmap.bitmapData,
+        let image = source.cgImage(forProposedRect: nil, context: nil, hints: nil),
+        let context = CGContext(data: pixels, width: 22, height: 22, bitsPerComponent: 8,
+            bytesPerRow: bitmap.bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+    context.interpolationQuality = .high
+    context.draw(image, in: CGRect(origin: .zero, size: size))
+    // CGContext writes premultiplied RGBA. Classify straight RGB, not RGB *
+    // alpha, or a translucent white edge is mistaken for dark background.
+    // Then write straight-alpha white/clear pixels for the NSBitmapImageRep.
     for y in 0..<22 {
         for x in 0..<22 {
-            guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-            let minimum = min(color.redComponent, color.greenComponent, color.blueComponent)
-            let maximum = max(color.redComponent, color.greenComponent, color.blueComponent)
-            let foreground = minimum >= 180.0 / 255 && maximum - minimum <= 55.0 / 255
-            bitmap.setColor(foreground ? NSColor(deviceWhite: 1, alpha: color.alphaComponent) : .clear,
-                            atX: x, y: y)
+            let offset = y * bitmap.bytesPerRow + x * 4
+            let alpha = Int(pixels[offset + 3])
+            let rgb = (0..<3).map { alpha == 0 ? 0 : Int(pixels[offset + $0]) * 255 / alpha }
+            let minimum = min(rgb[0], rgb[1], rgb[2])
+            let maximum = max(rgb[0], rgb[1], rgb[2])
+            let foreground = alpha > 0 && minimum >= 180 && maximum - minimum <= 55
+            for channel in 0..<3 { pixels[offset + channel] = foreground ? 255 : 0 }
+            if !foreground { pixels[offset + 3] = 0 }
         }
     }
-    let image = NSImage(size: size)
-    image.addRepresentation(bitmap)
-    image.isTemplate = true
-    image.accessibilityDescription = "Captures"
-    return image
+    let template = NSImage(size: size)
+    template.addRepresentation(bitmap)
+    template.isTemplate = true
+    template.accessibilityDescription = "Captures"
+    return template
 }
 
 func configureStatusItemButton(_ button: NSStatusBarButton) {
