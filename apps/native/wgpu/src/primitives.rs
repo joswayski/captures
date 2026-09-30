@@ -1048,8 +1048,14 @@ impl<'a> NumberInput<'a> {
         {
             set(value, self.clamp(parsed));
         }
-        if text.has_focus() {
+        // The final character can arrive with Enter. Keep that updated buffer
+        // through the following frame's lost_focus report, not the prior text.
+        if text.has_focus() || focused_before {
             ui.data_mut(|data| data.insert_temp(buffer_id, buffer.clone()));
+        } else {
+            ui.data_mut(|data| data.remove::<String>(buffer_id));
+        }
+        if text.has_focus() {
             // Keep vertical arrows for stepping instead of moving focus.
             ui.memory_mut(|memory| {
                 memory.set_focus_lock_filter(
@@ -1062,10 +1068,6 @@ impl<'a> NumberInput<'a> {
                 );
             });
             focus_ring(ui, t, rect, radius);
-        } else if !focused_before {
-            // Kept for one frame after focus leaves: egui reports
-            // `lost_focus` on the following frame.
-            ui.data_mut(|data| data.remove::<String>(buffer_id));
         }
 
         if steppers {
@@ -1822,6 +1824,53 @@ mod tests {
             value, 37.5,
             "committing on blur parses the typed text, not the step-rounded display"
         );
+    }
+
+    #[test]
+    fn number_input_keeps_final_text_received_with_enter() {
+        for deferred in [false, true] {
+            let (ctx, t) = setup();
+            let mut value = 0.;
+            let run = |events: Vec<egui::Event>, value: &mut f64| {
+                let mut field = Rect::NOTHING;
+                frame(&ctx, events, |ui| {
+                    let input = NumberInput::new("last-digit", "Shadow X offset", 120.);
+                    let input = if deferred {
+                        input.commit_on_enter()
+                    } else {
+                        input
+                    };
+                    field = input.show(ui, &t, value).rect;
+                });
+                field
+            };
+            let field = run(vec![], &mut value);
+            let text = egui::pos2(field.left() + 20., field.center().y);
+            run(
+                vec![egui::Event::PointerMoved(text), press(text, true)],
+                &mut value,
+            );
+            run(vec![press(text, false)], &mut value);
+            run(
+                vec![
+                    key(egui::Key::End),
+                    key(egui::Key::Backspace),
+                    egui::Event::Text("1".into()),
+                ],
+                &mut value,
+            );
+            run(
+                vec![egui::Event::Text("7".into()), key(egui::Key::Enter)],
+                &mut value,
+            );
+            for _ in 0..3 {
+                run(vec![], &mut value);
+            }
+            assert_eq!(
+                value, 17.,
+                "Enter must keep the last digit (deferred={deferred})"
+            );
+        }
     }
 
     #[test]
