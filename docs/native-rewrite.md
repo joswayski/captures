@@ -27,6 +27,13 @@ undo, pixels and draft reopening; AppKit has XCTest coverage. Physical macOS,
 Windows and Wayland acceptance remain open; these additions do not choose the
 renderer or replace the shipping Tauri app.
 
+Both hosts pin the Properties title outside the fields' scroll viewport, following
+shipping's sticky heading without covering controls. AppKit retains its existing
+title dimensions and field layout; wgpu keeps the shipping 48px title. Real-input
+X11 checks compare fixed title pixels against moving fields for image, shape,
+Text and Crop at the minimum size, in both appearances. AppKit XCTest checks the
+same separation, resizing and reachable fields. Physical-platform gates stay open.
+
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |

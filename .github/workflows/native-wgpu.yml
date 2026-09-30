@@ -263,6 +263,7 @@ jobs:
             /usr/bin/python3 apps/native/x11_editor_smoke.py --external-image-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-external-image-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --canvas-interactions-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-canvas-interactions-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --shape-transforms-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-shape-transforms-$appearance"
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --properties-heading-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-properties-heading-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --history-shortcuts-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-history-shortcuts-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --combine-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-combine-$appearance"
           done

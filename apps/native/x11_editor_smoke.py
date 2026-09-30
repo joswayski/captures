@@ -124,6 +124,8 @@ def main():
                         help="Exercise image file drop guides, Expand canvas and line curve editing")
     parser.add_argument("--shape-transforms-only", action="store_true",
                         help="Transform freshly drawn shapes without switching tools; undo and reopen")
+    parser.add_argument("--properties-heading-only", action="store_true",
+                        help="Keep Properties titles visible while fields scroll at minimum size")
     parser.add_argument("--external-image-only", action="store_true",
                         help="Open external images, preserve per-file errors and safely reopen drafts/sources")
     args = parser.parse_args()
@@ -1952,6 +1954,48 @@ def main():
                            "draft-reopen-exact-pixels", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native polygons: previews, cancellation, silhouettes, undo/redo, minimum, draft")
+            return
+
+        if args.properties_heading_only:
+            resize_editor(760, 540)
+            before = draft_bytes()
+            for name in ("image", "rectangle", "text", "crop"):
+                if name == "image":
+                    toolbar_click("layers")
+                    layer_click(0)
+                elif name == "crop":
+                    toolbar_click("geometry")
+                    start, end = document_point((50, 70)), document_point((500, 280))
+                    run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                        "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                        *map(str, end), "sleep", ".2", "mouseup", "1", "sleep", ".3")
+                else:
+                    draw_tool(name)
+                top = properties_top()
+                # Wheel inside the small fields viewport, not on its pinned title.
+                run("xdotool", "mousemove", "--window", editor, str(inspector_x(180)),
+                    str(top + 65), "click", "--repeat", "20", "--delay", "40", "4", "sleep", ".6")
+                shot(editor, f"properties-{name}-top")
+                run("xdotool", "click", "--repeat", "20", "--delay", "40", "5", "sleep", ".6")
+                shot(editor, f"properties-{name}-scrolled")
+
+                def band(state, offset, height):
+                    return run("convert", str(output / f"properties-{name}-{state}.png"),
+                               "-crop", f"280x{height}+{inspector_x(8)}+{top + offset}", "rgba:-")
+
+                assert band("top", 1, 46) == band("scrolled", 1, 46), f"{name}: title scrolled away"
+                assert band("top", 58, 20) != band("scrolled", 58, 20), f"{name}: fields did not scroll"
+                assert draft_bytes() == before, f"{name}: scrolling changed the draft"
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "Properties heading suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["image-title", "shape-title", "text-title", "crop-title",
+                           "real-fields-scroll", "minimum-layout", "unchanged-draft", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native Properties: pinned image/shape/text/crop titles, real scroll, unchanged draft")
             return
 
         if args.shape_transforms_only:

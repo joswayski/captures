@@ -639,6 +639,8 @@ An approximate vector guide appears until the first pixel frame is ready.
 Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
 as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
 persistence.
+Both native hosts keep the Properties title visible while its fields scroll,
+including at the minimum window size; the title does not cover the controls.
 In both native hosts, **Layers** supports clicking the edited preview to select an
 unlocked visible layer, or empty space to clear selection. Drag shows a translated
 selection outline; release moves the layer in one undoable edit. Escape, focus loss,

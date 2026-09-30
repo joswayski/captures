@@ -3863,6 +3863,57 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
     }
 
+    func testPropertiesHeadingsStayOutsideTheScrolledFieldsAtMinimumSize() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
+                layers: [shapeLayer(id: "shape", x: 5, y: 7)], annotations: ["shape": annotationStyle()]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            for tool in ["selected", "text", "crop", "erase"] {
+                let control: NSView
+                switch tool {
+                case "selected":
+                    try showLayers(in: controller.root)
+                    control = try field("Shadow Y offset", in: controller.root)
+                case "text":
+                    controller.selectDrawTool(.text)
+                    control = try field("New text size", in: controller.root)
+                case "crop":
+                    try showGeometry(in: controller.root)
+                    control = try popup("Crop aspect", in: controller.root)
+                default:
+                    controller.selectDrawTool(.erase)
+                    control = try rangeSlider("Brush softness", in: controller.root).slider
+                }
+                let scroll = try XCTUnwrap(control.enclosingScrollView)
+                let heading = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+                    .first { $0.accessibilityLabel() == "Properties heading" && !$0.isHiddenOrHasHiddenAncestor })
+                XCTAssertNil(heading.enclosingScrollView, "\(tool): title cannot scroll with the fields")
+                XCTAssertFalse(heading.stringValue.isEmpty)
+                for size in [NSSize(width: 1000, height: 600), NSSize(width: 760, height: 540)] {
+                    controller.window.setContentSize(size)
+                    let initial = heading.convert(heading.bounds, to: controller.root)
+                    let document = try XCTUnwrap(scroll.documentView)
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0,
+                        document.bounds.height - scroll.contentView.bounds.height)))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    control.scrollToVisible(control.bounds)
+                    controller.root.layoutSubtreeIfNeeded()
+                    XCTAssertEqual(heading.convert(heading.bounds, to: controller.root), initial)
+                    XCTAssertTrue(heading.visibleRect.contains(heading.bounds))
+                    let clip = scroll.contentView.convert(scroll.contentView.bounds, to: controller.root)
+                    XCTAssertGreaterThanOrEqual(clip.minY, initial.maxY, "title cannot cover a reachable control")
+                    XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                                  "\(tool): the requested field remains reachable")
+                }
+                try render(controller.root, name: "screenshot-editor-pinned-\(tool)-\(appearance)")
+            }
+            XCTAssertTrue(worker.requests.isEmpty, "scrolling and tool changes never edit the document")
+        }
+    }
+
     func testAnnotationRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

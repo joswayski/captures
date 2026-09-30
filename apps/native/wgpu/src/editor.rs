@@ -2142,6 +2142,10 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 ui.cursor().top() - 0.5,
                 egui::Stroke::new(1., tokens.color("border-subtle")),
             );
+            // Shipping's sticky Properties title stays outside the fields'
+            // scroll viewport, so it cannot cover a control scrolled into view.
+            ui.spacing_mut().item_spacing.y = 0.;
+            ui.add_enabled_ui(enabled, |ui| chrome::properties_heading(ui, tokens, view));
             crate::primitives::scroll_area(
                 ui,
                 tokens,
@@ -2152,7 +2156,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui.add_enabled_ui(enabled, |ui| {
                         // Sections space their own items (`inspector::section`).
                         ui.spacing_mut().item_spacing.y = 0.;
-                        chrome::properties_heading(ui, tokens, view);
                         match view.properties_section() {
                             Section::Layers => show_layer_properties(ui, tokens, view, tx),
                             Section::Draw => show_draw_properties(ui, tokens, view),
@@ -6671,6 +6674,119 @@ mod tests {
             Ok(Job::Apply(Request::PasteLayer { after_id: None, .. }))
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn properties_titles_stay_fixed_while_the_minimum_inspector_scrolls() {
+        for (section, shape, selected, title, field) in [
+            (
+                Section::Layers,
+                DrawShape::Rectangle,
+                true,
+                "Original screenshot",
+                "Shift rotation snap",
+            ),
+            (
+                Section::Draw,
+                DrawShape::Rectangle,
+                false,
+                "Rectangle",
+                "Stroke",
+            ),
+            (
+                Section::Draw,
+                DrawShape::Text,
+                false,
+                "Text",
+                "New text style",
+            ),
+            (
+                Section::Geometry,
+                DrawShape::Rectangle,
+                false,
+                "Crop",
+                "Aspect ratio",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+            let (tx, _rx) = mpsc::channel();
+            let mut view = View::default();
+            view.receive(&ctx, Ok(presented(true)));
+            view.section = section;
+            view.draw_shape = shape;
+            view.select_layer_exact(selected.then(|| "capture-background".into()));
+            if section == Section::Geometry {
+                // A staged crop exposes the size/actions below Aspect ratio;
+                // the no-selection hint alone fits without scrolling.
+                view.crop_tool = true;
+                view.crop_previous = Some(view.crop);
+                view.crop = [1., 0., 3., 2.];
+            }
+            let document = view.presented.as_ref().unwrap().document.clone();
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 540.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, view, &tx),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let position = |output: &egui::FullOutput, label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .rev()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.job.text == label
+                                // The Text style preview also says "Text";
+                                // layer rows repeat image titles in smaller type.
+                                && (label != title || text.galley.job.sections.first().is_some_and(|section| {
+                                    section.format.font_id.size == tokens.number("text-md")
+                                        && section.format.font_id.family == egui::FontFamily::Name("semibold".into())
+                                })) => Some(text.pos),
+                        _ => None,
+                    })
+            };
+            frame(&mut view, vec![]);
+            let before = frame(&mut view, vec![]);
+            let heading = position(&before, title).expect(title);
+            let initial_field = position(&before, field).expect(field);
+            let pointer = egui::pos2(600., heading.y + 60.);
+            frame(&mut view, vec![egui::Event::PointerMoved(pointer)]);
+            frame(
+                &mut view,
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0., -600.),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            for _ in 0..30 {
+                frame(&mut view, vec![]);
+            }
+            let after = frame(&mut view, vec![]);
+            assert_eq!(
+                position(&after, title),
+                Some(heading),
+                "{title}: title stays outside scrolling content"
+            );
+            assert_ne!(
+                position(&after, field),
+                Some(initial_field),
+                "{title}: fields actually scroll"
+            );
+            assert_eq!(view.presented.as_ref().unwrap().document, document);
+        }
     }
 
     #[test]

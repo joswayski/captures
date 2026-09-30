@@ -2310,7 +2310,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         geometryPanel.addSubview(geometryScroll)
 
         let width = Self.contentWidth
-        panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: width, height: 24),
+        let cropHeading = panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: width, height: 24),
                    size: 16, weight: .semibold, parent: geometryContent)
         // Shipping "Aspect ratio": the label over a token select.
         panelFieldLabel("Aspect ratio", x: 0, y: 36, parent: geometryContent)
@@ -2356,6 +2356,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         applyCropHalo.surround(applyCropButton)
         geometryContent.addSubview(applyCropHalo, positioned: .below, relativeTo: applyCropButton)
         publishCropControls()
+        pinPropertiesHeading(cropHeading, in: geometryPanel, scroll: geometryScroll, height: 24)
 
         buildLayersPanel()
         buildDrawPanel()
@@ -2621,6 +2622,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         railTip.isHidden = false
     }
 
+    /// Keep the existing title outside the fields' clip, like shipping's sticky
+    /// heading. Rebase the document once; control positions on screen stay put.
+    private func pinPropertiesHeading(_ heading: NSTextField, in panel: Surface,
+                                      scroll: NSScrollView, height: CGFloat, rule: NSView? = nil) {
+        guard let content = scroll.documentView else { return }
+        panel.addSubview(heading)
+        heading.setAccessibilityLabel("Properties heading")
+        if let rule { panel.addSubview(rule) }
+        for view in content.subviews { view.frame.origin.y -= height }
+        content.frame.size.height = max(0, content.frame.height - height)
+        scroll.autoresizingMask = [.width]
+        panel.sizeDidChange = { [weak scroll] size in
+            scroll?.frame = NSRect(x: 0, y: height, width: size.width, height: max(0, size.height - height))
+        }
+        panel.sizeDidChange?(panel.bounds.size)
+    }
+
     private func buildDrawPanel() {
         let width = Self.contentWidth
         let scroll = NSScrollView(frame: drawPanel.bounds)
@@ -2689,15 +2707,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         content.addSubview(drawToolPreview)
         buildDrawingDefaultControls(in: content)
         buildCreateTextControls(in: content)
+        if let drawHeading {
+            pinPropertiesHeading(drawHeading, in: drawPanel, scroll: scroll, height: 24)
+        }
+        drawControlBaseY = drawControlBaseY.mapValues { $0 - 24 }
         publishDrawToolControls()
     }
 
     /// Top of the `DrawToolPreview` slot, below the Eraser mode row.
-    static let drawPreviewTop: CGFloat = 140
+    static let drawPreviewTop: CGFloat = 116
     /// The preview's height plus one row gap.
     private var drawPreviewShift: CGFloat { EditorDrawToolPreviewView.height + 12 }
-    /// Where drawing and new-text properties start, under the heading.
-    static let drawDefaultsTop: CGFloat = 36
+    /// Where drawing and new-text properties start in the scrollable body.
+    static let drawDefaultsTop: CGFloat = 12
 
     /// Height of a full-width shipping `ColorField` swatch grid in Properties.
     private var panelSwatchHeight: CGFloat {
@@ -3270,6 +3292,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         curveControls.resized = { [weak self] _ in self?.layoutLayerInspectorTail() }
         layerContent.addSubview(curveControls)
+        pinPropertiesHeading(layerPropertiesHeading, in: layerPropertiesPanel,
+                             scroll: panelScroll, height: 48, rule: layerPropertiesRule)
         buildLayerMenu()
         layoutLayerInspectorTail()
     }
@@ -3857,10 +3881,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // Each tool's rows end at a fixed, font-independent offset.
         let bottom: CGFloat
         if wand {
-            drawHelper.frame.origin.y = 216 + 24 + 8
+            drawHelper.frame.origin.y = 192 + 24 + 8
             bottom = drawHelper.frame.maxY
         } else if brush {
-            drawHelper.frame.origin.y = 218 + EditorMarkedSlider.height + 8 + shift
+            drawHelper.frame.origin.y = 194 + EditorMarkedSlider.height + 8 + shift
             bottom = drawHelper.frame.maxY
         } else {
             bottom = defaultsBottom
@@ -5734,10 +5758,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         } ?? ""
         layerPropertiesHeading.isHidden = layer == nil
         layerPropertiesRule.isHidden = layer == nil
-        // Shipping sections: the 48 pt heading and its `--s-4` margin, then
-        // `--s-5` padding. The Shift rotation snap section comes first.
+        // The pinned 48 pt heading is outside this body. Its `--s-4` margin
+        // and `--s-5` section padding remain; Shift rotation snap comes first.
         let pad: CGFloat = 12
-        var y: CGFloat = 48 + 8 + pad
+        var y: CGFloat = 8 + pad
         let transforms = layer != nil && toolShowsTransformChrome
         rotationSnapLabel.isHidden = !transforms; rotationSnap.isHidden = !transforms
         rotationSnapHint.isHidden = !transforms; layerSectionRule.isHidden = !transforms
