@@ -88,7 +88,9 @@ final class ScreenshotEditorTests: XCTestCase {
     func testToolRailSelectionMenuFocusBusyGatesAndMinimumLayout() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
-            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            let base = layer(id: "base", name: "Base", x: 0, y: 0,
+                             visible: true, locked: true, opacity: 100)
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [base]))
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
                 worker: worker, writeClipboard: { _ in true })
             defer { controller.window.orderOut(nil) }
@@ -122,12 +124,21 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(rail[0].frame.minY, 52 + 8)
             XCTAssertEqual(rail[1].frame.minY - rail[0].frame.minY, 40, "38pt buttons with 2pt gaps")
             let sections = try segmented("Editor section", in: controller.root)
+            let layers = try table("Screenshot layers", in: controller.root)
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            rail[0].performClick(nil)
+            XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "base", "Select retains selection")
             rail[2].performClick(nil)
+            XCTAssertEqual(layers.selectedRow, -1, "Text clears selection")
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
             XCTAssertEqual(sections.selectedSegment, 2)
             XCTAssertEqual(controller.drawOverlay.shape, .text)
             XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
             XCTAssertTrue(rail[2].selected)
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             rail[1].performClick(nil)
+            XCTAssertEqual(layers.selectedRow, -1, "Crop clears selection")
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
             XCTAssertTrue(controller.cropOverlay.croppingEnabled)
             XCTAssertTrue(rail[1].selected)
             rail[0].performClick(nil)
@@ -185,20 +196,27 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testToolKeysSelectExistingToolsPreserveRepeatsAndCancelUnfinishedGestures() throws {
         _ = NSApplication.shared
-        let original = snapshot(id: "shot", unsaved: true, draft: true)
+        let base = layer(id: "base", name: "Base", x: 0, y: 0,
+                         visible: true, locked: true, opacity: 100)
+        let original = snapshot(id: "shot", unsaved: true, draft: true, layers: [base])
         let worker = FakeEditorWorker(snapshot: original)
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         controller.window.makeFirstResponder(nil)
         let sections = try segmented("Editor section", in: controller.root)
+        let layers = try table("Screenshot layers", in: controller.root)
         for (key, shape) in [("T", EditorDrawOverlay.Shape.text), ("r", .rectangle),
                              ("o", .ellipse), ("l", .line), ("d", .diamond), ("s", .star),
                              ("a", .arrow), ("p", .pen), ("b", .wand)] {
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            controller.window.makeFirstResponder(nil)
             controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: key))
             XCTAssertEqual(sections.selectedSegment, 2)
             XCTAssertEqual(controller.drawOverlay.shape, shape)
             XCTAssertTrue(controller.drawOverlay.drawingEnabled)
+            XCTAssertEqual(layers.selectedRow, -1, "\(key) clears selection")
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
         }
         // The rail alone picks tools; Eraser offers shipping's mode group.
         XCTAssertFalse(descendants(in: controller.root).contains {
@@ -2617,6 +2635,14 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["opacity"] as? Double, 100)
         XCTAssertTrue(controller.compareView.isHidden, "Preserve with settings closed never compares")
         XCTAssertTrue(worker.compares.isEmpty)
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "fresh-shape",
+                       "drawing selects the result without switching tools")
+        controller.selectDrawTool(.ellipse)
+        XCTAssertNil(controller.selectionOverlay.selectedLayerID,
+                     "reactivating the same tool clears the freshly selected shape")
+        XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, -1)
+        XCTAssertTrue(overlay.drawingEnabled)
+        try render(controller.root, name: "screenshot-editor-tool-deselection")
         try showLayers(in: controller.root)
         XCTAssertEqual(try selectedLayerName(in: controller), "Shape")
         XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0,

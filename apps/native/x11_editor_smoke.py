@@ -1396,6 +1396,10 @@ def main():
             drag((320, 250), (480, 370))
             arrow = save_layers(lambda values: len(values) == 2, "rail Arrow creates one layer")[-1]
             assert arrow["shape"] == "arrow", arrow
+            before_deselection = draft_bytes()
+            run("xdotool", "key", "a", "Delete", "ctrl+d", "Right", "sleep", "1")
+            assert draft_bytes() == before_deselection, "reactivating Arrow clears layer shortcut targets"
+            shot(editor, "tool-cleared-shape-selection")
             resize_editor(760, 540, "sleep", ".3")
             rail_click("shapes")  # Shapes at the minimum size.
             shot(editor, "tool-rail-minimum-menu")
@@ -1420,6 +1424,8 @@ def main():
                                  endX=star["endX"] + 21, endY=star["endY"] + 17), moved
             before_crop = draft_bytes()
             run("xdotool", "key", "c", "sleep", ".3")
+            run("xdotool", "key", "Delete", "ctrl+d", "Right", "sleep", "1")
+            assert draft_bytes() == before_crop, "switching to Crop clears layer shortcut targets"
             drag((330, 270), (460, 350))
             run("xdotool", "key", "c", "sleep", ".3")
             shot(editor, "shortcut-crop-candidate")
@@ -1560,6 +1566,7 @@ def main():
                            "nudge-undo-exact", "field-nudge-focus", "locked-nudge-guard",
                            "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters",
                            "rail-arrow-create", "rail-menu-escape", "rail-minimum",
+                           "same-tool-clears-selection", "crop-clears-selection",
                            "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",
                            "layer-paste-once-with-OS-text", "layer-paste-cumulative-offset",
                            "layer-paste-undo-redo", "layer-clipboard-session-local",

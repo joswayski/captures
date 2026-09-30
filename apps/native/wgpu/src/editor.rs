@@ -706,6 +706,10 @@ impl Default for View {
 
 impl View {
     fn activate_tool(&mut self, section: Section, shape: Option<DrawShape>) {
+        // Shipping clears selection even when reactivating the current tool.
+        if section != Section::Layers {
+            self.select_layer_exact(None);
+        }
         let active = self.section == section
             && match shape {
                 Some(shape) => self.draw_shape == shape,
@@ -2070,7 +2074,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
-    handle_tool_shortcuts(ui.ctx(), view);
     if view.inline.is_none()
         && !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
@@ -2754,61 +2757,6 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
     }
 }
 
-fn handle_tool_shortcuts(ctx: &egui::Context, view: &mut View) {
-    if ctx.current_pass_index() != 0
-        || !ctx.input(|input| input.focused)
-        || ctx.input(|input| input.pointer.any_pressed())
-        || ctx.memory(|memory| memory.focused().is_some())
-        || egui::Popup::is_any_open(ctx)
-        || view.presented.is_none()
-        || view.pending
-        || view.inline.is_some()
-        || view.closed
-        || view.close_requested
-        || view.import_picker.is_some()
-        || view.folder_picker.is_some()
-    {
-        return;
-    }
-    let tools = ctx.input_mut(|input| {
-        let mut tools = Vec::new();
-        input.events.retain(|event| {
-            let egui::Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } = event
-            else {
-                return true;
-            };
-            if modifiers.command || modifiers.ctrl || modifiers.mac_cmd || modifiers.alt {
-                return true;
-            }
-            let tool = match key {
-                egui::Key::V => (Section::Layers, None),
-                egui::Key::C => (Section::Geometry, None),
-                egui::Key::T => (Section::Draw, Some(DrawShape::Text)),
-                egui::Key::R => (Section::Draw, Some(DrawShape::Rectangle)),
-                egui::Key::O => (Section::Draw, Some(DrawShape::Ellipse)),
-                egui::Key::L => (Section::Draw, Some(DrawShape::Line)),
-                egui::Key::D => (Section::Draw, Some(DrawShape::Diamond)),
-                egui::Key::S => (Section::Draw, Some(DrawShape::Star)),
-                egui::Key::A => (Section::Draw, Some(DrawShape::Arrow)),
-                egui::Key::P => (Section::Draw, Some(DrawShape::Freehand)),
-                egui::Key::B => (Section::Draw, Some(view.last_background_tool)),
-                _ => return true,
-            };
-            tools.push(tool);
-            false
-        });
-        tools
-    });
-    for (section, shape) in tools {
-        view.activate_tool(section, shape);
-    }
-}
-
 fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<Job>) {
     if ctx.current_pass_index() != 0
         || !ctx.input(|input| input.focused)
@@ -2824,6 +2772,17 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
     }
     // Sliders and closed selectors also own arrows, not just text editors.
     let canvas_navigation = ctx.memory(|memory| memory.focused().is_none());
+    let tools_enabled = canvas_navigation
+        && view.presented.is_some()
+        && !view.pending
+        && view.import_picker.is_none()
+        && view.folder_picker.is_none();
+    // Keep tools and document actions in input order, including when a fast
+    // tool-change + Delete arrives in one frame. Neither kind may jump ahead.
+    enum Shortcut {
+        Tool(Section, Option<DrawShape>),
+        Document(egui::Key, bool),
+    }
     let requests = ctx.input_mut(|input| {
         let mut requests = Vec::new();
         input.events.retain(|event| {
@@ -2831,14 +2790,45 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
             // Their text payload belongs to the OS clipboard, not our layer copy.
             match event {
                 egui::Event::Copy => {
-                    requests.push((egui::Key::C, false));
+                    requests.push(Shortcut::Document(egui::Key::C, false));
                     return false;
                 }
                 egui::Event::Paste(_) => {
-                    requests.push((egui::Key::V, false));
+                    requests.push(Shortcut::Document(egui::Key::V, false));
                     return false;
                 }
                 _ => {}
+            }
+            if let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+                && tools_enabled
+                && !modifiers.command
+                && !modifiers.ctrl
+                && !modifiers.mac_cmd
+                && !modifiers.alt
+            {
+                let tool = match key {
+                    egui::Key::V => Some((Section::Layers, None)),
+                    egui::Key::C => Some((Section::Geometry, None)),
+                    egui::Key::T => Some((Section::Draw, Some(DrawShape::Text))),
+                    egui::Key::R => Some((Section::Draw, Some(DrawShape::Rectangle))),
+                    egui::Key::O => Some((Section::Draw, Some(DrawShape::Ellipse))),
+                    egui::Key::L => Some((Section::Draw, Some(DrawShape::Line))),
+                    egui::Key::D => Some((Section::Draw, Some(DrawShape::Diamond))),
+                    egui::Key::S => Some((Section::Draw, Some(DrawShape::Star))),
+                    egui::Key::A => Some((Section::Draw, Some(DrawShape::Arrow))),
+                    egui::Key::P => Some((Section::Draw, Some(DrawShape::Freehand))),
+                    egui::Key::B => Some((Section::Draw, Some(view.last_background_tool))),
+                    _ => None,
+                };
+                if let Some((section, shape)) = tool {
+                    requests.push(Shortcut::Tool(section, shape));
+                    return false;
+                }
             }
             if let egui::Event::Key {
                 key,
@@ -2860,7 +2850,7 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
                         egui::Key::Z | egui::Key::D | egui::Key::C | egui::Key::V
                     ) && (modifiers.command || modifiers.ctrl)))
             {
-                requests.push((*key, modifiers.shift));
+                requests.push(Shortcut::Document(*key, modifiers.shift));
                 false
             } else {
                 true
@@ -2868,10 +2858,17 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         });
         requests
     });
-    for (key, shift) in requests {
+    for shortcut in requests {
         if view.pending {
             continue;
         }
+        let (key, shift) = match shortcut {
+            Shortcut::Tool(section, shape) => {
+                view.activate_tool(section, shape);
+                continue;
+            }
+            Shortcut::Document(key, shift) => (key, shift),
+        };
         let Some(presented) = &view.presented else {
             continue;
         };
@@ -6807,20 +6804,37 @@ mod tests {
         frame(&mut view, vec![]);
         // 8px top padding, 38px buttons and 2px gaps, as in shipping.
         let rail = |row: usize| egui::pos2(28., 27. + row as f32 * 40.);
+        view.select_layer(Some("capture-background".into()));
         click(&mut view, rail(2));
         assert_eq!(
             (view.section, view.draw_shape),
             (Section::Draw, DrawShape::Text)
         );
+        assert!(view.selected_layer.is_none(), "rail tools clear selection");
+        view.select_layer(Some("capture-background".into()));
+        click(&mut view, rail(2));
+        assert!(
+            view.selected_layer.is_none(),
+            "reactivating Text also clears selection"
+        );
+        view.select_layer(Some("capture-background".into()));
         click(&mut view, rail(1));
         assert!(view.crop_previous.is_some());
+        assert!(view.selected_layer.is_none(), "Crop clears selection");
         view.crop = [13., 21., 97., 53.];
         click(&mut view, rail(1));
         assert_eq!(view.crop, [13., 21., 97., 53.]);
+        view.select_layer(Some("capture-background".into()));
         click(&mut view, rail(0));
         assert_eq!(view.section, Section::Layers);
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "Select retains selection"
+        );
         assert!(view.crop_previous.is_none());
         click(&mut view, rail(3));
+        assert!(view.selected_layer.is_none(), "Shapes clears selection");
         assert!(egui::Popup::is_any_open(&ctx));
         frame(&mut view, vec![]);
         // The flyout opens 10px right of Shapes, centred on it: a 3×2 grid of
@@ -6912,8 +6926,10 @@ mod tests {
             (egui::Key::P, DrawShape::Freehand),
             (egui::Key::B, DrawShape::Wand),
         ] {
+            view.select_layer(Some("capture-background".into()));
             frame(&mut view, vec![key(code, egui::Modifiers::SHIFT)]);
             assert_eq!((view.section, view.draw_shape), (Section::Draw, shape));
+            assert!(view.selected_layer.is_none(), "{code:?} clears selection");
         }
         for shape in [DrawShape::Erase, DrawShape::Restore] {
             view.draw_shape = shape;
@@ -6925,7 +6941,12 @@ mod tests {
         frame(&mut view, vec![key(egui::Key::R, egui::Modifiers::NONE)]);
         let gesture = Some((Point { x: 13., y: 21. }, Point { x: 97., y: 53. }));
         view.shape_drag = gesture;
+        view.select_layer(Some("capture-background".into()));
         frame(&mut view, vec![key(egui::Key::R, egui::Modifiers::NONE)]);
+        assert!(
+            view.selected_layer.is_none(),
+            "reactivating Rectangle clears selection"
+        );
         assert_eq!(view.shape_drag, gesture);
         frame(&mut view, vec![key(egui::Key::C, egui::Modifiers::NONE)]);
         assert!(view.shape_drag.is_none());
@@ -6939,8 +6960,14 @@ mod tests {
             [13., 21., 97., 53.],
             "repeat does not cancel the crop candidate"
         );
+        view.select_layer(Some("capture-background".into()));
         frame(&mut view, vec![key(egui::Key::V, egui::Modifiers::NONE)]);
         assert_eq!(view.section, Section::Layers);
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "V retains selection"
+        );
         assert_eq!(view.crop, previous);
         assert!(view.crop_previous.is_none());
         for modifiers in [
@@ -6965,6 +6992,11 @@ mod tests {
         output.textures_delta.clear();
         frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
         assert_eq!(view.section, Section::Layers, "typing keeps its keys");
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "blocked tool keys retain selection"
+        );
         let mut output = ctx.run_ui(Default::default(), |ui| {
             ui.add(egui::Slider::new(&mut 50., 0.0..=100.0))
                 .request_focus();
@@ -6981,6 +7013,101 @@ mod tests {
             rx.try_recv().is_err(),
             "tool selection never submits document, draft or export work"
         );
+    }
+
+    #[test]
+    fn tool_and_layer_shortcuts_in_one_frame_follow_input_order() {
+        for key in [egui::Key::Delete, egui::Key::D, egui::Key::ArrowRight] {
+            for tool_first in [true, false] {
+                let ctx = egui::Context::default();
+                let (mut view, id) = covered_canvas_view(&ctx);
+                view.section = Section::Draw;
+                view.draw_shape = DrawShape::Arrow;
+                view.select_layer(Some(id.clone()));
+                let (tx, rx) = mpsc::channel();
+                let event = |key, modifiers| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                };
+                let tool = event(egui::Key::A, egui::Modifiers::NONE);
+                let action = event(
+                    key,
+                    if key == egui::Key::D {
+                        egui::Modifiers::CTRL
+                    } else {
+                        egui::Modifiers::NONE
+                    },
+                );
+                let events = if tool_first {
+                    vec![tool, action]
+                } else {
+                    vec![action, tool]
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |_| {
+                        handle_document_shortcuts(&ctx, &mut view, &tx);
+                        if ctx.current_pass_index() == 0 {
+                            ctx.request_discard("ordered keys");
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                if tool_first {
+                    assert!(view.selected_layer.is_none());
+                    assert!(
+                        !view.pending && rx.try_recv().is_err(),
+                        "{key:?} has no target after A"
+                    );
+                } else {
+                    assert!(view.pending, "{key:?} must act before A");
+                    let Ok(Job::Apply(request)) = rx.try_recv() else {
+                        panic!("missing layer action")
+                    };
+                    match (key, request) {
+                        (
+                            egui::Key::Delete,
+                            Request::Layer {
+                                id: target,
+                                edit: LayerEdit::Delete,
+                            },
+                        )
+                        | (
+                            egui::Key::D,
+                            Request::Layer {
+                                id: target,
+                                edit: LayerEdit::Duplicate { .. },
+                            },
+                        ) => assert_eq!(target, id),
+                        (
+                            egui::Key::ArrowRight,
+                            Request::Layer {
+                                id: target,
+                                edit: LayerEdit::Translate { delta_x, delta_y },
+                            },
+                        ) => {
+                            assert_eq!(target, id);
+                            assert_eq!((delta_x, delta_y), (1., 0.));
+                        }
+                        _ => panic!("wrong ordered layer action"),
+                    }
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "multipass must not repeat an action"
+                    );
+                }
+                assert_eq!(
+                    (view.section, view.draw_shape),
+                    (Section::Draw, DrawShape::Arrow)
+                );
+            }
+        }
     }
 
     #[test]
@@ -7820,10 +7947,17 @@ mod tests {
         );
         assert!(rx.try_recv().is_err(), "typing must not edit a layer");
         frame(&mut view, vec![], false);
+        frame(&mut view, vec![key(egui::Key::D, false)], false);
+        assert_eq!(
+            view.draw_shape,
+            DrawShape::Diamond,
+            "plain D selects a tool"
+        );
+        assert!(view.selected_layer.is_none() && rx.try_recv().is_err());
+        view.select_layer_exact(Some(original_id.clone()));
         frame(
             &mut view,
             vec![
-                key(egui::Key::D, false),
                 key(egui::Key::Delete, false),
                 key(egui::Key::Backspace, false),
                 key(egui::Key::ArrowUp, false),
@@ -7832,7 +7966,7 @@ mod tests {
         );
         assert!(
             rx.try_recv().is_err(),
-            "plain D and locked deletion do nothing"
+            "locked deletion and movement do nothing"
         );
         frame(
             &mut view,

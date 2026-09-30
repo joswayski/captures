@@ -5389,6 +5389,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func activateTool(section: Int, shape: EditorDrawOverlay.Shape?) {
+        // Shipping clears selection even when reactivating the current tool.
+        // The table's selection callback also resets its outline and inspector.
+        if section != Section.layers { layerTable.deselectAll(nil) }
         if sectionControl.selectedSegment == section {
             if let shape, drawOverlay.shape == shape { return }
             if section == Section.layers || (section == Section.geometry && cropActive) {
