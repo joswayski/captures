@@ -3655,6 +3655,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         [.rectangle, .ellipse, .line, .triangle, .diamond, .star].contains(shape)
     }
 
+    private var toolShowsTransformChrome: Bool {
+        sectionControl.selectedSegment == Section.layers
+            || (sectionControl.selectedSegment == Section.draw
+                && (isGroupedShape(drawShape) || drawShape == .arrow))
+    }
+
     /// Shipping `.screenshot-tool-rail`, in `captures_app::editor_chrome` order.
     /// layoutEditor() places the buttons in the rail column.
     private func buildToolRail() {
@@ -5680,21 +5686,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func layoutLayerInspectorTail() {
         guard let curveControls, let layerGeometryHint else { return }
         let layer = selectedLayer
-        layerPropertiesHeading.stringValue = layer.map { $0.kind == .image ? $0.name : $0.rowKind } ?? ""
+        layerPropertiesHeading.stringValue = layer.map {
+            toolShowsTransformChrome ? ($0.kind == .image ? $0.name : $0.rowKind)
+                : EditorChrome.toolLabel(drawShape == .text ? "t" : drawShape.rawValue)
+        } ?? ""
         layerPropertiesHeading.isHidden = layer == nil
         layerPropertiesRule.isHidden = layer == nil
         // Shipping sections: the 48 pt heading and its `--s-4` margin, then
         // `--s-5` padding. The Shift rotation snap section comes first.
         let pad: CGFloat = 12
         var y: CGFloat = 48 + 8 + pad
-        rotationSnapLabel.isHidden = layer == nil; rotationSnap.isHidden = layer == nil
-        rotationSnapHint.isHidden = layer == nil; layerSectionRule.isHidden = layer == nil
-        rotationSnapLabel.frame.origin.y = y
-        rotationSnap.frame.origin.y = y + 22
-        rotationSnapHint.frame.origin.y = rotationSnap.frame.maxY + pad
-        y = rotationSnapHint.frame.maxY + pad
-        layerSectionRule.frame.origin.y = y
-        y += 1 + pad
+        let transforms = layer != nil && toolShowsTransformChrome
+        rotationSnapLabel.isHidden = !transforms; rotationSnap.isHidden = !transforms
+        rotationSnapHint.isHidden = !transforms; layerSectionRule.isHidden = !transforms
+        if transforms {
+            rotationSnapLabel.frame.origin.y = y
+            rotationSnap.frame.origin.y = y + 22
+            rotationSnapHint.frame.origin.y = rotationSnap.frame.maxY + pad
+            y = rotationSnapHint.frame.maxY + pad
+            layerSectionRule.frame.origin.y = y
+            y += 1 + pad
+        }
         let image = layer?.kind == .image
         let geometryViews: [NSView] = layerGeometryLabels + [layerWidth, layerHeight, layerX, layerY, layerGeometryHint]
         geometryViews.forEach { $0.isHidden = !image }

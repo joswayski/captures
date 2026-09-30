@@ -4998,7 +4998,8 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.response = { request in
             var layer = self.shapeLayer(id: "new-\(worker.requests.count)", x: 11, y: 17)
             if request["operation"] as? String == "create_freehand_path" { layer["kind"] = "path" }
-            return self.snapshot(id: "shot", unsaved: true, layers: [layer])
+            return self.snapshot(id: "shot", unsaved: true, layers: [layer],
+                                 annotations: ["new-\(worker.requests.count)": self.annotationStyle()])
         }
         let tool = DrawToolChoice(controller)
         let overlay = controller.drawOverlay
@@ -5012,8 +5013,13 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(worker.requests.last?["operation"] as? String, operation)
             XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "new-\(count + 1)")
             XCTAssertTrue(controller.compareView.isHidden && worker.compares.isEmpty)
+            XCTAssertEqual(try field("Shift rotation snap", in: controller.root).isHidden, index == 4,
+                           "Line/Arrow expose transforms; Pen keeps only style Properties")
             if index == 4 {
                 XCTAssertEqual((worker.requests.last?["points"] as? [[String: CGFloat]])?.count, 2)
+                XCTAssertEqual(try field("Properties heading", in: controller.root).stringValue, "Freehand")
+                XCTAssertEqual(try rangeSlider("Stroke width", in: controller.root).value, 4)
+                try render(controller.root, name: "screenshot-editor-pen-properties-no-transform")
             } else { XCTAssertEqual(worker.requests.last?["shape"] as? String, index == 2 ? "line" : "arrow") }
         }
         let count = worker.requests.count
@@ -5376,6 +5382,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try field("Text size", in: properties).stringValue, "32")
         XCTAssertEqual(try field("New text size", in: controller.root).stringValue, "24",
                        "selected text size does not replace creation defaults")
+        XCTAssertTrue(try field("Shift rotation snap", in: properties).isHidden)
+        XCTAssertEqual(try field("Properties heading", in: properties).stringValue, "Text")
+        try render(controller.root, name: "screenshot-editor-text-properties-no-transform")
         content.string = "Properties edit"
         controller.textDidChange(Notification(name: NSText.didChangeNotification, object: content))
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "edit_text")

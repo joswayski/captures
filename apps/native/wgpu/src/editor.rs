@@ -705,6 +705,12 @@ impl Default for View {
 }
 
 impl View {
+    fn tool_shows_transform_chrome(&self) -> bool {
+        self.section == Section::Layers
+            || (self.section == Section::Draw
+                && (self.draw_shape.is_grouped() || self.draw_shape == DrawShape::Arrow))
+    }
+
     fn properties_section(&self) -> Section {
         if self.section == Section::Draw && self.selected_layer.is_some() {
             Section::Layers
@@ -922,7 +928,6 @@ impl View {
                         })
                         .map(|preset| preset.id.to_owned());
                 }
-                let text_apply_pending = self.text_apply_pending;
                 let changed = self
                     .presented
                     .as_ref()
@@ -1006,13 +1011,6 @@ impl View {
                 self.text_apply_pending = false;
                 if pasted_layer || combined_layers {
                     self.activate_tool(Section::Layers, None);
-                } else if self.inline.is_none()
-                    && !copied_layer
-                    && self.draw_shape == DrawShape::Text
-                    && self.text.is_some()
-                    && !text_apply_pending
-                {
-                    self.section = Section::Layers;
                 }
                 if !copied_layer {
                     self.reset_background_fields();
@@ -5526,31 +5524,33 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
         }
         return;
     };
-    inspector::section(ui, tokens, |ui| {
-        inspector::labelled(ui, tokens, "Shift rotation snap", |ui| {
-            let mut degrees = view.rotation_snap_degrees;
-            if crate::primitives::NumberInput::new(
-                "rotation-snap",
-                "Shift rotation snap",
-                ui.available_width(),
-            )
-            .range(1. ..=180.)
-            .show(ui, tokens, &mut degrees)
-            .changed()
-            {
-                view.rotation_snap_degrees = degrees.round().clamp(1., 180.);
-                view.layer_gesture = None;
-            }
+    if view.tool_shows_transform_chrome() {
+        inspector::section(ui, tokens, |ui| {
+            inspector::labelled(ui, tokens, "Shift rotation snap", |ui| {
+                let mut degrees = view.rotation_snap_degrees;
+                if crate::primitives::NumberInput::new(
+                    "rotation-snap",
+                    "Shift rotation snap",
+                    ui.available_width(),
+                )
+                .range(1. ..=180.)
+                .show(ui, tokens, &mut degrees)
+                .changed()
+                {
+                    view.rotation_snap_degrees = degrees.round().clamp(1., 180.);
+                    view.layer_gesture = None;
+                }
+            });
+            inspector::hint(
+                ui,
+                tokens,
+                &format!(
+                    "Hold Shift while dragging the rotate handle to snap in {}° increments.",
+                    view.rotation_snap_degrees
+                ),
+            );
         });
-        inspector::hint(
-            ui,
-            tokens,
-            &format!(
-                "Hold Shift while dragging the rotate handle to snap in {}° increments.",
-                view.rotation_snap_degrees
-            ),
-        );
-    });
+    }
     inspector::section(ui, tokens, |ui| match element {
         Element::Text(_) => show_text(ui, tokens, view, tx),
         Element::Image(image) => show_image_geometry(ui, tokens, view, tx, image),
@@ -9254,6 +9254,35 @@ mod tests {
         );
         assert_eq!(view.properties_section(), Section::Draw);
         assert!(rx.try_recv().is_err());
+
+        for (tool, title) in [(DrawShape::Text, "Text"), (DrawShape::Freehand, "Freehand")] {
+            view.activate_tool(Section::Draw, Some(tool));
+            view.select_layer(Some(id.clone()));
+            frame(&mut view, vec![]);
+            let output = frame(&mut view, vec![]);
+            let nodes = &output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes;
+            assert!(
+                !nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Shift rotation snap"))
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Fill color: #2d9cff")),
+                "selected style controls stay present with {title} active"
+            );
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == title)));
+            assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+            assert_eq!(view.new_annotation_style, defaults);
+            assert!(rx.try_recv().is_err());
+        }
     }
 
     #[test]

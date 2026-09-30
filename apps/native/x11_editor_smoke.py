@@ -2362,8 +2362,9 @@ def main():
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "existing input single undo")[-1] == created
 
-            # Finishing/undo returns to Select. Double-click edits the same layer
+            # Select explicitly; finishing/undo keeps Text active. Double-click edits the same layer
             # without switching to the Text tool or committing a move/resize.
+            toolbar_click("layers")
             x, y = document_point((110, 78))
             run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
                 "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".3")
@@ -2527,7 +2528,7 @@ def main():
             PLATE_ROWS = 106
             # With the shadow open and Properties scrolled to its end, rows
             # measured up from the bottom of the Properties area.
-            TEXT_SHADOW_END = {"blur": 85, "offset": 27}
+            TEXT_SHADOW_END = {"opacity": 154, "blur": 85, "offset": 27}
 
             def shadow_rows(plated):
                 check = TEXT["shadow"] + (PLATE_ROWS if plated else 0)
@@ -2549,6 +2550,12 @@ def main():
             assert created["text"] == "Text" and created["fontFamily"] == "sans"
             assert created["align"] == "left" and created.get("autoWidth") is True
             shot(editor, f"text-created-{args.appearance}")
+            pixel(f"text-created-{args.appearance}", 14, rail_point("text")[1], (255, 202, 40))
+            # Text keeps its live style fields without transform chrome. Select
+            # restores the rotation section used by these inspector coordinates.
+            toolbar_click("layers")
+            shot(editor, f"text-selected-{args.appearance}")
+            pixel(f"text-selected-{args.appearance}", 14, rail_point("select")[1], (255, 202, 40))
             prop_click(95, TEXT["style"])
             shot(editor, f"text-style-menu-{args.appearance}")
             run("xdotool", "key", "Escape")
@@ -2575,10 +2582,13 @@ def main():
             save_layers(lambda values: values[-1].get("dropShadow") is True
                         and values[-1]["background"] is None, "glyph shadow applied")
             prop_swatch(rows["color"], "#2d9cff", indent=SHADOW_INDENT)
-            prop_slider(rows["opacity"], "Home", *["Prior"] * 6, *["Right"] * 5)  # 65%.
-            # The Blur slider and offsets sit below the window: scroll to the end.
+            # Expanded numeric rows sit below the viewport; reach them before
+            # pressing keys rather than clicking clipped inspector content.
             properties_end()
             shot(editor, "text-shadow-scrolled")
+            end_slider(TEXT_SHADOW_END["opacity"], "Home", *["Prior"] * 6, *["Right"] * 5)  # 65%.
+            save_layers(lambda values: values[-1]["dropShadowStyle"]["opacity"] == 65,
+                        "shadow opacity applied")
             end_slider(TEXT_SHADOW_END["blur"], "Home", *["Right"] * 3)  # 3 px.
             end_field(TEXT_SHADOW_END["offset"], "17", x=100)
             end_field(TEXT_SHADOW_END["offset"], "-8", x=240)
@@ -2690,6 +2700,22 @@ def main():
             assert reopened.get("dropShadow") is True
             assert reopened["dropShadowStyle"] == custom_shadow
             assert not reopened["outlined"]
+            toolbar_click("draw")
+            draw_tool("pen")
+            start, end = document_point((100, 60)), document_point((180, 100))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
+            placed = save_layers(lambda values: len(values) == 3, "Pen Properties fixture")
+            assert placed[-1]["kind"] == "path" and placed[-1]["points"]
+            properties_start()
+            shot(editor, f"pen-created-properties-{args.appearance}")
+            pixel(f"pen-created-properties-{args.appearance}", 14, rail_point("pen")[1], (255, 202, 40))
+            toolbar_click("layers")
+            properties_start()
+            shot(editor, f"pen-selected-properties-{args.appearance}")
+            pixel(f"pen-selected-properties-{args.appearance}", 14, rail_point("select")[1], (255, 202, 40))
+            assert layers() == placed, "switching tool Properties must not edit layers"
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "text suite quits")
@@ -2705,7 +2731,8 @@ def main():
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
                            "text-outlined-style-pixels", "text-outlined-style-undo",
                            "text-undo-redo", "text-draft-reopen",
-                           "text-minimum-appearance", "original-unchanged"],
+                           "text-minimum-appearance", "pen-properties-tool-switch-no-edit",
+                           "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text UI: create, style, undo/redo, save/reopen, minimum")
             return

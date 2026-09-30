@@ -199,7 +199,6 @@ impl View {
                 self.output = input.previous_output;
                 self.select_layer_exact(input.previous_selection);
             }
-            self.activate_tool(Section::Layers, None);
             if input.close_after {
                 self.request_close();
             }
@@ -693,6 +692,80 @@ mod tests {
         view.receive(&ctx, Ok(presented_text("label", "newest\nαβ")));
         assert!(view.inline.is_none() && view.output.is_none());
         assert_eq!(view.selected_layer.as_deref(), Some("label"));
+        assert_eq!(
+            view.section,
+            Section::Layers,
+            "editing from Select keeps Select"
+        );
+    }
+
+    #[test]
+    fn new_text_keeps_its_tool_after_finish_live_properties_and_autosave() {
+        let ctx = egui::Context::default();
+        let mut view = View {
+            autosaves: true,
+            ..View::default()
+        };
+        view.receive(&ctx, Ok(super::super::tests::presented(false)));
+        view.activate_tool(Section::Draw, Some(DrawShape::Text));
+        let (tx, rx) = mpsc::channel();
+        view.begin_inline(
+            &tx,
+            TextInputTarget::New {
+                create: TextCreate {
+                    point: Point { x: 2., y: 1. },
+                    text: String::new(),
+                    font_size: 32.,
+                    font_family: "sans".into(),
+                    color: "#ff3b5c".into(),
+                    style_preset: None,
+                    drop_shadow: None,
+                    drop_shadow_style: None,
+                },
+            },
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::BeginTextInput { .. }))
+        ));
+        view.inline.as_mut().unwrap().text = "finished".into();
+        accept(&ctx, &mut view, "");
+        view.drain_inline(&tx);
+        assert!(
+            matches!(rx.try_recv(), Ok(Job::Apply(Request::UpdateTextInput { text, .. })) if text == "finished")
+        );
+        accept(&ctx, &mut view, "finished");
+        view.finish_inline(true);
+        view.drain_inline(&tx);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Job::Apply(Request::FinishTextInput { commit: true, .. }))
+        ));
+        view.receive(&ctx, Ok(presented_text("label", "finished")));
+        assert!(view.inline.is_none());
+        assert_eq!(
+            (view.section, view.draw_shape),
+            (Section::Draw, DrawShape::Text)
+        );
+        assert!(!view.tool_shows_transform_chrome());
+        let mut edited = presented_text("label", "Properties edit");
+        edited.created_layer = None;
+        view.receive(&ctx, Ok(edited));
+        assert_eq!(
+            view.section,
+            Section::Draw,
+            "a live property reply keeps Text"
+        );
+        view.autosave.edited(Instant::now() - DraftAutosave::DELAY);
+        view.drive_autosave(&ctx, &tx);
+        let Ok(Job::Autosave { reply }) = rx.try_recv() else {
+            panic!("a due text autosave reaches the worker");
+        };
+        reply.send(Ok(true)).unwrap();
+        assert!(view.receive_autosave());
+        assert_eq!(view.section, Section::Draw);
+        assert_eq!(view.selected_layer.as_deref(), Some("label"));
+        assert_eq!(view.text.as_ref().unwrap().accepted.text, "Properties edit");
     }
 
     #[test]
