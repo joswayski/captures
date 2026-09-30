@@ -17,6 +17,16 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Both screenshot-editor hosts keep selected move/resize/rotation and curve grips
+live under the Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow tools. Only the
+active tool's own selected shape body starts a move; empty canvas still draws,
+and a handle gesture cannot also create a shape. Text and Pen keep their style
+Properties without this transform chrome. Geometry and shape-body hit testing
+come from shared Rust. Private-X11 light/dark tests exercise active-tool edits,
+undo, pixels and draft reopening; AppKit has XCTest coverage. Physical macOS,
+Windows and Wayland acceptance remain open; these additions do not choose the
+renderer or replace the shipping Tauri app.
+
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |

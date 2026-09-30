@@ -615,6 +615,30 @@ pub fn curve_path_hit_radius(shape: &ShapeElement, radius: f64) -> f64 {
     radius.max(shape.style.stroke_width * 2. + radius * 0.6)
 }
 
+/// Shipping `hitTestSelectedShapeBody`: a shape tool moves only its own selected
+/// shape. Curved strokes use the path, not their potentially very large box.
+pub fn selected_shape_body_hit(
+    element: &Element,
+    active_shape: &str,
+    point: Point,
+    radius: f64,
+) -> Result<bool, String> {
+    if !point.x.is_finite() || !point.y.is_finite() || !radius.is_finite() || radius < 0. {
+        return Err("Shape hit testing requires finite input and a nonnegative radius.".into());
+    }
+    let Element::Shape(shape) = element else {
+        return Ok(false);
+    };
+    if shape.shape != active_shape || !shape.base.visible || shape.base.locked {
+        return Ok(false);
+    }
+    if is_curveable(shape) {
+        let (_, _, distance) = closest_point_on_curve(shape, point);
+        return Ok(distance <= curve_path_hit_radius(shape, radius));
+    }
+    element.hit_test(point, radius)
+}
+
 /// Shipping `curveStrokeHoverHint` for a selected, unlocked line/arrow.
 #[must_use]
 pub fn curve_hover_hint(shape: &ShapeElement, point: Point, radius: f64) -> Option<&'static str> {
@@ -1019,6 +1043,87 @@ mod tests {
             shape.base.visible = false;
         }
         assert!(canvas_expand_preview(&hidden, 100., 80.).unwrap().is_none());
+    }
+
+    #[test]
+    fn selected_shape_body_uses_active_kind_rotated_bounds_and_path_distance() {
+        let mut shape = line("rectangle", Vec::new());
+        shape.end_y = 60.;
+        shape.base.rotation = Some(std::f64::consts::FRAC_PI_2);
+        let element = Element::Shape(shape.clone());
+        // Center (60, 40): the original wide box becomes tall after rotation.
+        assert!(
+            selected_shape_body_hit(&element, "rectangle", Point { x: 60., y: 85. }, 0.).unwrap()
+        );
+        assert!(
+            !selected_shape_body_hit(&element, "rectangle", Point { x: 100., y: 40. }, 0.).unwrap()
+        );
+        assert!(
+            !selected_shape_body_hit(&element, "ellipse", Point { x: 60., y: 40. }, 10.).unwrap()
+        );
+        shape.base.locked = true;
+        assert!(
+            !selected_shape_body_hit(
+                &Element::Shape(shape.clone()),
+                "rectangle",
+                Point { x: 60., y: 40. },
+                10.
+            )
+            .unwrap()
+        );
+        shape.base.locked = false;
+        shape.base.visible = false;
+        assert!(
+            !selected_shape_body_hit(
+                &Element::Shape(shape),
+                "rectangle",
+                Point { x: 60., y: 40. },
+                10.
+            )
+            .unwrap()
+        );
+
+        let mut shape = line("arrow", Vec::new());
+        shape.end_y = 120.;
+        shape.style.stroke_width = 2.;
+        let element = Element::Shape(shape);
+        assert!(
+            element.hit_test(Point { x: 100., y: 25. }, 10.).unwrap(),
+            "inside the box, far from the diagonal path"
+        );
+        assert!(
+            !selected_shape_body_hit(&element, "arrow", Point { x: 100., y: 25. }, 10.).unwrap()
+        );
+        // (60, 70) is an independently known sample on the diagonal.
+        assert!(
+            selected_shape_body_hit(&element, "arrow", Point { x: 60., y: 79.9 }, 10.).unwrap()
+        );
+        assert!(
+            !selected_shape_body_hit(&element, "arrow", Point { x: 60., y: 85. }, 10.).unwrap()
+        );
+        assert!(
+            selected_shape_body_hit(
+                &element,
+                "arrow",
+                Point {
+                    x: f64::NAN,
+                    y: 70.
+                },
+                10.
+            )
+            .is_err()
+        );
+        assert!(selected_shape_body_hit(&element, "arrow", Point { x: 60., y: 70. }, -1.).is_err());
+        let document = Document::new_capture("fixture", 200., 100., None);
+        assert!(
+            !selected_shape_body_hit(
+                &document.elements[0],
+                "rectangle",
+                Point { x: 60., y: 40. },
+                10.
+            )
+            .unwrap()
+        );
     }
 
     #[test]

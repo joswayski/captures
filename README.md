@@ -627,6 +627,9 @@ edited preview into shared document coordinates, including reverse and off-canva
 gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
 cancels transient geometry without editing the document. Arrow outlines and Pen
 smoothing come from shared Rust; Pen supports click-only dots and round caps.
+In both native hosts, newly placed shapes keep their move, resize, rotation and
+curve grips live without switching to Select. The active shape tool moves the body
+of its own selected shape; dragging empty space starts another shape.
 Both native editors offer stroke/fill colors, stroke width and opacity before
 drawing. These choices stay local to the editor; drawing creates one undoable
 layer. Pre-placement drop-shadow controls include color, opacity, blur and X/Y
@@ -642,7 +645,7 @@ selection outline; release moves the layer in one undoable edit. Escape, focus l
 preview resizing or leaving Layers cancels the drag. Pixels update on release, not
 continuously during dragging; selection alone does not change the document.
 The selected layer also exposes a **rotation grip** when it fits inside the image.
-Drag it to rotate; hold Shift for stops configured under **Layers → Shift rotation snap**
+Drag it to rotate; hold Shift for stops configured under **Properties → Shift rotation snap**
 (1–180°, initially 15°). The increment is per-editor UI state, not a document edit
 or saved preference. Rotation uses the same outline-only
 preview, cancellation, undo and draft behavior. Hidden or locked layers have no

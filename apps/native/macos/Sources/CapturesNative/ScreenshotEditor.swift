@@ -415,6 +415,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             window?.invalidateCursorRects(for: self)
         }
     }
+    var onBegin: (() -> Void)?
     var onComplete: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
     var onPreview: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
     var onPreviewCancel: (() -> Void)?
@@ -480,6 +481,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         if (shape == .wand || shape == .text || shape.isBackgroundBrush)
             && (!bounds.contains(point) || !presentedImageRect.contains(point)) { return }
         cancelGesture()
+        onBegin?()
         startPoint = point; currentPoint = point; needsDisplay = true
         if shape == .pen {
             penPoints = [canvasPoint(for: point)]
@@ -747,6 +749,10 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var selectionEnabled = false {
         didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled; layoutExpandButton() }
     }
+    /// Shape tools leave empty canvas to the drawing overlay underneath.
+    var selectedOnly = false {
+        didSet { if selectedOnly != oldValue { cancelGesture(); layoutExpandButton() } }
+    }
     var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
     var selectedLayerID: String? { didSet { if selectedLayerID != oldValue { cancelGesture() }; needsDisplay = true } }
     var documentJSON: String? { didSet { if documentJSON != oldValue { cancelGesture() } } }
@@ -830,6 +836,29 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let target = super.hitTest(point) else { return nil }
+        guard selectedOnly, target === self else { return target }
+        let local = convert(point, from: superview)
+        // AppKit keeps the original mouse-down responder through mouse-up.
+        // Never hand an owned transform to the drawing view mid-gesture.
+        return startPoint != nil || isViewportPanning || ownsSelectedPoint(local) ? self : nil
+    }
+    func ownsSelectedPoint(_ point: CGPoint) -> Bool {
+        guard selectionEnabled, presentedImageRect.contains(point), canvasSize.width > 0 else { return false }
+        let documentPoint = canvasPoint(for: point)
+        let scale = presentedImageRect.width / canvasSize.width
+        if let geometry = rotationHandle(),
+           hypot(documentPoint.x - geometry.handle.x, documentPoint.y - geometry.handle.y) <= geometry.hitRadius {
+            return true
+        }
+        if resizeEnabled, let id = selectedLayerID, let documentJSON,
+           let result = try? NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
+                point: documentPoint, displayScale: scale), result.1 != nil { return true }
+        if curveHandles != nil, let id = selectedLayerID,
+           curveHitTest?(id, documentPoint, 10 / scale)?.handle != nil { return true }
+        return (try? hitTestLayer?(documentPoint, 8 / scale)) != nil
+    }
     override func setFrameSize(_ newSize: NSSize) {
         if newSize != frame.size { cancelGesture() }
         super.setFrameSize(newSize)
@@ -862,7 +891,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     /// Place the action outside the largest overflow gap, kept inside the view.
     func layoutExpandButton() {
         guard let expandButton else { return }
-        guard let expandPreview, selectionEnabled, startPoint == nil, canvasSize.width > 0 else {
+        guard let expandPreview, selectionEnabled, !selectedOnly, startPoint == nil, canvasSize.width > 0 else {
             expandButton.isHidden = true; expandArmed = false; return
         }
         let image = presentedImageRect, scale = image.width / canvasSize.width
@@ -931,6 +960,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
                 needsDisplay = true; return
             }
             hitLayerID = try hitTestLayer?(documentPoint, 8 / scale)
+            if selectedOnly && hitLayerID == nil { return }
             if let id = hitLayerID {
                 guard let documentJSON else { throw AppBridgeError.invalidResponse }
                 moveDrag = try NativeEditorMoveDrag.begin(documentJSON: documentJSON,
@@ -2113,6 +2143,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.frame = viewportInput.bounds
         drawOverlay.autoresizingMask = [.width, .height]
         drawOverlay.setAccessibilityLabel("Screenshot drawing canvas")
+        drawOverlay.onBegin = { [weak self] in
+            guard let self, self.toolShowsTransformChrome else { return }
+            self.selectCanvasLayer(nil)
+        }
         drawOverlay.onComplete = { [weak self] shape, start, end, points in
             self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
@@ -2138,7 +2172,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.setAccessibilityLabel("Screenshot layer selection canvas")
         selectionOverlay.toolTip = "Drag a layer to move, its border to resize, or its round grip to rotate. Shift constrains corner resize and rotation. Escape cancels."
         selectionOverlay.hitTestLayer = { [weak self] point, tolerance in
-            guard let json = self?.state.snapshot?.documentJSON else { return nil }
+            guard let self, let json = self.state.snapshot?.documentJSON else { return nil }
+            if self.sectionControl.selectedSegment == Section.draw {
+                guard let id = self.selectedLayerID,
+                      try NativeEditorCanvas.shapeBodyHit(documentJSON: json, layerID: id,
+                          shape: self.drawShape.rawValue, point: point, radius: tolerance * 10 / 8) else { return nil }
+                return id
+            }
             return try NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: tolerance)
         }
         selectionOverlay.outlineForLayer = { [weak self] id in
@@ -2156,6 +2196,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.onDoubleClick = { [weak self] point, tolerance in
             guard let self else { return false }
             if self.curveDoubleClick(at: point, radius: tolerance * 10 / 8) { return true }
+            guard self.sectionControl.selectedSegment == Section.layers else { return false }
             return self.beginExistingTextInput(at: point, tolerance: tolerance)
         }
         selectionOverlay.curveHitTest = { [weak self] id, point, radius in
@@ -5676,7 +5717,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextEditor.isEditable = inlineTextInput?.finishInFlight != true
         drawOverlay.drawingEnabled = active
         if !active || drawShape != .wand { hideWandLoupe() }
-        selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
+        selectionOverlay.selectedOnly = sectionControl?.selectedSegment == Section.draw
+        selectionOverlay.selectionEnabled = toolShowsTransformChrome
             && state.snapshot != nil && !state.busy && inputResolved && !importLoading
     }
 
@@ -5776,7 +5818,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 return true
             }
         }
-        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+        guard sectionControl.selectedSegment == Section.layers,
+              let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
               id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
               let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
               hit.onPath, let closest = hit.closest else { return false }
@@ -5791,7 +5834,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                         point: point, radius: radius))?.hint {
             return hint
         }
-        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+        guard sectionControl.selectedSegment == Section.layers,
+              let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
               id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
               let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
               hit.onPath else { return nil }

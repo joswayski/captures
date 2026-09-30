@@ -147,6 +147,16 @@ enum NativeEditorCanvas {
         return guide
     }
 
+    static func shapeBodyHit(documentJSON: String, layerID: String, shape: String,
+                             point: CGPoint, radius: Double) throws -> Bool {
+        let result = try query(documentJSON: documentJSON, [
+            "operation": "shape_body", "id": layerID, "shape": shape,
+            "point": ["x": Double(point.x), "y": Double(point.y)], "radius": radius,
+        ])
+        guard let hit = result["hit"] as? Bool else { throw AppBridgeError.invalidResponse }
+        return hit
+    }
+
     static func curveHit(documentJSON: String, layerID: String, point: CGPoint, radius: Double) throws -> NativeCurveHit {
         let result = try query(documentJSON: documentJSON, [
             "operation": "curve", "id": layerID,

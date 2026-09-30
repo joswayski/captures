@@ -2112,7 +2112,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.layers.menu = None;
         view.layers.rename = None;
     }
-    if view.section != Section::Layers
+    if !view.tool_shows_transform_chrome()
         || view.pending
         || view.close_requested
         || !ui.input(|input| input.focused)
@@ -2210,21 +2210,28 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             if view.crop_previous.is_some() && !view.pending && view.inline.is_none() {
                 show_crop(ui, tokens, view, available, preview, intercepted);
             }
+            let layer_owned = view.tool_shows_transform_chrome()
+                && view.shape_drag.is_none()
+                && view.inline.is_none()
+                && !view.pending
+                && !view.close_requested
+                && show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             if view.section == Section::Draw
                 && view.inline.is_none()
                 && !view.pending
                 && !view.close_requested
             {
-                show_shape(ui, tokens, view, tx, available, preview, intercepted);
+                show_shape(
+                    ui,
+                    tokens,
+                    view,
+                    tx,
+                    available,
+                    preview,
+                    intercepted || layer_owned,
+                );
             } else {
                 view.wand_loupe = None;
-            }
-            if view.section == Section::Layers
-                && view.inline.is_none()
-                && !view.pending
-                && !view.close_requested
-            {
-                show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             }
             if view.section == Section::Layers
                 && view.crop_previous.is_none()
@@ -3091,10 +3098,13 @@ fn show_layer_canvas(
     available: egui::Rect,
     preview: egui::Rect,
     viewport_intercepted: bool,
-) {
+) -> bool {
     let Some(presented) = &view.presented else {
-        return;
+        return false;
     };
+    // Keep ownership after a same-frame release/no-op/cancel; the draw path
+    // must not replay a gesture whose state has already been cleared.
+    let mut owned = view.layer_gesture.is_some();
     let document = presented.document.clone();
     let bounds = Rect {
         x: 0.,
@@ -3129,26 +3139,28 @@ fn show_layer_canvas(
             && (response.double_clicked_by(egui::PointerButton::Primary)
                 || response.triple_clicked_by(egui::PointerButton::Primary))
             && let Some(position) = response.interact_pointer_pos()
+            && available.contains(position)
+            && crate::primitives::pressed_on_layer(ui, position)
             && preview.contains(position)
         {
             let point = image_point(position, preview, bounds);
             if canvas::double_click(view, tx, &document, point, 10. / display_scale) {
                 view.cancel_layer_gesture();
-                return;
+                return true;
             }
             match document.hit_test(point, 8. / display_scale) {
-                Ok(Some(Element::Text(text))) => {
+                Ok(Some(Element::Text(text))) if view.section == Section::Layers => {
                     view.begin_inline(
                         tx,
                         captures_app::editor_session::TextInputTarget::Existing {
                             id: text.base.id.clone(),
                         },
                     );
-                    return;
+                    return true;
                 }
                 Err(error) => {
                     view.error = Some(error);
-                    return;
+                    return true;
                 }
                 _ => {}
             }
@@ -3213,6 +3225,7 @@ fn show_layer_canvas(
                             ))
                     });
                     if let Some((id, outline, initial_radians)) = rotation {
+                        owned = true;
                         view.layer_gesture = Some(LayerGesture {
                             kind: LayerGestureKind::Rotate {
                                 id,
@@ -3260,6 +3273,7 @@ fn show_layer_canvas(
                         .map(|handle| (shape.base.id.clone(), handle, Box::new(shape.clone())))
                     });
                     if let Some((id, handle, shape)) = curve {
+                        owned = true;
                         view.layer_gesture = Some(LayerGesture {
                             kind: LayerGestureKind::Curve { id, handle, shape },
                             start: point,
@@ -3292,6 +3306,7 @@ fn show_layer_canvas(
                         }
                     };
                     if let Some((id, handle, drag, resize)) = resize {
+                        owned = true;
                         view.layer_gesture = Some(LayerGesture {
                             kind: LayerGestureKind::Resize {
                                 id,
@@ -3309,8 +3324,28 @@ fn show_layer_canvas(
                         view.error = None;
                         continue;
                     }
-                    match document.hit_test(point, 8. * bounds.width / f64::from(preview.width())) {
+                    let hit = if view.section == Section::Draw {
+                        selected
+                            .map(|element| {
+                                captures_app::editor_canvas::selected_shape_body_hit(
+                                    element,
+                                    view.draw_shape.preview_key(),
+                                    point,
+                                    10. / display_scale,
+                                )
+                                .map(|hit| hit.then_some(element))
+                            })
+                            .transpose()
+                            .map(Option::flatten)
+                    } else {
+                        document.hit_test(point, 8. / display_scale)
+                    };
+                    match hit {
                         Ok(hit) => {
+                            if view.section == Section::Draw && hit.is_none() {
+                                continue;
+                            }
+                            owned = true;
                             let move_state = hit
                                 .map(|element| {
                                     let drag = MoveDrag::new(
@@ -3539,6 +3574,52 @@ fn show_layer_canvas(
     if response.hovered() || view.layer_gesture.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
+    if view.section == Section::Draw
+        // Idle handle/body hover keeps the transform cursor. A drawing press
+        // that ends over the old selection still belongs to drawing.
+        && !ui.input(|input| input.pointer.any_down() || input.events.iter().any(|event| {
+            matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, .. })
+        }))
+        && let Some(position) = ui.input(|input| input.pointer.hover_pos())
+            .filter(|pos| available.contains(*pos) && preview.contains(*pos) && crate::primitives::pressed_on_layer(ui, *pos))
+        && let Some(element) = view.selected_layer.as_ref().and_then(|id| {
+            document.elements.iter().find(|element| &element.base().id == id)
+        }).filter(|element| element.base().visible && !element.base().locked)
+    {
+        let point = image_point(position, preview, bounds);
+        owned |= element
+            .resize_handle_at(point, 8. / display_scale)
+            .ok()
+            .flatten()
+            .is_some()
+            || element
+                .selection_outline()
+                .ok()
+                .and_then(|outline| {
+                    rotation_handle(
+                        outline,
+                        element.base().rotation(),
+                        display_scale,
+                        bounds.width,
+                        bounds.height,
+                    )
+                })
+                .is_some_and(|handle| {
+                    (point.x - handle.handle.x).hypot(point.y - handle.handle.y)
+                        <= handle.hit_radius
+                })
+            || matches!(element, Element::Shape(shape) if captures_app::editor_canvas::hit_test_curve_handle(shape, point, 10. / display_scale).is_some())
+            || captures_app::editor_canvas::selected_shape_body_hit(
+                element,
+                view.draw_shape.preview_key(),
+                point,
+                10. / display_scale,
+            )
+            .unwrap_or(false);
+    }
+    if owned && input_enabled && !viewport_intercepted {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
     let (outline, delta, active_rotation, guides, show_grips) =
         if let Some(gesture) = &view.layer_gesture {
             match &gesture.kind {
@@ -3738,8 +3819,9 @@ fn show_layer_canvas(
             if let Some((_, handles)) = canvas::selected_curve(view) {
                 canvas::paint_curve_handles(&painter, tokens, &handles, project, false);
             }
-            if let Some(pointer) = response.hover_pos()
-                && preview.contains(pointer)
+            if let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
+                available.contains(*pos) && crate::primitives::pressed_on_layer(ui, *pos)
+            }) && preview.contains(pointer)
                 && let Some(hint) = canvas::hover_hint(
                     view,
                     &document,
@@ -3752,6 +3834,7 @@ fn show_layer_canvas(
         }
         Some(_) => {}
     }
+    owned
 }
 
 /// One shared token table for UI tests that drive canvas painters directly.
@@ -4069,6 +4152,7 @@ fn show_shape(
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
     {
         let start = image_point(origin, preview, bounds);
+        view.select_layer_exact(None);
         view.shape_drag = Some((start, start));
         view.shape_drag_frame = preview;
         if view.draw_shape == DrawShape::Freehand {
@@ -4112,16 +4196,32 @@ fn show_shape(
             }
         });
     }
+    let stopped = response.drag_stopped_by(egui::PointerButton::Primary);
+    let position = if stopped {
+        // A later hover sample in this frame cannot overwrite release.
+        ui.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => Some(*pos),
+                _ => None,
+            })
+        })
+    } else {
+        response.interact_pointer_pos()
+    };
     if first_pass
         && !viewport_intercepted
-        && (response.dragged_by(egui::PointerButton::Primary)
-            || response.drag_stopped_by(egui::PointerButton::Primary))
-        && let Some(position) = response.interact_pointer_pos()
+        && (response.dragged_by(egui::PointerButton::Primary) || stopped)
+        && let Some(position) = position
         && let Some((_, end)) = &mut view.shape_drag
     {
         *end = image_point(position, frame, bounds);
     }
-    if response.hovered() || response.dragged() {
+    if !viewport_intercepted && (response.hovered() || response.dragged()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     let style = view.new_annotation_style.clone();
@@ -4129,7 +4229,7 @@ fn show_shape(
     if first_pass
         && !viewport_intercepted
         && previous_geometry != (view.shape_drag, view.freehand_points.len())
-        && !response.drag_stopped_by(egui::PointerButton::Primary)
+        && !stopped
         && let Some((start, end)) = view.shape_drag
         && let Some(pixels) = &mut view.drawing_preview
     {
@@ -4276,7 +4376,7 @@ fn show_shape(
     }
     if first_pass
         && !viewport_intercepted
-        && response.drag_stopped_by(egui::PointerButton::Primary)
+        && stopped
         && let Some((start, end)) = view.shape_drag.take()
     {
         let request = if view.draw_shape == DrawShape::Freehand {
@@ -12206,12 +12306,228 @@ mod tests {
                 );
                 let tokens = crate::tokens::load().into_values().next().unwrap();
                 canvas::receive_drops(ctx, view, Some(preview));
-                show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview, false);
+                let owned = view.shape_drag.is_none()
+                    && show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview, false);
+                if view.section == Section::Draw && !view.pending {
+                    show_shape(&mut ui, &tokens, view, tx, screen, preview, owned);
+                }
                 canvas::show_expand(&mut ui, &tokens, view, tx, screen, preview);
                 canvas::paint_drop_guide(&ui, &tokens, view, screen, preview);
             },
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn active_shape_handles_and_body_own_the_whole_gesture_but_empty_space_draws() {
+        for action in ["click", "resize", "rotate", "move", "draw", "cancel"] {
+            let ctx = egui::Context::default();
+            let (mut view, _) = canvas_view(
+                &ctx,
+                Point { x: 20., y: 50. },
+                Point { x: 180., y: 50. },
+                OpenShapeKind::Line,
+            );
+            let document = Arc::make_mut(&mut view.presented.as_mut().unwrap().document);
+            document.elements.pop();
+            let id = document
+                .create_closed_shape(ClosedShapeCreate {
+                    shape: ClosedShapeKind::Rectangle,
+                    start: Point { x: 20., y: 20. },
+                    end: Point { x: 100., y: 70. },
+                    style: ElementStyle::default(),
+                    opacity: 100.,
+                })
+                .unwrap();
+            let outline = document
+                .elements
+                .last()
+                .unwrap()
+                .selection_outline()
+                .unwrap();
+            view.section = Section::Draw;
+            view.draw_shape = DrawShape::Rectangle;
+            view.select_layer_exact(Some(id.clone()));
+            let (tx, rx) = mpsc::channel();
+            let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+            let project =
+                |point: Point| egui::pos2(100. + point.x as f32 / 2., 100. + point.y as f32 / 2.);
+            let start = project(match action {
+                "move" => Point { x: 60., y: 45. },
+                "draw" => Point { x: 180., y: 85. },
+                "rotate" => {
+                    rotation_handle(outline, 0., 0.5, 200., 100.)
+                        .unwrap()
+                        .handle
+                }
+                _ => outline[0],
+            });
+            // A new drawing crosses the old selected body; hover cannot steal it.
+            let end = if action == "draw" {
+                project(Point { x: 60., y: 45. })
+            } else {
+                start + egui::vec2(23., 7.)
+            };
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let frame = |view: &mut View, events| {
+                run_canvas(
+                    &ctx,
+                    view,
+                    &tx,
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    preview,
+                )
+            };
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![egui::Event::PointerMoved(start)]);
+            if action == "click" {
+                frame(&mut view, vec![button(start, true), button(start, false)]);
+                assert!(rx.try_recv().is_err() && !view.pending && view.shape_drag.is_none());
+                assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+                continue;
+            }
+            frame(&mut view, vec![button(start, true)]);
+            frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+            if action == "draw" {
+                assert_eq!(
+                    view.shape_drag,
+                    Some((Point { x: 180., y: 85. }, Point { x: 60., y: 45. }))
+                );
+                assert!(view.layer_gesture.is_none());
+            }
+            assert!(rx.try_recv().is_err(), "{action}: only release commits");
+            if action == "cancel" {
+                frame(
+                    &mut view,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(
+                &mut view,
+                vec![button(end, false), egui::Event::PointerMoved(start)],
+            );
+            if action == "cancel" {
+                assert!(rx.try_recv().is_err() && !view.pending);
+            } else {
+                let job = rx.try_recv().expect(action);
+                match (action, job) {
+                    (
+                        "resize",
+                        Job::Apply(Request::Layer {
+                            id: target,
+                            edit:
+                                LayerEdit::Resize {
+                                    handle: ResizeHandle::Nw,
+                                    current,
+                                    ..
+                                },
+                        }),
+                    ) => {
+                        assert_eq!(target, id);
+                        assert!((current.x - (outline[0].x + 46.)).abs() < 1e-12);
+                        assert!((current.y - (outline[0].y + 14.)).abs() < 1e-12);
+                    }
+                    (
+                        "rotate",
+                        Job::Apply(Request::Layer {
+                            id: target,
+                            edit: LayerEdit::Rotate { radians },
+                        }),
+                    ) => {
+                        assert_eq!(target, id);
+                        assert_ne!(radians, 0.);
+                    }
+                    (
+                        "move",
+                        Job::Apply(Request::Layer {
+                            id: target,
+                            edit:
+                                LayerEdit::DragMove {
+                                    delta_x,
+                                    delta_y,
+                                    display_scale,
+                                },
+                        }),
+                    ) => {
+                        assert_eq!(target, id);
+                        assert_eq!((delta_x, delta_y, display_scale), (46., 14., 0.5));
+                    }
+                    ("draw", Job::Apply(Request::CreateClosedShape { create })) => {
+                        assert_eq!(create.shape, ClosedShapeKind::Rectangle);
+                        assert_eq!(create.start, Point { x: 180., y: 85. });
+                        assert_eq!(create.end, Point { x: 60., y: 45. });
+                        assert!(view.selected_layer.is_none());
+                    }
+                    _ => panic!("{action}: wrong gesture owner"),
+                }
+                assert!(rx.try_recv().is_err(), "{action}: exactly one request");
+            }
+            assert_eq!(
+                (view.section, view.draw_shape),
+                (Section::Draw, DrawShape::Rectangle)
+            );
+            assert!(view.layer_gesture.is_none() && view.shape_drag.is_none());
+        }
+        for (kind, tool) in [
+            (OpenShapeKind::Line, DrawShape::Line),
+            (OpenShapeKind::Arrow, DrawShape::Arrow),
+        ] {
+            let ctx = egui::Context::default();
+            let (mut view, id) = canvas_view(
+                &ctx,
+                Point { x: 20., y: 50. },
+                Point { x: 180., y: 50. },
+                kind,
+            );
+            view.section = Section::Draw;
+            view.draw_shape = tool;
+            let (tx, rx) = mpsc::channel();
+            let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+            let start = egui::pos2(150., 125.);
+            let end = egui::pos2(150., 140.);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            for events in [
+                vec![],
+                vec![egui::Event::PointerMoved(start), button(start, true)],
+                vec![egui::Event::PointerMoved(end)],
+                vec![button(end, false)],
+            ] {
+                run_canvas(
+                    &ctx,
+                    &mut view,
+                    &tx,
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    preview,
+                );
+            }
+            assert!(
+                matches!(rx.try_recv(), Ok(Job::Apply(Request::Layer { id: target, edit: LayerEdit::Curve { edit: captures_app::editor_canvas::CurveEdit::Move { handle: captures_app::editor_canvas::CurveHandle::StarterControl { index: 1 }, point } } })) if target == id && point == Point { x: 100., y: 80. })
+            );
+            assert!(rx.try_recv().is_err() && view.shape_drag.is_none());
+            assert_eq!((view.section, view.draw_shape), (Section::Draw, tool));
+        }
     }
 
     #[test]

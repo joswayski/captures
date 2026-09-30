@@ -2651,6 +2651,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try rangeSlider("New drawing stroke width", in: defaults).value, 8)
         XCTAssertTrue(overlay.drawingEnabled)
         XCTAssertEqual(overlay.shape, .ellipse, "showing Properties keeps the drawing tool active")
+        XCTAssertTrue(controller.selectionOverlay.selectionEnabled,
+                      "newly placed shapes keep their transform grips live")
+        XCTAssertTrue(controller.selectionOverlay.selectedOnly,
+                      "empty space still belongs to the active drawing tool")
         try render(controller.root, name: "screenshot-editor-created-properties")
         controller.selectDrawTool(.ellipse)
         XCTAssertNil(controller.selectionOverlay.selectedLayerID,
@@ -4311,6 +4315,70 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(overlay.movePreview?.outline[0].x, 0)
         overlay.drag(to: CGPoint(x: 41, y: 50))
         XCTAssertNil(overlay.movePreview)
+    }
+
+    func testShapeToolOverlayPassesEmptyCanvasThroughAndRetainsOwnedTransforms() throws {
+        _ = NSApplication.shared
+        let parent = EditorViewportGestureView(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        let drawing = EditorDrawOverlay(frame: parent.bounds)
+        drawing.canvasSize = parent.bounds.size; drawing.drawingEnabled = true
+        let overlay = EditorSelectionOverlay(frame: parent.bounds)
+        parent.addSubview(drawing); parent.addSubview(overlay)
+        overlay.canvasSize = parent.bounds.size; overlay.selectionEnabled = true; overlay.selectedOnly = true
+        let element: [String: Any] = [
+            "kind": "shape", "id": "selected", "shape": "rectangle", "x": 100.0, "y": 70.0,
+            "endX": 180.0, "endY": 130.0, "controls": [], "locked": false, "visible": true,
+            "opacity": 100.0, "blendMode": "source-over",
+            "style": ["color": "#ff3b5c", "fill": "#ff3b5c", "strokeWidth": 8.0],
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "width": 300.0, "height": 220.0, "elements": [element],
+        ]), as: UTF8.self)
+        overlay.documentJSON = json; overlay.selectedLayerID = "selected"
+        let outline = [CGPoint(x: 95, y: 65), CGPoint(x: 185, y: 65),
+                       CGPoint(x: 185, y: 135), CGPoint(x: 95, y: 135)]
+        overlay.selectedOutline = outline; overlay.rotationEnabled = true; overlay.resizeEnabled = true
+        overlay.hitTestLayer = { point, tolerance in
+            try NativeEditorCanvas.shapeBodyHit(documentJSON: json, layerID: "selected",
+                shape: "rectangle", point: point, radius: tolerance * 10 / 8) ? "selected" : nil
+        }
+        overlay.outlineForLayer = { _ in outline }
+        let empty = CGPoint(x: 20, y: 200), body = CGPoint(x: 140, y: 100)
+        XCTAssertTrue(parent.hitTest(empty) === drawing)
+        XCTAssertTrue(parent.hitTest(body) === overlay)
+        overlay.begin(at: empty); overlay.end(at: empty)
+        XCTAssertNil(overlay.startPoint, "empty canvas never becomes a deselection/move gesture")
+
+        var moves: [(String, CGFloat, CGFloat)] = []
+        overlay.onMove = { id, dx, dy, _ in moves.append((id, dx, dy)) }
+        overlay.begin(at: body)
+        XCTAssertTrue(parent.hitTest(empty) === overlay, "the original owner survives leaving the shape")
+        overlay.drag(to: CGPoint(x: 155, y: 94))
+        XCTAssertTrue(moves.isEmpty)
+        overlay.end(at: CGPoint(x: 157, y: 91))
+        XCTAssertEqual(moves.count, 1); XCTAssertEqual(moves[0].0, "selected")
+        XCTAssertEqual(moves[0].1, 17); XCTAssertEqual(moves[0].2, -9)
+        XCTAssertTrue(parent.hitTest(empty) === drawing)
+
+        var resize: (String, String, CGPoint)?
+        overlay.onResize = { id, handle, point, _, _ in resize = (id, handle, point) }
+        XCTAssertTrue(parent.hitTest(outline[0]) === overlay)
+        overlay.begin(at: outline[0]); overlay.end(at: CGPoint(x: 84, y: 55))
+        XCTAssertEqual(resize?.0, "selected"); XCTAssertEqual(resize?.1, "nw")
+        XCTAssertEqual(resize?.2, CGPoint(x: 84, y: 55))
+        let grip = try XCTUnwrap(NativeEditorRotationHandle(outline: outline, radians: 0,
+            displayScale: 1, canvas: overlay.canvasSize))
+        XCTAssertTrue(parent.hitTest(grip.handle) === overlay)
+        var rotations = 0; overlay.onRotate = { _, _ in rotations += 1 }
+        overlay.begin(at: grip.handle); overlay.end(at: grip.handle)
+        XCTAssertEqual(rotations, 0, "a grip click does not create a layer or undo entry")
+        overlay.begin(at: grip.handle); overlay.drag(to: CGPoint(x: grip.handle.x + 12, y: grip.handle.y + 5))
+        overlay.cancelGesture(); overlay.end(at: body)
+        XCTAssertEqual(rotations, 0, "Escape/cancel cannot fall through into drawing")
+        overlay.begin(at: grip.handle); overlay.end(at: CGPoint(x: grip.handle.x + 12, y: grip.handle.y + 5))
+        XCTAssertEqual(rotations, 1)
+        overlay.selectedOnly = false
+        XCTAssertTrue(parent.hitTest(empty) === overlay, "Select still owns empty-space deselection")
     }
 
     func testCanvasRotationGripHasPriorityUsesReleaseAndNoOpDoesNotCommit() throws {

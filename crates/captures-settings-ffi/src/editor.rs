@@ -603,6 +603,12 @@ enum CanvasQuery {
         selected_id: Option<String>,
         point: Option<Point>,
     },
+    ShapeBody {
+        id: String,
+        shape: String,
+        point: Point,
+        radius: f64,
+    },
     Curve {
         id: String,
         point: Point,
@@ -643,6 +649,30 @@ pub unsafe extern "C" fn captures_editor_canvas_query_v1(
                     selected_id.as_deref(),
                     point
                 )))
+            }
+            CanvasQuery::ShapeBody {
+                id,
+                shape,
+                point,
+                radius,
+            } => {
+                if !point.x.is_finite()
+                    || !point.y.is_finite()
+                    || !radius.is_finite()
+                    || radius < 0.
+                {
+                    return Err(
+                        "Shape hit testing requires finite input and a nonnegative radius.".into(),
+                    );
+                }
+                let hit = document
+                    .elements
+                    .iter()
+                    .find(|element| element.base().id == id)
+                    .map(|element| canvas::selected_shape_body_hit(element, &shape, point, radius))
+                    .transpose()?
+                    .unwrap_or(false);
+                Ok(json!({"hit": hit}))
             }
             CanvasQuery::Curve { id, point, radius } => {
                 if !point.x.is_finite() || !point.y.is_finite() || !radius.is_finite() {
@@ -1921,6 +1951,28 @@ mod tests {
             ));
             assert_eq!(hit["result"]["handle"], json!({"kind": "start"}));
             assert_eq!(hit["result"]["hint"], "Drag to move endpoint");
+            for (id, shape, y, radius, expected) in [
+                (line.as_str(), "arrow", 1., 0., true),
+                (line.as_str(), "arrow", 100., 6., false),
+                (line.as_str(), "line", 1., 6., false),
+                ("capture-background", "arrow", 1., 6., false),
+                ("missing", "arrow", 1., 6., false),
+            ] {
+                let query = CString::new(
+                    json!({"operation": "shape_body", "id": id,
+                    "shape": shape, "point": {"x": 10., "y": y}, "radius": radius})
+                    .to_string(),
+                )
+                .unwrap();
+                let hit = take_json(captures_editor_canvas_query_v1(
+                    document.as_ptr(),
+                    query.as_ptr(),
+                ));
+                assert_eq!(hit, json!({"ok": true, "result": {"hit": expected}}));
+            }
+            let invalid_radius = take_json(captures_editor_canvas_query_v1(document.as_ptr(),
+                c"{\"operation\":\"shape_body\",\"id\":\"missing\",\"shape\":\"arrow\",\"point\":{\"x\":1,\"y\":1},\"radius\":-1}".as_ptr()));
+            assert_eq!(invalid_radius["ok"], false);
             let preview = CString::new(
                 json!({"operation": "curve_preview", "id": line,
                        "handle": {"kind": "starter_control", "index": 1},

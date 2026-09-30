@@ -122,6 +122,8 @@ def main():
                         help="Exercise confirmed original replacement, History identity and retained drafts")
     parser.add_argument("--canvas-interactions-only", action="store_true",
                         help="Exercise image file drop guides, Expand canvas and line curve editing")
+    parser.add_argument("--shape-transforms-only", action="store_true",
+                        help="Transform freshly drawn shapes without switching tools; undo and reopen")
     parser.add_argument("--external-image-only", action="store_true",
                         help="Open external images, preserve per-file errors and safely reopen drafts/sources")
     args = parser.parse_args()
@@ -1950,6 +1952,119 @@ def main():
                            "draft-reopen-exact-pixels", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native polygons: previews, cancellation, silhouettes, undo/redo, minimum, draft")
+            return
+
+        if args.shape_transforms_only:
+            resize_editor(1200, 701)
+            save(640, 360, 0, 0)
+
+            def shape_gesture(start, end, capture=None, cancel=False):
+                before = draft_bytes()
+                start, end = document_point(start), document_point(end)
+                run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                    "sleep", ".2", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+                    "--window", editor, *map(str, end), "sleep", ".3")
+                if capture:
+                    shot(editor, capture)
+                    assert draft_bytes() == before, "transient transform wrote a draft"
+                if cancel:
+                    run("xdotool", "key", "Escape", "sleep", ".2")
+                run("xdotool", "mouseup", "1", "sleep", ".3")
+
+            def rectangle_is(x, y, end_x, end_y):
+                values = layers()
+                return len(values) == 2 and all(math.isclose(values[-1][key], value, abs_tol=1e-6)
+                    for key, value in (("x", x), ("y", y), ("endX", end_x), ("endY", end_y)))
+
+            draw_tool("rectangle")
+            shape_gesture((260, 110), (380, 210))
+            rectangle = save_layers(lambda values: len(values) == 2, "fresh rectangle")[-1]
+            rectangle_id = rectangle["id"]
+            assert rectangle["style"]["strokeWidth"] == 8
+            shot(editor, "shape-active-created")
+            pixel("shape-active-created", 14, rail_point("shapes")[1], (255, 202, 40))
+            shape_gesture((320, 160), (357, 191), capture="shape-active-moving")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "active Rectangle moves its body")
+            assert layers()[-1]["id"] == rectangle_id
+            shot(editor, "shape-active-moved")
+            document_pixel("shape-active-moved", 350, 190, (255, 59, 92))
+            document_pixel("shape-active-moved", 300, 120, (40, 110, 166))
+            toolbar_click("undo")
+            save_until(lambda: rectangle_is(260, 110, 380, 210), "body move is one undo step")
+            toolbar_click("redo")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "body move redo")
+
+            # Shipping scales the padded selection box affinely: 130x110
+            # becomes 150x130. Endpoints lie 5px inside that original box.
+            resized = (272 + 5 * 150 / 130, 116 + 5 * 130 / 110,
+                       272 + 125 * 150 / 130, 116 + 105 * 130 / 110)
+            shape_gesture((292, 136), (272, 116), capture="shape-active-resizing")
+            save_until(lambda: rectangle_is(*resized), "active Rectangle resizes")
+            shot(editor, "shape-active-resized")
+            pixel("shape-active-resized", 14, rail_point("shapes")[1], (255, 202, 40))
+            toolbar_click("undo")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "resize is one undo step")
+            toolbar_click("redo")
+            save_until(lambda: rectangle_is(*resized), "resize redo")
+
+            # Center (347,181), padded top near 117, grip 28px above it.
+            # The release vector is (31,-73), independently deriving the angle.
+            before = draft_bytes()
+            shape_gesture((347, 88), (378, 108), capture="shape-active-rotation-cancel", cancel=True)
+            assert draft_bytes() == before
+            shape_gesture((347, 88), (378, 108))
+            angle = math.atan2(31, 73)
+            save_layers(lambda values: len(values) == 2 and math.isclose(
+                values[-1].get("rotation", 0), angle, abs_tol=1e-12), "active Rectangle rotates")
+            shot(editor, "shape-active-rotated")
+            pixel("shape-active-rotated", 14, rail_point("shapes")[1], (255, 202, 40))
+            document_pixel("shape-active-rotated", 347, 181, (255, 59, 92))
+            toolbar_click("undo")
+            save_layers(lambda values: values[-1].get("rotation", 0) == 0, "rotation single undo")
+            toolbar_click("redo")
+            save_layers(lambda values: math.isclose(values[-1].get("rotation", 0), angle,
+                abs_tol=1e-12), "rotation redo")
+
+            # Empty space must draw another rectangle, not move/select the original.
+            shape_gesture((470, 270), (560, 320))
+            created = save_layers(lambda values: len(values) == 3, "empty space starts another shape")[-1]
+            assert created["id"] != rectangle_id and created["shape"] == "rectangle"
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle_id,
+                        "new shape is one undo step")
+
+            # Newly drawn Lines keep curve dots live; no Select click in between.
+            draw_tool("line")
+            shape_gesture((180, 290), (580, 290))
+            line = save_layers(lambda values: len(values) == 3, "fresh line")[-1]
+            shape_gesture((380, 290), (380, 250))
+            curved = save_layers(lambda values: len(values) == 3 and len(values[-1]["controls"]) == 3,
+                                 "active Line bends its starter dot")[-1]
+            assert curved["id"] == line["id"] and curved["shape"] == "line"
+            assert [(round(p["x"]), round(p["y"])) for p in curved["controls"]] == [
+                (280, 290), (380, 250), (480, 290)]
+            shot(editor, "shape-active-curve")
+            pixel("shape-active-curve", 14, rail_point("shapes")[1], (255, 202, 40))
+            document_pixel("shape-active-curve", 330, 270, (255, 59, 92), 8)
+            saved = layers()
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "active-shape editor closes")
+            editor = reopen()
+            assert layers() == saved
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, "shape-active-reopened-minimum")
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "active-shape suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["active-rectangle-body", "body-move-pixels", "active-corner-resize",
+                           "active-rotation", "rotation-cancel", "single-undo-redo",
+                           "empty-space-new-shape", "active-line-starter", "curve-pixels",
+                           "retained-active-tool", "exact-draft-reopen", "minimum-layout", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native active shapes: move, resize, rotate, cancel, curve, undo, pixels, draft")
             return
 
         if args.canvas_interactions_only:

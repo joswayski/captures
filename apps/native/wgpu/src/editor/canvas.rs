@@ -661,7 +661,8 @@ pub(super) fn double_click(
             return true;
         }
     }
-    if let Ok(Some(Element::Shape(shape))) = document.hit_test(point, radius)
+    if view.section == Section::Layers
+        && let Ok(Some(Element::Shape(shape))) = document.hit_test(point, radius)
         && canvas::is_curveable(shape)
         && Some(&shape.base.id) != view.selected_layer.as_ref()
     {
@@ -756,6 +757,9 @@ pub(super) fn hover_hint(
         && let Some(hint) = canvas::curve_hover_hint(&shape, point, radius)
     {
         return Some(hint);
+    }
+    if view.section != Section::Layers {
+        return None;
     }
     match document.hit_test(point, radius) {
         Ok(Some(Element::Shape(shape)))
