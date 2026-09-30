@@ -247,6 +247,7 @@ final class ScreenshotEditorTests: XCTestCase {
             worker: worker, writeClipboard: { _ in true })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showGeometry(in: controller.root)
         let sections = try segmented("Editor section", in: controller.root)
         let canvasWidth = try field("Canvas width", in: controller.root)
         XCTAssertTrue(controller.window.makeFirstResponder(canvasWidth))
