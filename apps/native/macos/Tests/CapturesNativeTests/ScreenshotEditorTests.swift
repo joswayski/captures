@@ -4216,7 +4216,13 @@ final class ScreenshotEditorTests: XCTestCase {
         try render(controller.root, name: "screenshot-editor-new-drawing-shadow-retained-light")
         controller.window.setContentSize(NSSize(width: 760, height: 540))
         controller.root.layoutSubtreeIfNeeded()
-        for input in shadowInputs {
+        // The fixed title leaves less room than the entire multi-row color
+        // group. Each swatch and custom well must still be fully reachable.
+        let compactInputs = shadowInputs.flatMap { input -> [NSView] in
+            if let row = input as? ColorSwatchRow { return row.swatchButtons + [row.customWell] }
+            return [input]
+        }
+        for input in compactInputs {
             input.scrollToVisible(input.bounds)
             XCTAssertTrue(input.visibleRect.contains(input.bounds), "compact \(input) remains reachable by scrolling")
         }
@@ -5140,7 +5146,9 @@ final class ScreenshotEditorTests: XCTestCase {
                            "Line/Arrow expose transforms; Pen keeps only style Properties")
             if index == 4 {
                 XCTAssertEqual((worker.requests.last?["points"] as? [[String: CGFloat]])?.count, 2)
-                XCTAssertEqual(try field("Properties heading", in: controller.root).stringValue, "Freehand")
+                let heading = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+                    .first { $0.accessibilityLabel() == "Properties heading" && !$0.isHiddenOrHasHiddenAncestor })
+                XCTAssertEqual(heading.stringValue, "Freehand")
                 XCTAssertEqual(try rangeSlider("Stroke width", in: controller.root).value, 4)
                 try render(controller.root, name: "screenshot-editor-pen-properties-no-transform")
             } else { XCTAssertEqual(worker.requests.last?["shape"] as? String, index == 2 ? "line" : "arrow") }
