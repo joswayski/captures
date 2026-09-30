@@ -140,6 +140,7 @@ def main():
             # Every shipping state renders with shared copy and the shipping card height.
             stills = [(state, "dark", "top") for state in STILLS]
             stills += [("available", "light", "top"), ("error", "light", "top"),
+                       ("closing", "light", "top"),
                        ("single", "dark", "bottom"), ("single", "dark", "none")]
             for state, appearance, tray in stills:
                 name = f"{state}-{appearance}-{tray}"

@@ -291,19 +291,13 @@ pub fn show(
             area.min + egui::vec2(tokens.number("s-4"), (height - 16.) / 2.),
             egui::vec2(16., 16.),
         );
-        let ink = Stroke::new(1.6, tokens.color("caution-text"));
-        let c = glyph.center();
-        card_ui.painter().add(egui::Shape::closed_line(
-            vec![
-                c + egui::vec2(0., -6.),
-                c + egui::vec2(6.5, 5.),
-                c + egui::vec2(-6.5, 5.),
-            ],
-            ink,
-        ));
-        card_ui
-            .painter()
-            .line_segment([c + egui::vec2(0., -2.), c + egui::vec2(0., 1.5)], ink);
+        crate::capture_controls::paint_icon(
+            card_ui.painter(),
+            "warning",
+            glyph,
+            1.8,
+            tokens.color("caution-text"),
+        );
         card_ui.painter().galley(
             egui::pos2(text_left, area.top() + tokens.number("s-3")),
             galley,
@@ -906,6 +900,66 @@ impl FixtureHost {
         if self.last_report.as_ref() != Some(&report) {
             crate::emit("update-notice", report.clone());
             self.last_report = Some(report);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_warning_has_shipping_stem_dot_and_scaled_stroke() {
+        use captures_app::update_notice::{ViewState, fixture, present};
+        let presentation = present(fixture("closing").as_ref(), &ViewState::default());
+        let placement = Placement {
+            x: 0.,
+            y: 0.,
+            width: 456.,
+            height: presentation.card_height + 56.,
+            caret: Caret::None,
+            caret_x: 0.,
+        };
+        for theme in ["light-mustard", "dark-mustard"] {
+            let tokens = crate::tokens::load().remove(theme).unwrap();
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert!(show(ui, &tokens, &presentation, &placement).is_none());
+            });
+            output.textures_delta.clear();
+            let ink = egui::epaint::ColorMode::Solid(tokens.color("caution-text"));
+            let paths: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Path(path) if path.stroke.color == ink => Some(path),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(paths.len(), 3, "rounded triangle, stem and dot: {theme}");
+            assert!(
+                paths
+                    .iter()
+                    .all(|path| (path.stroke.width - 1.2).abs() < 0.001)
+            );
+            let segments: Vec<_> = paths
+                .iter()
+                .filter(|path| path.points.len() == 2)
+                .map(|path| path.points[1] - path.points[0])
+                .collect();
+            // Shipping 24-unit SVG at 16px: v5.2 stem and h.01 round-cap dot.
+            assert!(
+                segments
+                    .iter()
+                    .any(|delta| delta.x.abs() < 0.001 && (delta.y - 3.466_667).abs() < 0.001),
+                "stem: {theme}"
+            );
+            assert!(
+                segments
+                    .iter()
+                    .any(|delta| (delta.x - 0.006_667).abs() < 0.001 && delta.y.abs() < 0.001),
+                "dot: {theme}"
+            );
         }
     }
 }

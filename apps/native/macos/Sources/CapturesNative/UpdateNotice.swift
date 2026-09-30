@@ -564,8 +564,12 @@ final class UpdateNoticeView: NSView {
             box.layer?.borderWidth = 1
             box.layer?.cornerRadius = tokens.number("r-md")
             let glyph = NSImageView(frame: NSRect(x: s4, y: (boxHeight - 16) / 2, width: 16, height: 16))
-            glyph.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil)
-            glyph.contentTintColor = tokens.color("caution-text")
+            glyph.image = NSImage(size: glyph.frame.size, flipped: true) { [tokens] rect in
+                tokens.color("caution-text").setStroke()
+                ShippingIcons.stroke("warning", in: rect)
+                return true
+            }
+            glyph.setAccessibilityElement(false)
             box.addSubview(glyph)
             text.frame = NSRect(x: s4 + 16 + s3, y: s3, width: textWidth, height: textHeight)
             box.addSubview(text)
