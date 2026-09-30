@@ -3757,8 +3757,10 @@ def main():
         # Two swatch rows put Opacity, Blur and the offsets 32px higher.
         annotation_slider(shadow + 177, shadowed, "End", "Next", "Next")  # 80%.
         annotation_slider(shadow + 246, shadowed, "Home")  # 0 px blur.
-        annotation_field(shadow + 306, shadowed, "25", 100)
-        annotation_field(shadow + 306, shadowed, "-12", 240)
+        # The pinned-heading layout puts the text centres 12px above the old
+        # click points, which hit the lower padding instead of focusing input.
+        annotation_field(shadow + 294, shadowed, "25", 100)
+        annotation_field(shadow + 294, shadowed, "-12", 240)
         styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}) == {"color": "#ff8a22", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}, "custom annotation shadow")[-1]
         assert styled["id"] == annotation["id"] and styled["locked"]
         assert styled["style"]["fill"] == "#36c96b" and styled["style"]["strokeWidth"] == 12
