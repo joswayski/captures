@@ -894,6 +894,32 @@ impl Element {
         }
     }
 
+    /// Selection-box picking for one visible, unlocked layer. Callers validate
+    /// finite coordinates and a nonnegative tolerance before picking.
+    pub(crate) fn hit_test(&self, point: Point, tolerance: f64) -> Result<bool, String> {
+        let base = self.base();
+        if !base.visible || base.locked {
+            return Ok(false);
+        }
+        let bounds = self.selection_bounds()?;
+        let Point { mut x, mut y } = point;
+        // Match the shipping zero-angle shortcut: subtracting/adding the
+        // pivot can otherwise move an exact fractional edge outside.
+        if base.rotation() != 0. {
+            let center_x = bounds.x + bounds.width / 2.;
+            let center_y = bounds.y + bounds.height / 2.;
+            let (sin, cos) = (-base.rotation()).sin_cos();
+            let delta_x = point.x - center_x;
+            let delta_y = point.y - center_y;
+            x = center_x + delta_x * cos - delta_y * sin;
+            y = center_y + delta_x * sin + delta_y * cos;
+        }
+        Ok(x >= bounds.x - tolerance
+            && x <= bounds.x + bounds.width + tolerance
+            && y >= bounds.y - tolerance
+            && y <= bounds.y + bounds.height + tolerance)
+    }
+
     /// Shipping unrotated selection bounds, including annotation padding, not
     /// painted-pixel bounds. The center is also the element's rotation pivot.
     /// Text follows shipping's estimated wrapping, not measured glyph ink.
@@ -1446,28 +1472,7 @@ impl Document {
             );
         }
         for element in self.elements.iter().rev() {
-            let base = element.base();
-            if !base.visible || base.locked {
-                continue;
-            }
-            let bounds = element.selection_bounds()?;
-            let Point { mut x, mut y } = point;
-            // Match the shipping zero-angle shortcut: subtracting/adding the
-            // pivot can otherwise move an exact fractional edge outside.
-            if base.rotation() != 0. {
-                let center_x = bounds.x + bounds.width / 2.;
-                let center_y = bounds.y + bounds.height / 2.;
-                let (sin, cos) = (-base.rotation()).sin_cos();
-                let delta_x = point.x - center_x;
-                let delta_y = point.y - center_y;
-                x = center_x + delta_x * cos - delta_y * sin;
-                y = center_y + delta_x * sin + delta_y * cos;
-            }
-            if x >= bounds.x - tolerance
-                && x <= bounds.x + bounds.width + tolerance
-                && y >= bounds.y - tolerance
-                && y <= bounds.y + bounds.height + tolerance
-            {
+            if element.hit_test(point, tolerance)? {
                 return Ok(Some(element));
             }
         }
