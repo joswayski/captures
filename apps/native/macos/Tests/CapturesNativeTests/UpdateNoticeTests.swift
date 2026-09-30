@@ -139,7 +139,8 @@ final class UpdateNoticeTests: XCTestCase {
                 })
                 let glyph = try XCTUnwrap(box.subviews.compactMap { $0 as? NSImageView }.first)
                 let image = try XCTUnwrap(glyph.image)
-                XCTAssertFalse(image.isSymbolImage, "close warnings use shipping paths, not SF Symbols")
+                XCTAssertTrue(image.representations.contains { $0 is NSCustomImageRep },
+                              "close warnings use custom shipping paths, not SF Symbols")
                 XCTAssertEqual(image.size, NSSize(width: 16, height: 16))
                 XCTAssertFalse(glyph.isAccessibilityElement(), "the warning text names the whole row")
             }
