@@ -2433,6 +2433,7 @@ def main():
             assert rounded["align"] == "center" and rounded["y"] == 200
             assert math.isclose(rounded["x"] + rounded["width"] / 2, 480, abs_tol=1e-6)
             assert json.loads(draft.read_text())["fonts"]["families"]["rounded"] == "Nunito"
+            toolbar_click("layers")  # Deselect with Select; Text stays active after Finish.
             fixture_click((28, 109))
             shot(editor, "text-defaults-rounded")
             document_pixel("text-defaults-rounded", 480, 196, (17, 19, 24))
@@ -2472,6 +2473,7 @@ def main():
             assert text["text"] == "Native" and text["align"] == "center" and text["y"] == 80
             assert math.isclose(text["x"] + text["width"] / 2, 200, abs_tol=1e-6)
             assert text["background"] == "#111318" and text["autoWidth"]
+            toolbar_click("layers")
             fixture_click((28, 109))  # Deselect: the rotation stem crosses the plate sample.
             shot(editor, "text-defaults-created")
             document_pixel("text-defaults-created", 200, 76, (17, 19, 24))
