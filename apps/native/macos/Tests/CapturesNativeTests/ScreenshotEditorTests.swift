@@ -2600,7 +2600,8 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.response = { request in
             guard request["operation"] as? String == "create_closed_shape" else { return nil }
             return self.snapshot(id: "shot", width: 1280, height: 640,
-                                 unsaved: true, draft: true, layers: [original, created])
+                                 unsaved: true, draft: true, layers: [original, created],
+                                 annotations: ["fresh-shape": self.annotationStyle()])
         }
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
                                                      worker: worker)
@@ -2637,10 +2638,26 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(worker.compares.isEmpty)
         XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "fresh-shape",
                        "drawing selects the result without switching tools")
+        let properties = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Layer properties"
+        })
+        let defaults = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Drawing controls"
+        })
+        XCTAssertFalse(properties.isHidden, "the created layer's Properties replace drawing defaults")
+        XCTAssertTrue(defaults.isHidden)
+        XCTAssertEqual(try rangeSlider("Stroke width", in: properties).value, 4,
+                       "Properties reflect the selected layer, not the 8px creation default")
+        XCTAssertEqual(try rangeSlider("New drawing stroke width", in: defaults).value, 8)
+        XCTAssertTrue(overlay.drawingEnabled)
+        XCTAssertEqual(overlay.shape, .ellipse, "showing Properties keeps the drawing tool active")
+        try render(controller.root, name: "screenshot-editor-created-properties")
         controller.selectDrawTool(.ellipse)
         XCTAssertNil(controller.selectionOverlay.selectedLayerID,
                      "reactivating the same tool clears the freshly selected shape")
         XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, -1)
+        XCTAssertTrue(properties.isHidden)
+        XCTAssertFalse(defaults.isHidden, "clearing selection restores drawing defaults")
         XCTAssertTrue(overlay.drawingEnabled)
         try render(controller.root, name: "screenshot-editor-tool-deselection")
         try showLayers(in: controller.root)
@@ -5347,6 +5364,24 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(controller.compareView.afterImage, "the accepted commit drops the stale After side")
         waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
         XCTAssertFalse(controller.compareView.isHidden, "the comparison returns once text is resolved")
+        let properties = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Layer properties"
+        })
+        XCTAssertFalse(properties.isHidden, "finished text exposes its Properties without changing tools")
+        XCTAssertEqual(controller.drawOverlay.shape, .text)
+        XCTAssertTrue(controller.drawOverlay.drawingEnabled)
+        let content = try textView("Text content", in: properties)
+        XCTAssertTrue(content.isEditable, "the selected text remains editable with Text active")
+        XCTAssertTrue(try field("Text size", in: properties).isEnabled)
+        XCTAssertEqual(try field("Text size", in: properties).stringValue, "32")
+        XCTAssertEqual(try field("New text size", in: controller.root).stringValue, "24",
+                       "selected text size does not replace creation defaults")
+        content.string = "Properties edit"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: content))
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "edit_text")
+        XCTAssertEqual(worker.requests.last?["id"] as? String, "fresh")
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["text": "Properties edit"] as NSDictionary)
     }
 
     func testInlineTextDelayedBeginPreservesSelectionAndMarkedEscapeStaysNative() throws {

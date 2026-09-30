@@ -1504,11 +1504,11 @@ fn draw_key(shape: DrawShape) -> &'static str {
     }
 }
 
-/// Shipping `.screenshot-properties-heading`: the selected layer's label
-/// under Select, else the active tool's name; nothing for Select without a
+/// Shipping `.screenshot-properties-heading`: the selected layer's label,
+/// else the active tool's name; nothing for Select without a
 /// selection (the rail already shows the tool).
 pub(super) fn properties_heading(ui: &mut egui::Ui, tokens: &Tokens, view: &View) {
-    let title = match view.section {
+    let title = match view.properties_section() {
         Section::Layers => {
             let Some(element) = view.presented.as_ref().and_then(|presented| {
                 presented

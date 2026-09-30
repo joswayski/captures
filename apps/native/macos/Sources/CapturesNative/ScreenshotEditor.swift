@@ -3610,9 +3610,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelCrop()
         cancelDrawing()
         cancelViewportPan()
-        geometryPanel.isHidden = sectionControl.selectedSegment != Section.geometry
-        layerPropertiesPanel.isHidden = sectionControl.selectedSegment != Section.layers
-        drawPanel.isHidden = sectionControl.selectedSegment != Section.draw
+        updatePropertiesPanels()
         if sectionControl.selectedSegment != Section.layers { closeLayerMenu(); finishLayerRename(commit: true) }
         layoutLayerInspectorTail()
         // The export bar and its encoded preview do not depend on the section.
@@ -3620,6 +3618,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateDrawing()
         // Shipping has no Crop section apart from the Crop tool.
         if sectionControl.selectedSegment == Section.geometry { beginCrop() }
+    }
+
+    private func updatePropertiesPanels() {
+        let active = sectionControl.selectedSegment
+        let section = active == Section.draw && selectedLayer != nil ? Section.layers : active
+        geometryPanel.isHidden = section != Section.geometry
+        layerPropertiesPanel.isHidden = section != Section.layers
+        drawPanel.isHidden = section != Section.draw
     }
 
     @objc private func changeEraserMode() {
@@ -5647,9 +5653,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         brushSize?.isEnabled = active; brushSoftness?.isEnabled = active
         createTextPreset.isEnabled = active && createTextPreset.numberOfItems > 1
         createTextSize.isEnabled = active
-        // Selected text edits live under Select and stay editable while an
+        // Selected text edits stay editable while an
         // edit applies; changes made meanwhile queue (see `liveEdit`).
-        let textReady = sectionControl?.selectedSegment == Section.layers && state.snapshot != nil
+        let textReady = sectionControl?.selectedSegment != Section.geometry && state.snapshot != nil
             && inputResolved && selectedLayer?.kind == .text
         textEditor.isEditable = textReady
         textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
@@ -6474,6 +6480,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishLayerGeometry()
         if layerMenuID != nil && layerMenuID != selectedLayerID { closeLayerMenu() }
         if renamingLayerID != nil && renamingLayerID != selectedLayerID { finishLayerRename(commit: true) }
+        updatePropertiesPanels()
         layoutLayerInspectorTail()
         updateControls()
     }

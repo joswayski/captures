@@ -697,11 +697,14 @@ Focused native controls retain typing and letter navigation.
 Both hosts also keep a left tool rail visible beside the canvas, with the shipping
 labels and hover tips: Select & move, Crop, Text, Shapes, Arrow, Freehand and Eraser.
 Shapes opens Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last
-choice. The rail chooses the inspector (there are no section tabs); pending work
-disables it. Like shipping, the header holds the canvas W × H fields, Trim edges and
-the canvas background, then Undo/Redo (hidden at 1040 points and narrower), the zoom
-group and Add images. Like shipping, both hosts autosave the edit draft 700 ms after
-each change and flush it when the editor closes, without a save prompt. Reopening a
+choice. The rail chooses the tool (there are no section tabs); pending work
+disables it. Drawing selects the new layer and shows its Properties while keeping
+the drawing tool active. Choosing Crop or a drawing tool clears selection and
+restores that tool's controls. Like shipping, the header holds the canvas W × H
+fields, Trim edges and the canvas background, then Undo/Redo (hidden at 1040 points
+and narrower), the zoom group and Add images. Like shipping, both hosts autosave
+the edit draft 700 ms after each change and flush it when the editor closes,
+without a save prompt. Reopening a
 draft shows the shipping restored-edits notice with Discard, and Recenter
 appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.

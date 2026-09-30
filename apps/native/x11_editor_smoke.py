@@ -1396,6 +1396,22 @@ def main():
             drag((320, 250), (480, 370))
             arrow = save_layers(lambda values: len(values) == 2, "rail Arrow creates one layer")[-1]
             assert arrow["shape"] == "arrow", arrow
+            shot(editor, "created-shape-properties")
+            # Open shapes omit the 28px Stroke checkbox and its 12px gap.
+            prop_swatch(ANNOTATION["stroke-row"] - 40, "#2d9cff")
+            recolored = save_layers(lambda values: values[-1]["style"]["color"] == "#2d9cff",
+                                    "Properties edit the created arrow without selecting another tool")[-1]
+            assert recolored == dict(arrow, style=dict(arrow["style"], color="#2d9cff"))
+            shot(editor, "created-shape-properties-edited")
+            resize_editor(760, 540, "sleep", ".3")
+            shot(editor, "created-shape-properties-minimum")
+            properties_end()
+            shot(editor, "created-shape-properties-minimum-end")
+            resize_editor(1000, 901, "sleep", ".3")
+            properties_start()
+            blur_click()
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == arrow, "selected style undo")[-1] == arrow
             before_deselection = draft_bytes()
             run("xdotool", "key", "a", "Delete", "ctrl+d", "Right", "sleep", "1")
             assert draft_bytes() == before_deselection, "reactivating Arrow clears layer shortcut targets"
@@ -1467,6 +1483,7 @@ def main():
                             visible=True, locked=False)
             assert copied == expected, (copied, expected)
             nudged = copied
+            positions = [copied]
             for key, dx, dy in [("Left", -1, 0), ("shift+Up", 0, -10),
                                 ("shift+Right", 10, 0), ("Down", 0, 1)]:
                 expected = dict(nudged, x=nudged["x"] + dx, y=nudged["y"] + dy,
@@ -1474,9 +1491,13 @@ def main():
                 run("xdotool", "key", key, "sleep", ".3")
                 nudged = save_layers(lambda values: len(values) == 3 and values[-1] == expected,
                                      f"keyboard nudge {key}")[-1]
-            for _ in range(4):
+                positions.append(expected)
+            # Busy commands intentionally do not queue; verify each accepted
+            # undo before sending the next, even on slow software rendering.
+            for expected in reversed(positions[:-1]):
                 run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            assert save_layers(lambda values: len(values) == 3, "undo nudges exactly")[-1] == copied
+                save_layers(lambda values: len(values) == 3 and values[-1] == expected,
+                            "undo each nudge exactly")
             layer_click(0)  # Restore the copy selection after Undo.
             canvas_click("width")
             run("xdotool", "key", "ctrl+d", "Delete", "Left", "shift+Up", "sleep", ".3")
@@ -1567,6 +1588,8 @@ def main():
                            "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters",
                            "rail-arrow-create", "rail-menu-escape", "rail-minimum",
                            "same-tool-clears-selection", "crop-clears-selection",
+                           "created-layer-properties-edit", "created-layer-properties-undo",
+                           "created-layer-properties-minimum",
                            "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",
                            "layer-paste-once-with-OS-text", "layer-paste-cumulative-offset",
                            "layer-paste-undo-redo", "layer-clipboard-session-local",

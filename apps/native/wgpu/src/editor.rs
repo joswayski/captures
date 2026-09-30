@@ -705,6 +705,14 @@ impl Default for View {
 }
 
 impl View {
+    fn properties_section(&self) -> Section {
+        if self.section == Section::Draw && self.selected_layer.is_some() {
+            Section::Layers
+        } else {
+            self.section
+        }
+    }
+
     fn activate_tool(&mut self, section: Section, shape: Option<DrawShape>) {
         // Shipping clears selection even when reactivating the current tool.
         if section != Section::Layers {
@@ -2140,14 +2148,14 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 ui,
                 tokens,
                 egui::ScrollArea::vertical()
-                    .id_salt(view.section)
+                    .id_salt(view.properties_section())
                     .auto_shrink([false, false]),
                 |ui| {
                     ui.add_enabled_ui(enabled, |ui| {
                         // Sections space their own items (`inspector::section`).
                         ui.spacing_mut().item_spacing.y = 0.;
                         chrome::properties_heading(ui, tokens, view);
-                        match view.section {
+                        match view.properties_section() {
                             Section::Layers => show_layer_properties(ui, tokens, view, tx),
                             Section::Draw => show_draw_properties(ui, tokens, view),
                             Section::Geometry => show_crop_properties(ui, tokens, view, tx),
@@ -9043,6 +9051,108 @@ mod tests {
         assert_eq!(fields.style.stroke_width, 200.);
         assert_eq!(fields.shadow.blur, 170.);
         assert_eq!(fields.patch(&original), AnnotationStylePatch::default());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn selected_draw_properties_edit_the_layer_not_creation_defaults() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (mut view, id) = covered_canvas_view(&ctx);
+        view.section = Section::Draw;
+        view.draw_shape = DrawShape::Arrow;
+        view.select_layer(Some(id.clone()));
+        let defaults = view.new_annotation_style.clone();
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 1600.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Shift rotation snap"))
+        );
+        let bounds = nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("Fill color: #2d9cff"))
+            .and_then(|(_, node)| node.bounds())
+            .expect("selected-layer color control");
+        let blue = egui::pos2(
+            ((bounds.x0 + bounds.x1) / 2.) as f32,
+            ((bounds.y0 + bounds.y1) / 2.) as f32,
+        );
+        assert_eq!(
+            (view.section, view.properties_section()),
+            (Section::Draw, Section::Layers)
+        );
+        assert!(rx.try_recv().is_err(), "showing Properties is not an edit");
+        frame(&mut view, vec![egui::Event::PointerMoved(blue)]);
+        for pressed in [true, false] {
+            frame(
+                &mut view,
+                vec![egui::Event::PointerButton {
+                    pos: blue,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
+            panic!("selected swatch applies live")
+        };
+        assert_eq!(key, format!("style:{id}:fill-color"));
+        assert!(
+            matches!(*request, Request::Layer { id: target, edit: LayerEdit::AnnotationStyle { patch } }
+            if target == id && patch.fill == OptionalNullable::Value("#2d9cff".into()))
+        );
+        assert_eq!(view.new_annotation_style, defaults);
+        assert_eq!(
+            (view.section, view.draw_shape),
+            (Section::Draw, DrawShape::Arrow)
+        );
+        view.pending = false; // No worker runs in this detached View fixture.
+        view.activate_tool(Section::Draw, Some(DrawShape::Arrow));
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        assert!(
+            !nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Shift rotation snap"))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Color: #2d9cff"))
+        );
+        assert_eq!(view.properties_section(), Section::Draw);
         assert!(rx.try_recv().is_err());
     }
 
