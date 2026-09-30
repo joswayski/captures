@@ -1246,26 +1246,38 @@ impl<'a> RangeSlider<'a> {
                     );
                 });
                 let big = self.step * 10.;
-                for (key, delta) in [
-                    (egui::Key::ArrowRight, Some(self.step)),
-                    (egui::Key::ArrowUp, Some(self.step)),
-                    (egui::Key::ArrowLeft, Some(-self.step)),
-                    (egui::Key::ArrowDown, Some(-self.step)),
-                    (egui::Key::PageUp, Some(big)),
-                    (egui::Key::PageDown, Some(-big)),
-                    (egui::Key::Home, None),
-                    (egui::Key::End, None),
-                ] {
-                    // Every press counts, even several in one frame.
-                    while ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
-                        next = match (key, delta) {
-                            (egui::Key::Home, _) => self.min,
-                            (egui::Key::End, _) => self.max,
-                            (_, Some(delta)) => (next + delta).clamp(self.min, self.max),
-                            _ => next,
+                // Every press counts in arrival order. Grouping by key type
+                // would apply Home after an arrow received later in the frame.
+                ui.input_mut(|input| {
+                    input.events.retain(|event| {
+                        let egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } = event
+                        else {
+                            return true;
                         };
-                    }
-                }
+                        if !modifiers.matches_logically(egui::Modifiers::NONE) {
+                            return true;
+                        }
+                        next = match key {
+                            egui::Key::ArrowRight | egui::Key::ArrowUp => {
+                                (next + self.step).clamp(self.min, self.max)
+                            }
+                            egui::Key::ArrowLeft | egui::Key::ArrowDown => {
+                                (next - self.step).clamp(self.min, self.max)
+                            }
+                            egui::Key::PageUp => (next + big).clamp(self.min, self.max),
+                            egui::Key::PageDown => (next - big).clamp(self.min, self.max),
+                            egui::Key::Home => self.min,
+                            egui::Key::End => self.max,
+                            _ => return true,
+                        };
+                        false
+                    });
+                });
             }
         }
         if next != *value {
@@ -1856,5 +1868,29 @@ mod tests {
         assert_eq!(value, 200.);
         run(vec![key(egui::Key::Home)], &mut value);
         assert_eq!(value, 0.);
+        run(
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::ArrowRight),
+                key(egui::Key::PageUp),
+            ],
+            &mut value,
+        );
+        assert_eq!(
+            value, 11.,
+            "Home must precede increments received in the same frame"
+        );
+        run(
+            vec![
+                key(egui::Key::End),
+                key(egui::Key::ArrowLeft),
+                key(egui::Key::PageDown),
+            ],
+            &mut value,
+        );
+        assert_eq!(
+            value, 189.,
+            "End must precede decrements received in the same frame"
+        );
     }
 }
