@@ -2182,7 +2182,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             let size = texture.size_vec2();
             view.viewport_image_size = Some(size);
             let fit = fitted_image_rect(available, size);
-            let intercepted = handle_viewport_input(ui, view, available);
+            let comparison_id = egui::Id::unique("screenshot-compression-comparison");
+            let intercepted = (view.compare_visible()
+                && !view.compare_suppressed()
+                && crate::compare_overlay::owns_pointer(ui.ctx(), comparison_id))
+                || handle_viewport_input(ui, view, available);
             let preview = viewport_rect(view.viewport, fit, size).unwrap_or(fit);
             canvas::receive_drops(ui.ctx(), view, Some(preview));
             ui.allocate_rect(available, egui::Sense::hover());
@@ -2243,7 +2247,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui,
                     tokens,
                     crate::compare_overlay::Overlay {
-                        id: egui::Id::unique("screenshot-compression-comparison"),
+                        id: comparison_id,
                         frame: preview,
                         clip,
                         after: view.output.as_ref().map(|(texture, _)| texture),
@@ -7467,6 +7471,102 @@ mod tests {
                 !view.pending && rx.try_recv().is_err(),
                 "a preset never encodes or edits"
             );
+        }
+    }
+
+    #[test]
+    fn comparison_controls_own_gestures_before_the_select_canvas() {
+        for appearance in ["light-mustard", "dark-mustard"] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let tokens = crate::tokens::load().remove(appearance).unwrap();
+            let mut view = View::default();
+            let mut value = presented(false);
+            value.document = Arc::new(Document::new_capture("compare", 640., 360., None));
+            value.pixels = Arc::new(RgbaImage::new(640, 360));
+            view.receive(&ctx, Ok(value));
+            let original = view.presented.as_ref().unwrap().document.clone();
+            view.export_settings_open = true;
+            view.export_options.quality = ExportQuality::Compress;
+            view.output = Some((view.texture.as_ref().unwrap().clone(), 500));
+            view.compare_pending = false;
+            view.compare_key = Some((view.pixels_revision, view.export_options));
+            let (tx, rx) = mpsc::channel();
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000., 1000.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, view, &tx),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let control = |output: &egui::FullOutput, label: &str| {
+                let rect = output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some(label))
+                    .and_then(|(_, node)| node.bounds())
+                    .unwrap_or_else(|| panic!("missing comparison control: {label}"));
+                egui::pos2(
+                    ((rect.x0 + rect.x1) / 2.) as f32,
+                    ((rect.y0 + rect.y1) / 2.) as f32,
+                )
+            };
+            let press = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut view, vec![]);
+            let output = frame(&mut view, vec![]);
+            let handle = control(&output, compare::HANDLE_LABEL);
+            let preview = fitted_image_rect(view.viewport_area.unwrap(), egui::vec2(640., 360.));
+            let end = egui::pos2(preview.left() + preview.width() * 0.25, handle.y);
+            frame(&mut view, vec![egui::Event::PointerMoved(handle)]);
+            frame(&mut view, vec![press(handle, true)]);
+            assert!(
+                view.layer_gesture.is_none(),
+                "{appearance}: split press must not select"
+            );
+            assert!(!view.compare_suppressed());
+            frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+            frame(&mut view, vec![press(end, false)]);
+            assert!((view.compare_split - 0.25).abs() < 1e-6);
+
+            // A complete click in one frame also belongs only to the overlay.
+            let output = frame(&mut view, vec![]);
+            let range = control(&output, compare::RANGE_LABEL);
+            frame(&mut view, vec![egui::Event::PointerMoved(range)]);
+            frame(&mut view, vec![press(range, true), press(range, false)]);
+            assert!((view.compare_split - 0.5).abs() < 1e-6);
+            let output = frame(&mut view, vec![]);
+            let dismiss = control(&output, compare::DISMISS_LABEL);
+            frame(&mut view, vec![egui::Event::PointerMoved(dismiss)]);
+            frame(&mut view, vec![press(dismiss, true), press(dismiss, false)]);
+            assert!(view.compare_dismissed);
+            assert!(view.selected_layer.is_none() && view.layer_gesture.is_none());
+            assert_eq!(view.presented.as_ref().unwrap().document, original);
+            assert!(rx.try_recv().is_err() && !view.pending);
+
+            // The ordinary canvas still starts a Select gesture away from chrome.
+            view.compare_dismissed = false;
+            frame(&mut view, vec![]);
+            let canvas = preview.min + egui::vec2(30., 40.);
+            frame(&mut view, vec![egui::Event::PointerMoved(canvas)]);
+            frame(&mut view, vec![press(canvas, true)]);
+            assert!(view.layer_gesture.is_some() && view.compare_suppressed());
         }
     }
 
