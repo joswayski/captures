@@ -5790,7 +5790,6 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(controller.state.snapshot?.fontFamilyOptions.map(\.key), ["sans", "serif", "mono", "rounded"],
                        "rows for fonts the draft does not pin are dropped")
         try showLayers(in: controller.root)
-        try showDraw(in: controller.root)
         let family = try popup("Text font", in: controller.root)
         XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Rounded"])
         XCTAssertEqual(family.titleOfSelectedItem, "Serif")
@@ -5907,6 +5906,7 @@ final class ScreenshotEditorTests: XCTestCase {
             let future = try popup("New text style", in: controller.root)
             let futureSize = try field("New text size", in: controller.root)
             let futureColor = try swatchRow("Color", in: controller.root)
+            try showLayers(in: controller.root)
             let selected = try popup("Text style preset", in: controller.root)
             let selectedSize = try field("Text size", in: controller.root)
             let selectedColor = try swatchRow("Text color", in: controller.root)
@@ -5933,6 +5933,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(future.titleOfSelectedItem, "Box")
             XCTAssertEqual(selectedSize.stringValue, "71")
             XCTAssertEqual(selectedColor.selectedHex, "#2d9cff")
+            controller.selectDrawTool(.text)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
@@ -5973,6 +5974,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 default: return nil
                 }
             }
+            try showLayers(in: controller.root)
             choose("Outlined")
             XCTAssertEqual((worker.requests.last?["patch"] as? [String: Any])?["outlined"] as? Bool, true,
                            "fake accepted Outlined style must match the requested edit")
@@ -5981,6 +5983,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try press("Undo", in: controller.root)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "undo must not restore prior creation defaults")
 
+            controller.selectDrawTool(.text)
             let overlay = controller.drawOverlay
             XCTAssertTrue(overlay.drawingEnabled)
             XCTAssertEqual(overlay.shape, .text)
@@ -6015,11 +6018,11 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
-        try showDraw(in: controller.root)
         let future = try popup("New text style", in: controller.root)
         let selected = try popup("Text style preset", in: controller.root)
         selected.selectItem(withTitle: "Box"); _ = selected.sendAction(selected.action, to: selected.target)
         XCTAssertEqual(future.titleOfSelectedItem, "Box")
+        controller.selectDrawTool(.text)
         future.selectItem(withTitle: "Plain")
         XCTAssertEqual(future.titleOfSelectedItem, "Plain")
         XCTAssertEqual(worker.requests.map { $0["operation"] as? String }, ["edit_text"],
