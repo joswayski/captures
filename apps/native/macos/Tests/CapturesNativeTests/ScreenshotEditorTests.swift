@@ -3767,6 +3767,8 @@ final class ScreenshotEditorTests: XCTestCase {
         try showComparison(controller, worker)
         let sections = try segmented("Editor section", in: controller.root)
         sections.selectedSegment = 1; _ = sections.sendAction(sections.action, to: sections.target)
+        try table("Screenshot layers", in: controller.root)
+            .selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertNotNil(controller.compareView.afterImage, "showing the style is not an edit")
         worker.deferRequests = true
@@ -5761,6 +5763,7 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         XCTAssertEqual(controller.state.snapshot?.fontFamilyOptions.map(\.key), ["sans", "serif", "mono", "rounded"],
                        "rows for fonts the draft does not pin are dropped")
+        try showLayers(in: controller.root)
         try showDraw(in: controller.root)
         let family = try popup("Text font", in: controller.root)
         XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Rounded"])
@@ -5871,6 +5874,7 @@ final class ScreenshotEditorTests: XCTestCase {
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showLayers(in: controller.root)
             try showDraw(in: controller.root)
             let tool = DrawToolChoice(controller)
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
@@ -5984,6 +5988,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showLayers(in: controller.root)
         try showDraw(in: controller.root)
         let future = try popup("New text style", in: controller.root)
         let selected = try popup("Text style preset", in: controller.root)
@@ -6518,6 +6523,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(stale.item(withTitle: "Merge visible")!.isEnabled)
         XCTAssertFalse(stale.item(withTitle: "Flatten image")!.isEnabled)
         // The ⋯ popover's Combine actions follow the same capabilities.
+        controller.toggleLayerMenu(id: "target")
         let mergeDown = try button("Merge down", in: controller.root)
         XCTAssertTrue(mergeDown.isEnabled)
         XCTAssertFalse(try button("Merge visible", in: controller.root).isEnabled)
@@ -7204,7 +7210,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.window.setContentSize(NSSize(width: 1000, height: 600))
         let order = controller.keyViewOrder
-        XCTAssertTrue(order.first === controller.cropOverlay, "The active section's canvas starts focused")
+        XCTAssertTrue(order.first === controller.selectionOverlay, "Select's canvas starts focused")
         var previous = -1
         for name in ["Output size", "Save quality", "Export settings", "Change save location", "Saved filename",
                      "Format", "Show in Folder", "Copy image", "Save as new file"] {
