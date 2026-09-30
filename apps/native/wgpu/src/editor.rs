@@ -622,7 +622,7 @@ impl Default for View {
             draft_restored: false,
             last_solid_background: colors::DEFAULT_CANVAS_BACKGROUND.into(),
             background_queued: None,
-            section: Section::Geometry,
+            section: Section::Layers,
             export_options: ExportOptions {
                 format: ExportFormat::Png,
                 quality: ExportQuality::Preserve,
@@ -989,7 +989,7 @@ impl View {
                 self.presented = Some(presented);
                 self.ensure_export_target();
                 if !copied_layer {
-                    self.select_layer(selected);
+                    self.select_layer_exact(selected);
                 }
                 self.text_apply_pending = false;
                 if pasted_layer || combined_layers {
@@ -6410,6 +6410,7 @@ mod tests {
         let document = initial.document.clone();
         let pixels = initial.pixels.clone();
         view.receive(&ctx, Ok(initial));
+        view.select_layer_exact(Some("other".into()));
         view.output = Some((view.texture.as_ref().unwrap().clone(), 101));
         let (tx, rx) = mpsc::channel();
         let frame = |view: &mut View, events| {
@@ -7650,6 +7651,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut view = View::default();
         view.receive(&ctx, Ok(presented(false)));
+        view.select_layer_exact(Some("capture-background".into()));
         view.section = Section::Draw;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
         view.last_solid_background = "#123456".into();
@@ -7769,6 +7771,7 @@ mod tests {
         image.base.visible = false;
         let original_id = image.base.id.clone();
         view.receive(&ctx, Ok(initial));
+        view.select_layer_exact(Some(original_id.clone()));
         let (tx, rx) = mpsc::channel();
         let key = |key, ctrl| egui::Event::Key {
             key,
@@ -8357,6 +8360,37 @@ mod tests {
         view.receive(&ctx, Err("retry".into()));
         assert_eq!(view.shown_background(), None);
         assert_eq!(view.last_solid_background, "#ff3b5c");
+    }
+
+    #[test]
+    fn opening_and_refreshing_do_not_invent_a_layer_selection() {
+        let ctx = egui::Context::default();
+        for has_draft in [false, true] {
+            let mut view = View::default();
+            let mut initial = presented(false);
+            initial.has_draft = has_draft;
+            view.receive(&ctx, Ok(initial));
+            assert_eq!(view.section, Section::Layers, "Select is the initial tool");
+            assert!(view.selected_layer.is_none());
+            view.receive(&ctx, Ok(presented(false)));
+            assert!(
+                view.selected_layer.is_none(),
+                "a refresh keeps the empty selection"
+            );
+            view.select_layer_exact(Some("capture-background".into()));
+            view.receive(&ctx, Ok(presented(false)));
+            assert_eq!(view.selected_layer.as_deref(), Some("capture-background"));
+            view.select_layer_exact(None);
+            view.receive(&ctx, Ok(presented(false)));
+            assert!(
+                view.selected_layer.is_none(),
+                "a refresh does not undo deselection"
+            );
+            let mut created = presented_text("new-text", "Hello");
+            created.created_layer = Some("new-text".into());
+            view.receive(&ctx, Ok(created));
+            assert_eq!(view.selected_layer.as_deref(), Some("new-text"));
+        }
     }
 
     pub(super) fn presented(unsaved: bool) -> Presented {
@@ -9065,6 +9099,7 @@ mod tests {
             .edit_layer(&id, LayerEdit::Visibility { visible: false })
             .unwrap();
         view.receive(&ctx, Ok(value));
+        view.select_layer_exact(Some(id.clone()));
         assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
         let pixels = view.presented.as_ref().unwrap().pixels.clone();
         view.annotation.as_mut().unwrap().style.fill = Some("bad color".into());
@@ -11132,7 +11167,7 @@ mod tests {
         assert!(view.receive_import(&jobs));
         assert!(
             matches!(queued.recv().unwrap(), Job::Import { path, selected_id, point: None }
-            if path == Path::new("photo.png") && selected_id.as_deref() == Some("capture-background"))
+            if path == Path::new("photo.png") && selected_id.is_none())
         );
         assert!(view.pending && view.import_picker.is_none());
         assert!(Arc::ptr_eq(
@@ -11553,6 +11588,7 @@ mod tests {
             )
             .unwrap();
         view.receive(&ctx, Ok(value));
+        view.select_layer_exact(Some("copy".into()));
         assert_eq!(view.selected_layer.as_deref(), Some("copy"));
         assert_eq!(view.layer_geometry, [7., 3., 24., 24.]);
         let (tx, rx) = mpsc::channel();

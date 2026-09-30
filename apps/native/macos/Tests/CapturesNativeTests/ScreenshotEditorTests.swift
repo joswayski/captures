@@ -65,6 +65,26 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(controller.window.isVisible)
     }
 
+    func testFreshAndRestoredEditorsStartWithoutSelectingALayer() throws {
+        _ = NSApplication.shared
+        for draft in [false, true] {
+            let image = layer(id: "base", name: "Base", x: 0, y: 0,
+                              visible: true, locked: false, opacity: 100)
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", draft: draft, layers: [image]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let layers = try table("Screenshot layers", in: controller.root)
+            XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 1,
+                           "Select is the initial tool")
+            XCTAssertEqual(layers.selectedRow, -1)
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "base")
+            XCTAssertTrue(worker.requests.isEmpty, "selection is UI state, not a document edit")
+        }
+    }
+
     func testToolRailSelectionMenuFocusBusyGatesAndMinimumLayout() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -7399,6 +7419,12 @@ final class ScreenshotEditorTests: XCTestCase {
         let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 1
         _ = sections.sendAction(sections.action, to: sections.target)
+        // Inspector fixtures need a selected layer; opening the editor no
+        // longer supplies one implicitly. Preserve any explicit selection.
+        let layers = try table("Screenshot layers", in: view)
+        if layers.selectedRow == -1 && layers.numberOfRows > 0 {
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        }
     }
 
     private func showGeometry(in view: NSView) throws {

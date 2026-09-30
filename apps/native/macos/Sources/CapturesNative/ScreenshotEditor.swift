@@ -2240,7 +2240,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                             target: self, action: #selector(changeSection))
         sectionControl.frame = NSRect(x: 688, y: 24, width: Self.panelWidth, height: 28)
         sectionControl.autoresizingMask = [.minXMargin]
-        sectionControl.selectedSegment = 0
+        sectionControl.selectedSegment = Section.layers
         sectionControl.setAccessibilityLabel("Editor section")
         // Shipping has no section tabs: the rail's tool chooses the inspector.
         // The hidden control keeps the section state and its action.
@@ -6429,7 +6429,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self.selectedLayerID = selectedLayerID
         } else if layers.isEmpty {
             selectedLayerID = nil; selectedLayerIndex = 0
-        } else if allowFallback {
+        } else if allowFallback && selectedLayerID != nil {
             selectedLayerIndex = min(selectedLayerIndex, layers.count - 1)
             selectedLayerID = layers[selectedLayerIndex].id
         }

@@ -1382,6 +1382,12 @@ def main():
 
         if args.history_shortcuts_only:
             resize_editor(1000, 901, "sleep", ".3")  # Integer-pixel Fit origin for exact movement.
+            run("xdotool", "windowactivate", "--sync", editor, "key", "ctrl+d", "sleep", "1")
+            assert not draft.exists(), "opening with no selection must not duplicate an implicit layer"
+            shot(editor, "initial-no-selection")
+            layer_click(0)
+            shot(editor, "explicit-layer-selection")
+            assert not draft.exists(), "selecting a layer does not edit the document"
             rail_click("shapes")  # Persistent Shapes rail button.
             shot(editor, "tool-rail-shapes-menu")
             run("xdotool", "key", "Escape", "sleep", ".3")
@@ -1546,7 +1552,8 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
+                "checks": ["open-no-selection", "explicit-layer-selection",
+                           "keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
                            "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged",
                            "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
                            "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
