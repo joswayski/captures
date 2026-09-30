@@ -69,14 +69,22 @@ final class StatusItemTests: XCTestCase {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
             pixelsWide: 22, pixelsHigh: 22, bitsPerSample: 8, samplesPerPixel: 4,
             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-            bitmapFormat: .alphaNonpremultiplied, bytesPerRow: 0, bitsPerPixel: 0))
+            bitmapFormat: .alphaNonpremultiplied, bytesPerRow: 22 * 4, bitsPerPixel: 32))
+        let input = try XCTUnwrap(bitmap.bitmapData)
         for y in 0..<22 {
             for x in 0..<22 {
-                let color: NSColor = x < 6 ? .black : x < 11 ? NSColor(deviceWhite: 1, alpha: y < 11 ? 0.5 : 0.25)
-                    : x < 16 ? .red : NSColor(deviceWhite: 0.68, alpha: 1)
-                bitmap.setColor(color, atX: x, y: y)
+                // Explicit straight RGBA avoids NSBitmapImageRep.setColor's unsupported
+                // grayscale-to-RGB conversion on the macOS 26 test runner.
+                let rgba: [UInt8] = x < 6 ? [0, 0, 0, 255]
+                    : x < 11 ? [255, 255, 255, y < 11 ? 128 : 64]
+                    : x < 16 ? [255, 0, 0, 255] : [173, 173, 173, 255]
+                let offset = y * bitmap.bytesPerRow + x * 4
+                for channel in 0..<4 { input[offset + channel] = rgba[channel] }
             }
         }
+        // Verify the fixture before invoking the conversion under test.
+        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 8, y: 10)).alphaComponent, 0.5, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 8, y: 16)).alphaComponent, 0.25, accuracy: 0.01)
         let source = NSImage(size: NSSize(width: 22, height: 22))
         source.addRepresentation(bitmap)
         let template = try XCTUnwrap(statusItemTemplate(source: source))
