@@ -1008,6 +1008,9 @@ impl View {
                 if !copied_layer {
                     self.select_layer_exact(selected);
                 }
+                if self.live_queue.is_empty() && !ctx.input(|input| input.pointer.primary_down()) {
+                    self.curve_bend = None;
+                }
                 self.text_apply_pending = false;
                 if pasted_layer || combined_layers {
                     self.activate_tool(Section::Layers, None);
@@ -1029,6 +1032,7 @@ impl View {
                 }
                 self.inline_failed();
                 self.live_queue.clear();
+                self.curve_bend = None;
                 // A rejected explicit text Apply keeps the user's staged composition.
                 if !self.text_apply_pending {
                     self.select_layer_exact(self.selected_layer.clone());
@@ -1588,6 +1592,9 @@ impl View {
                 .or_else(|| elements.last())
         });
         self.selected_layer = layer.map(|element| element.base().id.clone());
+        if previous_layer != self.selected_layer {
+            self.curve_bend = None;
+        }
         // Live style edits still queued keep the fields the user is changing.
         let keep = !self.live_queue.is_empty() && previous_layer == self.selected_layer;
         self.annotation = layer.and_then(|element| match element {
@@ -1635,6 +1642,7 @@ impl View {
             self.selected_layer = None;
             self.annotation = None;
             self.text = None;
+            self.curve_bend = None;
             self.layer_opacity = 100.;
             self.layer_geometry = [1., 1., 0., 0.];
         } else {
@@ -5671,7 +5679,7 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
                     "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
                 ),
             );
-            ui.add_enabled_ui(!view.pending, |ui| {
+            ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.y = tokens.number("s-5");
                 canvas::show_curve_controls(ui, tokens, view, tx, shape);
             });
@@ -12872,13 +12880,17 @@ mod tests {
                         }],
                     );
                 }
-                let Ok(Job::Apply(Request::Layer {
-                    id: target,
-                    edit: LayerEdit::Curve { edit },
-                })) = rx.try_recv()
-                else {
+                let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
                     panic!("locked inspector applies one curve edit")
                 };
+                let Request::Layer {
+                    id: target,
+                    edit: LayerEdit::Curve { edit },
+                } = *request
+                else {
+                    panic!("curve property")
+                };
+                assert!(key.starts_with(&format!("curve:{id}:once:")));
                 assert_eq!(target, id);
                 assert_eq!(
                     edit,
@@ -12891,6 +12903,86 @@ mod tests {
                 assert!(rx.try_recv().is_err());
                 assert_eq!(view.pending_layer_selection.as_deref(), Some(id.as_str()));
                 assert!(canvas::selected_curve(&view).is_none());
+                if !multipoint {
+                    let focus = ctx
+                        .memory(|memory| memory.focused())
+                        .expect("Curve holds keyboard focus");
+                    for (keys, expected) in [
+                        (vec![egui::Key::Home; 2], -100.),
+                        (vec![egui::Key::End], 100.),
+                        (vec![egui::Key::PageDown; 10], 0.),
+                        (vec![egui::Key::ArrowLeft, egui::Key::ArrowRight], 0.),
+                    ] {
+                        frame(
+                            &mut view,
+                            keys.into_iter()
+                                .map(|key| egui::Event::Key {
+                                    key,
+                                    physical_key: None,
+                                    pressed: true,
+                                    repeat: false,
+                                    modifiers: egui::Modifiers::NONE,
+                                })
+                                .collect(),
+                        );
+                        assert_eq!(ctx.memory(|memory| memory.focused()), Some(focus));
+                        assert_eq!(view.curve_bend, Some((id.clone(), expected)));
+                    }
+                    assert_eq!(
+                        view.live_queue.len(),
+                        14,
+                        "same-frame changes wait separately, even a zero-net pair; clamped no-ops don't"
+                    );
+                    let mut document = (*view.presented.as_ref().unwrap().document).clone();
+                    let mut keys = vec![key];
+                    let bends = [
+                        1., -1., 1., 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0., -0.01, 0.,
+                    ];
+                    for (index, bend) in bends.iter().copied().enumerate() {
+                        document
+                            .edit_layer(
+                                &id,
+                                LayerEdit::Curve {
+                                    edit: CurveEdit::Bend { bend },
+                                },
+                            )
+                            .unwrap();
+                        let mut accepted = presented(false);
+                        accepted.document = Arc::new(document.clone());
+                        accepted.pixels = Arc::new(RgbaImage::new(200, 100));
+                        view.receive(&ctx, Ok(accepted));
+                        if let Some(expected) = bends.get(index + 1) {
+                            assert_eq!(
+                                view.curve_bend,
+                                Some((id.clone(), 0.)),
+                                "older receipts cannot reset later keys"
+                            );
+                            view.flush_live(&tx);
+                            let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv()
+                            else {
+                                panic!("queued key")
+                            };
+                            let Request::Layer {
+                                id: target,
+                                edit:
+                                    LayerEdit::Curve {
+                                        edit: CurveEdit::Bend { bend: next },
+                                    },
+                            } = *request
+                            else {
+                                panic!("queued curve")
+                            };
+                            assert_eq!(target, id);
+                            assert_eq!(next, *expected);
+                            assert!(!keys.contains(&key), "each key is its own undo step");
+                            keys.push(key);
+                        }
+                    }
+                    assert!(view.curve_bend.is_none());
+                    assert!(view.live_queue.is_empty() && rx.try_recv().is_err());
+                    frame(&mut view, vec![]);
+                    assert_eq!(ctx.memory(|memory| memory.focused()), Some(focus));
+                }
             }
         }
     }

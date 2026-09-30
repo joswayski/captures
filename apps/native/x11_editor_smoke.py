@@ -2192,16 +2192,20 @@ def main():
             save_layers(lambda values: values[-1]["controls"] == [], "straighten before bending")
             properties_end()
             shot(editor, "locked-curve-slider")
-            # One accepted keyboard edit; subsequent presses need renewed focus
-            # while the existing curve inspector disables itself for worker jobs.
-            end_slider(96, "Home", x=INSPECTOR_WIDTH // 2)
+            # Keep focus through worker edits: Home is -100%, then three Right
+            # keys reach -97%, each with its own undo step.
+            end_slider(96, "Home", "Right", "Right", "Right", x=INSPECTOR_WIDTH // 2)
             bent = save_layers(lambda values: len(values[-1]["controls"]) == 1 and
-                               values[-1]["controls"][0] == {"x": 380, "y": -250}, "locked Curve -100 percent")[-1]
-            assert bent == dict(locked, controls=[{"x": 380, "y": -250}])
+                               values[-1]["controls"][0] == {"x": 380, "y": -238}, "locked Curve -97 percent")[-1]
+            assert bent == dict(locked, controls=[{"x": 380, "y": -238}])
+            shot(editor, "locked-curve-keyboard-result")
             # Restore the earlier curve before the remainder of the canvas suite.
-            for _ in range(2):
+            for controls in ([{"x": 380, "y": -242}], [{"x": 380, "y": -246}],
+                             [{"x": 380, "y": -250}], [], locked["controls"]):
                 toolbar_click("undo")
-            assert save_layers(lambda values: values[-1] == locked, "undo locked Properties edits")[-1] == locked
+                restored = dict(locked, controls=controls)
+                assert save_layers(lambda values: values[-1] == restored,
+                                   "undo each locked Properties edit")[-1] == restored
             layer_click(0, "lock")
             save_layers(lambda values: not values[-1]["locked"], "unlock line for canvas suite")
             properties_start()
@@ -2283,7 +2287,7 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["curve-starter-drag", "curve-point-double-click-remove", "curve-undo-redo",
                            "locked-canvas-curve-guard", "locked-properties-straighten", "locked-properties-bend",
-                           "locked-properties-undo",
+                           "curve-keyboard-focus-through-worker", "curve-discrete-key-undo", "locked-properties-undo",
                            "expand-canvas-action", "expand-canvas-single-undo", "xdnd-drop-guide-top",
                            "xdnd-drop-placed-above", "drop-single-undo", "curve-draft-reopen",
                            "original-unchanged"],

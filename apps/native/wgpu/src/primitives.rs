@@ -1204,6 +1204,17 @@ impl<'a> RangeSlider<'a> {
     /// Returns the track's response (probe it for the thumb's travel),
     /// marked changed when `value` changed.
     pub fn show(self, ui: &mut egui::Ui, t: &Tokens, value: &mut f64) -> egui::Response {
+        self.show_steps(ui, t, value).0
+    }
+
+    /// Also returns individual keyboard changes in event order. Consumers
+    /// with discrete undo steps must not collapse keys received in one frame.
+    pub fn show_steps(
+        self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        value: &mut f64,
+    ) -> (egui::Response, Vec<f64>) {
         use captures_app::controls::range;
         let id = ui.make_persistent_id(self.id_salt);
         let enabled = ui.is_enabled();
@@ -1227,6 +1238,7 @@ impl<'a> RangeSlider<'a> {
         let mut response = ui.interact(track, id, egui::Sense::click_and_drag());
         let travel = track.x_range().shrink(7.);
         let mut next = *value;
+        let mut steps = Vec::new();
         if enabled {
             if response.is_pointer_button_down_on()
                 && let Some(pointer) = response.interact_pointer_pos()
@@ -1264,6 +1276,7 @@ impl<'a> RangeSlider<'a> {
                         if !modifiers.matches_logically(egui::Modifiers::NONE) {
                             return true;
                         }
+                        let previous = next;
                         next = match key {
                             egui::Key::ArrowRight | egui::Key::ArrowUp => {
                                 (next + self.step).clamp(self.min, self.max)
@@ -1277,6 +1290,9 @@ impl<'a> RangeSlider<'a> {
                             egui::Key::End => self.max,
                             _ => return true,
                         };
+                        if next != previous {
+                            steps.push(next);
+                        }
                         false
                     });
                 });
@@ -1382,7 +1398,7 @@ impl<'a> RangeSlider<'a> {
                 .wrap(),
             );
         }
-        response
+        (response, steps)
     }
 }
 

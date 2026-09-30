@@ -8346,6 +8346,54 @@ extension ScreenshotEditorTests {
         }
     }
 
+    func testCurvePropertiesQueueDiscreteEditsWithoutLosingFocusOrResettingNewerInput() throws {
+        _ = NSApplication.shared
+        let line = shapeLayer(id: "line", x: 180, y: 150)
+        let initial = snapshot(id: "shot", layers: [line], extra: ["curve_handles": ["line": curveHandlesValue()]])
+        let worker = FakeEditorWorker(snapshot: initial)
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let curve = try XCTUnwrap(controller.curveControls)
+        curve.bendSlider.scrollToVisible(curve.bendSlider.bounds)
+        XCTAssertTrue(controller.window.makeFirstResponder(curve.bendSlider))
+        worker.deferRequests = true
+        for value in [50.0, 0.0, -35.0] {
+            curve.bendSlider.doubleValue = value
+            _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+            XCTAssertTrue(curve.bendSlider.isEnabled)
+            XCTAssertTrue(controller.window.firstResponder === curve.bendSlider)
+        }
+        XCTAssertEqual(worker.requests.count, 1, "later values wait for the worker")
+        XCTAssertEqual(curve.bendValue.stringValue, "-35%")
+        for (index, value) in [50.0, 0.0, -35.0].enumerated() {
+            let edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+            XCTAssertEqual(edit["bend"] as? Double, value / 100)
+            worker.completePending(with: snapshot(id: "shot", layers: [line],
+                extra: ["curve_handles": ["line": curveHandlesValue(bend: value)]]))
+            if index < 2 {
+                waitUntil { worker.requests.count == index + 2 && controller.state.busy }
+                XCTAssertEqual(curve.bendValue.stringValue, "-35%", "old receipts cannot reset newer input")
+            } else { waitUntil { !controller.state.busy } }
+            XCTAssertTrue(controller.window.firstResponder === curve.bendSlider)
+        }
+        XCTAssertEqual(Set(worker.liveKeys).count, 3, "each discrete edit has its own undo key")
+        for value in [100.0, 20.0] {
+            curve.bendSlider.doubleValue = value
+            _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        }
+        XCTAssertEqual(worker.requests.count, 4)
+        worker.completePendingFailure()
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertEqual(curve.bendSlider.doubleValue, -35)
+        XCTAssertEqual(curve.bendValue.stringValue, "-35%")
+        curve.bendSlider.doubleValue = 100
+        _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        XCTAssertEqual(worker.requests.count, 5, "the failed value can be retried; queued edits were dropped")
+        worker.completePending(with: snapshot(id: "shot", layers: [line],
+            extra: ["curve_handles": ["line": curveHandlesValue(bend: 100)]]))
+    }
+
     func testFileDropShowsTheSharedGuideAndImportsAtThePointerSample() throws {
         _ = NSApplication.shared
         let background: [String: Any] = [

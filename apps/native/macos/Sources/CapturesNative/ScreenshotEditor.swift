@@ -3288,7 +3288,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         curveControls = EditorCurveControls(tokens: tokens, width: Self.contentWidth)
         curveControls.apply = { [weak self] edit in
             guard let self, let id = self.selectedLayer?.id else { return }
-            self.curveCanvasLayer(id, edit: edit)
+            self.liveEdit(key: self.liveOnceKey("curve:\(id)"), request: ["operation": "layer", "id": id,
+                "edit": ["action": "curve", "edit": edit]])
         }
         curveControls.resized = { [weak self] _ in self?.layoutLayerInspectorTail() }
         layerContent.addSubview(curveControls)
@@ -6390,6 +6391,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.liveQueue.removeAll()
                 self.showError("Editor action failed: \(error.localizedDescription)")
                 if !preserveStagedTextOnFailure { self.publishSelectedLayerFields() }
+                else { self.curveControls?.setHandles(self.selectedLayer.flatMap { self.state.snapshot?.curveHandles[$0.id] }) }
                 self.publishBackgroundFields()
             }
             self.textApplyPending = false
@@ -6498,9 +6500,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if ready && !liveQueue.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.flushLiveQueue() }
         }
-        curveControls?.setReady(ready)
         // Live fields stay editable while an edit applies; their edits queue.
         let live = state.snapshot != nil && inlineTextInput == nil
+        curveControls?.setReady(live)
         annotationControls?.setReady(live)
         let layer = live ? selectedLayer : nil
         rotationSnap.isEnabled = layer != nil
@@ -6556,7 +6558,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let curve = selectedLayer.flatMap { state.snapshot?.curveHandles[$0.id] }
         selectionOverlay.curveHandles = selectionOverlay.resizeEnabled ? curve : nil
         selectionOverlay.expandPreview = selectedLayer.flatMap { state.snapshot?.canvasExpand[$0.id] }
-        curveControls?.setHandles(curve)
+        if !liveQueue.contains(where: { layerID != nil && $0.key.hasPrefix("curve:\(layerID!):") }) {
+            curveControls?.setHandles(curve)
+        }
         publishLayerGeometry()
         if layerMenuID != nil && layerMenuID != selectedLayerID { closeLayerMenu() }
         if renamingLayerID != nil && renamingLayerID != selectedLayerID { finishLayerRename(commit: true) }

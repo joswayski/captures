@@ -40,8 +40,15 @@ property edits without permitting locked canvas-dot dragging, insertion or
 removal. Core tests cover exact geometry, undo and draft retention; host tests
 check usable fields without canvas dots, and the X11 canvas suite exercises the
 locked-line commands. Physical macOS/Windows/Wayland acceptance remains open.
-The Curve inspector still disables during worker edits; wgpu can lose keyboard
-focus between consecutive steps. This slice does not fix that input gap.
+Both hosts now keep Curve Properties enabled and focused during worker edits.
+Discrete keyboard steps, slider releases and Straighten actions use the existing
+ordered live-edit queue with separate undo keys, including keys received together
+in one wgpu frame and changes that return to the original value. Clamped no-ops
+do not enqueue an edit. Staged values survive older receipts; failures discard
+queued edits and restore the last accepted value.
+wgpu focus tests and AppKit deferred-worker XCTest cover consecutive input;
+private-X11 light/dark checks apply Home plus three Right keys without refocusing
+and undo every change exactly. Platform accessibility/IME acceptance stays open.
 
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
