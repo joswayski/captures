@@ -1783,7 +1783,9 @@ def main():
             shot(editor, "drawing-styled-committed")
             # Independently blend 37% #36c96b / #111318 over the #286ea6 source.
             document_pixel("drawing-styled-committed", 300, 95, (45, 144, 144), 1)
-            document_pixel("drawing-styled-committed", 300, 40, (31, 76, 113), 1)
+            # The active shape's north resize grip covers the stroke midpoint.
+            # Keep the same border-color check ten pixels away from that chrome.
+            document_pixel("drawing-styled-committed", 290, 40, (31, 76, 113), 1)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes the new shape")
 
@@ -3565,7 +3567,8 @@ def main():
         assert all(abs(actual - expected) < 1e-12 for actual, expected in zip(
             (arrow["x"], arrow["y"], arrow["endX"], arrow["endY"]), (512, 231, 342, 101)))
         shot(editor, "open-shape-arrow")
-        fixture_pixel("open-shape-arrow", 435, 255, (255, 59, 92))
+        # Sample 40% along the shaft, document (444,179), not its 50% starter dot.
+        fixture_pixel("open-shape-arrow", 452, 268, (255, 59, 92))
         fixture_pixel("open-shape-arrow", 310, 260, (255, 59, 92))
         drag((500, 400), (502, 400))  # Two screen/document pixels is below the 3px gesture threshold.
         save_layers(lambda values: len(values) == 5, "short arrow cancellation")
