@@ -5592,6 +5592,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func hideInlineTextEditor() {
         defer { publishComparison() }
+        // Escape leaves the text view first responder; hiding its frame must
+        // not leave document Undo routed to that invisible field. Preserve a
+        // control the user already focused by clicking away.
+        if window.firstResponder === inlineTextEditor { focusActiveCanvas() }
         inlineTextFrame?.isHidden = true
         inlineTextStyleKey = nil
     }

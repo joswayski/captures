@@ -2519,8 +2519,9 @@ def main():
                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            check=True, timeout=10)
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".3")
-            assert run("xclip", "-selection", "clipboard", "-o") == oversized
+            copied = run("xclip", "-selection", "clipboard", "-o")
             shot(editor, "text-input-error")
+            assert copied == oversized, (len(copied), copied[:80])
             assert draft_bytes() == before, "failed previews must not save"
             run("xdotool", "key", "ctrl+a")
             type_text("Recovered", 1)
@@ -2561,7 +2562,11 @@ def main():
                                   "existing Text hit edits and commits on click-away")[-1]
             assert revised["id"] == created["id"]
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            assert save_layers(lambda values: len(values) == 2, "existing input single undo")[-1] == created
+            # An edit and its undo have the same layer count. Wait for the exact
+            # old layer, not a stable but not-yet-updated autosave manifest.
+            assert save_layers(lambda values: len(values) == 2 and values[-1] == created,
+                               "existing input single undo")[-1] == created
+            shot(editor, "text-input-existing-undo")
 
             # Select explicitly; finishing/undo keeps Text active. Double-click edits the same layer
             # without switching to the Text tool or committing a move/resize.
@@ -2582,7 +2587,8 @@ def main():
             assert math.isclose(double_clicked["x"] + double_clicked["width"] / 2,
                                 created["x"] + created["width"] / 2, abs_tol=1e-6)
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            assert save_layers(lambda values: len(values) == 2, "double-click edit single undo")[-1] == created
+            assert save_layers(lambda values: len(values) == 2 and values[-1] == created,
+                               "double-click edit single undo")[-1] == created
 
             begin_input((400, 250))
             resize_editor(760, 540, "sleep", ".3")

@@ -5524,6 +5524,71 @@ final class ScreenshotEditorTests: XCTestCase {
                        ["text": "Properties edit"] as NSDictionary)
     }
 
+    func testInlineTextFinishReleasesHiddenResponderWithoutStealingClickAwayFocus() throws {
+        _ = NSApplication.shared
+        for focusElsewhere in [false, true] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            worker.response = { request in
+                guard ["begin_text_input", "update_text_input"].contains(request["operation"] as? String ?? "")
+                    else { return nil }
+                return self.snapshot(id: "shot",
+                    layers: [self.textLayer(id: "fresh", text: request["text"] as? String ?? "")],
+                    activeTextInput: ["input_id": request["input_id"] as! String,
+                                      "layer_id": "fresh", "is_new": true])
+            }
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = DrawToolChoice(controller)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+            let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            let editor = try textView("Edit text on canvas", in: controller.root)
+            try typeInline("Revised\nline two", in: controller)
+            worker.deferRequests = true
+            try finishInlineText(in: controller)
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
+            worker.completePendingFailure("finish failed")
+            XCTAssertTrue(controller.window.firstResponder === editor)
+            XCTAssertTrue(editor.isEditable && !editor.isHiddenOrHasHiddenAncestor)
+            XCTAssertEqual(editor.string, "Revised\nline two", "failure preserves the editable buffer")
+
+            let count = worker.requests.count
+            var nextResponder: NSResponder?
+            if focusElsewhere {
+                // A real field editor must keep focus when click-away Finish
+                // completes; its Undo belongs to the field, not the document.
+                let other = NSTextField(string: "Another field")
+                other.frame = NSRect(x: 20, y: 20, width: 150, height: 24)
+                controller.root.addSubview(other)
+                XCTAssertTrue(controller.window.makeFirstResponder(other))
+                nextResponder = controller.window.firstResponder
+            } else {
+                try finishInlineText(in: controller)
+            }
+            waitUntil { worker.requests.count == count + 1 && controller.state.busy }
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
+            worker.completePending(with: snapshot(id: "shot", unsaved: true,
+                layers: [textLayer(id: "fresh", text: "Revised\nline two")]))
+            XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+            let finishedCount = worker.requests.count
+            let undo = try keyEvent(window: controller.window, keyCode: 6, characters: "z", modifiers: .command)
+            if focusElsewhere {
+                XCTAssertTrue(controller.window.firstResponder === nextResponder)
+                _ = controller.window.performKeyEquivalent(with: undo)
+                XCTAssertEqual(worker.requests.count, finishedCount, "field Undo must remain native")
+            } else {
+                XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
+                XCTAssertTrue(controller.window.performKeyEquivalent(with: undo))
+                XCTAssertEqual(worker.requests.count, finishedCount + 1)
+                XCTAssertEqual(worker.requests.last?["operation"] as? String, "undo",
+                               "the first Undo after Escape must reach document history")
+                worker.completePending(with: snapshot(id: "shot", canRedo: true))
+            }
+        }
+    }
+
     func testInlineTextDelayedBeginPreservesSelectionAndMarkedEscapeStaysNative() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))

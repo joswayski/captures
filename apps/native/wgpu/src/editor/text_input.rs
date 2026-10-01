@@ -209,6 +209,9 @@ impl View {
         let Some(input) = &mut self.inline else {
             return;
         };
+        // Only a finish attempt releases focus. Ordinary preview failures must
+        // not re-request it over a still-active selection or clipboard command.
+        input.focus |= input.finish.is_some();
         input.phase = None;
         input.finish = None;
         input.blocked = true;
@@ -584,6 +587,10 @@ pub(super) fn show(
         }
     }
     if let Some(commit) = finish {
+        // Shipping blurs the textarea before finishing. Unregistering it on a
+        // later idle frame is too late for the first document shortcut; only
+        // surrender this field's focus, preserving a newly clicked control.
+        ui.memory_mut(|memory| memory.surrender_focus(input_id));
         view.finish_inline(commit);
     }
 }
@@ -936,6 +943,178 @@ mod tests {
             assert_eq!(elements[1]["x"], 23.);
             assert_eq!(elements[1]["y"], 31.);
             assert!(!data.path().join("exports").exists());
+        }
+    }
+
+    #[test]
+    fn the_first_document_undo_after_inline_finish_is_not_owned_by_the_removed_field() {
+        for escape in [false, true] {
+            let (ctx, mut view, tx, rx) = setup();
+            let tokens = crate::tokens::load()["light-mustard"].clone();
+            tokens.apply(&ctx, true);
+            accept(&ctx, &mut view, "original");
+            let other_id = std::cell::Cell::new(egui::Id::NULL);
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 540.),
+                        )),
+                        focused: true,
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        super::super::handle_document_shortcuts(&ctx, view, &tx);
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let other = ui.put(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(680., 380.),
+                                    egui::vec2(60., 40.),
+                                ),
+                                egui::Button::new("Other"),
+                            );
+                            other_id.set(other.id);
+                            if other.clicked() {
+                                other.request_focus();
+                            }
+                            let area = ui.available_rect_before_wrap();
+                            let preview = egui::Rect::from_min_size(area.min, egui::vec2(7., 3.));
+                            show(ui, &tokens, view, area, preview);
+                        });
+                        if ctx.current_pass_index() == 0 {
+                            ctx.request_discard("inline focus multi-pass");
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                output.platform_output.commands
+            };
+            let key = |key, modifiers| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            frame(&mut view, vec![]);
+            assert!(ctx.text_edit_focused());
+            frame(
+                &mut view,
+                vec![
+                    key(egui::Key::A, egui::Modifiers::COMMAND),
+                    egui::Event::Text("Unaccepted\nbuffer".into()),
+                ],
+            );
+            view.drain_inline(&tx);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(Job::Apply(Request::UpdateTextInput { .. }))
+            ));
+            view.receive(&ctx, Err("preview failed".into()));
+            assert!(
+                !view.inline.as_ref().unwrap().focus,
+                "preview errors keep existing focus"
+            );
+            let copied = frame(
+                &mut view,
+                vec![
+                    key(egui::Key::A, egui::Modifiers::COMMAND),
+                    egui::Event::Copy,
+                ],
+            );
+            assert!(
+                copied.iter().any(|command| matches!(
+                    command,
+                    egui::OutputCommand::CopyText(text) if text == "Unaccepted\nbuffer"
+                )),
+                "Select All/Copy retains the unaccepted buffer after a preview error"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "clipboard keys belong to inline text"
+            );
+            // A changed buffer clears the preview-error guard for click-away.
+            frame(
+                &mut view,
+                vec![
+                    key(egui::Key::A, egui::Modifiers::COMMAND),
+                    egui::Event::Text("Revised\nline two".into()),
+                ],
+            );
+            let outside = egui::pos2(700., 400.);
+            let finish = if escape {
+                vec![key(egui::Key::Escape, egui::Modifiers::NONE)]
+            } else {
+                vec![
+                    egui::Event::PointerMoved(outside),
+                    egui::Event::PointerButton {
+                        pos: outside,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos: outside,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            };
+            frame(&mut view, finish);
+            assert_eq!(view.inline.as_ref().unwrap().finish, Some(true));
+            view.drain_inline(&tx);
+            assert!(
+                matches!(
+                    rx.try_recv(),
+                    Ok(Job::Apply(Request::UpdateTextInput { .. }))
+                ),
+                "finishing retries the failed preview first"
+            );
+            accept(&ctx, &mut view, "Revised\nline two");
+            view.drain_inline(&tx);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(Job::Apply(Request::FinishTextInput { commit: true, .. }))
+            ));
+            assert!(!ctx.text_edit_focused());
+            if !escape {
+                assert_eq!(
+                    ctx.memory(|memory| memory.focused()),
+                    Some(other_id.get()),
+                    "click-away preserves the new control's focus"
+                );
+            }
+            view.receive(&ctx, Err("finish failed".into()));
+            frame(&mut view, vec![]);
+            assert!(ctx.text_edit_focused(), "a failed finish remains editable");
+            assert_eq!(view.inline.as_ref().unwrap().text, "Revised\nline two");
+            view.drain_inline(&tx);
+            assert!(
+                rx.try_recv().is_err(),
+                "failure must not automatically retry"
+            );
+            frame(
+                &mut view,
+                vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+            );
+            view.drain_inline(&tx);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(Job::Apply(Request::FinishTextInput { commit: true, .. }))
+            ));
+            // The worker can finish before an idle frame unregisters the field.
+            view.receive(&ctx, Ok(presented_text("label", "Revised\nline two")));
+            assert!(view.inline.is_none());
+            frame(&mut view, vec![key(egui::Key::Z, egui::Modifiers::COMMAND)]);
+            assert!(
+                matches!(rx.try_recv(), Ok(Job::Apply(Request::Undo))),
+                "first Undo after {} must reach document history",
+                if escape { "Escape" } else { "click-away" }
+            );
+            assert!(rx.try_recv().is_err(), "layout passes must not repeat Undo");
         }
     }
 

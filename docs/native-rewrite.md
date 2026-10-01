@@ -50,6 +50,13 @@ wgpu focus tests and AppKit deferred-worker XCTest cover consecutive input;
 private-X11 light/dark checks apply Home plus three Right keys without refocusing
 and undo every change exactly. Platform accessibility/IME acceptance stays open.
 
+Both hosts release inline text's keyboard focus when Escape finishes, so the
+first document Undo is not owned by a hidden text editor. Click-away preserves
+the newly focused control; a failed finish retains the buffer and restores text
+focus for retry. Host tests cover this handoff and failure recovery. X11 Undo
+checks wait for the exact pre-edit layer, including its geometry, rather than
+accepting an unchanged layer count. Physical-platform and IME gates stay open.
+
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
