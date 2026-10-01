@@ -17,6 +17,14 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+wgpu invalidates the Preferences focus sample on every native focus event. A
+transfer to History can no longer briefly re-suspend global shortcuts before
+the next Preferences pass. The X11 lifecycle test follows named, settled recorder
+rectangles, sends each chord once, and checks all seven persistence paths plus
+edited Region and New Capture launches after restart and blur. Windows shares
+the fix; physical Windows/Wayland input remains unverified. AppKit is unchanged;
+no physical-platform, accessibility or mixed-DPI gate closes from these checks.
+
 Both screenshot-editor hosts keep selected move/resize/rotation and curve grips
 live under the Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow tools. Only the
 active tool's own selected shape body starts a move; empty canvas still draws,

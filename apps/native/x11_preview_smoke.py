@@ -1299,11 +1299,54 @@ def main():
                 edit_settings.write_text(settings.read_text())
                 edit_args = [str(binary), "--live", "--open-history", "--open-preferences", "--history-root", str(history),
                              "--settings-file", str(edit_settings), "--quit-after", "180"]
+                env["CAPTURES_NATIVE_LAYOUT_PROBE"] = "1"
                 editor = spawn("shortcut-editor", edit_args)
                 # The shortcut recorders live in the separate Preferences window.
                 root = wait(lambda: windows("Captures Preferences"), "shortcut editor Preferences")[0]
                 run("xdotool", "windowmove", "--sync", root, "20", "60")
                 time.sleep(1)
+
+                layout = {"name": "shortcut-editor", "offset": 0, "latest": {}}
+                labels = ["New Capture", "Region", "Window", "Full Screen", "Record Region",
+                          "Record Window", "Record Full Screen"]
+
+                def shortcut_layout():
+                    with (output / f"{layout['name']}.stdout.log").open() as log:
+                        log.seek(layout["offset"])
+                        while (line := log.readline()).endswith("\n"):
+                            layout["offset"] += len(line.encode())
+                            try:
+                                event = json.loads(line)
+                            except ValueError:
+                                continue
+                            if event.get("event") == "preferences-shortcuts-layout":
+                                layout["latest"] = event["detail"]
+                    return layout["latest"]
+
+                def shortcuts_ready():
+                    view = shortcut_layout()
+                    if view.get("section") != "shortcuts":
+                        return False
+                    page = view["page"]
+                    # Shipping scroll-margin-top is 16px. Do not click moving
+                    # rows during the smooth navigation, even if already visible.
+                    if not (abs(view["card_top"] - page[1] - 16) <= 1
+                            and all(name in view["controls"] and page[1] <= view["controls"][name][1]
+                                    and view["controls"][name][3] <= page[3] for name in labels)):
+                        return False
+                    # Layout events precede presentation. In this dark fixture,
+                    # the selected nav wash is brighter than hover/idle. Check
+                    # actual pixels too, not a screenshot of the previous frame.
+                    strip = run("import", "-window", root, "-crop", "1x69+15+85", "-depth", "8", "rgb:-")
+                    washes = [sum(strip[y * 3:y * 3 + 3]) for y in (0, 34, 68)]
+                    return washes[2] > max(washes[:2])
+
+                def save_error_painted():
+                    # The Mustard fixture's error text is pink, not the gold
+                    # Saving pill. Await actual header pixels after the reply.
+                    pixels = run("import", "-window", root, "-crop", "400x32+460+19", "-depth", "8", "rgb:-")
+                    return sum(r > g + 10 and b > g + 1
+                               for r, g, b in zip(pixels[::3], pixels[1::3], pixels[2::3])) > 30
 
                 def open_shortcuts():
                     # A capture recreates the hidden Preferences window, so look
@@ -1311,12 +1354,14 @@ def main():
                     nonlocal root
                     root = wait(lambda: windows("Captures Preferences"), "Preferences window")[0]
                     click(root, 98, 153)
-                    time.sleep(.4)
+                    wait(shortcuts_ready, "settled Shortcuts page with all seven recorders visible")
 
-                # Measured Preferences-window client positions, not fixture
-                # coordinates. Normal and focused states share the row geometry.
-                rows = [294, 330, 366, 402, 438, 474, 510]
-                recorder_x = 709  # Recorders are right-aligned, as in shipping.
+                def click_recorder(index):
+                    rect = shortcut_layout()["controls"][labels[index]]
+                    click(root, round((rect[0] + rect[2]) / 2), round((rect[1] + rect[3]) / 2))
+                    wait(lambda: shortcut_layout().get("recording") == labels[index],
+                         f"focused {labels[index]} recorder before sending one chord")
+
                 paths = [("new_capture_shortcut",), ("region_shortcut",),
                          ("window_shortcut",), ("display_shortcut",),
                          ("recording", "video_shortcut"), ("recording", "window_shortcut"),
@@ -1334,7 +1379,7 @@ def main():
 
                 def record(index, chord, expected):
                     before = stored_keys()
-                    click(root, recorder_x, rows[index])
+                    click_recorder(index)
                     run("xdotool", "key", chord)
                     wait(lambda: stored_keys()[index] == expected, f"persist {paths[index]} = {expected}")
                     after = stored_keys()
@@ -1350,7 +1395,7 @@ def main():
                 # callback (without releasing the OS grab) cannot pass this.
                 record(1, "ctrl+shift+F7", "Control+Shift+F7")
                 baseline = stored_keys()
-                click(root, recorder_x, rows[0])
+                click_recorder(0)
                 run("xdotool", "keydown", "ctrl", "sleep", ".2")
                 shot(root, "shortcuts-dark-recording")
                 run("xdotool", "keyup", "ctrl", "key", "p", "sleep", ".2")
@@ -1362,7 +1407,7 @@ def main():
                 other_app = spawn("editor-focus", ["xmessage", "-title", "Recorder focus fixture",
                     "-geometry", "220x70+1040+250", "Recorder blur target"])
                 other = wait(lambda: windows("Recorder focus fixture"), "recorder blur target")[0]
-                click(root, recorder_x, rows[0])
+                click_recorder(0)
                 run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                 time.sleep(.3)
                 run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
@@ -1372,12 +1417,20 @@ def main():
 
                 # The existing Region chord is deliverable to another recorder,
                 # but the settings validator must reject that duplicate.
-                click(root, recorder_x, rows[2])
-                run("xdotool", "key", "ctrl+shift+F7", "sleep", ".5")
+                click_recorder(2)
+                run("xdotool", "key", "ctrl+shift+F7")
+                wait(lambda: shortcut_layout().get("save_error")
+                     and shortcut_layout().get("recording") is None, "duplicate rejected after recording ends")
+                wait(save_error_painted, "painted duplicate-save error before repair")
                 shot(root, "shortcuts-duplicate-error")
                 assert stored_keys() == baseline, "duplicate shortcut was persisted"
-                # The recorder keeps keyboard focus across the error banner.
-                run("xdotool", "key", "space", "sleep", ".2", "key", "ctrl+f")
+                # Like shipping, completing a chord ends recording even when
+                # saving fails. Space re-arms the still-focused button. Await
+                # that real input before sending the repair chord once.
+                run("xdotool", "key", "space")
+                wait(lambda: shortcut_layout().get("recording") == labels[2],
+                     "Space re-arms the focused recorder across the save error")
+                run("xdotool", "key", "ctrl+f")
                 wait(lambda: stored_keys()[2] == "Control+KeyF", "repair duplicate via focused recorder")
                 open_shortcuts()
                 for index, chord, expected in [
@@ -1408,13 +1461,14 @@ def main():
                 run("xdotool", "key", "Escape")
                 wait(lambda: not windows(SELECTOR) and windows("Capture History"), "navigation shortcut cancel")
                 open_shortcuts()
-                click(root, recorder_x, rows[0])
+                click_recorder(0)
                 # Leaving Preferences must cancel the recorder.
                 run("xdotool", "windowactivate", "--sync", history_window)
                 run("xdotool", "key", "ctrl+q")
                 assert editor.wait(timeout=10) == 0, "stale recorder swallowed workspace Quit"
                 assert stored_keys() == expected
 
+                layout.update(name="shortcut-editor-restart", offset=0, latest={})
                 editor = spawn("shortcut-editor-restart", edit_args)
                 root = wait(lambda: windows("Captures Preferences"), "restart with saved shortcuts")[0]
                 run("xdotool", "windowmove", "--sync", root, "20", "60")
@@ -1432,6 +1486,10 @@ def main():
                 time.sleep(.3)
                 run("xdotool", "key", "ctrl+alt+n")
                 controls = wait(lambda: windows(CONTROLS), "edited New Capture chord after restart and blur")[0]
+                # Like x11_capture_smoke, observe the toolbar pixels, not just
+                # an initially transparent native window awaiting preparation.
+                wait(lambda: int(run("import", "-window", controls, "-crop", "1280x96+0+804",
+                                     "-format", "%k", "info:")) > 16, "edited New Capture toolbar painted")
                 shot(controls, "controls-edited-shortcut")
                 run("xdotool", "key", "Escape")
                 wait(lambda: not windows(CONTROLS) and windows("Captures Preferences")

@@ -1,6 +1,10 @@
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        OnceLock,
+        mpsc::{self, Receiver, Sender},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -250,6 +254,8 @@ pub struct Preferences {
     shortcut_recorder: Option<ShortcutRecorder>,
     shortcut_input: shortcut_input::Bridge,
     suppress_shortcut_commands: bool,
+    shortcut_rects: BTreeMap<&'static str, [f32; 4]>,
+    last_shortcut_probe: Option<Value>,
     feedback: crate::feedback::FeedbackWindow,
     login_root: Option<PathBuf>,
     login_enabled: Option<bool>,
@@ -349,6 +355,8 @@ impl Preferences {
             shortcut_recorder: None,
             shortcut_input,
             suppress_shortcut_commands: false,
+            shortcut_rects: BTreeMap::new(),
+            last_shortcut_probe: None,
             feedback: crate::feedback::FeedbackWindow::default(),
             login_root: None,
             login_enabled: None,
@@ -832,6 +840,7 @@ impl Preferences {
                     ui.spacing_mut().item_spacing.y = 0.;
                     self.find_rows.clear();
                     self.card_tops.clear();
+                    self.shortcut_rects.clear();
                     self.appearance(ui, t);
                     self.capture(ui, t);
                     self.shortcuts(ui, t);
@@ -850,6 +859,20 @@ impl Preferences {
             viewport.top() + 80.,
             at_end && output.state.offset.y > 0.,
         );
+        if shortcut_probe_enabled() {
+            let probe = json!({
+                "section": preferences::SECTIONS[self.active_section].id,
+                "card_top": self.card_tops[2],
+                "page": [viewport.left(), viewport.top(), viewport.right(), viewport.bottom()],
+                "controls": self.shortcut_rects,
+                "recording": self.shortcut_recorder.as_ref().map(|recorder| recorder.field.label()),
+                "save_error": self.save_error.is_some(),
+            });
+            if self.last_shortcut_probe.as_ref() != Some(&probe) {
+                crate::emit("preferences-shortcuts-layout", probe.clone());
+                self.last_shortcut_probe = Some(probe);
+            }
+        }
         history
     }
 
@@ -1893,6 +1916,13 @@ impl Preferences {
                     )
                     .inner;
                 let started = response.clicked() && !recording;
+                if shortcut_probe_enabled() {
+                    let rect = response.rect;
+                    this.shortcut_rects.insert(
+                        field.label(),
+                        [rect.left(), rect.top(), rect.right(), rect.bottom()],
+                    );
+                }
                 if started {
                     this.shortcut_recorder = Some(ShortcutRecorder::new(field));
                     this.shortcut_input.start();
@@ -2299,6 +2329,13 @@ fn modifier_kind(code: &str) -> Option<ShortcutModifier> {
 
 fn shortcut_recording_lost_focus(active: bool, just_started: bool, has_focus: bool) -> bool {
     active && !just_started && !has_focus
+}
+
+/// The existing opt-in UI probe reports geometry and readiness only,
+/// never bindings, typed keys or settings paths.
+fn shortcut_probe_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some())
 }
 
 pub(crate) fn shortcut_platform() -> ShortcutPlatform {

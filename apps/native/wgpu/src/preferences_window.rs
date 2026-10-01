@@ -9,14 +9,15 @@ use eframe::egui;
 thread_local! {
     static IN_WINDOW_EVENT: Cell<bool> = const { Cell::new(false) };
     static ROOT_PASS_REQUESTED: Cell<bool> = const { Cell::new(false) };
-    static NATIVE_FOCUS: Cell<bool> = const { Cell::new(true) };
+    static NATIVE_FOCUS: Cell<(bool, u64)> = const { Cell::new((true, 0)) };
 }
 
 /// Record whether any Captures window holds native keyboard focus. The
 /// Preferences viewport's own focus is read during a UI pass and can be one
-/// pass stale; a blur to another application must release shortcuts at once.
+/// pass stale. Every native focus event invalidates that sample, including a
+/// transfer to History before Preferences receives its next UI pass.
 pub(crate) fn set_native_focus(focused: bool) {
-    NATIVE_FOCUS.with(|cell| cell.set(focused));
+    NATIVE_FOCUS.with(|cell| cell.set((focused, cell.get().1 + 1)));
 }
 
 /// Run `f` while the host dispatches a winit window event to eframe.
@@ -61,6 +62,7 @@ pub(crate) enum Shown<R> {
 pub(crate) struct PreferencesWindow {
     open: bool,
     focused: bool,
+    focus_generation: u64,
     /// Hidden while a capture hides the workspace.
     hidden: bool,
     /// The window's last on-screen frame (outer position, inner size).
@@ -82,7 +84,12 @@ impl PreferencesWindow {
     }
 
     pub(crate) fn focused(&self) -> bool {
-        self.presented() && self.focused && NATIVE_FOCUS.with(Cell::get)
+        self.presented()
+            && self.focused
+            && NATIVE_FOCUS.with(|cell| {
+                let (focused, generation) = cell.get();
+                focused && generation == self.focus_generation
+            })
     }
 
     /// Shipping `show_preferences`: create the window, or show, restore and
@@ -160,6 +167,7 @@ impl PreferencesWindow {
             Shown::Content(add.take().map(|add| add(ui)))
         });
         self.focused = focused;
+        self.focus_generation = NATIVE_FOCUS.with(|cell| cell.get().1);
         self.frame = frame;
         self.declared = true;
         match shown {
@@ -229,6 +237,55 @@ mod tests {
         assert!(window.is_open() && !window.presented() && !window.focused());
         window.close();
         assert!(!window.is_open() && !window.presented());
+    }
+
+    #[test]
+    fn native_focus_transfer_invalidates_preferences_until_its_next_pass() {
+        let ctx = egui::Context::default();
+        let mut window = PreferencesWindow::default();
+        window.open(&ctx);
+        let focused_input = || egui::RawInput {
+            viewports: [(
+                egui::ViewportId::ROOT,
+                egui::ViewportInfo {
+                    focused: Some(true),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        set_native_focus(true);
+        during_window_event(|| {
+            ctx.run_ui(focused_input(), |ui| {
+                window.show(ui.ctx(), false, |_| ());
+            })
+            .textures_delta
+            .clear();
+        });
+        assert!(window.focused());
+
+        // History gains focus before the Preferences viewport is resampled.
+        // "Any Captures window focused" must not revive its stale true bit.
+        set_native_focus(false);
+        assert!(!window.focused());
+        set_native_focus(true);
+        assert!(
+            !window.focused(),
+            "stale Preferences cannot suspend OS grabs"
+        );
+
+        // A real Preferences pass may establish focus again.
+        ctx.run_ui(focused_input(), |ui| {
+            window.show(ui.ctx(), false, |_| ());
+        })
+        .textures_delta
+        .clear();
+        assert!(window.focused());
+        // Native gain can precede the former window's blur.
+        set_native_focus(true);
+        assert!(!window.focused(), "gain alone also invalidates the sample");
     }
 
     #[test]
