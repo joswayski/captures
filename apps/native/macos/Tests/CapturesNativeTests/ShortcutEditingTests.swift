@@ -5,9 +5,12 @@ import XCTest
 private final class ShortcutSettingsTransport: SettingsTransport {
     private let lock = NSLock()
     private var value: [String: Any]
+    private let saveError: String?
     private(set) var saves: [[String: Any]] = []
 
-    init(appearance: String = "dark", newCaptureShortcut: String = "Command+Shift+Space") {
+    init(appearance: String = "dark", newCaptureShortcut: String = "Command+Shift+Space",
+         saveError: String? = nil) {
+        self.saveError = saveError
         value = [
             "appearance": appearance, "theme": "mustard", "custom_theme": [:],
             "output_directory": "/fixture/Captures",
@@ -26,6 +29,7 @@ private final class ShortcutSettingsTransport: SettingsTransport {
         switch object["operation"] as? String {
         case "load": return ["ok": true, "settings": value]
         case "save":
+            if let saveError { throw SettingsStoreError.backend(saveError) }
             guard let settings = object["settings"] as? [String: Any] else {
                 throw SettingsStoreError.invalidResponse
             }
@@ -215,6 +219,60 @@ final class ShortcutEditingTests: XCTestCase {
         XCTAssertEqual(events.map { $0.0 }, ["KeyF", "KeyQ"])
         XCTAssertTrue(events.allSatisfy { $0.1 })
         XCTAssertTrue(recorder.recording)
+    }
+
+    func testSaveErrorHeaderKeepsCopyAndActionsClearAcrossResize() throws {
+        let error = "The Region shortcut conflicts with New Capture. Choose a different combination before trying to save these preferences again."
+        let message = PreferencesPolicy.template("save_error_template", error: error)
+        for appearance in ["light", "dark"] {
+            let transport = ShortcutSettingsTransport(appearance: appearance, saveError: error)
+            let (controller, window) = try fixture(transport: transport, appearance: appearance) { _, _, _, _, _ in
+                ["kind": "complete", "keys": ["Ctrl", "Q"], "shortcut": "Control+KeyQ"]
+            }
+            let root = try XCTUnwrap(window.contentView)
+            let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: "region_shortcut"))
+            recorder.performClick(nil)
+            controller.handleShortcutInput(code: "KeyQ", control: true, shift: false, alt: false, meta: false)
+            controller.flush()
+            try waitUntil {
+                root.subviews.flatMap(\.subviews).compactMap { $0 as? NSTextField }
+                    .contains { $0.stringValue == message }
+            }
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            // Shrink within each layout, cross the sidebar breakpoint, then grow back.
+            for width in [CGFloat(880), 721, 720, 560, 1000] {
+                window.setContentSize(NSSize(width: width, height: 600))
+                root.layoutSubtreeIfNeeded()
+                let copy = root.subviews.compactMap { $0 as? NSTextField }
+                    .filter { [PreferencesPolicy.text("title"), PreferencesPolicy.text("subtitle")].contains($0.stringValue) }
+                XCTAssertEqual(copy.count, 2)
+                let history = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
+                    .first { $0.title == PreferencesPolicy.text("history") })
+                let retry = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
+                    .first { $0.title == "Retry" })
+                let status = try XCTUnwrap(root.subviews.flatMap(\.subviews).compactMap { $0 as? NSTextField }
+                    .first { $0.stringValue == message })
+                let pill = try XCTUnwrap(status.superview)
+                for label in copy {
+                    XCTAssertLessThanOrEqual(label.frame.maxX + tokens.number("s-6"), history.frame.minX)
+                    let inkWidth = (label.stringValue as NSString).size(withAttributes: [.font: try XCTUnwrap(label.font)]).width
+                    XCTAssertGreaterThanOrEqual(label.frame.width, inkWidth, "full header copy at \(width)")
+                }
+                XCTAssertLessThanOrEqual(history.frame.maxX + tokens.number("s-4"), pill.frame.minX)
+                XCTAssertLessThanOrEqual(pill.frame.maxX + tokens.number("s-4"), retry.frame.minX)
+                XCTAssertEqual(retry.frame.maxX, root.bounds.width - tokens.number("s-8"))
+                XCTAssertFalse(retry.isHidden)
+                XCTAssertLessThanOrEqual(pill.frame.width, 360)
+                XCTAssertLessThan(status.frame.width, status.intrinsicContentSize.width)
+                XCTAssertEqual(status.lineBreakMode, .byTruncatingTail)
+                XCTAssertEqual(status.accessibilityLabel(), message, "full unelided error remains accessible")
+                if let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                    RunLoop.main.run(until: Date().addingTimeInterval(
+                        NativeMotion.duration("popover_in", tokens: tokens)))
+                    try render(root, name: "preferences-error-\(appearance)-\(Int(width)).png", directory: directory)
+                }
+            }
+        }
     }
 
     func testShortcutCardsRenderNormalRecordingAndInvalidInLightAndDark() throws {

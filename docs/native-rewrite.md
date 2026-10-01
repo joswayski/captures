@@ -17,6 +17,13 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Both Preferences hosts keep save status on one line, with shipping's 360px error
+cap (42vw for other statuses) further constrained to clear the title/subtitle,
+History and the existing native Retry action. AppKit rebalances on resize;
+wgpu retains the full message in its label metadata and AppKit in accessibility.
+Host tests cover both themes and minimum/sidebar-breakpoint widths. Physical
+Windows/macOS, Wayland, screen-reader and mixed-DPI acceptance remain open.
+
 wgpu invalidates the Preferences focus sample on every native focus event. A
 transfer to History can no longer briefly re-suspend global shortcuts before
 the next Preferences pass. The X11 lifecycle test follows named, settled recorder

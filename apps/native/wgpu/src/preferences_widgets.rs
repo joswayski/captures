@@ -267,6 +267,13 @@ pub fn button(ui: &mut egui::Ui, t: &Tokens, label: &str, raised: bool) -> Respo
     button_sized(ui, t, label, raised, t.number("h-md"))
 }
 
+pub fn button_width(ui: &egui::Ui, t: &Tokens, label: &str) -> f32 {
+    text(ui, label, t.number("text-sm"), t.color("text"))
+        .size()
+        .x
+        + t.number("s-5") * 2.
+}
+
 pub fn button_sized(
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -276,7 +283,7 @@ pub fn button_sized(
 ) -> Response {
     let enabled = ui.is_enabled();
     let galley = text(ui, label, t.number("text-sm"), t.color("text"));
-    let size = vec2(galley.size().x + t.number("s-5") * 2., height);
+    let size = vec2(button_width(ui, t, label), height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let hovered = enabled && response.hovered();
@@ -563,6 +570,7 @@ pub fn status_pill(
     t: &Tokens,
     kind: &str,
     message: &str,
+    max_width: f32,
     pose: captures_app::motion::Pose,
 ) -> Response {
     let (fill, border, color) = match kind {
@@ -570,15 +578,17 @@ pub fn status_pill(
         "error" => ("danger-surface", None, "danger-text"),
         _ => ("surface-raised", Some("border"), "text-muted"),
     };
-    let galley = ui.painter().layout(
+    let marker = 13.;
+    let decoration_width = marker + t.number("s-3") + t.number("s-4") * 2.;
+    let mut job = egui::text::LayoutJob::simple_singleline(
         message.to_owned(),
         FontId::proportional(t.number("text-xs")),
         t.color(color),
-        360.,
     );
-    let marker = 13.;
+    job.wrap = egui::text::TextWrapping::truncate_at_width((max_width - decoration_width).max(0.));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let size = vec2(
-        galley.size().x + marker + t.number("s-3") + t.number("s-4") * 2.,
+        galley.size().x + decoration_width,
         (galley.size().y + 4.).max(t.number("h-sm")),
     );
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
