@@ -5595,6 +5595,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // Escape leaves the text view first responder; hiding its frame must
         // not leave document Undo routed to that invisible field. Preserve a
         // control the user already focused by clicking away.
+        // The canvas overlays were hidden during input. Restore their state
+        // before asking AppKit to make the active canvas first responder.
+        updateDrawing()
         if window.firstResponder === inlineTextEditor { focusActiveCanvas() }
         inlineTextFrame?.isHidden = true
         inlineTextStyleKey = nil

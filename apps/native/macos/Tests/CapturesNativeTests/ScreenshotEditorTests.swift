@@ -5569,9 +5569,15 @@ final class ScreenshotEditorTests: XCTestCase {
             }
             waitUntil { worker.requests.count == count + 1 && controller.state.busy }
             XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
+            XCTAssertTrue(controller.drawOverlay.isHidden, "input keeps the canvas inactive until Finish resolves")
+            if !focusElsewhere {
+                XCTAssertTrue(controller.window.firstResponder === editor,
+                              "Escape retains the text responder during the accepted Finish")
+            }
             worker.completePending(with: snapshot(id: "shot", unsaved: true,
                 layers: [textLayer(id: "fresh", text: "Revised\nline two")]))
             XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+            XCTAssertFalse(controller.drawOverlay.isHidden, "the canvas must be available before receiving focus")
             let finishedCount = worker.requests.count
             let undo = try keyEvent(window: controller.window, keyCode: 6, characters: "z", modifiers: .command)
             if focusElsewhere {
