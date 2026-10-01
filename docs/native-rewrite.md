@@ -1008,12 +1008,21 @@ retain a local typing buffer while one worker update fits/renders at a time.
 Escape, outside clicks and close finish one undoable edit (shipping has no
 Done/Cancel). The box is painted in the layer's transform: bundled face, size,
 colour, opacity, plate, padding, alignment and rotation, with the accent outline
-`--s-3` outside it, while the session preview omits that layer. Rotated labels
-rotate their glyphs, plate and caret, but egui keeps the selection highlight and
-pointer caret placement unrotated; outlined labels draw filled glyphs. Empty new
-text creates nothing; empty existing text removes that layer, and a cleared box
-after a failed Begin is dismissed. Quit drains the latest buffer before draft
-saving, and failed updates retain it for retry. Output actions cannot publish
+`--s-3` outside it, while the session preview omits that layer. Typing refits the
+frame before presenting the new glyphs, without waiting for another input event.
+Rotated labels rotate their glyphs, plate and caret, but egui keeps the selection highlight and
+pointer caret placement unrotated. Outlined input paints hollow grayscale strokes
+of the actual shaped atlas glyphs, retaining ligatures, fallback, advances and
+caret layout. Selection retains its background without restoring glyph fill.
+Masks reuse unchanged raster pixels, invalidate changed width/DPI or recycled
+atlas coordinates, and retain only the current visible glyph set on layout changes.
+The raster stencil is a live-input approximation, not contour-equivalent export;
+strokes wider than 24 physical pixels use an eight-line disk approximation, which
+softens antialiased edges, and large type still has a noticeable first-render cost.
+Saved pixels keep the shared contour renderer.
+Empty new text creates nothing; empty existing text removes that layer, and a
+cleared box after a failed Begin is dismissed. Quit drains the latest buffer before
+draft saving, and failed updates retain it for retry. Output actions cannot publish
 unfinished pixels.
 Private X11/software-GL exercises are implementation evidence, not Windows,
 Wayland, physical input, IME or accessibility acceptance. AppKit composition is a

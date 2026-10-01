@@ -2519,7 +2519,11 @@ def main():
                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            check=True, timeout=10)
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".3")
-            copied = run("xclip", "-selection", "clipboard", "-o")
+            # Clipboard publication follows a UI repaint. Wait for the one
+            # accepted Copy command, without reissuing it or relying on a
+            # fixed sleep under software rendering / concurrent build load.
+            copied = wait(lambda: value if (value := run("xclip", "-selection", "clipboard", "-o"))
+                          == oversized else None, "selected oversized input copied after preview error")
             shot(editor, "text-input-error")
             assert copied == oversized, (len(copied), copied[:80])
             assert draft_bytes() == before, "failed previews must not save"
@@ -2590,6 +2594,93 @@ def main():
             assert save_layers(lambda values: len(values) == 2 and values[-1] == created,
                                "double-click edit single undo")[-1] == created
 
+            # Outlined typing must remain hollow even when TextEdit recolors
+            # selected glyphs. The document renderer already has this style;
+            # exercise the separate live input, not only the accepted preview.
+            resize_editor(1000, 1001, "sleep", ".3")
+            toolbar_click("layers")
+            click(editor, *document_point((600, 320)))
+            toolbar_click("draw")
+            draw_tool("text")
+            prop_click(95, TEXT_DEFAULTS["style"])
+            prop_click(60, 271)  # Outlined: Plain, Standard, Rounded, Outlined.
+            prop_field(TEXT_DEFAULTS["size"], 128, x=59)
+            before = draft_bytes()
+            begin_input((100, 140))
+            type_text("Oo", 1)
+            shot(editor, "text-input-outline-wide-stroke")
+            assert draft_bytes() == before
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            large = save_layers(lambda values: len(values) == 3, "large outlined input finishes")[-1]
+            assert large["outlined"] and large["fontSize"] == 128 and large["text"] == "Oo"
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 2 and values[-1] == created,
+                        "large outlined creation undo")
+            # Undo can restore the prior selected layer. Deselect before
+            # changing defaults, rather than typing into its live Properties.
+            toolbar_click("layers")
+            click(editor, *document_point((600, 320)))
+            toolbar_click("draw")
+            draw_tool("text")
+            prop_field(TEXT_DEFAULTS["size"], 72, x=59)
+            before = draft_bytes()
+            begin_input((300, 180))
+            type_text("BOLD", 1)
+            shot(editor, "text-input-outline-new")
+            assert draft_bytes() == before
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            outlined = save_layers(lambda values: len(values) == 3, "outlined input finishes")[-1]
+            assert outlined["text"] == "BOLD" and outlined["outlined"]
+            assert outlined["fontSize"] == 72 and outlined["background"] is None
+            toolbar_click("layers")
+            prop_click(37, 430)  # Existing Text Properties: Bold.
+            bold = save_layers(lambda values: values[-1]["bold"], "outlined bold applied")[-1]
+            before = draft_bytes()
+            begin_input((300, 200))
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"BOLD",
+                 "outlined selection copied from the live input")
+            shot(editor, "text-input-outline-selected")
+            run("xdotool", "key", "ctrl+End", "Left", "sleep", ".2")
+            shot(editor, "text-input-outline-caret")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == bold, "unchanged outlined input")[-1] == bold
+            assert draft_bytes() == before
+            toolbar_click("layers")
+            layer_click(0)  # Unchanged input restores its previous selection.
+            # A one-line 72pt label has a 90px frame. Turn its top grip to
+            # the right of the centre with the shipping Shift snap (90°).
+            center_x = bold["x"] + bold["width"] / 2
+            center_y = bold["y"] + 45
+            _, _, scale = fit_geometry()
+            radius = 45 + 28 / scale
+            # drag() uses the historical left-inspector fixture coordinates.
+            drag((center_x + 238, center_y - radius + 89),
+                 (center_x + radius + 238, center_y + 89), shift=True)
+            rotated = save_layers(lambda values: math.isclose(values[-1].get("rotation", 0),
+                                  math.pi / 2, abs_tol=1e-6), "outlined label rotated")[-1]
+            before = draft_bytes()
+            begin_input((center_x, center_y))
+            run("xdotool", "key", "ctrl+End", "Left", "sleep", ".2")
+            shot(editor, "text-input-outline-rotated")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            save_layers(lambda values: values[-1] == rotated, "unchanged rotated outlined input")
+            assert draft_bytes() == before
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: values[-1] == bold, "outlined rotation undo")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: values[-1] == outlined, "outlined bold undo")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 2 and values[-1] == created, "outlined creation undo")
+            toolbar_click("layers")
+            click(editor, *document_point((600, 320)))
+            toolbar_click("draw")
+            draw_tool("text")
+            prop_click(95, TEXT_DEFAULTS["style"])
+            prop_click(60, 431)  # Rounded Box, restoring the suite's defaults.
+            prop_field(TEXT_DEFAULTS["size"], 24, x=59)
+            resize_editor(1000, 700, "sleep", ".3")
+
             begin_input((400, 250))
             resize_editor(760, 540, "sleep", ".3")
             type_text("Minimum", 1)
@@ -2620,6 +2711,10 @@ def main():
                            "error-recovery-one-undo", "preview-no-draft", "multiline-exact", "one-create-undo",
                            "redo-exact", "existing-hit-same-id", "click-away-commits", "existing-one-undo", "minimum-input",
                            "select-double-click-same-id-position", "double-click-one-undo",
+                           "outlined-wide-stroke-preview", "outlined-wide-stroke-undo",
+                           "outlined-preview-no-draft", "outlined-input-style", "outlined-selection-clipboard",
+                           "outlined-unchanged-no-draft", "outlined-bold-and-create-undo",
+                           "outlined-rotated-input", "outlined-rotation-undo",
                            "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text input: transient typing, multiline, existing hit, undo, minimum and quit")

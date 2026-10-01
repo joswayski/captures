@@ -3,6 +3,8 @@
 use super::*;
 use captures_app::editor_session::TextInputTarget;
 
+mod outline;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Begin,
@@ -33,6 +35,7 @@ pub(super) struct InlineText {
     previous_selection: Option<String>,
     previous_document: Arc<Document>,
     previous_output: Option<(egui::TextureHandle, u64)>,
+    outline: outline::Outline,
 }
 
 impl View {
@@ -85,6 +88,7 @@ impl View {
             previous_selection: self.selected_layer.clone(),
             previous_document: presented.document.clone(),
             previous_output: self.output.clone(),
+            outline: Default::default(),
         });
         self.cancel_edit_gestures();
         self.cancel_crop();
@@ -275,6 +279,7 @@ struct InlineGeometry {
     format: egui::TextFormat,
     halign: egui::Align,
     auto_width: bool,
+    outline_width: Option<f32>,
     plate: Option<(egui::Color32, f32)>,
 }
 
@@ -362,6 +367,9 @@ fn inline_geometry(
         format,
         halign,
         auto_width: layout.auto_width,
+        outline_width: element
+            .outlined
+            .then_some(layout.outline_width as f32 * scale),
         plate: element
             .background
             .as_deref()
@@ -397,8 +405,8 @@ fn inline_galley(
 ///
 /// Rotated labels paint their glyphs, plate and caret rotated about the frame
 /// centre; the selection highlight and pointer caret placement use the
-/// unrotated box (egui text fields cannot rotate). Outlined labels draw filled
-/// glyphs rather than shipping's transparent stroked ones.
+/// unrotated box (egui text fields cannot rotate). Outlined labels replace
+/// only the visible glyph ink with cached, hollow atlas-derived strokes.
 pub(super) fn show(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -457,6 +465,7 @@ pub(super) fn show(
     let rotation = egui::emath::Rot2::from_angle(geometry.angle);
     let rotate = |point: egui::Pos2| pivot + rotation * (point - pivot);
     let text_color = geometry.format.color;
+    let separate_ink = rotated || geometry.outline_width.is_some();
     let mut lost_focus = false;
     let response = egui::Area::new(ui.scope_id().with((&input.id, "canvas-text-frame")))
         .order(egui::Order::Foreground)
@@ -486,7 +495,13 @@ pub(super) fn show(
             } else {
                 tokens.color("theme-accent").gamma_multiply(0.2)
             };
-            visuals.selection.stroke.color = text_color;
+            // Selection recolors glyph vertices independently of TextFormat.
+            // Keep its background without restoring a filled outlined label.
+            visuals.selection.stroke.color = if separate_ink {
+                egui::Color32::TRANSPARENT
+            } else {
+                text_color
+            };
             visuals.text_cursor.stroke = egui::Stroke::new(
                 (geometry.format.font_id.size / 16.).clamp(1., 3.),
                 if rotated {
@@ -496,7 +511,7 @@ pub(super) fn show(
                 },
             );
             let mut format = geometry.format.clone();
-            if rotated {
+            if separate_ink {
                 format.color = egui::Color32::TRANSPARENT;
             }
             let (halign, auto_width, wrap) = (
@@ -543,20 +558,39 @@ pub(super) fn show(
             }
             if field.changed() {
                 input.blocked = false;
+                // Geometry above used the buffer before TextEdit handled this
+                // pass's events. Refit before presenting the new glyphs, not
+                // after a later pointer event or cursor blink.
+                ui.ctx().request_discard("inline typing refits its frame");
             }
             lost_focus = field.lost_focus();
             if field.has_focus() {
                 // The accent outline is the indicator (`outline: 0` on the textarea).
                 crate::primitives::focus_indicated(ui.ctx());
             }
-            if rotated {
+            if separate_ink {
                 let origin = output.galley_pos - egui::vec2(output.galley.rect.left(), 0.);
-                let mut shape =
-                    egui::epaint::TextShape::new(rotate(origin), output.galley.clone(), text_color);
-                shape.override_text_color = Some(text_color);
-                shape.angle = geometry.angle;
-                painter.add(shape);
-                if field.has_focus()
+                if let Some(width) = geometry.outline_width {
+                    input.outline.paint(
+                        &painter,
+                        &output.galley,
+                        origin,
+                        width,
+                        text_color,
+                        rotate,
+                    );
+                } else {
+                    let mut shape = egui::epaint::TextShape::new(
+                        rotate(origin),
+                        output.galley.clone(),
+                        text_color,
+                    );
+                    shape.override_text_color = Some(text_color);
+                    shape.angle = geometry.angle;
+                    painter.add(shape);
+                }
+                if rotated
+                    && field.has_focus()
                     && let Some(range) = output.cursor_range
                 {
                     let caret = output
@@ -661,6 +695,21 @@ mod tests {
         let (plate, radius) = geometry.plate.unwrap();
         assert!(plate.a() < 255 && radius > 0.);
         assert!(geometry.content.width() < geometry.frame.width());
+        assert!(geometry.outline_width.is_none());
+        element.outlined = true;
+        let outlined =
+            inline_geometry(&ctx, &element, None, "Wide label text", preview, 0.5).unwrap();
+        assert_eq!(outlined.outline_width, Some(1.28));
+        assert_eq!(
+            outlined.frame, geometry.frame,
+            "stroke cannot move the anchor"
+        );
+        assert_eq!(
+            outlined.content, geometry.content,
+            "stroke cannot change wrapping"
+        );
+        assert_eq!(outlined.angle, geometry.angle);
+        assert_eq!(outlined.format, geometry.format);
         // Shipping's 48 × 28 minimum applies to a blank label.
         let blank = inline_geometry(&ctx, &element, None, "", preview, 0.1).unwrap();
         assert!(blank.frame.width() > 47.99 && blank.frame.height() > 27.99);
@@ -1196,6 +1245,70 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "typing must not enqueue ahead of Begin"
+        );
+    }
+
+    #[test]
+    fn typing_refits_the_frame_in_the_same_render_not_on_a_later_pointer_event() {
+        let (ctx, mut view, _, _) = setup();
+        crate::ui_fonts::install(&ctx);
+        let tokens = crate::tokens::load()["light-mustard"].clone();
+        tokens.apply(&ctx, true);
+        view.canvas = [640., 360.];
+        let document = Arc::make_mut(&mut view.presented.as_mut().unwrap().document);
+        let Element::Text(element) = document.elements.last_mut().unwrap() else {
+            unreachable!()
+        };
+        element.font_family = "sans".into();
+        element.font_size = 128.;
+        element.outlined = true;
+        element.text.clear();
+        view.inline.as_mut().unwrap().text.clear();
+        let frame = |view: &mut View, events: Vec<egui::Event>| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000., 900.),
+                    )),
+                    time: Some(if events.is_empty() { 0. } else { 1. }),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let area = ui.available_rect_before_wrap();
+                        let preview = egui::Rect::from_min_size(area.min, egui::vec2(640., 360.));
+                        show(ui, &tokens, view, area, preview);
+                    });
+                },
+            )
+        };
+        frame(&mut view, vec![]).textures_delta.clear();
+        let mut typed = frame(&mut view, vec![egui::Event::Text("Oo".into())]);
+        typed.textures_delta.clear();
+        assert_eq!(view.inline.as_ref().unwrap().text, "Oo");
+        let frame = typed
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.stroke.width == 1. => Some(rect.rect),
+                _ => None,
+            })
+            .unwrap();
+        let ink = typed
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+            .reduce(|a, b| a.union(b))
+            .unwrap();
+        assert!(
+            frame.contains_rect(ink),
+            "input frame {frame:?} must contain ink {ink:?}"
         );
     }
 }
