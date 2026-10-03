@@ -6,6 +6,7 @@ import ProductGallery from "../ProductGallery";
 const REPO_URL = "https://github.com/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
+const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const COOKING_TOOLTIP =
@@ -98,7 +99,7 @@ export default function Home({
           <p className="mt-5 max-w-xl text-sm leading-relaxed text-ink-muted sm:text-[0.9375rem]">
             A cross-platform screen capture utility by{" "}
             <a
-              href={X_URL}
+              href={AUTHOR_URL}
               target="_blank"
               rel="noreferrer"
               className="font-medium text-ink no-underline underline-offset-2 transition-colors duration-200 ease-out hover:underline"
