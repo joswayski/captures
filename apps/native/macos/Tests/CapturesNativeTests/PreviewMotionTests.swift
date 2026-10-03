@@ -132,6 +132,46 @@ final class PreviewMotionTests: XCTestCase {
         try waitUntil { !controller.isPanelVisible }
     }
 
+    func testDelayedDeletesKeepTheBatchUntilSurvivorsSettleWithoutARebuildJump() throws {
+        _ = NSApplication.shared
+        try XCTSkipIf(NativeMotion.reduceMotion, "Reduce Motion removes cards at once")
+        try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "Dust needs Metal")
+        for placement in ["bottom_right", "top_right"] {
+            let controller = try presentedController(ids: ["first", "second", "third", "fourth"],
+                                                     placement: placement)
+            defer { controller.close() }
+            let view = try XCTUnwrap(controller.previewView)
+            let first = try XCTUnwrap(view.card(for: "first"))
+            let restY = first.frame.minY
+            let slot = try XCTUnwrap(view.card(for: "second")).frame.minY - restY
+            let hold = controller.dismiss("third", exit: .dust)
+            XCTAssertEqual(hold, 2.9, accuracy: 1e-6)
+            let start = CACurrentMediaTime()
+            try waitUntil { CACurrentMediaTime() - start >= 2 }
+            XCTAssertEqual(controller.dismiss("second", exit: .dust), 2.9, accuracy: 1e-6)
+            let secondStart = CACurrentMediaTime()
+
+            // Unlike the per-slot Rust/React paths, AppKit retains both exits
+            // until the last hold ends. The first hold must not rebuild a
+            // partly settled stack or discard the second dust overlay.
+            try waitUntil { CACurrentMediaTime() - start >= 3.1 }
+            XCTAssertTrue(controller.previewView === view)
+            XCTAssertEqual(view.exitingArtifactIDs, ["second", "third"])
+            try waitUntil { CACurrentMediaTime() - secondStart >= 2.45 }
+            XCTAssertEqual(first.frame.minY, restY + slot * 2, accuracy: 0.5)
+            let before = view.cardScreenFrames()
+            try waitUntil { !controller.isTransitioning && controller.previewView !== view }
+            let rebuilt = try XCTUnwrap(controller.previewView)
+            XCTAssertEqual(rebuilt.renderedArtifactIDs, ["first", "fourth"])
+            for id in ["first", "fourth"] {
+                let previous = try XCTUnwrap(before[id])
+                let current = try XCTUnwrap(rebuilt.cardScreenFrames()[id])
+                XCTAssertEqual(current.minX, previous.minX, accuracy: 0.5, id)
+                XCTAssertEqual(current.minY, previous.minY, accuracy: 0.5, id)
+            }
+        }
+    }
+
     func testShowLessMorphsOverTheShippingTimingOnScreen() throws {
         _ = NSApplication.shared
         try XCTSkipIf(NativeMotion.reduceMotion, "Reduce Motion snaps the morph")
@@ -187,10 +227,10 @@ final class PreviewMotionTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func presentedController(ids: [String]) throws -> MiniPreviewController {
+    private func presentedController(ids: [String], placement: String = "bottom_right") throws -> MiniPreviewController {
         let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1), size: NSSize(width: 284, height: 160))
         let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in image })
-        let settings = MiniPreviewSettings(enabled: true, placement: "bottom_right", includeInCaptures: false)
+        let settings = MiniPreviewSettings(enabled: true, placement: placement, includeInCaptures: false)
         for id in ids {
             let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
             controller.present(artifact(id: id), on: screenID(), settings: settings, generation: generation)
