@@ -953,6 +953,15 @@ fn stroke_path(
     );
 }
 
+fn image_pixmap(pixels: &RgbaImage) -> Option<Pixmap> {
+    let mut bitmap = Pixmap::new(pixels.width(), pixels.height())?;
+    for (destination, source) in bitmap.pixels_mut().iter_mut().zip(pixels.pixels()) {
+        *destination =
+            tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3]).premultiply();
+    }
+    Some(bitmap)
+}
+
 fn draw_layer(
     canvas: &mut Pixmap,
     layer: &Layer,
@@ -976,13 +985,7 @@ fn draw_layer(
         pixels,
     } = &layer.shape
     {
-        let mut bitmap =
-            Pixmap::new(pixels.width(), pixels.height()).ok_or("Image layer is too large")?;
-        for (destination, source) in bitmap.pixels_mut().iter_mut().zip(pixels.pixels()) {
-            *destination =
-                tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
-                    .premultiply();
-        }
+        let bitmap = image_pixmap(pixels).ok_or("Image layer is too large")?;
         let transform = Transform::from_scale(
             *width / pixels.width() as f32,
             *height / pixels.height() as f32,
@@ -1287,10 +1290,38 @@ fn render_validated(
 ) -> Result<RgbaImage, String> {
     let (width, height) = output.dimensions();
     if !layers.is_empty() {
-        let mut canvas = Pixmap::new(width, height).ok_or("Source image is too large")?;
         let blend_source = layers
             .iter()
             .any(|layer| layer.blend_mode != BlendMode::Normal);
+        let first_bitmap = layers.first().and_then(|layer| match &layer.shape {
+            Shape::Image {
+                origin,
+                width: w,
+                height: h,
+                pixels,
+            } if !blend_source
+                && origin.x == 0.
+                && origin.y == 0.
+                && *w == width as f32
+                && *h == height as f32
+                && pixels.dimensions() == (width, height)
+                && layer.rotation_degrees == 0.
+                && layer.color[3] == 255
+                && !shadows.contains_key(&layer.id) =>
+            {
+                Some(pixels)
+            }
+            _ => None,
+        });
+        // Identity SourceOver onto an empty plane is exactly the premultiplied
+        // bitmap. Keep transforms, shadows, reduced opacity and backdrop blends
+        // on the raster path; later layers paint over this plane normally.
+        let mut canvas = if let Some(pixels) = first_bitmap {
+            image_pixmap(pixels)
+        } else {
+            Pixmap::new(width, height)
+        }
+        .ok_or("Source image is too large")?;
         if blend_source {
             // Non-normal blending needs the source image as its backdrop,
             // not a transparent annotation plane composed over it afterward.
@@ -1299,7 +1330,7 @@ fn render_validated(
                     .premultiply();
             }
         }
-        for layer in layers {
+        for layer in layers.iter().skip(usize::from(first_bitmap.is_some())) {
             draw_layer(&mut canvas, layer, shadows.get(&layer.id))?;
         }
         if blend_source {
@@ -1346,11 +1377,18 @@ mod tests {
     use super::*;
 
     fn legacy_render(document: &Document) -> RgbaImage {
+        legacy_render_with_shadows(document, &BTreeMap::new())
+    }
+
+    fn legacy_render_with_shadows(
+        document: &Document,
+        shadows: &BTreeMap<u64, DropShadow>,
+    ) -> RgbaImage {
         let (width, height) = document.source.dimensions();
         let mut output = (*document.source).clone();
         let mut canvas = Pixmap::new(width, height).unwrap();
         for layer in &document.layers {
-            draw_layer(&mut canvas, layer, None).unwrap();
+            draw_layer(&mut canvas, layer, shadows.get(&layer.id)).unwrap();
         }
         let bytes = canvas
             .pixels()
@@ -1448,6 +1486,141 @@ mod tests {
         let output = render_with_shadows_owned(document, &BTreeMap::new()).unwrap();
         assert_eq!(output, expected);
         assert_eq!(output.as_raw().as_ptr(), allocation);
+    }
+
+    #[test]
+    fn first_bitmap_matches_raster_path_across_alpha_geometry_and_following_layers() {
+        let width = 256;
+        let height = 19;
+        // Every alpha byte, asymmetric color channels and hidden RGB at alpha 0.
+        let pixels = Arc::new(RgbaImage::from_fn(width, height, |x, y| {
+            Rgba([x as u8, (x * 53 + y * 19) as u8, (255 - x) as u8, x as u8])
+        }));
+        let image = Layer {
+            id: 7,
+            shape: Shape::Image {
+                origin: Point { x: 0., y: 0. },
+                width: width as f32,
+                height: height as f32,
+                pixels: pixels.clone(),
+            },
+            color: [0, 0, 0, 255],
+            stroke_width: 0.,
+            fill: None,
+            rotation_degrees: 0.,
+            rotation_origin: None,
+            blend_mode: BlendMode::Normal,
+        };
+        for variant in 0..8 {
+            let mut layer = image.clone();
+            if let Shape::Image {
+                origin,
+                width,
+                height,
+                pixels,
+            } = &mut layer.shape
+            {
+                match variant {
+                    1 => origin.x = -1.,
+                    2 => origin.y = 0.75,
+                    3 => *width -= 1.,
+                    4 => *height += 3.,
+                    7 => *pixels = normal_document(128, 17, false).source,
+                    _ => {}
+                }
+            }
+            if variant == 5 {
+                layer.rotation_degrees = 13.25;
+            } else if variant == 6 {
+                layer.color[3] = 137;
+            }
+            for crop in [
+                None,
+                Some(PixelRect {
+                    x: 7,
+                    y: 3,
+                    width: 241,
+                    height: 13,
+                }),
+            ] {
+                let mut document = normal_document(width, height, false);
+                document.layers.insert(0, layer.clone());
+                document.crop = crop;
+                let original = (*pixels).clone();
+                let expected = legacy_render(&document);
+                assert_eq!(
+                    render(&document).unwrap(),
+                    expected,
+                    "variant {variant}, {crop:?}"
+                );
+                assert_eq!(
+                    render_with_shadows_owned(document, &BTreeMap::new()).unwrap(),
+                    expected,
+                    "owned variant {variant}, {crop:?}"
+                );
+                assert_eq!(*pixels, original);
+            }
+        }
+
+        let mut document = normal_document(width, height, false);
+        document.layers = vec![image];
+        let shadows = BTreeMap::from([(
+            7,
+            DropShadow {
+                color: [91, 37, 203, 153],
+                blur: 2.5,
+                offset_x: -7.25,
+                offset_y: 11.5,
+            },
+        )]);
+        assert_eq!(
+            render_with_shadows(&document, &shadows).unwrap(),
+            legacy_render_with_shadows(&document, &shadows)
+        );
+        assert_eq!(render(&document).unwrap(), legacy_render(&document));
+    }
+
+    #[test]
+    fn full_canvas_bitmap_keeps_source_backdrop_for_its_own_and_later_blends() {
+        let mut document = normal_document(8, 6, false);
+        document.source = Arc::new(RgbaImage::from_pixel(8, 6, Rgba([200, 100, 50, 255])));
+        let image = Layer {
+            id: 7,
+            shape: Shape::Image {
+                origin: Point { x: 0., y: 0. },
+                width: 8.,
+                height: 6.,
+                pixels: Arc::new(RgbaImage::from_pixel(8, 6, Rgba([100, 200, 80, 128]))),
+            },
+            color: [0, 0, 0, 255],
+            stroke_width: 0.,
+            fill: None,
+            rotation_degrees: 0.,
+            rotation_origin: None,
+            blend_mode: BlendMode::Normal,
+        };
+        let mut multiply = image.clone();
+        multiply.shape = Shape::Rectangle {
+            origin: Point { x: 0., y: 0. },
+            width: 8.,
+            height: 6.,
+        };
+        multiply.fill = Some([128, 64, 192, 255]);
+        multiply.blend_mode = BlendMode::Multiply;
+        document.layers = vec![image.clone(), multiply];
+        // SourceOver gives [150,150,65]; opaque Multiply rounds channel products /255.
+        assert_eq!(
+            render(&document).unwrap().get_pixel(3, 2).0,
+            [75, 38, 49, 255]
+        );
+        let mut image = image;
+        image.blend_mode = BlendMode::Multiply;
+        document.layers = vec![image];
+        // Partial-alpha Multiply: src_premul*dst/255 + dst*(255-alpha)/255.
+        assert_eq!(
+            render(&document).unwrap().get_pixel(3, 2).0,
+            [139, 89, 33, 255]
+        );
     }
 
     #[test]
