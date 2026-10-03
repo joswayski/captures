@@ -44,7 +44,9 @@ AppKit now also hides a busy screenshot window after 400 ms while its controller
 retains accepted Copy/Save and inspector/text callbacks. Its final best-effort
 autosave, session free and subsequent open are ordered on the existing worker
 queue. Normal Quit uses `.terminateLater`, drains main-thread callbacks first,
-then runs the existing failure-aware worker barrier off-main. A failed final draft
+then runs the existing failure-aware worker barrier off-main. Quit requests enter
+through the main run loop, not a GCD queue callout that would starve callbacks in
+AppKit's nested termination loop. A failed final draft
 restores the hidden editor; retry does not repeat completed output. Permission
 restart/style rebuild keep their synchronous contract and refuse pending UI work.
 XCTest covers deferred success/failure, reopen ordering, typed-buffer recovery

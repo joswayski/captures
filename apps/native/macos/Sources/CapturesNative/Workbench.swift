@@ -852,6 +852,12 @@ func configureStatusItemButton(_ button: NSStatusBarButton) {
     button.setAccessibilityLabel("Captures")
 }
 
+/// `.terminateLater` runs a nested modal loop. Invoke Quit from the run loop,
+/// not a GCD main-queue callout, so that loop can drain main-queue worker replies.
+func requestApplicationTermination(terminate: @escaping () -> Void = { NSApp.terminate(nil) }) {
+    RunLoop.main.perform(inModes: [.default], block: terminate)
+}
+
 func performTermination(flushPreferences: () -> Void, cancelCapture: () -> Void,
                         closeShortcuts: () -> Void, closePreviews: () -> Void,
                         drainActions: () -> Void,
@@ -973,7 +979,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         self.miniPreviewActions = miniPreviewActions
         let rootWindowCloseHandler = RootWindowCloseHandler(rootWindow: window,
             closePreviews: { [weak miniPreviews] in miniPreviews?.close() },
-            terminate: { NSApp.terminate(nil) }, hidesRootWindow: options.live)
+            terminate: { requestApplicationTermination() }, hidesRootWindow: options.live)
         self.rootWindowCloseHandler = rootWindowCloseHandler
         window.delegate = rootWindowCloseHandler
         if options.live {
@@ -1009,7 +1015,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             }
         }
         if let seconds = options.quitAfter {
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { NSApp.terminate(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { requestApplicationTermination() }
         }
         // Also drain once after the workspace is ready. A worker wake posted
         // before the observer existed therefore cannot strand startup traffic.
@@ -1138,7 +1144,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         return true
     }
 
-    @objc private func quitApplication() { NSApp.terminate(nil) }
+    @objc private func quitApplication() { requestApplicationTermination() }
 
     @objc private func showFind() {
         if scene == "preferences" || appWindows.window(.preferences)?.isKeyWindow == true {
@@ -1408,7 +1414,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             process.arguments = permissionRestartArguments(options: options, pendingMedia: pendingOpenImages)
             try process.run()
             terminating = true
-            NSApp.terminate(nil)
+            requestApplicationTermination()
         } catch {
             // Re-elect this process when spawning fails so instance delivery is
             // not silently left without an owner.
@@ -1419,14 +1425,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 if !result.primary {
                     // Another primary accepted the queued media. Do not keep
                     // a second live host after losing the election.
-                    NSApp.terminate(nil)
+                    requestApplicationTermination()
                     return
                 }
                 failed(restartError)
             } catch {
                 presentHostError(title: "Couldn’t Restart Captures",
                     message: "\(restartError) Captures could not restore its application lock and will quit. Reopen it to continue setup.")
-                NSApp.terminate(nil)
+                requestApplicationTermination()
             }
         }
     }
@@ -1759,7 +1765,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }, outputFolder: { [weak self] in
             self?.openOutputFolder()
         }, quit: {
-            NSApp.terminate(nil)
+            requestApplicationTermination()
         })
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button { configureStatusItemButton(button) }

@@ -244,6 +244,34 @@ final class StatusItemTests: XCTestCase {
             "hidden Preferences allows shortcuts")
     }
 
+    func testQuitInvocationLetsNestedRunLoopDrainMainQueueReplies() {
+        _ = NSApplication.shared
+        var insideCaller = false
+        var replyReceived = false
+        var invocations = 0
+        let finished = expectation(description: "Quit receives its main-queue worker reply")
+        DispatchQueue.main.async {
+            insideCaller = true
+            requestApplicationTermination {
+                invocations += 1
+                XCTAssertTrue(Thread.isMainThread)
+                XCTAssertFalse(insideCaller, "Quit must not nest inside its initiating queue block")
+                // Model terminateLater's nested wait without terminating XCTest.
+                // DispatchQueue.main.async for Quit itself would starve this reply.
+                DispatchQueue.main.async { replyReceived = true }
+                let deadline = Date().addingTimeInterval(1)
+                while !replyReceived && Date() < deadline {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+                }
+                XCTAssertTrue(replyReceived, "the nested Quit loop must drain main-queue callbacks")
+                finished.fulfill()
+            }
+            insideCaller = false
+        }
+        wait(for: [finished], timeout: 5)
+        XCTAssertEqual(invocations, 1)
+    }
+
     func testQuitFlushesCancelsClosesAndDrainsBeforeCleanup() {
         var events: [String] = []
         performTermination(flushPreferences: { events.append("flush-preferences") },
