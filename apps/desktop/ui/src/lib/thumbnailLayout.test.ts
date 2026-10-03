@@ -19,6 +19,7 @@ import {
   thumbnailStackContentHeight,
   thumbnailStackMotionClassNames,
   thumbnailStackNeedsScrollport,
+  readComputedTranslateY,
   restoreThumbnailStackShiftClass,
   thumbnailStackOverflow,
   thumbnailStackNewestScrollTop,
@@ -1116,7 +1117,7 @@ describe("thumbnail stack layout", () => {
     ]);
   });
 
-  it("animates only when the required shift magnitude increases", () => {
+  it("animates toward the anchor, including across a reflow compensation", () => {
     expect(shouldAnimateThumbnailStackShift(0, THUMBNAIL_CARD_SLOT_PX)).toBe(true);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX * 2))
       .toBe(true);
@@ -1126,12 +1127,17 @@ describe("thumbnail stack layout", () => {
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, 0)).toBe(false);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX))
       .toBe(false);
-    expect(shouldAnimateThumbnailStackShift(0, -THUMBNAIL_CARD_SLOT_PX)).toBe(true);
-    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, -THUMBNAIL_CARD_SLOT_PX * 2))
+    const top = { fromTop: true };
+    expect(shouldAnimateThumbnailStackShift(0, -THUMBNAIL_CARD_SLOT_PX, top)).toBe(true);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, -THUMBNAIL_CARD_SLOT_PX * 2, top))
       .toBe(true);
-    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX * 2, -THUMBNAIL_CARD_SLOT_PX))
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX * 2, -THUMBNAIL_CARD_SLOT_PX, top))
       .toBe(false);
-    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, 0)).toBe(false);
+    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, 0, top)).toBe(false);
+    expect(shouldAnimateThumbnailStackShift(-123, 0)).toBe(true);
+    expect(shouldAnimateThumbnailStackShift(-123, THUMBNAIL_CARD_SLOT_PX)).toBe(true);
+    expect(shouldAnimateThumbnailStackShift(123, 0, top)).toBe(true);
+    expect(shouldAnimateThumbnailStackShift(123, -THUMBNAIL_CARD_SLOT_PX, top)).toBe(true);
   });
 
   it("clamps exiting cards to their current shift so they cannot jump up or chase new holes", () => {
@@ -1206,7 +1212,7 @@ describe("thumbnail stack layout", () => {
     ]);
   });
 
-  it("waits to consume a shifted deleting neighbor until that neighbor is a clear hole", () => {
+  it("passes a shifted deleting neighbor once its motion delay ends", () => {
     const cards = [
       card({ currentShiftPx: thumbnailStackShiftPx(1) }),
       card({
@@ -1219,7 +1225,7 @@ describe("thumbnail stack layout", () => {
       card({}),
     ];
     expect(computeThumbnailStackShifts(cards)).toEqual([
-      thumbnailStackShiftPx(1),
+      thumbnailStackShiftPx(2),
       thumbnailStackShiftPx(1),
       0,
       0,
@@ -1508,7 +1514,7 @@ describe("thumbnail stack layout", () => {
 
       vi.advanceTimersByTime(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16);
       expect(first.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
-        `${THUMBNAIL_CARD_SLOT_PX}px`,
+        `${THUMBNAIL_CARD_SLOT_PX * 2}px`,
       );
       expect(second.style.getPropertyValue("--thumbnail-stack-shift")).toBe(
         `${THUMBNAIL_CARD_SLOT_PX}px`,
@@ -1517,6 +1523,83 @@ describe("thumbnail stack layout", () => {
       dispose();
       stack.remove();
       vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])("preserves a mid-settle convoy when a held slot unmounts (fromTop=%s)", async (fromTop) => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    if (fromTop) stack.className = "thumbnail-stack-anchor-top";
+    const [survivor, secondExit, firstExit, anchored] = Array.from({ length: 4 }, () => {
+      const card = document.createElement("article");
+      card.className = "thumbnail-card";
+      return card;
+    });
+    const cards = [survivor, secondExit, firstExit, anchored];
+    stack.append(...(fromTop ? cards.reverse() : cards));
+    document.body.append(stack);
+    const direction = fromTop ? -1 : 1;
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      firstExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(secondExit.style.translate).toBe(`0 ${direction * 184}px`);
+
+      // The browser is only 61px into the 184px target when Delete freezes it.
+      const computed = vi.spyOn(window, "getComputedStyle").mockReturnValue({
+        translate: `0px ${direction * 61}px`,
+        transform: "none",
+      } as CSSStyleDeclaration);
+      try {
+        secondExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        computed.mockRestore();
+      }
+      expect(survivor.style.translate).toBe(`0 ${direction * 61}px`);
+      expect(secondExit.style.translate).toBe(`0 ${direction * 61}px`);
+
+      await vi.advanceTimersByTimeAsync(900);
+      firstExit.remove();
+      await vi.advanceTimersByTimeAsync(0);
+      // Layout moved a whole 184px slot. Its opposite compensation keeps both
+      // cards at the same screen position, not at the old transition target.
+      expect(survivor.style.translate).toBe(`0 ${direction * -123}px`);
+      expect(secondExit.style.translate).toBe(`0 ${direction * -123}px`);
+      expect(direction * 184 + Number.parseFloat(survivor.style.getPropertyValue("--thumbnail-stack-shift")))
+        .toBe(direction * 61);
+      expect(anchored.style.translate).toBe("");
+
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16 - 900);
+      expect(survivor.style.translate).toBe(`0 ${direction * 184}px`);
+      expect(survivor).toHaveClass("thumbnail-stack-shifting");
+      expect(survivor).not.toHaveClass("thumbnail-stack-shift-instant");
+      expect(secondExit.style.translate).toBe(`0 ${direction * -123}px`);
+
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_MOTION_DURATION_MS);
+      secondExit.remove();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(survivor.style.translate).toBe("");
+      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+      expect(anchored.style.translate).toBe("");
+    } finally {
+      dispose();
+      stack.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads the rendered slot translate independently of the card's transform", () => {
+    const card = document.createElement("article");
+    card.style.translate = "0 61px";
+    card.style.transform = "matrix(1, 0, 0, 1, -118, 0)";
+    document.body.append(card);
+    try {
+      expect(readComputedTranslateY(card)).toBe(61);
+    } finally {
+      card.remove();
     }
   });
 
