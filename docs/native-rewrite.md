@@ -17,6 +17,23 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Both screenshot-editor hosts now expose only shipping's Tiny, Smaller, Balanced,
+High and Highest compression presets (55/70/85/92/98), with no numeric quality
+field. Save stays enabled during Copy; repeated clicks request one Save after
+Copy succeeds or fails, using the current validated export inputs. Copy stays
+blocked during Save, and only an active Save shows “Saving…”. wgpu regressions
+cover input validation, coalescing, stale completions, exact saved pixels and
+normal-quit draining. AppKit has deferred-worker XCTest regressions; those need
+macOS execution. The private-X11 preset suite checks both appearances, open menus,
+minimum size, comparison controls, Tiny palettes and exact Highest pixels.
+Physical macOS/Windows, Wayland, accessibility and mixed-DPI acceptance stay open.
+
+wgpu screenshot-editor close still has no timeout for pending work or the final
+draft write, and destruction joins its worker. Matching shipping's 400 ms
+best-effort close needs a separate lifecycle slice: a window-only timer would
+still block during worker teardown. Normal application quit deliberately drains
+accepted output before saving the draft; this export slice preserves that policy.
+
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
 History and the existing native Retry action. AppKit rebalances on resize;

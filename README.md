@@ -559,7 +559,9 @@ down to 760×540, with scrollable inspector controls. A shipping-style export ba
 the bottom of both editors in every section: an **Export settings** disclosure whose
 summary reads like `PNG · 1920 × 1080 · ≈ 240 KB`, the filename with a format suffix
 menu, **Saving to** with **Change…**, **Copy image** (briefly **Copied**), a
-**Save as new file** switch and **Save**. The **Crop** tool selects directly on the
+**Save as new file** switch and **Save**. Save stays available while Copy runs;
+repeated clicks queue one Save after Copy finishes, even if Copy fails. Copy stays
+blocked during Save. The **Crop** tool selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking, then shows the
 selection's size with **Clear** and **Apply crop**. Apply commits the selection;
 Clear or Escape leaves the document unchanged. Layer rows show a grip,
@@ -610,8 +612,9 @@ the selection stays separate from the document until **Apply crop**, and **Clear
 or Escape drops it.
 It includes native image-layer controls, lossless rotate/flip actions, and
 PNG/JPEG/WebP output previews without saving. Both native export settings offer
-**Tiny, Smaller, Balanced, High and Highest** compression presets alongside custom
-values. Highest PNG preserves pixels with lossless packing; JPEG/WebP presets are lossy.
+only **Tiny, Smaller, Balanced, High and Highest** compression presets, starting
+at Highest, with no numeric quality field. Highest PNG preserves pixels with
+lossless packing; JPEG/WebP presets are lossy.
 Both hosts also offer **Original, 75%, 50% and Custom** output dimensions, with an
 aspect lock for custom sizes. Preview/save resize only the exported pixels and the
 published History image; the editable document, draft and full-resolution clipboard are unchanged.
