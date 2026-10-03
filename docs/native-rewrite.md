@@ -56,6 +56,25 @@ media-opening smokes passed. Light/dark reopen and failed-text recovery renders
 were inspected. Recovered editors restore mini-preview “In editor” presence.
 These lifecycle slices do not establish physical-platform parity or choose the renderer.
 
+The shared native screenshot renderer now consumes its freshly allocated canvas
+instead of cloning it before painting, avoiding one 31.6 MiB allocation/copy at
+3840×2160. Borrowed/shared sources remain immutable; blend, shadow and crop pixels
+are unchanged. Linux-orb release component trials (three runs, each one discarded
+warmup plus five alternating-order three-render trials) measured median costs:
+
+| 4K canvas fixture | Borrowed → owned, ms/render | Reduction |
+| --- | --- | --- |
+| Empty | 33.2 → 12.1 | 21.0 ms / 63.5% |
+| Three vector layers | 25.3 → 12.6 | 12.7 ms / 50.1% |
+| Full-size mixed-alpha bitmap | 283.0 → 273.2 | 9.8 ms / 3.4% |
+
+These medians pool the 15 trial means per path. Bitmap trial ranges overlap;
+bitmap painting still dominates. Costs include fresh canvas allocation/fill and
+painting, not decoding, UI, encoding or presentation. They are not whole-app,
+physical-footprint or hardware-platform acceptance results. Reproduce with the
+focused benchmark in `apps/native/README.md`; physical macOS/Windows and Wayland
+execution and the broader performance gates remain open.
+
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
 History and the existing native Retry action. AppKit rebalances on resize;
