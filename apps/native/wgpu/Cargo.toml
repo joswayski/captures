@@ -53,6 +53,11 @@ tray-icon = { version = "0.25.1", default-features = false }
 [profile.dev]
 debug = 0
 
+# Overlay's unselected scalar lanes intentionally wrap, as SIMD/release do.
+# Tests inherit dev; keep overflow checks enabled for our own code.
+[profile.dev.package."tiny-skia:0.11.4"]
+overflow-checks = false
+
 [profile.release]
 strip = "debuginfo"
 
