@@ -561,7 +561,11 @@ summary reads like `PNG · 1920 × 1080 · ≈ 240 KB`, the filename with a form
 menu, **Saving to** with **Change…**, **Copy image** (briefly **Copied**), a
 **Save as new file** switch and **Save**. Save stays available while Copy runs;
 repeated clicks queue one Save after Copy finishes, even if Copy fails. Copy stays
-blocked during Save. The **Crop** tool selects directly on the
+blocked during Save. The Windows/Linux workbench limits screenshot-window close's
+visible wait to 400 ms while accepted work and draft saving continue in the
+background. Reopening that capture waits for its worker to finish; normal Quit
+still drains accepted work. AppKit's busy-close and queued-Save-on-Quit parity
+remain open. The **Crop** tool selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking, then shows the
 selection's size with **Clear** and **Apply crop**. Apply commits the selection;
 Clear or Escape leaves the document unchanged. Layer rows show a grip,

@@ -219,7 +219,20 @@ impl View {
         input.phase = None;
         input.finish = None;
         input.blocked = true;
-        input.close_after = false;
+        if std::mem::take(&mut input.close_after) {
+            // Keep the failed composition available for retry, including after
+            // the visible close deadline hid its viewport.
+            self.cancel_close();
+        }
+    }
+
+    pub(super) fn cancel_close(&mut self) {
+        self.close_requested = false;
+        self.close_deadline = None;
+        self.close_after_save = false;
+        if let Some(input) = &mut self.inline {
+            input.close_after = false;
+        }
     }
 
     pub(super) fn close_inline(&mut self) -> bool {
@@ -880,6 +893,10 @@ mod tests {
         ));
         view.receive(&ctx, Err("render failed".into()));
         assert!(!view.closed && !view.close_requested);
+        assert!(
+            view.close_deadline.is_none(),
+            "a failed finish restores the window for retry"
+        );
         assert_eq!(view.inline.as_ref().unwrap().text, "retryable");
         view.drain_inline(&tx);
         assert!(rx.try_recv().is_err());
@@ -900,7 +917,7 @@ mod tests {
         assert_eq!(input.text, "latest for quit");
         assert!(input.commit && !input.finishing);
         view.request_close();
-        assert!(!view.closed && !view.close_requested);
+        assert!(!view.closed && view.close_requested);
         view.drain_inline(&tx);
         assert!(
             matches!(rx.try_recv(), Ok(Job::Apply(Request::UpdateTextInput { text, .. })) if text == "latest for quit")
