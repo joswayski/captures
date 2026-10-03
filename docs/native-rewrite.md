@@ -75,6 +75,25 @@ physical-footprint or hardware-platform acceptance results. Reproduce with the
 focused benchmark in `apps/native/README.md`; physical macOS/Windows and Wayland
 execution and the broader performance gates remain open.
 
+The subsequent bitmap slice initializes the empty annotation plane from an exact
+full-canvas first image, avoiding its second 31.6 MiB pixmap allocation and raster
+draw at 4K. It applies only to normal blending, zero rotation/translation, 1:1
+dimensions, full layer opacity and no first-image shadow. Other cases retain the
+raster path; source alpha, later layers, shadows and cropping remain byte-exact.
+Three alternating old/new release-binary rounds with the same benchmark measured
+the owned path (15 trial means per version):
+
+| 4K canvas fixture | Before → seeded plane, ms/render | Difference |
+| --- | --- | --- |
+| Empty | 12.2 → 13.7 | 1.5 ms slower / 12.3% |
+| Three vector layers | 16.1 → 15.1 | 1.0 ms faster / 6.5% |
+| Full-size mixed-alpha bitmap | 277.3 → 219.7 | 57.6 ms faster / 20.8% |
+
+Empty/vector ranges overlap; the empty median regression is disclosed, not
+treated as a verified mechanism. Bitmap ranges were 269.6–302.3 ms before and
+212.2–232.2 ms after. These are still Linux-orb component costs, not whole-app,
+physical-footprint, energy or hardware-platform acceptance results.
+
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
 History and the existing native Retry action. AppKit rebalances on resize;
