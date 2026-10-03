@@ -2413,6 +2413,10 @@ def main():
             compare_settled("output-compare-recentred")
             assert divider_shown("output-compare-recentred")
             assert not draft.exists(), "moving the split never saves a draft"
+            # Release the comparison range's keyboard focus before capturing
+            # the preset menu (the first select click otherwise transfers focus).
+            px, py = setting_point(426)
+            click(editor, px, py - 24)
             setting_click(426)
             shot(editor, "output-preset-menu")  # Per-format preset descriptions.
             run("xdotool", "key", "Escape", "sleep", ".2")
@@ -2462,9 +2466,11 @@ def main():
             assert len(list(exports.iterdir())) == 2
             assert not draft.exists(), "output controls and exports never save a draft"
             assert (artifact / "capture.png").read_bytes() == original
+            quality_mode(1)  # Inspect the affected preset control at minimum size too.
+            compare_settled("output-preset-return-to-compress")
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "output-preset-minimum")
-            setting_click(282)
+            setting_click(426)
             shot(editor, "output-preset-minimum-menu")
             run("xdotool", "key", "Escape")
             close(root)

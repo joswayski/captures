@@ -1382,7 +1382,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// session; while another command runs, the newest per key waits here.
     private var liveQueue: [(key: String, request: [String: Any])] = []
     private var liveSerial = 0
-    private let outputQualityValue = NSTextField()
     /// Maximum file size as a decimal value in `outputMaximumUnit` (KB/MB/GB).
     private let outputMaximumSize = NSTextField()
     private let outputMaximumUnit = ClosurePopUpButton()
@@ -1559,6 +1558,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var copyConfirmed = false
     private var copyConfirmToken = 0
     private var saveInFlight = false
+    private var copyInFlight = false
+    /// Shipping coalesces Save clicks while Copy owns the worker.
+    private var pendingSaveAfterCopy = false
     private let exportBarRule = Surface()
     private(set) var lastSavedPath: String?
     private var estimate: EditorEstimate?
@@ -1779,6 +1781,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         case .success:
             inlineTextInput = nil; hideInlineTextEditor()
             backgroundSwatches?.deactivate(); queuedBackground = nil
+            copyInFlight = false; pendingSaveAfterCopy = false; saveInFlight = false
             state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
             estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
             comparisonWork?.cancel(); comparisonWork = nil; comparisonGeneration += 1
@@ -3045,14 +3048,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         add(outputQuality)
         outputCompressionPreset.tokens = tokens
         outputCompressionPreset.addItems(withTitles: Self.outputCompressionPresets.map { $0.name })
-        outputCompressionPreset.setAccessibilityLabel("Output compression preset")
+        outputCompressionPreset.selectItem(withTitle: "Highest")
+        outputCompressionPreset.setAccessibilityLabel("Compression quality")
         outputCompressionPreset.target = self
         outputCompressionPreset.action = #selector(outputCompressionPresetChanged)
         add(outputCompressionPreset)
-        configure(outputQualityValue, frame: .zero, label: "Output quality value", parent: exportSettingsPanel)
         configure(outputMaximumSize, frame: .zero, label: "Maximum file size", parent: exportSettingsPanel)
-        outputQualityValue.stringValue = "98"
-        outputQualityValue.formatter = outputIntegerFormatter; outputQualityValue.delegate = self
         // Shipping's screenshot default: 10 MB, decimal units.
         outputMaximumSize.placeholderString = "Required"
         outputMaximumSize.stringValue = maximumUnit.value(10_000_000)
@@ -3081,8 +3082,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         group("custom", "Width × height", [(outputWidth as NSView, 0, 64), (outputHeight as NSView, 72, 64),
                                            (outputAspectLock as NSView, 144, 72)], 216)
         group("quality", "Save quality", [(outputQuality as NSView, 0, 150)], 150)
-        group("preset", "Quality", [(outputCompressionPreset as NSView, 0, 100),
-                                    (outputQualityValue as NSView, 108, 56)], 164)
+        group("preset", "Quality", [(outputCompressionPreset as NSView, 0, 104)], 104)
         group("maximum", "Maximum file size", [(outputMaximumSize as NSView, 0, 96),
                                                (outputMaximumUnit as NSView, 104, 72)], 176)
         group("estimate", "Est. size", [(exportEstimateValue as NSView, 0, 92),
@@ -4043,8 +4043,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             comparisonDismissed = false
             if lastQualityIndex == 0 { compareView?.split = 0.5 }
         }
-        normalizeOutputQuality()
-        synchronizeOutputCompressionPreset()
         invalidateOutput()
         updateOutputOptionControls()
         // A different encoding is no longer the file that was just saved.
@@ -4177,20 +4175,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             updateControls()
             return
         }
-        guard [outputQualityValue, outputMaximumSize].contains(where: { $0 === field }) else { return }
-        synchronizeOutputCompressionPreset()
+        guard field === outputMaximumSize else { return }
         invalidateOutput()
         exportInputsChanged(clearsSaved: false)
         updateControls()
     }
 
     @objc private func outputCompressionPresetChanged() {
-        guard outputQuality.indexOfSelectedItem == 1,
-              let selected = outputCompressionPreset.titleOfSelectedItem,
-              let preset = Self.outputCompressionPresets.first(where: { $0.name == selected }) else {
-            synchronizeOutputCompressionPreset(); return
-        }
-        outputQualityValue.stringValue = String(preset.value)
+        guard outputQuality.indexOfSelectedItem == 1 else { return }
         outputOptionsChanged()
     }
 
@@ -4282,7 +4274,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func copyEditedImage() {
         guard let artifactID = state.artifactID, let generation = state.beginCommand() else { return }
-        exportError = nil
+        exportError = nil; copyInFlight = true
         status.stringValue = "Copying edited image…"; updateControls()
         // Copy the published edited frame, never the selected encoded preview or
         // export budget. Encoding stays on the existing serialized editor worker.
@@ -4302,6 +4294,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
                 self.showExportError("Couldn’t copy the edited image: \(error.localizedDescription)")
+            }
+            self.copyInFlight = false
+            if self.pendingSaveAfterCopy {
+                self.pendingSaveAfterCopy = false
+                // Like shipping's finally, Save also runs after a failed Copy
+                // and validates the current filename, destination and options.
+                self.saveExport()
             }
             self.updateControls()
             self.submitPendingImportIfReady()
@@ -4555,6 +4554,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// needed) or publish a new file that never replaces anything.
     private func saveExport() {
         guard let artifactID = state.artifactID, let bar = exportBarState else { return }
+        guard !saveInFlight else { return }
+        if copyInFlight {
+            pendingSaveAfterCopy = true
+            return
+        }
         if let error = exportOptionsError ?? bar.error { showExportError(error); return }
         guard let plan = bar.plan, let options = outputOptions(),
               let generation = state.beginCommand() else { return }
@@ -4656,11 +4660,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let quality = qualities[outputQuality.indexOfSelectedItem]
         let qualityValue: UInt64
         if quality == "compress" {
-            let minimum: UInt64 = format == "jpeg" ? 40 : 1
-            guard let value = outputInteger(outputQualityValue), (minimum...100).contains(value) else {
-                return (nil, "Output quality must be a whole number from \(minimum) through 100 for \(format.uppercased()).")
-            }
-            qualityValue = value
+            qualityValue = Self.outputCompressionPresets[outputCompressionPreset.indexOfSelectedItem].value
         } else {
             qualityValue = 100
         }
@@ -4705,7 +4705,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let ready = state.snapshot != nil && !state.busy
         let compress = outputQuality.indexOfSelectedItem == 1
         let maximum = outputQuality.indexOfSelectedItem == 2
-        outputQualityValue.isEnabled = ready && compress
         outputMaximumSize.isEnabled = ready && maximum
         outputMaximumUnit.isEnabled = ready && maximum
         showComparisonButton?.isEnabled = state.snapshot != nil
@@ -4743,30 +4742,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private static let outputCompressionPresets: [(name: String, value: UInt64)] = [
         ("Tiny", 55), ("Smaller", 70), ("Balanced", 85), ("High", 92), ("Highest", 98),
     ]
-
-    private func synchronizeOutputCompressionPreset() {
-        guard outputCompressionPreset.superview != nil else { return }
-        let value = outputInteger(outputQualityValue)
-        let preset = Self.outputCompressionPresets.first(where: { $0.value == value })
-        if let preset {
-            if outputCompressionPreset.item(withTitle: "Custom") != nil {
-                outputCompressionPreset.removeItem(withTitle: "Custom")
-            }
-            outputCompressionPreset.selectItem(withTitle: preset.name)
-        } else {
-            if outputCompressionPreset.item(withTitle: "Custom") == nil {
-                outputCompressionPreset.insertItem(withTitle: "Custom", at: 0)
-            }
-            outputCompressionPreset.selectItem(withTitle: "Custom")
-        }
-    }
-
-    private func normalizeOutputQuality() {
-        guard outputQuality.indexOfSelectedItem == 1,
-              let current = outputInteger(outputQualityValue) else { return }
-        let minimum: UInt64 = outputFormat.indexOfSelectedItem == 1 ? 40 : 1
-        outputQualityValue.stringValue = String(min(100, max(minimum, current)))
-    }
 
     private var selectedLayer: NativeEditorLayer? {
         guard let id = selectedLayerID else { return nil }
@@ -6451,6 +6426,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextInput = nil; hideInlineTextEditor()
         selectedLayerID = nil; preferredLayerID = nil
         backgroundSwatches?.deactivate(); queuedBackground = nil
+        copyInFlight = false; pendingSaveAfterCopy = false; saveInFlight = false
         state.close(); editedImage = nil; invalidateOutput(); preview.image = nil
         estimateWork?.cancel(); estimateWork = nil; estimateGeneration += 1
         comparisonWork?.cancel(); comparisonWork = nil; comparisonGeneration += 1
@@ -6495,7 +6471,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveAsNewSwitch.isEnabled = ready
         let exportReady = exportBarState.map { $0.plan != nil && $0.error == nil } == true
             && exportOptionsError == nil
-        exportSaveButton?.isEnabled = ready && exportReady
+        exportSaveButton?.isEnabled = (ready || copyInFlight) && exportReady
         exportSaveButton?.title = saveInFlight ? "Saving…" : "Save"
         fitButton?.isEnabled = ready
         publishZoomLimits(ready: ready)

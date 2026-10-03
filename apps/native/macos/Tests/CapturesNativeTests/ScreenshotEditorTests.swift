@@ -832,11 +832,11 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
-    func testExportActionsStayVisibleAcrossSectionsAndDisableTogetherDuringWork() throws {
+    func testExportActionsStayVisibleAcrossSectionsAndSaveWaitsForCopy() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
-            worker.deferEncodes = true
+            worker.deferEncodes = true; worker.deferExportSaves = true
             var copies = 0
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
                 worker: worker, writeClipboard: { _ in copies += 1; return true })
@@ -877,7 +877,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try showDraw(in: controller.root)
             copy.performClick(nil)
             XCTAssertTrue(controller.state.busy)
-            XCTAssertFalse(copy.isEnabled); XCTAssertFalse(save.isEnabled)
+            XCTAssertFalse(copy.isEnabled); XCTAssertTrue(save.isEnabled)
             save.performClick(nil)
             XCTAssertTrue(worker.exportSaves.isEmpty)
             try render(controller.root, name: "screenshot-editor-export-bar-pending-\(appearance)")
@@ -886,6 +886,10 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(copy.title, "Copied"); XCTAssertEqual(copy.accessibilityLabel(), "Copied")
             if case .shipping(let name)? = copy.icon { XCTAssertEqual(name, "check") }
             else { XCTFail("copy confirmation uses the shared check icon") }
+            XCTAssertEqual(worker.exportSaves.count, 1, "accepted Save follows Copy")
+            XCTAssertTrue(controller.state.busy)
+            XCTAssertFalse(copy.isEnabled); XCTAssertFalse(save.isEnabled)
+            worker.completePendingExportSave()
             XCTAssertTrue(copy.isEnabled); XCTAssertTrue(save.isEnabled)
             try render(controller.root, name: "screenshot-editor-export-bar-copied-\(appearance)")
             waitUntil(timeout: ScreenshotEditorController.exportConfirmationDuration + 2) {
@@ -1575,10 +1579,10 @@ final class ScreenshotEditorTests: XCTestCase {
         try showOutput(in: controller.root)
         let format = try popup("Format", in: controller.root)
         let quality = try popup("Save quality", in: controller.root)
-        let qualityValue = try field("Output quality value", in: controller.root)
+        let preset = try popup("Compression quality", in: controller.root)
         let maximum = try field("Maximum file size", in: controller.root)
         let unit = try popup("Screenshot file size unit", in: controller.root)
-        XCTAssertTrue(qualityValue.isHidden); XCTAssertTrue(maximum.isHidden); XCTAssertTrue(unit.isHidden)
+        XCTAssertTrue(preset.isHidden); XCTAssertTrue(maximum.isHidden); XCTAssertTrue(unit.isHidden)
         XCTAssertFalse(labels(in: controller.root).contains("PNG colors"),
                        "shipping derives the PNG palette from the Compress preset")
         XCTAssertNil(descendants(in: controller.root).compactMap { $0 as? NSSegmentedControl }
@@ -1595,20 +1599,18 @@ final class ScreenshotEditorTests: XCTestCase {
 
         quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
         format.selectItem(withTitle: ".webp"); _ = format.sendAction(format.action, to: format.target)
-        qualityValue.stringValue = "1"
+        preset.selectItem(withTitle: "Tiny"); _ = preset.sendAction(preset.action, to: preset.target)
         format.selectItem(withTitle: ".jpg"); _ = format.sendAction(format.action, to: format.target)
-        XCTAssertEqual(qualityValue.stringValue, "40", "JPEG UI clamps to the encoder's minimum")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Tiny", "format changes retain the chosen preset")
         XCTAssertEqual(quality.item(at: 1)?.toolTip, "Smaller JPEG with Tiny through Highest quality presets.")
-        qualityValue.stringValue = "73"
-        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
-                                                      object: qualityValue))
+        preset.selectItem(withTitle: "Smaller"); _ = preset.sendAction(preset.action, to: preset.target)
         XCTAssertTrue(controller.comparisonPending, "the After side waits for the 280 ms refresh")
         waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
         XCTAssertEqual(worker.compares.count, 1, "the refresh coalesces option changes")
         let options = try XCTUnwrap(worker.compares.last)
         XCTAssertEqual(options["format"] as? String, "jpeg")
         XCTAssertEqual(options["quality"] as? String, "compress")
-        XCTAssertEqual(options["quality_value"] as? UInt64, 73)
+        XCTAssertEqual(options["quality_value"] as? UInt64, 70)
         XCTAssertNil(options["max_size_bytes"])
         XCTAssertTrue((options["png"] as? [String: Any])?.isEmpty == true)
         XCTAssertTrue(worker.encodes.isEmpty, "the comparison never occupies the session queue")
@@ -1802,7 +1804,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.compares.count, count, "invalid text must not overflow or encode")
     }
 
-    func testOutputCompressionPresetsMapExactValuesAndTrackCustomEdits() throws {
+    func testOutputCompressionPresetsAreTheOnlyQualityControlAndRetainTheirValue() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
@@ -1810,8 +1812,10 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showOutput(in: controller.root)
         let mode = try popup("Save quality", in: controller.root)
-        let preset = try popup("Output compression preset", in: controller.root)
-        let quality = try field("Output quality value", in: controller.root)
+        let preset = try popup("Compression quality", in: controller.root)
+        XCTAssertFalse(descendants(in: controller.root).contains {
+            $0.accessibilityLabel() == "Output quality value"
+        }, "shipping has no arbitrary numeric compression control")
         XCTAssertTrue(preset.isHidden)
         mode.selectItem(withTitle: "Compress"); _ = mode.sendAction(mode.action, to: mode.target)
         XCTAssertEqual(preset.itemTitles, ["Tiny", "Smaller", "Balanced", "High", "Highest"])
@@ -1821,7 +1825,6 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(preset.item(withTitle: "Highest")?.toolTip, "Same pixels, tighter packing. No color reduction.")
 
         preset.selectItem(withTitle: "Tiny"); _ = preset.sendAction(preset.action, to: preset.target)
-        XCTAssertEqual(quality.stringValue, "55")
         waitUntil(timeout: 3) { !controller.comparisonPending && !worker.compares.isEmpty }
         XCTAssertEqual(worker.compares.last?["quality_value"] as? UInt64, 55)
 
@@ -1830,21 +1833,17 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(preset.titleOfSelectedItem, "Tiny")
         XCTAssertEqual(preset.item(withTitle: "Tiny")?.toolTip, "Smallest file with the most visible compression.")
         format.selectItem(withTitle: ".png"); _ = format.sendAction(format.action, to: format.target)
-        preset.selectItem(withTitle: "Highest"); _ = preset.sendAction(preset.action, to: preset.target)
-        XCTAssertEqual(quality.stringValue, "98")
-        waitUntil(timeout: 3) { !controller.comparisonPending }
-        XCTAssertEqual(worker.compares.last?["quality_value"] as? UInt64, 98)
-        XCTAssertTrue((worker.compares.last?["png"] as? [String: Any])?.isEmpty == true)
-
-        quality.stringValue = "73"
-        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
-                                                      object: quality))
-        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
+        for (label, value) in [("Smaller", UInt64(70)), ("Balanced", 85), ("High", 92), ("Highest", 98)] {
+            preset.selectItem(withTitle: label); _ = preset.sendAction(preset.action, to: preset.target)
+            waitUntil(timeout: 3) { !controller.comparisonPending }
+            XCTAssertEqual(worker.compares.last?["quality_value"] as? UInt64, value)
+            XCTAssertTrue((worker.compares.last?["png"] as? [String: Any])?.isEmpty == true)
+        }
         mode.selectItem(withTitle: "Preserve quality"); _ = mode.sendAction(mode.action, to: mode.target)
         XCTAssertTrue(preset.isHidden)
         mode.selectItem(withTitle: "Compress"); _ = mode.sendAction(mode.action, to: mode.target)
-        XCTAssertEqual(quality.stringValue, "73", "mode changes preserve a custom numeric value")
-        XCTAssertEqual(preset.titleOfSelectedItem, "Custom")
+        XCTAssertEqual(preset.titleOfSelectedItem, "Highest", "mode changes retain the preset")
+        XCTAssertEqual(preset.itemTitles, ["Tiny", "Smaller", "Balanced", "High", "Highest"])
         XCTAssertEqual(controller.state.snapshot?.hasDraft, true)
         XCTAssertTrue(controller.state.snapshot?.unsavedChanges == true)
     }
@@ -2051,6 +2050,70 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testSaveDuringCopyCoalescesAndRunsAfterCopySuccessOrFailure() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            for failure in ["none", "encode", "clipboard"] {
+                let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
+                worker.deferEncodes = true; worker.deferExportSaves = true
+                let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                    worker: worker, writeClipboard: { _ in failure != "clipboard" })
+                defer { controller.window.orderOut(nil) }
+                controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
+                                   outputDirectory: "/exports")
+                let copy = try copyButton(in: controller.root)
+                let save = try button("Save", in: controller.root)
+                copy.performClick(nil)
+                XCTAssertTrue(controller.state.busy)
+                XCTAssertFalse(copy.isEnabled)
+                XCTAssertTrue(save.isEnabled); XCTAssertEqual(save.title, "Save")
+                save.performClick(nil); save.performClick(nil)
+                XCTAssertTrue(worker.exportSaves.isEmpty, "Save waits for Copy, not the other way around")
+                let filename = try field("Saved filename", in: controller.root)
+                filename.stringValue = "latest-request"
+                controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
+                                                              object: filename))
+                worker.failEncode = failure == "encode"
+                worker.completePendingEncode()
+                XCTAssertEqual(worker.exportSaves.count, 1, "repeated Save clicks coalesce even after Copy fails")
+                XCTAssertEqual((worker.exportSaves.last?["plan"] as? [String: Any])?["path"] as? String,
+                               "/exports/latest-request.png", "the queued Save validates current inputs")
+                XCTAssertTrue(controller.state.busy)
+                XCTAssertEqual(save.title, "Saving…"); XCTAssertFalse(save.isEnabled)
+                XCTAssertFalse(copy.isEnabled)
+                copy.performClick(nil); save.performClick(nil)
+                XCTAssertEqual(worker.encodes.count, 1, "Copy cannot queue during Save")
+                XCTAssertEqual(worker.exportSaves.count, 1)
+                try render(controller.root, name: "screenshot-editor-queued-save-\(failure)-\(appearance)")
+                worker.completePendingExportSave()
+                XCTAssertFalse(controller.state.busy)
+                XCTAssertEqual(save.title, "Save"); XCTAssertTrue(copy.isEnabled)
+            }
+        }
+    }
+
+    func testQueuedSaveRevalidatesInvalidFilenameAfterCopy() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        worker.deferEncodes = true
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try copyButton(in: controller.root).performClick(nil)
+        try button("Save", in: controller.root).performClick(nil)
+        let filename = try field("Saved filename", in: controller.root)
+        filename.stringValue = "invalid/name"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
+        worker.completePendingEncode()
+        XCTAssertTrue(worker.exportSaves.isEmpty)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertTrue(labels(in: controller.root).contains { $0.contains("filename") })
+        filename.stringValue = "recovered"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
+        try button("Save", in: controller.root).performClick(nil)
+        XCTAssertEqual(worker.exportSaves.count, 1, "invalid queued Save does not get stuck or retry itself")
+    }
+
     func testStaleClipboardCompletionCannotWriteAfterTermination() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
@@ -2064,11 +2127,13 @@ final class ScreenshotEditorTests: XCTestCase {
         let copy = try copyButton(in: controller.root)
         copy.performClick(nil)
         XCTAssertTrue(controller.state.busy); XCTAssertFalse(copy.isEnabled)
+        try button("Save", in: controller.root).performClick(nil)
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         XCTAssertEqual(worker.closeCount, 0, "accepted worker work must not be freed during copy")
         XCTAssertTrue(controller.prepareForTermination())
         worker.completePendingEncode()
         XCTAssertEqual(writes, 0)
+        XCTAssertTrue(worker.exportSaves.isEmpty, "a stale Copy cannot dispatch the queued Save")
         XCTAssertNil(controller.state.artifactID)
     }
 
@@ -2128,7 +2193,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(maximum.stringValue, "10", "shipping's default: 10 MB")
         XCTAssertEqual(unit.itemTitles, ["KB", "MB", "GB"]); XCTAssertEqual(unit.titleOfSelectedItem, "MB")
         XCTAssertTrue(maximum.toolTip?.hasPrefix("Uses stronger PNG compression") == true)
-        XCTAssertTrue((try field("Output quality value", in: controller.root)).isHidden)
+        XCTAssertTrue((try popup("Compression quality", in: controller.root)).isHidden)
         XCTAssertFalse(labels(in: controller.root).contains { $0.contains("(bytes)") })
         waitUntil(timeout: 3) { !controller.comparisonPending && !worker.compares.isEmpty }
         XCTAssertEqual(worker.compares.last?["max_size_bytes"] as? UInt64, 10_000_000)
@@ -2959,7 +3024,7 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try showOutput(in: controller.root)
-            let preset = try popup("Output compression preset", in: controller.root)
+            let preset = try popup("Compression quality", in: controller.root)
             XCTAssertTrue(preset.isHidden)
             try render(controller.root, name: "screenshot-editor-output-normal-\(appearance)")
 
@@ -7978,6 +8043,8 @@ private final class FakeEditorWorker: EditorWorking {
     var saveResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/output/edited.png"))
     var saveOriginalResult: Result<EditorSavePresentation, Error> = .success(.saved(path: "/exports/original.png"))
     var exportSaves: [[String: Any]] = []
+    var deferExportSaves = false
+    private var pendingExportSaveCompletion: ((Result<EditorExportSaved, Error>) -> Void)?
     var exportSaveResult: Result<EditorExportSaved, Error> = .success(EditorExportSaved(
         path: "/output/edited.png", artifactID: "saved-id", sizeBytes: 12_345, warning: nil,
         notice: "Saved /output/edited.png"))
@@ -8077,7 +8144,7 @@ private final class FakeEditorWorker: EditorWorking {
     func completePendingEncode() {
         let completion = pendingEncodeCompletion
         pendingEncodeCompletion = nil
-        completion?(.success(output()))
+        completion?(failEncode ? .failure(AppBridgeError.backend(failureMessage)) : .success(output()))
     }
 
     func saveNew(_ request: [String: Any],
@@ -8095,7 +8162,14 @@ private final class FakeEditorWorker: EditorWorking {
     func save(_ request: [String: Any],
               completion: @escaping (Result<EditorExportSaved, Error>) -> Void) {
         exportSaves.append(request)
+        if deferExportSaves { pendingExportSaveCompletion = completion; return }
         completion(exportSaveResult)
+    }
+
+    func completePendingExportSave() {
+        let completion = pendingExportSaveCompletion
+        pendingExportSaveCompletion = nil
+        completion?(exportSaveResult)
     }
 
     func estimate(_ request: [String: Any],

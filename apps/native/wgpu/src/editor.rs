@@ -62,6 +62,12 @@ type CompareReply = (u64, Result<(RgbaImage, u64), String>);
 /// editor windows; tests record the request instead).
 type RevealFile = Arc<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportJob {
+    Copy,
+    Save,
+}
+
 enum Job {
     Apply(Request),
     DrawingPreview {
@@ -536,7 +542,9 @@ struct View {
     notice_until: Option<Instant>,
     copied_until: Option<Instant>,
     export_error: Option<String>,
-    export_job: bool,
+    export_job: Option<ExportJob>,
+    /// Shipping coalesces Save clicks while Copy owns the worker.
+    pending_save_after_copy: bool,
     folder_picker: Option<Receiver<Option<PathBuf>>>,
     output_notice: Option<String>,
     import_picker: Option<Receiver<Option<Vec<PathBuf>>>>,
@@ -626,7 +634,7 @@ impl Default for View {
             export_options: ExportOptions {
                 format: ExportFormat::Png,
                 quality: ExportQuality::Preserve,
-                quality_value: 80,
+                quality_value: 98,
                 max_size_bytes: None,
                 png: PngOptions::default(),
                 size: ExportSize::Original,
@@ -663,7 +671,8 @@ impl Default for View {
             notice_until: None,
             copied_until: None,
             export_error: None,
-            export_job: false,
+            export_job: None,
+            pending_save_after_copy: false,
             folder_picker: None,
             output_notice: None,
             import_picker: None,
@@ -976,7 +985,7 @@ impl View {
                 if presented.copied {
                     self.copied_until = Some(Instant::now() + EXPORT_CONFIRMATION);
                 }
-                if export_job {
+                if export_job.is_some() {
                     self.export_error = None;
                 }
                 let copied_layer = presented.copied_layer;
@@ -1024,7 +1033,7 @@ impl View {
             Err(error) => {
                 self.pending_layer_selection = None;
                 self.combine_pending = false;
-                if export_job {
+                if export_job.is_some() {
                     // Save and copy failures belong to the export bar's status line.
                     self.export_error = Some(error);
                 } else {
@@ -1150,6 +1159,17 @@ impl View {
     }
 
     fn save(&mut self, tx: &Sender<Job>) {
+        if self.closed || (self.close_requested && !self.pending_save_after_copy) {
+            return;
+        }
+        if self.export_job == Some(ExportJob::Copy) {
+            self.pending_save_after_copy = true;
+            return;
+        }
+        if self.pending {
+            return;
+        }
+        self.pending_save_after_copy = false;
         let Some(bar) = self.export_view() else {
             return;
         };
@@ -1160,18 +1180,31 @@ impl View {
         self.output_notice = None;
         self.notice_until = None;
         self.export_error = None;
-        self.export_job = self.submit_job(
-            tx,
-            Job::Save {
-                plan,
-                options: self.export_options,
-            },
-        );
+        self.export_job = self
+            .submit_job(
+                tx,
+                Job::Save {
+                    plan,
+                    options: self.export_options,
+                },
+            )
+            .then_some(ExportJob::Save);
+    }
+
+    fn drain_save(&mut self, tx: &Sender<Job>) {
+        if !self.pending && self.pending_save_after_copy {
+            // Like shipping's finally, this also runs after Copy fails and
+            // validates current inputs rather than freezing a stale Save plan.
+            self.save(tx);
+        }
     }
 
     fn copy(&mut self, tx: &Sender<Job>) {
+        if self.pending || self.closed || self.close_requested {
+            return;
+        }
         self.export_error = None;
-        self.export_job = self.submit_job(tx, Job::Copy);
+        self.export_job = self.submit_job(tx, Job::Copy).then_some(ExportJob::Copy);
     }
 
     fn reveal_saved(&mut self) {
@@ -1980,6 +2013,7 @@ impl Editor {
             self.view.lock().unwrap().receive(ctx, result);
             ctx.request_repaint_of(self.viewport);
         }
+        self.view.lock().unwrap().drain_save(&self.tx);
         if let Some(preview) = &mut self.view.lock().unwrap().drawing_preview {
             preview.receive(&self.tx);
         }
@@ -2001,6 +2035,17 @@ impl Editor {
         // A ready picker result is not an accepted edit yet. Do not let receive
         // enqueue a new import after the worker has finished its final save.
         self.view.lock().unwrap().import_picker = None;
+        // A Save accepted during Copy still lives on the UI side. Dispatch it
+        // before the final flush so normal quit drains that output too.
+        while self.view.lock().unwrap().pending_save_after_copy {
+            let reply = self
+                .rx
+                .recv()
+                .map_err(|_| "Editor worker stopped.".to_owned())?;
+            let mut view = self.view.lock().unwrap();
+            view.receive(ctx, reply);
+            view.drain_save(&self.tx);
+        }
         let (tx, rx) = mpsc::channel();
         let input = self.view.lock().unwrap().inline_for_flush();
         self.tx
@@ -4922,7 +4967,7 @@ fn show_export_row(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let plan_ready = bar.is_some_and(|bar| bar.plan.is_some() && bar.error.is_none());
             let save = egui::Button::new(
-                RichText::new(if view.pending && view.export_job {
+                RichText::new(if view.export_job == Some(ExportJob::Save) {
                     "Saving…"
                 } else {
                     "Save"
@@ -4932,10 +4977,16 @@ fn show_export_row(
             )
             .fill(tokens.color("theme-accent"));
             let hint = bar.map_or_else(String::new, |bar| bar.hint.clone());
+            let save_ready = ready
+                || (view.export_job == Some(ExportJob::Copy)
+                    && view.inline.is_none()
+                    && !view.closed
+                    && !view.close_requested);
             let response = ui
-                .add_enabled_ui(ready && plan_ready && view.folder_picker.is_none(), |ui| {
-                    ui.add_sized([EXPORT_SAVE_WIDTH, height], save)
-                })
+                .add_enabled_ui(
+                    save_ready && plan_ready && view.folder_picker.is_none(),
+                    |ui| ui.add_sized([EXPORT_SAVE_WIDTH, height], save),
+                )
                 .inner
                 .on_hover_text(&hint);
             response.widget_info(|| {
@@ -5347,40 +5398,27 @@ fn show_export_group(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, group:
         }
         ExportGroup::Preset => {
             caption(ui, "Quality");
-            ui.horizontal(|ui| {
-                let options = &mut view.export_options;
-                let format = options.format;
-                let selected = output_preset(options);
-                let choices: Vec<_> = export::QUALITY_PRESETS
-                    .iter()
-                    .map(|preset| {
-                        crate::primitives::SelectOption::new(Some(preset.quality), preset.label)
-                            .description(preset.description(format))
-                    })
-                    .collect();
-                let current = selected.map(|_| options.quality_value);
-                if let Some(Some(quality)) = crate::primitives::Select::new(
-                    "output-quality-preset",
-                    "Compression quality",
-                    104.,
-                )
-                .trigger_text(selected.unwrap_or("Custom"))
-                .show(ui, tokens, &choices, &current)
-                .chosen
-                {
-                    options.quality_value = quality;
-                    // Shared encoding owns PNG palette selection.
-                    options.png.max_colors = None;
-                }
-                let minimum = if options.format == ExportFormat::Jpeg {
-                    40
-                } else {
-                    1
-                };
-                options.quality_value = options.quality_value.clamp(minimum, 100);
-                ui.add(egui::DragValue::new(&mut options.quality_value).range(minimum..=100))
-                    .on_hover_text("Compression quality value");
-            });
+            let options = &mut view.export_options;
+            let format = options.format;
+            let selected = output_preset(options);
+            let choices: Vec<_> = export::QUALITY_PRESETS
+                .iter()
+                .map(|preset| {
+                    crate::primitives::SelectOption::new(Some(preset.quality), preset.label)
+                        .description(preset.description(format))
+                })
+                .collect();
+            let current = selected.map(|_| options.quality_value);
+            if let Some(Some(quality)) =
+                crate::primitives::Select::new("output-quality-preset", "Compression quality", 104.)
+                    .trigger_text(selected.unwrap_or("Custom"))
+                    .show(ui, tokens, &choices, &current)
+                    .chosen
+            {
+                options.quality_value = quality;
+                // Shared encoding owns PNG palette selection.
+                options.png.max_colors = None;
+            }
         }
         ExportGroup::Maximum => {
             caption(ui, "Maximum file size");
@@ -7432,18 +7470,38 @@ mod tests {
                         height: 7
                     }
                 );
-                assert!(view.export_job);
+                assert_eq!(view.export_job, Some(ExportJob::Save));
                 click(&mut view, size, copy);
                 assert!(
                     rx.try_recv().is_err(),
                     "copy cannot queue behind an accepted save"
                 );
                 view.pending = false;
-                view.export_job = false;
+                view.export_job = None;
                 click(&mut view, size, copy);
                 assert!(matches!(rx.try_recv(), Ok(Job::Copy)));
+                let copying = frame(&mut view, size, vec![]);
+                assert!(find(&copying, "Save").is_some(), "Copy is not Saving…");
+                assert!(find(&copying, "Saving…").is_none());
+                click(&mut view, size, save);
+                click(&mut view, size, save);
+                assert!(
+                    view.pending_save_after_copy,
+                    "Save remains clickable during Copy"
+                );
+                assert!(
+                    rx.try_recv().is_err(),
+                    "Save does not run until Copy completes"
+                );
+                view.receive(&ctx, Ok(presented(true)));
+                view.drain_save(&tx);
+                assert!(matches!(rx.try_recv(), Ok(Job::Save { .. })));
+                assert!(
+                    !view.pending_save_after_copy,
+                    "repeated clicks coalesce to one Save"
+                );
                 view.pending = false;
-                view.export_job = false;
+                view.export_job = None;
             }
         }
         let size = egui::vec2(760., 540.);
@@ -7505,6 +7563,46 @@ mod tests {
             "one status label and one complete hover tooltip"
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn queued_save_revalidates_after_failed_copy_and_ignores_stale_completions() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
+        let mut view = View {
+            default_directory: "/exports".into(),
+            ..View::default()
+        };
+        view.receive(&ctx, Ok(presented(true)));
+        view.copy(&tx);
+        assert!(matches!(rx.try_recv(), Ok(Job::Copy)));
+        view.save(&tx);
+        view.save(&tx);
+        view.copy(&tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "neither repeated Save nor Copy queues a worker job"
+        );
+        view.update_export_target(|target, _| target.set_stem("invalid/name"));
+        view.receive(&ctx, Err("clipboard unavailable".into()));
+        view.drain_save(&tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "queued Save validates the latest inputs"
+        );
+        assert!(view.export_error.as_ref().unwrap().contains("filename"));
+        assert!(!view.pending_save_after_copy && !view.pending);
+        view.update_export_target(|target, _| target.set_stem("recovered"));
+        view.copy(&tx);
+        assert!(matches!(rx.try_recv(), Ok(Job::Copy)));
+        view.save(&tx);
+        view.closed = true;
+        view.receive(&ctx, Ok(presented(true)));
+        view.drain_save(&tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "a stale completion cannot Save from a closed view"
+        );
     }
 
     #[test]
@@ -7583,7 +7681,7 @@ mod tests {
             }
         );
         view.pending = false;
-        view.export_job = false;
+        view.export_job = None;
 
         let output = click(&mut view, position(&output, "Save as new file"));
         assert_eq!(view.filename, "Shot-edited");
@@ -7602,7 +7700,7 @@ mod tests {
             }
         );
         view.pending = false;
-        view.export_job = false;
+        view.export_job = None;
 
         // A format that differs from the source always saves a copy and hides the switch.
         click(&mut view, position(&output, "Save as new file"));
@@ -7629,6 +7727,11 @@ mod tests {
     fn output_presets_set_exact_quality_clear_png_override_and_invalidate_preview() {
         let ctx = egui::Context::default();
         let mut view = View::default();
+        assert_eq!(
+            output_preset(&view.export_options),
+            Some("Highest"),
+            "shipping starts with Highest, not a hidden arbitrary numeric value"
+        );
         view.receive(&ctx, Ok(presented(false)));
         view.export_options.quality = ExportQuality::Compress;
         let original = view.presented.as_ref().unwrap().document.clone();
@@ -7682,6 +7785,11 @@ mod tests {
             view.export_options.png.max_colors = Some(17);
             view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
             let output = frame(&mut view, vec![]);
+            assert!(
+                !output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.job.text == view.export_options.quality_value.to_string())),
+                "shipping exposes the five presets, not an extra numeric quality field"
+            );
             let popup = click(&mut view, position(&output, "Custom"));
             click(&mut view, position(&popup, label));
             assert_eq!(view.export_options.quality_value, expected);
@@ -7855,7 +7963,8 @@ mod tests {
         let output = click(&mut view, find(&popup, "Compress").unwrap());
         assert_eq!(view.export_options.quality, ExportQuality::Compress);
         assert!(view.compare_visible());
-        let popup = click(&mut view, find(&output, "Custom").unwrap());
+        assert_eq!(view.export_options.quality_value, 98);
+        let popup = click(&mut view, find(&output, "Highest").unwrap());
         assert!(find(&popup, "Smallest PNG with the most visible dithering.").is_some());
         run_escape(&ctx, &mut view, &frame);
 
@@ -7900,6 +8009,10 @@ mod tests {
         let popup = click(&mut view, trigger.unwrap());
         click(&mut view, find(&popup, "Preserve quality").unwrap());
         assert_eq!(view.export_options.max_size_bytes, None);
+        assert_eq!(
+            view.export_options.quality_value, 98,
+            "quality modes retain the preset"
+        );
         assert_eq!(view.compare_split, compare::DEFAULT_SPLIT);
         let output = frame(&mut view, vec![]);
         for removed in ["PNG colors", "Canvas", "Encoded", "Edited"] {
@@ -14090,6 +14203,75 @@ mod tests {
         }
         receive(&editor, &ctx);
         assert!(editor.view.lock().unwrap().output_notice.is_none());
+    }
+
+    #[test]
+    fn queued_save_after_copy_success_or_failure_publishes_once_and_quit_drains_it() {
+        for fail_copy in [false, true] {
+            let (data, id) = fixture();
+            let ctx = egui::Context::default();
+            let (copied, rx) = mpsc::channel();
+            let editor = Editor::open(
+                &ctx,
+                data.path().join("history"),
+                id.clone(),
+                data.path().join("exports"),
+                CaptureMode::Region,
+                move |pixels| {
+                    copied.send(pixels).unwrap();
+                    if fail_copy {
+                        Err("clipboard unavailable".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            receive(&editor, &ctx);
+            editor.view.lock().unwrap().submit(&editor.tx, crop());
+            receive(&editor, &ctx);
+            let source = data.path().join("history").join(&id).join("capture.png");
+            let original = fs::read(&source).unwrap();
+            let destination = data.path().join("exports").join("latest.png");
+            {
+                let mut view = editor.view.lock().unwrap();
+                view.copy(&editor.tx);
+                view.save(&editor.tx);
+                view.save(&editor.tx);
+                view.copy(&editor.tx);
+                view.update_export_target(|target, _| target.set_stem("latest"));
+            }
+            if fail_copy {
+                // Exercise application quit with the Save still on the UI side.
+                editor.flush(&ctx).unwrap();
+            } else {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while editor.view.lock().unwrap().pending {
+                    assert!(Instant::now() < deadline, "queued Save timed out");
+                    editor.receive(&ctx);
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+            let pixels = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(pixels.dimensions(), (4, 2));
+            assert!(rx.try_recv().is_err(), "only one Copy was accepted");
+            let saved = image::open(&destination).unwrap().into_rgba8();
+            assert_eq!(saved.dimensions(), (4, 2));
+            assert_eq!(saved.get_pixel(0, 0).0, [62, 71, 9, 255]);
+            assert_eq!(saved.get_pixel(3, 1).0, [155, 142, 9, 255]);
+            assert_eq!(fs::read(&source).unwrap(), original);
+            assert_eq!(
+                fs::read_dir(data.path().join("exports")).unwrap().count(),
+                1
+            );
+            let view = editor.view.lock().unwrap();
+            assert!(
+                view.export_error.is_none(),
+                "the one queued Save succeeds even after Copy fails"
+            );
+            assert_eq!(view.last_saved.as_ref(), Some(&destination));
+            assert!(!view.pending_save_after_copy && !view.pending);
+            assert!(view.output_notice.as_ref().unwrap().contains("latest.png"));
+        }
     }
 
     #[test]
