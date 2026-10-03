@@ -122,7 +122,8 @@ pub struct CardExit {
     /// the whole stack).
     pub settles: bool,
     /// Slots this card had already moved when it began exiting. An exiting
-    /// card keeps that shift instead of sliding into later holes.
+    /// card keeps its screen position instead of sliding into later holes;
+    /// removing a later slot rebases this value, possibly below zero.
     pub frozen_shift: f64,
 }
 
@@ -235,7 +236,7 @@ impl StackExits {
             .map(|(id, _)| id.clone())
             .collect();
         self.exits.retain(|(id, _)| !finished.contains(id));
-        self.display.retain(|id| !finished.contains(id));
+        self.remove_slots(&finished);
         self.exits.len() != before
     }
 
@@ -245,9 +246,26 @@ impl StackExits {
         let before = self.exits.len();
         self.exits.retain(|(exit, _)| exit != id);
         if !keep_slot {
-            self.display.retain(|existing| existing != id);
+            self.remove_slots(&[id.to_owned()]);
         }
         self.exits.len() != before
+    }
+
+    /// Reflow advances older cards by a whole slot, even if they froze partway
+    /// through a settle. Cancel that displacement for every retained exit.
+    fn remove_slots(&mut self, removed: &[String]) {
+        if removed.is_empty() {
+            return;
+        }
+        let mut later_removed = 0;
+        for id in self.display.iter().rev() {
+            if removed.contains(id) {
+                later_removed += 1;
+            } else if let Some((_, exit)) = self.exits.iter_mut().find(|(exit, _)| exit == id) {
+                exit.frozen_shift -= f64::from(later_removed);
+            }
+        }
+        self.display.retain(|id| !removed.contains(id));
     }
 
     /// Forget every exit at once (the stack collapsed, closed or rebuilt).
@@ -277,9 +295,10 @@ impl StackExits {
                 .any(|(_, exit)| !exit.finished(now_ms, false))
     }
 
-    /// Card slots (0…n, fractional while sliding) `id` has moved toward the
-    /// stack anchor. Older cards than an exiting one slide into its slot:
-    /// bottom-anchored stacks move them down, top-anchored ones up.
+    /// Card slots (fractional while sliding) `id` has moved toward the stack
+    /// anchor. A frozen exit may have a negative layout compensation. Older
+    /// cards than an exiting one slide into its slot: bottom-anchored stacks
+    /// move them down, top-anchored ones up.
     pub fn shift_slots(&self, id: &str, now_ms: f64, reduced_motion: bool, settle: &Tween) -> f64 {
         if let Some(exit) = self.exiting(id) {
             return exit.frozen_shift;
@@ -1218,6 +1237,85 @@ mod tests {
         assert!(exits.release("b", false));
         assert_eq!(exits.display_ids(), ["a"]);
         assert!(!exits.release("b", false));
+    }
+
+    #[test]
+    fn partial_settles_keep_screen_positions_when_an_earlier_exit_slot_disappears() {
+        let settle = Tween {
+            duration_ms: 580.,
+            easing: CubicBezier::LINEAR,
+        };
+        for release_after_trash in [false, true] {
+            for top_anchor in [false, true] {
+                let mut exits = StackExits::default();
+                let mut live = ids(&["a", "b", "c", "d"]);
+                assert!(exits.begin(&live, "c", ExitKind::Dust, 0., 0., true, &settle));
+                live.retain(|id| id != "c");
+                assert!(exits.begin(&live, "b", ExitKind::Dust, 2_000., 0., true, &settle));
+                live.retain(|id| id != "b");
+                exits.sync(&live);
+                let frozen = 200. / 580.;
+                assert!((exits.exiting("b").unwrap().frozen_shift - frozen).abs() < 1e-6);
+
+                // Screen position relative to the newest card: slot layout
+                // reverses at the top anchor, while the shift reverses with it.
+                let screen_y = |exits: &StackExits, id: &str, now: f64| {
+                    let index = exits
+                        .display_ids()
+                        .iter()
+                        .position(|item| item == id)
+                        .unwrap();
+                    let later = exits.display_count() - index - 1;
+                    let direction = if top_anchor { -1. } else { 1. };
+                    -(later as f64) * 184. * direction
+                        + exits.shift_px(id, now, false, &settle, top_anchor)
+                };
+                let before = ["a", "b", "d"].map(|id| screen_y(&exits, id, 2_900.));
+                if release_after_trash {
+                    assert!(!exits.prune_holding(2_900., false, &|id| id == "c"));
+                    assert!(exits.release("c", false));
+                } else {
+                    assert!(exits.prune(2_900., false));
+                }
+                assert_eq!(exits.display_ids(), ["a", "b", "d"]);
+                for (id, y) in ["a", "b", "d"].into_iter().zip(before) {
+                    assert!((screen_y(&exits, id, 2_900.) - y).abs() < 1e-6, "{id}");
+                }
+                assert!((exits.exiting("b").unwrap().frozen_shift - (frozen - 1.)).abs() < 1e-6);
+
+                // The last held removal also swaps settled shift for layout
+                // without displacing the remaining previews.
+                let before = screen_y(&exits, "a", 4_900.);
+                assert!(exits.prune(4_900., false));
+                assert_eq!(exits.display_ids(), ["a", "d"]);
+                assert!((screen_y(&exits, "a", 4_900.) - before).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn batched_removal_rebases_only_exits_older_than_the_removed_slots() {
+        let settle = settle();
+        let mut exits = StackExits::default();
+        let live = ids(&["a", "b", "c", "d", "e"]);
+        for id in ["c", "d"] {
+            exits.begin(&live, id, ExitKind::Dust, 0., 0., true, &settle);
+        }
+        exits.begin(&live, "b", ExitKind::Dust, 2_000., 0., true, &settle);
+        exits.begin(&live, "e", ExitKind::Dust, 2_100., 0., true, &settle);
+        let before = exits.exiting("b").unwrap().frozen_shift;
+        assert!(before > 0. && before < 2.);
+        assert!(exits.prune(2_900., false));
+        assert_eq!(exits.display_ids(), ["a", "b", "e"]);
+        assert_eq!(exits.exiting("b").unwrap().frozen_shift, before - 2.);
+        assert_eq!(exits.exiting("e").unwrap().frozen_shift, 0.);
+        assert!(exits.release("b", true));
+        assert_eq!(
+            exits.display_ids(),
+            ["a", "b", "e"],
+            "failed Trash retains its slot"
+        );
+        assert_eq!(exits.exiting("e").unwrap().frozen_shift, 0.);
     }
 
     #[test]
