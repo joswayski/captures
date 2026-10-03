@@ -560,17 +560,17 @@ export function resolveThumbnailStackShiftPx(
   currentShiftPx: number,
   exiting: boolean,
 ): number {
-  const live = Math.max(0, livePx);
-  if (!exiting) return live;
-  return Math.min(Math.max(0, currentShiftPx), live);
+  if (!exiting) return livePx;
+  // A removed slot can leave a frozen card behind its new layout position.
+  // Keep that compensation until its own exit clears instead of snapping it.
+  return Math.min(currentShiftPx, livePx);
 }
 
 /** Treat a dissolving-in-place card as passable after its motion delay. */
 function isClearExitHole(
   card: ThumbnailStackCardMotionState | undefined,
-  resolvedShiftPx: number,
 ): boolean {
-  return Boolean(card?.holdsLayoutSlot && card.motionReady && resolvedShiftPx <= 0.5);
+  return Boolean(card?.holdsLayoutSlot && card.motionReady);
 }
 
 /**
@@ -585,8 +585,8 @@ function isClearExitHole(
  * Cards never close the gap to a neighbor that still occupies its slot. That
  * keeps a convoy when several live cards follow a hole, and it stops a live
  * card from sliding into a preview that started deleting mid-settle.
- * Dissolving-in-place holes (motion-ready, unshifted) stay passable so a
- * single delete still eases into the ash after the usual delay.
+ * Once that neighbor's motion delay ends, its hole is passable even if it
+ * froze partway through an earlier settle.
  */
 export function computeThumbnailStackShifts(
   cards: readonly ThumbnailStackCardMotionState[],
@@ -597,7 +597,7 @@ export function computeThumbnailStackShifts(
       ...card,
       currentShiftPx: card.currentShiftPx === undefined
         ? undefined
-        : Math.abs(card.currentShiftPx),
+        : -card.currentShiftPx,
     }));
     const towardStart = computeThumbnailStackShiftsTowardLater(
       [...magnitudeCards].reverse(),
@@ -629,7 +629,7 @@ function computeThumbnailStackShiftsTowardLater(
       Boolean(card?.exiting),
     );
     shifts[index] = resolvedPx;
-    if (isClearExitHole(card, resolvedPx)) {
+    if (isClearExitHole(card)) {
       // Pass through this empty-looking slot; the next occupied card is one
       // more slot farther away.
       blockingPxFromBelow += THUMBNAIL_CARD_SLOT_PX;
@@ -642,15 +642,15 @@ function computeThumbnailStackShiftsTowardLater(
 }
 
 /**
- * Magnitude increases should ease so multi-exit stacks accumulate smoothly.
- * Decreases must snap: removing a finished exit reflows layout by one slot,
- * and an instant transform drop of the same amount cancels the jump.
+ * Motion toward the anchor should ease, including from a negative reflow
+ * compensation. Slot removal itself is rebased instantly before this check.
  */
 export function shouldAnimateThumbnailStackShift(
   previousPx: number,
   nextPx: number,
+  options: { fromTop?: boolean } = {},
 ): boolean {
-  return Math.abs(nextPx) > Math.abs(previousPx);
+  return options.fromTop ? nextPx < previousPx : nextPx > previousPx;
 }
 
 export function shouldScrollThumbnailStackToEnd(
@@ -950,23 +950,23 @@ export function restoreThumbnailStackShiftClass(card: HTMLElement | null): void 
 
 /**
  * Visual translateY currently on `card`, in CSS pixels.
- * Prefers the computed matrix so a mid-ease freeze matches what the user sees.
+ * Slot motion uses `translate`, independently of arrive/dismiss `transform`.
  */
 export function readComputedTranslateY(card: HTMLElement): number | null {
   if (typeof getComputedStyle !== "function") return null;
   try {
     const style = getComputedStyle(card);
-    const transform = style.transform;
-    if (transform && transform !== "none") {
-      const matrix = new DOMMatrixReadOnly(transform);
-      if (Number.isFinite(matrix.f)) return matrix.f;
-    }
     const translate = style.translate;
     if (translate && translate !== "none") {
       const parts = translate.trim().split(/\s+/);
       const yToken = parts.length >= 2 ? parts[1] : "0";
       const parsed = Number.parseFloat(yToken);
       if (Number.isFinite(parsed)) return parsed;
+    }
+    const transform = style.transform;
+    if (transform && transform !== "none") {
+      const matrix = new DOMMatrixReadOnly(transform);
+      if (Number.isFinite(matrix.f)) return matrix.f;
     }
   } catch {
     return null;
@@ -1059,7 +1059,7 @@ function hasExpandedSlotShift(card: HTMLElement): boolean {
 }
 
 function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
-  if (!hasThumbnailStackShiftPx(shiftPx)) {
+  if (!hasThumbnailStackShiftPx(shiftPx) && !animate) {
     const hadVisualShift = card.classList.contains(STACK_SHIFTING_CLASS)
       || hasThumbnailStackShiftPx(readStackShiftPx(card))
       || Boolean(card.style.translate);
@@ -1176,6 +1176,8 @@ export async function waitForThumbnailStackSettle(
 export function createThumbnailStackShiftController(stack: HTMLElement): () => void {
   const exitStartedAt = new WeakMap<HTMLElement, number>();
   const scheduledTimers = new Set<ReturnType<typeof setTimeout>>();
+  let previousCards: HTMLElement[] = [];
+  let previousFromTop = thumbnailStackShiftsFromTop(stack);
   let microtaskQueued = false;
   let disposed = false;
 
@@ -1197,6 +1199,11 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     const cards = Array.from(
       stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card"),
     );
+    const previous = previousCards;
+    previousCards = cards;
+    const fromTop = thumbnailStackShiftsFromTop(stack);
+    const anchorChanged = previousFromTop !== fromTop;
+    previousFromTop = fromTop;
     const now = performance.now();
 
     for (const card of cards) {
@@ -1245,6 +1252,24 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
 
     for (const card of cards) clearShiftSlots(card);
 
+    // Removing a held slot changes layout by a whole slot, even when a later
+    // delete froze the convoy partway through that move. Rebase the rendered
+    // translate, not its target, so layout and compensation cancel before paint.
+    const remaining = new Set(cards);
+    let removedSlots = 0;
+    for (const card of anchorChanged ? [] : fromTop ? previous : [...previous].reverse()) {
+      if (!remaining.has(card)) {
+        removedSlots += 1;
+      } else if (removedSlots > 0) {
+        const visualPx = readComputedTranslateY(card) ?? readStackShiftPx(card);
+        writeStackShiftPx(
+          card,
+          visualPx + removedSlots * THUMBNAIL_CARD_SLOT_PX * (fromTop ? 1 : -1),
+          false,
+        );
+      }
+    }
+
     const motionStates: ThumbnailStackCardMotionState[] = cards.map((card) => {
       const holdsLayoutSlot = isHeldLayoutExitCard(card);
       const startedAt = exitStartedAt.get(card);
@@ -1278,7 +1303,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     });
 
     const shifts = computeThumbnailStackShifts(motionStates, {
-      fromTop: thumbnailStackShiftsFromTop(stack),
+      fromTop,
     });
     for (let index = 0; index < cards.length; index += 1) {
       const card = cards[index]!;
@@ -1297,7 +1322,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       writeStackShiftPx(
         card,
         nextPx,
-        shouldAnimateThumbnailStackShift(previousPx, nextPx),
+        !anchorChanged && shouldAnimateThumbnailStackShift(previousPx, nextPx, { fromTop }),
       );
     }
   };

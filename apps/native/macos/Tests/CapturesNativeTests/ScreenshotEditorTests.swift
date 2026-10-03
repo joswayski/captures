@@ -832,11 +832,11 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
-    func testExportActionsStayVisibleAcrossSectionsAndDisableTogetherDuringWork() throws {
+    func testExportActionsStayVisibleAcrossSectionsAndSaveWaitsForCopy() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
             let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
-            worker.deferEncodes = true
+            worker.deferEncodes = true; worker.deferExportSaves = true
             var copies = 0
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
                 worker: worker, writeClipboard: { _ in copies += 1; return true })
@@ -877,7 +877,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try showDraw(in: controller.root)
             copy.performClick(nil)
             XCTAssertTrue(controller.state.busy)
-            XCTAssertFalse(copy.isEnabled); XCTAssertFalse(save.isEnabled)
+            XCTAssertFalse(copy.isEnabled); XCTAssertTrue(save.isEnabled)
             save.performClick(nil)
             XCTAssertTrue(worker.exportSaves.isEmpty)
             try render(controller.root, name: "screenshot-editor-export-bar-pending-\(appearance)")
@@ -886,6 +886,10 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(copy.title, "Copied"); XCTAssertEqual(copy.accessibilityLabel(), "Copied")
             if case .shipping(let name)? = copy.icon { XCTAssertEqual(name, "check") }
             else { XCTFail("copy confirmation uses the shared check icon") }
+            XCTAssertEqual(worker.exportSaves.count, 1, "accepted Save follows Copy")
+            XCTAssertTrue(controller.state.busy)
+            XCTAssertFalse(copy.isEnabled); XCTAssertFalse(save.isEnabled)
+            worker.completePendingExportSave()
             XCTAssertTrue(copy.isEnabled); XCTAssertTrue(save.isEnabled)
             try render(controller.root, name: "screenshot-editor-export-bar-copied-\(appearance)")
             waitUntil(timeout: ScreenshotEditorController.exportConfirmationDuration + 2) {
