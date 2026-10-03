@@ -1229,6 +1229,32 @@ pub fn render_with_shadows(
     document: &Document,
     shadows: &BTreeMap<u64, DropShadow>,
 ) -> Result<RgbaImage, String> {
+    validate_render(document, shadows)?;
+    render_validated(
+        (*document.source).clone(),
+        document.crop,
+        &document.layers,
+        shadows,
+    )
+}
+
+/// Consume a document, reusing its source allocation when uniquely owned.
+/// Shared sources are cloned before painting so retained frames stay immutable.
+/// Validation, compositing and cropping match [`render_with_shadows`].
+pub fn render_with_shadows_owned(
+    document: Document,
+    shadows: &BTreeMap<u64, DropShadow>,
+) -> Result<RgbaImage, String> {
+    validate_render(&document, shadows)?;
+    render_validated(
+        Arc::unwrap_or_clone(document.source),
+        document.crop,
+        &document.layers,
+        shadows,
+    )
+}
+
+fn validate_render(document: &Document, shadows: &BTreeMap<u64, DropShadow>) -> Result<(), String> {
     let (width, height) = document.source.dimensions();
     if width == 0 || height == 0 {
         return Err("Source image is empty".into());
@@ -1250,11 +1276,19 @@ pub fn render_with_shadows(
             }
         }
     }
-    let mut output = (*document.source).clone();
-    if !document.layers.is_empty() {
+    Ok(())
+}
+
+fn render_validated(
+    mut output: RgbaImage,
+    crop: Option<PixelRect>,
+    layers: &[Layer],
+    shadows: &BTreeMap<u64, DropShadow>,
+) -> Result<RgbaImage, String> {
+    let (width, height) = output.dimensions();
+    if !layers.is_empty() {
         let mut canvas = Pixmap::new(width, height).ok_or("Source image is too large")?;
-        let blend_source = document
-            .layers
+        let blend_source = layers
             .iter()
             .any(|layer| layer.blend_mode != BlendMode::Normal);
         if blend_source {
@@ -1265,7 +1299,7 @@ pub fn render_with_shadows(
                     .premultiply();
             }
         }
-        for layer in &document.layers {
+        for layer in layers {
             draw_layer(&mut canvas, layer, shadows.get(&layer.id))?;
         }
         if blend_source {
@@ -1298,7 +1332,7 @@ pub fn render_with_shadows(
             }
         }
     }
-    if let Some(crop) = document.crop {
+    if let Some(crop) = crop {
         output =
             image::imageops::crop_imm(&output, crop.x, crop.y, crop.width, crop.height).to_image();
     }
@@ -1403,6 +1437,149 @@ mod tests {
                 height: 403,
             });
             assert_eq!(render(&document).unwrap(), legacy_render(&document));
+        }
+    }
+
+    #[test]
+    fn owned_render_reuses_unique_canvas_without_changing_pixels() {
+        let document = normal_document(641, 479, false);
+        let allocation = document.source.as_raw().as_ptr();
+        let expected = legacy_render(&document);
+        let output = render_with_shadows_owned(document, &BTreeMap::new()).unwrap();
+        assert_eq!(output, expected);
+        assert_eq!(output.as_raw().as_ptr(), allocation);
+    }
+
+    #[test]
+    fn owned_render_preserves_shared_source_with_blends_shadows_and_crop() {
+        let shadows = BTreeMap::from([(
+            0,
+            DropShadow {
+                color: [91, 37, 203, 153],
+                blur: 2.5,
+                offset_x: -7.25,
+                offset_y: 11.5,
+            },
+        )]);
+        for crop in [
+            None,
+            Some(PixelRect {
+                x: 13,
+                y: 7,
+                width: 79,
+                height: 61,
+            }),
+        ] {
+            for blend in [
+                BlendMode::Normal,
+                BlendMode::Multiply,
+                BlendMode::Screen,
+                BlendMode::Overlay,
+                BlendMode::Darken,
+                BlendMode::Lighten,
+            ] {
+                let mut document = normal_document(127, 83, false);
+                document.crop = crop;
+                document.layers[0].blend_mode = blend;
+                let retained = document.source.clone();
+                let original = (*retained).clone();
+                let expected = render_with_shadows(&document, &shadows).unwrap();
+                let output = render_with_shadows_owned(document, &shadows).unwrap();
+                assert_eq!(output, expected, "{blend:?}, {crop:?}");
+                assert_eq!(*retained, original, "retained pixels must not be painted");
+                assert_ne!(output.as_raw().as_ptr(), retained.as_raw().as_ptr());
+            }
+        }
+    }
+
+    #[test]
+    fn owned_render_keeps_validation_errors_and_order() {
+        let mut document = normal_document(5, 3, false);
+        document.crop = Some(PixelRect {
+            x: u32::MAX,
+            y: 0,
+            width: 2,
+            height: 1,
+        });
+        document.layers[0].stroke_width = f32::NAN;
+        assert_eq!(
+            render_with_shadows_owned(document, &BTreeMap::new()).unwrap_err(),
+            "Crop must be nonempty and inside the source image"
+        );
+        assert_eq!(
+            render_with_shadows_owned(normal_document(0, 3, false), &BTreeMap::new()).unwrap_err(),
+            "Source image is empty"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual release benchmark"]
+    fn benchmark_native_canvas_4k() {
+        let width = 3840;
+        let height = 2160;
+        let vector_layers = normal_document(width, height, false).layers;
+        let bitmap_layers = vec![Layer {
+            id: 7,
+            shape: Shape::Image {
+                origin: Point { x: 0., y: 0. },
+                width: width as f32,
+                height: height as f32,
+                pixels: normal_document(width, height, false).source,
+            },
+            color: [0, 0, 0, 255],
+            stroke_width: 0.,
+            fill: None,
+            rotation_degrees: 0.,
+            rotation_origin: None,
+            blend_mode: BlendMode::Normal,
+        }];
+        for (name, layers) in [
+            ("empty", Vec::new()),
+            ("vectors", vector_layers),
+            ("bitmap", bitmap_layers),
+        ] {
+            let prepare = || Document {
+                source: Arc::new(RgbaImage::from_pixel(
+                    width,
+                    height,
+                    Rgba([17, 23, 91, 127]),
+                )),
+                crop: None,
+                layers: layers.clone(),
+            };
+            assert_eq!(
+                render_with_shadows(&prepare(), &BTreeMap::new()).unwrap(),
+                render_with_shadows_owned(prepare(), &BTreeMap::new()).unwrap(),
+                "benchmark paths must produce identical pixels"
+            );
+            let mut timings = [Vec::new(), Vec::new()];
+            for trial in 0..6 {
+                // Discard one warmup, then alternate order in five trials.
+                for implementation in [trial % 2, (trial + 1) % 2] {
+                    let started = Instant::now();
+                    for _ in 0..3 {
+                        // Include fresh canvas allocation/fill and painting,
+                        // as native editor_render does, not only compositor time.
+                        let document = black_box(prepare());
+                        black_box(if implementation == 0 {
+                            render_with_shadows(&document, &BTreeMap::new()).unwrap()
+                        } else {
+                            render_with_shadows_owned(document, &BTreeMap::new()).unwrap()
+                        });
+                    }
+                    if trial > 0 {
+                        timings[implementation].push(started.elapsed().as_secs_f64() * 1000. / 3.);
+                    }
+                }
+            }
+            for (implementation, timings) in ["borrowed", "owned"].into_iter().zip(timings) {
+                let mut sorted = timings.clone();
+                sorted.sort_by(f64::total_cmp);
+                eprintln!(
+                    "4k native canvas {name} {implementation}: {:.3} ms/render; trials={timings:?}",
+                    sorted[sorted.len() / 2]
+                );
+            }
         }
     }
 

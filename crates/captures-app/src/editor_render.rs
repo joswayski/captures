@@ -144,8 +144,8 @@ fn render_inner(
         }
     }
 
-    captures_image::render_with_shadows(
-        &captures_image::Document {
+    captures_image::render_with_shadows_owned(
+        captures_image::Document {
             source: Arc::new(RgbaImage::from_pixel(width, height, background)),
             crop: None,
             layers,

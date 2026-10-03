@@ -550,6 +550,18 @@ Instruments Time Profiler / Animation Hitches / Energy Log for the broader matri
 in `docs/native-rewrite.md`. Readiness and scripted-action timings measure CPU
 submission, not first displayed pixels or hardware input latency.
 
+The shared screenshot compositor's focused release benchmark compares a borrowed
+canvas with consuming the fresh canvas allocated by the native editor:
+
+```sh
+cargo test -p captures-image --release --locked benchmark_native_canvas_4k -- --ignored --nocapture
+```
+
+It checks identical pixels, includes allocation/fill and painting, discards one
+warmup, then reports five alternating-order trials of three renders each. Retain
+the raw trials, compiler and source/binary identity; repeat on the same idle host.
+This fixture excludes decoding, UI, encoding, presentation and process footprint.
+
 For visual review, capture the specific workbench window using macOS Screenshot
 (not your whole desktop), in light/dark, history empty/populated, HUD running/paused,
 and preview before/during/after deletion. Test both 1× and 2× screens, keyboard
