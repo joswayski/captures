@@ -505,6 +505,9 @@ char *captures_editor_hit_test_document_v1(const char *document_json,
  * guide {placement: "top"|"right"|"bottom"|"left"|"stack", label, target, point,
  * focus} (document-space rects {x,y,width,height}); pass the same point to
  * captures_editor_import_image_v1 to land where the guide shows.
+ * shape_body {id, shape, point, radius} returns {hit: bool} for a selected
+ * visible/unlocked shape matching the active tool; line/arrow bodies use
+ * path distance, other shapes use their rotated selection bounds.
  * curve {id, point, radius} returns {handle: {kind: "start"|"end"|"control"|
  * "starter_control", index?}|null, hint: string|null, on_path, closest: {x,y}|null}
  * for a line/arrow. curve_preview {id, handle, point} returns the curve handles

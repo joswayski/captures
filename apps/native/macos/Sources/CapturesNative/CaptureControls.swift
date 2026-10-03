@@ -828,7 +828,8 @@ final class CaptureControlsView: NSView {
         setAccessibilityRole(.group); setAccessibilityLabel("Capture controls")
 
         let narrow = frame.width < 820
-        let close = control("×", x: 8, width: 32) { [weak self] in self?.cancel() }
+        let close = control("Close", x: 8, width: 32) { [weak self] in self?.cancel() }
+        close.icon = .shipping("close"); close.iconOnly = true; close.iconSide = 15
         close.setAccessibilityLabel("Close capture controls")
         let screenshot = screenshotButton
         screenshot.frame = NSRect(x: 48, y: 12, width: narrow ? 88 : 92, height: 36)

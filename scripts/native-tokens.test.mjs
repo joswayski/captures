@@ -96,7 +96,9 @@ test('prepare writes portable app resources without an implicit test oracle', as
 
   await prepare(output);
 
-  assert.deepEqual((await readdir(output)).sort(), ['EDITOR-FONT-LICENSE.txt', 'dust.json', 'icon.svg', 'tokens.json']);
+  assert.deepEqual((await readdir(output)).sort(), ['EDITOR-FONT-LICENSE.txt', 'dust.json', 'icon.svg', 'tokens.json', 'tray-source.png']);
+  assert.deepEqual(await readFile(join(output, 'tray-source.png')),
+    await readFile(new URL('../apps/desktop/src-tauri/icons/icon.png', import.meta.url)));
   assert.equal(await readFile(join(output, 'EDITOR-FONT-LICENSE.txt'), 'utf8'),
     `${await readFile(new URL('../crates/captures-app/fonts/liberation/LICENSE', import.meta.url), 'utf8')}\n\n${await readFile(new URL('../crates/captures-app/fonts/nunito/OFL.txt', import.meta.url), 'utf8')}`);
   const tokens = JSON.parse(await readFile(join(output, 'tokens.json'), 'utf8'));

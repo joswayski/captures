@@ -641,6 +641,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var scroll = NSScrollView()
     private var document = Surface()
     private var headerRule = Surface()
+    private var headerTitle = NSTextField(labelWithString: "")
+    private var headerSubtitle = NSTextField(labelWithString: "")
     private var status = NSTextField(labelWithString: "")
     private var statusPill = Surface()
     private var statusMark: PreferenceStatusMark?
@@ -763,6 +765,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             }
             return
         }
+        layoutHeaderActions()
         guard !settings.isEmpty, abs(document.frame.width - scroll.contentSize.width) > 0.5 else { return }
         rebuildCards()
     }
@@ -796,9 +799,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             navButtons[section.0] = button
         }
         let left = width + tokens.number("s-8")
-        addLabel(PreferencesPolicy.text("title"), frame: NSRect(x: left, y: 16, width: 320, height: 24),
+        headerTitle = addLabel(PreferencesPolicy.text("title"), frame: NSRect(x: left, y: 16, width: 320, height: 24),
             size: tokens.number("text-xl"), weight: .semibold, parent: root)
-        addLabel(PreferencesPolicy.text("subtitle"), frame: NSRect(x: left, y: 41, width: 320, height: 16),
+        headerSubtitle = addLabel(PreferencesPolicy.text("subtitle"), frame: NSRect(x: left, y: 41, width: 320, height: 16),
             size: tokens.number("text-sm"), muted: true, parent: root)
         let historyTitle = PreferencesPolicy.text("history")
         historyButton = actionButton(historyTitle, x: 0, y: 20, width: buttonWidth(historyTitle),
@@ -848,16 +851,33 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// Shipping `.preferences-header-actions`: History, then the save status
     /// (and the native Retry after a failed save) at the trailing edge.
     private func layoutHeaderActions() {
+        let gap = tokens.number("s-4")
+        let copyWidth = ceil(max(headerTitle.intrinsicContentSize.width,
+            headerSubtitle.intrinsicContentSize.width))
         var x = root.bounds.width - tokens.number("s-8")
         if let retryButton, !retryButton.isHidden {
             retryButton.frame.origin.x = x - retryButton.frame.width
-            x = retryButton.frame.minX - tokens.number("s-4")
+            x = retryButton.frame.minX - gap
         }
         if !statusPill.isHidden {
+            // Bound the whole capsule, reserving History and the header copy.
+            let available = x - (historyButton?.frame.width ?? 0) - gap
+                - headerTitle.frame.minX - copyWidth - tokens.number("s-6")
+            let cap: CGFloat = statusKind == "error" ? 360 : root.bounds.width * 0.42
+            let decorationWidth = status.frame.minX + tokens.number("s-4")
+            let textWidth = ceil(status.intrinsicContentSize.width)
+            status.frame.size.width = min(textWidth, max(0, min(cap, available) - decorationWidth))
+            statusPill.frame.size.width = decorationWidth + status.frame.width
             statusPill.frame.origin.x = x - statusPill.frame.width
-            x = statusPill.frame.minX - tokens.number("s-4")
+            x = statusPill.frame.minX - gap
         }
-        if let historyButton { historyButton.frame.origin.x = x - historyButton.frame.width }
+        if let historyButton {
+            historyButton.frame.origin.x = x - historyButton.frame.width
+            let width = min(copyWidth, max(0, historyButton.frame.minX
+                - tokens.number("s-6") - headerTitle.frame.minX))
+            headerTitle.frame.size.width = width
+            headerSubtitle.frame.size.width = width
+        }
     }
 
     /// The last section whose card top has scrolled past the top of the view,
@@ -1910,9 +1930,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         statusPill.layer?.borderWidth = border == nil ? 0 : 1
         statusPill.layer?.borderColor = tokens.color(border ?? fill).cgColor
         status.textColor = tokens.color(color)
-        let textWidth = min(300, ceil((text as NSString).size(withAttributes: [.font: status.font ?? NSFont.systemFont(ofSize: 11)]).width) + 4)
-        status.frame.size.width = textWidth
-        statusPill.frame.size.width = status.frame.minX + textWidth + tokens.number("s-4")
         retryButton?.isHidden = statusKind != "error" || !saveFailed
         layoutHeaderActions()
         // Shipping `.preferences-save-status`: ui-pop-in over --dur-2 when it appears.
@@ -2128,6 +2145,7 @@ final class BrandMarkView: NSView {
         tokens.color("theme-accent").setFill()
         NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
         tokens.color("theme-accent-ink").setStroke()
+        tokens.color("theme-accent-ink").setFill()
         ShippingIcons.stroke("capture", in: NSRect(x: (bounds.width - 16) / 2, y: (bounds.height - 16) / 2,
             width: 16, height: 16))
     }

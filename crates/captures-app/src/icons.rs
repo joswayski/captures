@@ -11,6 +11,8 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         "pause" => &["M8 5v14M16 5v14"],
         "resume" => &["m8 5 11 7-11 7Z"],
         "restart" => &["M4 11a8 8 0 1 1 2 5.3", "M4 5v6h6"],
+        // Vector counterpart to shipping's font-dependent clockwise `↻`.
+        "loop" => &["M20 11a8 8 0 1 0-2 5.3", "M20 5v6h-6"],
         "capture" => &[
             "M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2",
             "M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z",
@@ -50,6 +52,10 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
+        "warning" => &[
+            "M10.29 4.86 1.82 19a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 4.86a2 2 0 0 0-3.42 0Z",
+            "M12 9.5v5.2M12 17.6h.01",
+        ],
         "history" => &["M3 12a9 9 0 1 0 3-6.7L3 8", "M3 3v5h5M12 7v5l3 2"],
         // These shipping SVGs use a 16-unit viewBox. `polylines`
         // normalizes them to the native hosts' shared 24-unit coordinate space.
@@ -85,6 +91,8 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         "chevron-up" => &["m6 15 6-6 6 6"],
         "chevron-down" => &["m6 9 6 6 6-6"],
         // Screenshot editor chrome (`EditorIcon` in `ScreenshotEditor.tsx`).
+        "editor-chevron-down" => &["m7 9 5 5 5-5"],
+        "editor-chevron-up" => &["m7 15 5-5 5 5"],
         "select" => &["m5 3 13 9-7 2-3 7Z"],
         "crop" => &["M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12"],
         "trim" => &[
@@ -547,10 +555,24 @@ mod tests {
     }
 
     #[test]
+    fn loop_arrow_points_clockwise_on_the_right() {
+        let loop_paths = paths("loop").unwrap();
+        let arc = flatten(loop_paths[0]);
+        assert_eq!(arc[0][0], [20., 11.]);
+        assert!(close(*arc[0].last().unwrap(), [18., 16.3]));
+        assert_eq!(
+            flatten(loop_paths[1]),
+            vec![vec![[20., 5.], [20., 11.], [14., 11.]]]
+        );
+    }
+
+    #[test]
     fn preview_paths_match_shipping_svg_sources() {
         let app = include_str!("../../../apps/desktop/ui/src/App.tsx");
         for (name, component) in [
             ("external-link", "ExternalPreferenceIcon"),
+            ("warning", "WarningIcon"),
+            ("capture", "CaptureIcon"),
             ("close", "CloseIcon"),
             ("trash", "TrashIcon"),
             ("edit", "EditIcon"),
@@ -567,6 +589,20 @@ mod tests {
                 assert!(body.contains(&format!("\"{path}\"")), "{component}: {path}");
             }
         }
+    }
+
+    #[test]
+    fn editor_disclosure_matches_shipping_path_and_rotated_expansion() {
+        let editor = include_str!("../../../apps/desktop/ui/src/ScreenshotEditor.tsx");
+        assert!(editor.contains(paths("editor-chevron-down").unwrap()[0]));
+        let down = polylines("editor-chevron-down").unwrap();
+        let up = polylines("editor-chevron-up").unwrap();
+        let rotated: Vec<_> = down[0]
+            .iter()
+            .rev()
+            .map(|p| [24. - p[0], 24. - p[1]])
+            .collect();
+        assert_eq!(up[0], rotated);
     }
 
     #[test]
@@ -599,6 +635,7 @@ mod tests {
             "pause",
             "resume",
             "restart",
+            "loop",
             "capture",
             "target-region",
             "target-window",
@@ -609,6 +646,7 @@ mod tests {
             "hide-controls",
             "close",
             "check",
+            "warning",
             "restore",
             "copy",
             "save",
@@ -621,6 +659,8 @@ mod tests {
             "preview-overflow-down",
             "chevron-up",
             "chevron-down",
+            "editor-chevron-up",
+            "editor-chevron-down",
             "align-left",
             "align-center",
             "align-right",

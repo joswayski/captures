@@ -168,6 +168,7 @@ export async function prepare(destination, testDestination) {
   }
   // Existing product asset; do not introduce an independent icon design.
   await copyFile(resolve(root, 'apps/desktop/assets/icon.svg'), resolve(destination, 'icon.svg'));
+  await copyFile(resolve(root, 'apps/desktop/src-tauri/icons/icon.png'), resolve(destination, 'tray-source.png'));
   const liberationNotice = await readFile(resolve(root, 'crates/captures-app/fonts/liberation/LICENSE'), 'utf8');
   const nunitoNotice = await readFile(resolve(root, 'crates/captures-app/fonts/nunito/OFL.txt'), 'utf8');
   await writeFile(resolve(destination, 'EDITOR-FONT-LICENSE.txt'), `${liberationNotice}\n\n${nunitoNotice}`);

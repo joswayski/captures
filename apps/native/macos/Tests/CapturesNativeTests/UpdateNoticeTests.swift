@@ -1,8 +1,26 @@
 import AppKit
+import QuartzCore
 import XCTest
 @testable import CapturesNative
 
 final class UpdateNoticeTests: XCTestCase {
+    func testHeaderIconsUseShippingPathsAndSpinnerGeometry() throws {
+        let tokens = Tokens.variants["dark-mustard"]!
+        let frame = NSRect(x: 0, y: 0, width: 36, height: 36)
+        for (icon, name) in [("app", "capture"), ("check", "check"), ("warning", "warning")] {
+            let view = UpdateNoticeIconView(frame: frame, icon: icon, tone: "accent", tokens: tokens)
+            XCTAssertEqual(view.iconName, name)
+            XCTAssertFalse(ShippingIcons.polylines(name).isEmpty)
+            XCTAssertTrue(view.subviews.isEmpty, "no platform-symbol image view")
+        }
+        let view = UpdateNoticeIconView(frame: frame, icon: "spinner", tone: "neutral", tokens: tokens)
+        let ring = try XCTUnwrap(view.layer?.sublayers?.first as? CAShapeLayer)
+        XCTAssertEqual(ring.frame, NSRect(x: 11, y: 11, width: 14, height: 14))
+        XCTAssertEqual(ring.lineWidth, 2)
+        XCTAssertEqual(ring.strokeEnd, 0.75)
+        XCTAssertEqual(try XCTUnwrap(ring.animation(forKey: "update-spin")).duration, 0.72)
+    }
+
     func testSharedPresentationCopyForEveryFixture() throws {
         let model = UpdateNoticeModel()
         model.event = { _, _ in }
@@ -115,6 +133,17 @@ final class UpdateNoticeTests: XCTestCase {
             view.onAction = { actions.append($0) }
             view.render(p, placement: placement)
             XCTAssertEqual(view.layer?.sublayers?.filter { $0.name == "update-caret" }.count, 1, name)
+            if let warning = p.closeWarning {
+                let box = try XCTUnwrap(view.subviews.flatMap(\.subviews).first {
+                    $0.accessibilityLabel() == warning
+                })
+                let glyph = try XCTUnwrap(box.subviews.compactMap { $0 as? NSImageView }.first)
+                let image = try XCTUnwrap(glyph.image)
+                XCTAssertTrue(image.representations.contains { $0 is NSCustomImageRep },
+                              "close warnings use custom shipping paths, not SF Symbols")
+                XCTAssertEqual(image.size, NSSize(width: 16, height: 16))
+                XCTAssertFalse(glyph.isAccessibilityElement(), "the warning text names the whole row")
+            }
             let buttons = view.subviews.flatMap(\.subviews).compactMap { $0 as? CaptureButton }
             XCTAssertEqual(buttons.map(\.title), [p.dismiss?.label, p.primary?.label].compactMap { $0 }, name)
             buttons.last?.performClick(nil)

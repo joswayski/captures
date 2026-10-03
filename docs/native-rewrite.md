@@ -17,6 +17,61 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Both Preferences hosts keep save status on one line, with shipping's 360px error
+cap (42vw for other statuses) further constrained to clear the title/subtitle,
+History and the existing native Retry action. AppKit rebalances on resize;
+wgpu retains the full message in its label metadata and AppKit in accessibility.
+Host tests cover both themes and minimum/sidebar-breakpoint widths. Physical
+Windows/macOS, Wayland, screen-reader and mixed-DPI acceptance remain open.
+
+wgpu invalidates the Preferences focus sample on every native focus event. A
+transfer to History can no longer briefly re-suspend global shortcuts before
+the next Preferences pass. The X11 lifecycle test follows named, settled recorder
+rectangles, sends each chord once, and checks all seven persistence paths plus
+edited Region and New Capture launches after restart and blur. Windows shares
+the fix; physical Windows/Wayland input remains unverified. AppKit is unchanged;
+no physical-platform, accessibility or mixed-DPI gate closes from these checks.
+
+Both screenshot-editor hosts keep selected move/resize/rotation and curve grips
+live under the Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow tools. Only the
+active tool's own selected shape body starts a move; empty canvas still draws,
+and a handle gesture cannot also create a shape. Text and Pen keep their style
+Properties without this transform chrome. Geometry and shape-body hit testing
+come from shared Rust. Private-X11 light/dark tests exercise active-tool edits,
+undo, pixels and draft reopening; AppKit has XCTest coverage. Physical macOS,
+Windows and Wayland acceptance remain open; these additions do not choose the
+renderer or replace the shipping Tauri app.
+
+Both hosts pin the Properties title outside the fields' scroll viewport, following
+shipping's sticky heading without covering controls. AppKit retains its existing
+title dimensions and field layout; wgpu keeps the shipping 48px title. Real-input
+X11 checks compare fixed title pixels against moving fields for image, shape,
+Text and Crop at the minimum size, in both appearances. AppKit XCTest checks the
+same separation, resizing and reachable fields. Physical-platform gates stay open.
+
+Curve and Straighten Properties now remain available for locked or hidden lines
+and arrows on both hosts, matching shipping. Shared Rust permits these two
+property edits without permitting locked canvas-dot dragging, insertion or
+removal. Core tests cover exact geometry, undo and draft retention; host tests
+check usable fields without canvas dots, and the X11 canvas suite exercises the
+locked-line commands. Physical macOS/Windows/Wayland acceptance remains open.
+Both hosts now keep Curve Properties enabled and focused during worker edits.
+Discrete keyboard steps, slider releases and Straighten actions use the existing
+ordered live-edit queue with separate undo keys, including keys received together
+in one wgpu frame and changes that return to the original value. Clamped no-ops
+do not enqueue an edit. Staged values survive older receipts; failures discard
+queued edits and restore the last accepted value.
+wgpu focus tests and AppKit deferred-worker XCTest cover consecutive input;
+private-X11 light/dark checks apply Home plus three Right keys without refocusing
+and undo every change exactly. Platform accessibility/IME acceptance stays open.
+
+Both hosts release inline text's keyboard focus when Escape finishes, so the
+first document Undo is not owned by a hidden text editor. Click-away preserves
+the newly focused control; a failed finish retains the buffer and restores text
+focus for retry. Host tests cover this handoff and failure recovery. X11 Undo
+checks wait for the exact pre-edit layer, including its geometry, rather than
+accepting an unchanged layer count. Physical-platform and IME gates stay open.
+
 | Area | Implemented in this tree | Work still open |
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
@@ -968,12 +1023,21 @@ retain a local typing buffer while one worker update fits/renders at a time.
 Escape, outside clicks and close finish one undoable edit (shipping has no
 Done/Cancel). The box is painted in the layer's transform: bundled face, size,
 colour, opacity, plate, padding, alignment and rotation, with the accent outline
-`--s-3` outside it, while the session preview omits that layer. Rotated labels
-rotate their glyphs, plate and caret, but egui keeps the selection highlight and
-pointer caret placement unrotated; outlined labels draw filled glyphs. Empty new
-text creates nothing; empty existing text removes that layer, and a cleared box
-after a failed Begin is dismissed. Quit drains the latest buffer before draft
-saving, and failed updates retain it for retry. Output actions cannot publish
+`--s-3` outside it, while the session preview omits that layer. Typing refits the
+frame before presenting the new glyphs, without waiting for another input event.
+Rotated labels rotate their glyphs, plate and caret, but egui keeps the selection highlight and
+pointer caret placement unrotated. Outlined input paints hollow grayscale strokes
+of the actual shaped atlas glyphs, retaining ligatures, fallback, advances and
+caret layout. Selection retains its background without restoring glyph fill.
+Masks reuse unchanged raster pixels, invalidate changed width/DPI or recycled
+atlas coordinates, and retain only the current visible glyph set on layout changes.
+The raster stencil is a live-input approximation, not contour-equivalent export;
+strokes wider than 24 physical pixels use an eight-line disk approximation, which
+softens antialiased edges, and large type still has a noticeable first-render cost.
+Saved pixels keep the shared contour renderer.
+Empty new text creates nothing; empty existing text removes that layer, and a
+cleared box after a failed Begin is dismissed. Quit drains the latest buffer before
+draft saving, and failed updates retain it for retry. Output actions cannot publish
 unfinished pixels.
 Private X11/software-GL exercises are implementation evidence, not Windows,
 Wayland, physical input, IME or accessibility acceptance. AppKit composition is a

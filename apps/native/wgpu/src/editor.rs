@@ -622,7 +622,7 @@ impl Default for View {
             draft_restored: false,
             last_solid_background: colors::DEFAULT_CANVAS_BACKGROUND.into(),
             background_queued: None,
-            section: Section::Geometry,
+            section: Section::Layers,
             export_options: ExportOptions {
                 format: ExportFormat::Png,
                 quality: ExportQuality::Preserve,
@@ -705,7 +705,25 @@ impl Default for View {
 }
 
 impl View {
+    fn tool_shows_transform_chrome(&self) -> bool {
+        self.section == Section::Layers
+            || (self.section == Section::Draw
+                && (self.draw_shape.is_grouped() || self.draw_shape == DrawShape::Arrow))
+    }
+
+    fn properties_section(&self) -> Section {
+        if self.section == Section::Draw && self.selected_layer.is_some() {
+            Section::Layers
+        } else {
+            self.section
+        }
+    }
+
     fn activate_tool(&mut self, section: Section, shape: Option<DrawShape>) {
+        // Shipping clears selection even when reactivating the current tool.
+        if section != Section::Layers {
+            self.select_layer_exact(None);
+        }
         let active = self.section == section
             && match shape {
                 Some(shape) => self.draw_shape == shape,
@@ -910,7 +928,6 @@ impl View {
                         })
                         .map(|preset| preset.id.to_owned());
                 }
-                let text_apply_pending = self.text_apply_pending;
                 let changed = self
                     .presented
                     .as_ref()
@@ -989,18 +1006,14 @@ impl View {
                 self.presented = Some(presented);
                 self.ensure_export_target();
                 if !copied_layer {
-                    self.select_layer(selected);
+                    self.select_layer_exact(selected);
+                }
+                if self.live_queue.is_empty() && !ctx.input(|input| input.pointer.primary_down()) {
+                    self.curve_bend = None;
                 }
                 self.text_apply_pending = false;
                 if pasted_layer || combined_layers {
                     self.activate_tool(Section::Layers, None);
-                } else if self.inline.is_none()
-                    && !copied_layer
-                    && self.draw_shape == DrawShape::Text
-                    && self.text.is_some()
-                    && !text_apply_pending
-                {
-                    self.section = Section::Layers;
                 }
                 if !copied_layer {
                     self.reset_background_fields();
@@ -1019,6 +1032,7 @@ impl View {
                 }
                 self.inline_failed();
                 self.live_queue.clear();
+                self.curve_bend = None;
                 // A rejected explicit text Apply keeps the user's staged composition.
                 if !self.text_apply_pending {
                     self.select_layer_exact(self.selected_layer.clone());
@@ -1578,6 +1592,9 @@ impl View {
                 .or_else(|| elements.last())
         });
         self.selected_layer = layer.map(|element| element.base().id.clone());
+        if previous_layer != self.selected_layer {
+            self.curve_bend = None;
+        }
         // Live style edits still queued keep the fields the user is changing.
         let keep = !self.live_queue.is_empty() && previous_layer == self.selected_layer;
         self.annotation = layer.and_then(|element| match element {
@@ -1625,6 +1642,7 @@ impl View {
             self.selected_layer = None;
             self.annotation = None;
             self.text = None;
+            self.curve_bend = None;
             self.layer_opacity = 100.;
             self.layer_geometry = [1., 1., 0., 0.];
         } else {
@@ -2070,7 +2088,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
-    handle_tool_shortcuts(ui.ctx(), view);
     if view.inline.is_none()
         && !ui.ctx().egui_wants_keyboard_input()
         && !egui::Popup::is_any_open(ui.ctx())
@@ -2103,7 +2120,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         view.layers.menu = None;
         view.layers.rename = None;
     }
-    if view.section != Section::Layers
+    if !view.tool_shows_transform_chrome()
         || view.pending
         || view.close_requested
         || !ui.input(|input| input.focused)
@@ -2133,18 +2150,21 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 ui.cursor().top() - 0.5,
                 egui::Stroke::new(1., tokens.color("border-subtle")),
             );
+            // Shipping's sticky Properties title stays outside the fields'
+            // scroll viewport, so it cannot cover a control scrolled into view.
+            ui.spacing_mut().item_spacing.y = 0.;
+            ui.add_enabled_ui(enabled, |ui| chrome::properties_heading(ui, tokens, view));
             crate::primitives::scroll_area(
                 ui,
                 tokens,
                 egui::ScrollArea::vertical()
-                    .id_salt(view.section)
+                    .id_salt(view.properties_section())
                     .auto_shrink([false, false]),
                 |ui| {
                     ui.add_enabled_ui(enabled, |ui| {
                         // Sections space their own items (`inspector::section`).
                         ui.spacing_mut().item_spacing.y = 0.;
-                        chrome::properties_heading(ui, tokens, view);
-                        match view.section {
+                        match view.properties_section() {
                             Section::Layers => show_layer_properties(ui, tokens, view, tx),
                             Section::Draw => show_draw_properties(ui, tokens, view),
                             Section::Geometry => show_crop_properties(ui, tokens, view, tx),
@@ -2171,7 +2191,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             let size = texture.size_vec2();
             view.viewport_image_size = Some(size);
             let fit = fitted_image_rect(available, size);
-            let intercepted = handle_viewport_input(ui, view, available);
+            let comparison_id = egui::Id::unique("screenshot-compression-comparison");
+            let intercepted = (view.compare_visible()
+                && !view.compare_suppressed()
+                && crate::compare_overlay::owns_pointer(ui.ctx(), comparison_id))
+                || handle_viewport_input(ui, view, available);
             let preview = viewport_rect(view.viewport, fit, size).unwrap_or(fit);
             canvas::receive_drops(ui.ctx(), view, Some(preview));
             ui.allocate_rect(available, egui::Sense::hover());
@@ -2197,21 +2221,28 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             if view.crop_previous.is_some() && !view.pending && view.inline.is_none() {
                 show_crop(ui, tokens, view, available, preview, intercepted);
             }
+            let layer_owned = view.tool_shows_transform_chrome()
+                && view.shape_drag.is_none()
+                && view.inline.is_none()
+                && !view.pending
+                && !view.close_requested
+                && show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             if view.section == Section::Draw
                 && view.inline.is_none()
                 && !view.pending
                 && !view.close_requested
             {
-                show_shape(ui, tokens, view, tx, available, preview, intercepted);
+                show_shape(
+                    ui,
+                    tokens,
+                    view,
+                    tx,
+                    available,
+                    preview,
+                    intercepted || layer_owned,
+                );
             } else {
                 view.wand_loupe = None;
-            }
-            if view.section == Section::Layers
-                && view.inline.is_none()
-                && !view.pending
-                && !view.close_requested
-            {
-                show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
             }
             if view.section == Section::Layers
                 && view.crop_previous.is_none()
@@ -2232,7 +2263,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                     ui,
                     tokens,
                     crate::compare_overlay::Overlay {
-                        id: egui::Id::unique("screenshot-compression-comparison"),
+                        id: comparison_id,
                         frame: preview,
                         clip,
                         after: view.output.as_ref().map(|(texture, _)| texture),
@@ -2754,61 +2785,6 @@ fn handle_viewport_shortcuts(ctx: &egui::Context, view: &mut View) {
     }
 }
 
-fn handle_tool_shortcuts(ctx: &egui::Context, view: &mut View) {
-    if ctx.current_pass_index() != 0
-        || !ctx.input(|input| input.focused)
-        || ctx.input(|input| input.pointer.any_pressed())
-        || ctx.memory(|memory| memory.focused().is_some())
-        || egui::Popup::is_any_open(ctx)
-        || view.presented.is_none()
-        || view.pending
-        || view.inline.is_some()
-        || view.closed
-        || view.close_requested
-        || view.import_picker.is_some()
-        || view.folder_picker.is_some()
-    {
-        return;
-    }
-    let tools = ctx.input_mut(|input| {
-        let mut tools = Vec::new();
-        input.events.retain(|event| {
-            let egui::Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } = event
-            else {
-                return true;
-            };
-            if modifiers.command || modifiers.ctrl || modifiers.mac_cmd || modifiers.alt {
-                return true;
-            }
-            let tool = match key {
-                egui::Key::V => (Section::Layers, None),
-                egui::Key::C => (Section::Geometry, None),
-                egui::Key::T => (Section::Draw, Some(DrawShape::Text)),
-                egui::Key::R => (Section::Draw, Some(DrawShape::Rectangle)),
-                egui::Key::O => (Section::Draw, Some(DrawShape::Ellipse)),
-                egui::Key::L => (Section::Draw, Some(DrawShape::Line)),
-                egui::Key::D => (Section::Draw, Some(DrawShape::Diamond)),
-                egui::Key::S => (Section::Draw, Some(DrawShape::Star)),
-                egui::Key::A => (Section::Draw, Some(DrawShape::Arrow)),
-                egui::Key::P => (Section::Draw, Some(DrawShape::Freehand)),
-                egui::Key::B => (Section::Draw, Some(view.last_background_tool)),
-                _ => return true,
-            };
-            tools.push(tool);
-            false
-        });
-        tools
-    });
-    for (section, shape) in tools {
-        view.activate_tool(section, shape);
-    }
-}
-
 fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<Job>) {
     if ctx.current_pass_index() != 0
         || !ctx.input(|input| input.focused)
@@ -2824,6 +2800,17 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
     }
     // Sliders and closed selectors also own arrows, not just text editors.
     let canvas_navigation = ctx.memory(|memory| memory.focused().is_none());
+    let tools_enabled = canvas_navigation
+        && view.presented.is_some()
+        && !view.pending
+        && view.import_picker.is_none()
+        && view.folder_picker.is_none();
+    // Keep tools and document actions in input order, including when a fast
+    // tool-change + Delete arrives in one frame. Neither kind may jump ahead.
+    enum Shortcut {
+        Tool(Section, Option<DrawShape>),
+        Document(egui::Key, bool),
+    }
     let requests = ctx.input_mut(|input| {
         let mut requests = Vec::new();
         input.events.retain(|event| {
@@ -2831,14 +2818,45 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
             // Their text payload belongs to the OS clipboard, not our layer copy.
             match event {
                 egui::Event::Copy => {
-                    requests.push((egui::Key::C, false));
+                    requests.push(Shortcut::Document(egui::Key::C, false));
                     return false;
                 }
                 egui::Event::Paste(_) => {
-                    requests.push((egui::Key::V, false));
+                    requests.push(Shortcut::Document(egui::Key::V, false));
                     return false;
                 }
                 _ => {}
+            }
+            if let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+                && tools_enabled
+                && !modifiers.command
+                && !modifiers.ctrl
+                && !modifiers.mac_cmd
+                && !modifiers.alt
+            {
+                let tool = match key {
+                    egui::Key::V => Some((Section::Layers, None)),
+                    egui::Key::C => Some((Section::Geometry, None)),
+                    egui::Key::T => Some((Section::Draw, Some(DrawShape::Text))),
+                    egui::Key::R => Some((Section::Draw, Some(DrawShape::Rectangle))),
+                    egui::Key::O => Some((Section::Draw, Some(DrawShape::Ellipse))),
+                    egui::Key::L => Some((Section::Draw, Some(DrawShape::Line))),
+                    egui::Key::D => Some((Section::Draw, Some(DrawShape::Diamond))),
+                    egui::Key::S => Some((Section::Draw, Some(DrawShape::Star))),
+                    egui::Key::A => Some((Section::Draw, Some(DrawShape::Arrow))),
+                    egui::Key::P => Some((Section::Draw, Some(DrawShape::Freehand))),
+                    egui::Key::B => Some((Section::Draw, Some(view.last_background_tool))),
+                    _ => None,
+                };
+                if let Some((section, shape)) = tool {
+                    requests.push(Shortcut::Tool(section, shape));
+                    return false;
+                }
             }
             if let egui::Event::Key {
                 key,
@@ -2860,7 +2878,7 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
                         egui::Key::Z | egui::Key::D | egui::Key::C | egui::Key::V
                     ) && (modifiers.command || modifiers.ctrl)))
             {
-                requests.push((*key, modifiers.shift));
+                requests.push(Shortcut::Document(*key, modifiers.shift));
                 false
             } else {
                 true
@@ -2868,10 +2886,17 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         });
         requests
     });
-    for (key, shift) in requests {
+    for shortcut in requests {
         if view.pending {
             continue;
         }
+        let (key, shift) = match shortcut {
+            Shortcut::Tool(section, shape) => {
+                view.activate_tool(section, shape);
+                continue;
+            }
+            Shortcut::Document(key, shift) => (key, shift),
+        };
         let Some(presented) = &view.presented else {
             continue;
         };
@@ -3084,10 +3109,13 @@ fn show_layer_canvas(
     available: egui::Rect,
     preview: egui::Rect,
     viewport_intercepted: bool,
-) {
+) -> bool {
     let Some(presented) = &view.presented else {
-        return;
+        return false;
     };
+    // Keep ownership after a same-frame release/no-op/cancel; the draw path
+    // must not replay a gesture whose state has already been cleared.
+    let mut owned = view.layer_gesture.is_some();
     let document = presented.document.clone();
     let bounds = Rect {
         x: 0.,
@@ -3122,26 +3150,28 @@ fn show_layer_canvas(
             && (response.double_clicked_by(egui::PointerButton::Primary)
                 || response.triple_clicked_by(egui::PointerButton::Primary))
             && let Some(position) = response.interact_pointer_pos()
+            && available.contains(position)
+            && crate::primitives::pressed_on_layer(ui, position)
             && preview.contains(position)
         {
             let point = image_point(position, preview, bounds);
             if canvas::double_click(view, tx, &document, point, 10. / display_scale) {
                 view.cancel_layer_gesture();
-                return;
+                return true;
             }
             match document.hit_test(point, 8. / display_scale) {
-                Ok(Some(Element::Text(text))) => {
+                Ok(Some(Element::Text(text))) if view.section == Section::Layers => {
                     view.begin_inline(
                         tx,
                         captures_app::editor_session::TextInputTarget::Existing {
                             id: text.base.id.clone(),
                         },
                     );
-                    return;
+                    return true;
                 }
                 Err(error) => {
                     view.error = Some(error);
-                    return;
+                    return true;
                 }
                 _ => {}
             }
@@ -3206,6 +3236,7 @@ fn show_layer_canvas(
                             ))
                     });
                     if let Some((id, outline, initial_radians)) = rotation {
+                        owned = true;
                         view.layer_gesture = Some(LayerGesture {
                             kind: LayerGestureKind::Rotate {
                                 id,
@@ -3253,6 +3284,7 @@ fn show_layer_canvas(
                         .map(|handle| (shape.base.id.clone(), handle, Box::new(shape.clone())))
                     });
                     if let Some((id, handle, shape)) = curve {
+                        owned = true;
                         view.layer_gesture = Some(LayerGesture {
                             kind: LayerGestureKind::Curve { id, handle, shape },
                             start: point,
@@ -3285,6 +3317,7 @@ fn show_layer_canvas(
                         }
                     };
                     if let Some((id, handle, drag, resize)) = resize {
+                        owned = true;
                         view.layer_gesture = Some(LayerGesture {
                             kind: LayerGestureKind::Resize {
                                 id,
@@ -3302,8 +3335,28 @@ fn show_layer_canvas(
                         view.error = None;
                         continue;
                     }
-                    match document.hit_test(point, 8. * bounds.width / f64::from(preview.width())) {
+                    let hit = if view.section == Section::Draw {
+                        selected
+                            .map(|element| {
+                                captures_app::editor_canvas::selected_shape_body_hit(
+                                    element,
+                                    view.draw_shape.preview_key(),
+                                    point,
+                                    10. / display_scale,
+                                )
+                                .map(|hit| hit.then_some(element))
+                            })
+                            .transpose()
+                            .map(Option::flatten)
+                    } else {
+                        document.hit_test(point, 8. / display_scale)
+                    };
+                    match hit {
                         Ok(hit) => {
+                            if view.section == Section::Draw && hit.is_none() {
+                                continue;
+                            }
+                            owned = true;
                             let move_state = hit
                                 .map(|element| {
                                     let drag = MoveDrag::new(
@@ -3532,6 +3585,52 @@ fn show_layer_canvas(
     if response.hovered() || view.layer_gesture.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
+    if view.section == Section::Draw
+        // Idle handle/body hover keeps the transform cursor. A drawing press
+        // that ends over the old selection still belongs to drawing.
+        && !ui.input(|input| input.pointer.any_down() || input.events.iter().any(|event| {
+            matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, .. })
+        }))
+        && let Some(position) = ui.input(|input| input.pointer.hover_pos())
+            .filter(|pos| available.contains(*pos) && preview.contains(*pos) && crate::primitives::pressed_on_layer(ui, *pos))
+        && let Some(element) = view.selected_layer.as_ref().and_then(|id| {
+            document.elements.iter().find(|element| &element.base().id == id)
+        }).filter(|element| element.base().visible && !element.base().locked)
+    {
+        let point = image_point(position, preview, bounds);
+        owned |= element
+            .resize_handle_at(point, 8. / display_scale)
+            .ok()
+            .flatten()
+            .is_some()
+            || element
+                .selection_outline()
+                .ok()
+                .and_then(|outline| {
+                    rotation_handle(
+                        outline,
+                        element.base().rotation(),
+                        display_scale,
+                        bounds.width,
+                        bounds.height,
+                    )
+                })
+                .is_some_and(|handle| {
+                    (point.x - handle.handle.x).hypot(point.y - handle.handle.y)
+                        <= handle.hit_radius
+                })
+            || matches!(element, Element::Shape(shape) if captures_app::editor_canvas::hit_test_curve_handle(shape, point, 10. / display_scale).is_some())
+            || captures_app::editor_canvas::selected_shape_body_hit(
+                element,
+                view.draw_shape.preview_key(),
+                point,
+                10. / display_scale,
+            )
+            .unwrap_or(false);
+    }
+    if owned && input_enabled && !viewport_intercepted {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
     let (outline, delta, active_rotation, guides, show_grips) =
         if let Some(gesture) = &view.layer_gesture {
             match &gesture.kind {
@@ -3731,8 +3830,9 @@ fn show_layer_canvas(
             if let Some((_, handles)) = canvas::selected_curve(view) {
                 canvas::paint_curve_handles(&painter, tokens, &handles, project, false);
             }
-            if let Some(pointer) = response.hover_pos()
-                && preview.contains(pointer)
+            if let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
+                available.contains(*pos) && crate::primitives::pressed_on_layer(ui, *pos)
+            }) && preview.contains(pointer)
                 && let Some(hint) = canvas::hover_hint(
                     view,
                     &document,
@@ -3745,6 +3845,7 @@ fn show_layer_canvas(
         }
         Some(_) => {}
     }
+    owned
 }
 
 /// One shared token table for UI tests that drive canvas painters directly.
@@ -4062,6 +4163,7 @@ fn show_shape(
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
     {
         let start = image_point(origin, preview, bounds);
+        view.select_layer_exact(None);
         view.shape_drag = Some((start, start));
         view.shape_drag_frame = preview;
         if view.draw_shape == DrawShape::Freehand {
@@ -4105,16 +4207,32 @@ fn show_shape(
             }
         });
     }
+    let stopped = response.drag_stopped_by(egui::PointerButton::Primary);
+    let position = if stopped {
+        // A later hover sample in this frame cannot overwrite release.
+        ui.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => Some(*pos),
+                _ => None,
+            })
+        })
+    } else {
+        response.interact_pointer_pos()
+    };
     if first_pass
         && !viewport_intercepted
-        && (response.dragged_by(egui::PointerButton::Primary)
-            || response.drag_stopped_by(egui::PointerButton::Primary))
-        && let Some(position) = response.interact_pointer_pos()
+        && (response.dragged_by(egui::PointerButton::Primary) || stopped)
+        && let Some(position) = position
         && let Some((_, end)) = &mut view.shape_drag
     {
         *end = image_point(position, frame, bounds);
     }
-    if response.hovered() || response.dragged() {
+    if !viewport_intercepted && (response.hovered() || response.dragged()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     let style = view.new_annotation_style.clone();
@@ -4122,7 +4240,7 @@ fn show_shape(
     if first_pass
         && !viewport_intercepted
         && previous_geometry != (view.shape_drag, view.freehand_points.len())
-        && !response.drag_stopped_by(egui::PointerButton::Primary)
+        && !stopped
         && let Some((start, end)) = view.shape_drag
         && let Some(pixels) = &mut view.drawing_preview
     {
@@ -4269,7 +4387,7 @@ fn show_shape(
     }
     if first_pass
         && !viewport_intercepted
-        && response.drag_stopped_by(egui::PointerButton::Primary)
+        && stopped
         && let Some((start, end)) = view.shape_drag.take()
     {
         let request = if view.draw_shape == DrawShape::Freehand {
@@ -4789,14 +4907,13 @@ fn show_export_row(
                         .x
                 });
                 let center = response.rect.center() - egui::vec2(text / 2. + 10., 0.);
-                ui.painter().add(egui::Shape::line(
-                    vec![
-                        center + egui::vec2(-4., 0.),
-                        center + egui::vec2(-1., 3.),
-                        center + egui::vec2(4., -3.),
-                    ],
-                    egui::Stroke::new(1.8, tokens.color("positive-text")),
-                ));
+                crate::capture_controls::paint_icon(
+                    ui.painter(),
+                    "check",
+                    egui::Rect::from_center_size(center, egui::Vec2::splat(16.)),
+                    1.8,
+                    tokens.color("positive-text"),
+                );
             }
             if response.clicked() {
                 view.copy(tx);
@@ -4911,25 +5028,16 @@ fn export_disclosure(
             rect.right() - tokens.number("s-4") - chevron / 2.,
             rect.center().y,
         );
-        let half = chevron / 4.;
-        let direction = if open { -1. } else { 1. };
-        let stroke = egui::Stroke::new(
-            1.6,
+        crate::capture_controls::paint_icon(
+            painter,
+            if open {
+                "editor-chevron-up"
+            } else {
+                "editor-chevron-down"
+            },
+            egui::Rect::from_center_size(center, egui::Vec2::splat(15.)),
+            1.8,
             tokens.color(if hovered { "text" } else { "text-muted" }),
-        );
-        painter.line_segment(
-            [
-                center + egui::vec2(-half, -half / 2. * direction),
-                center + egui::vec2(0., half / 2. * direction),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                center + egui::vec2(0., half / 2. * direction),
-                center + egui::vec2(half, -half / 2. * direction),
-            ],
-            stroke,
         );
         if response.has_focus() {
             crate::primitives::focus_indicated(ui.ctx());
@@ -5527,31 +5635,33 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
         }
         return;
     };
-    inspector::section(ui, tokens, |ui| {
-        inspector::labelled(ui, tokens, "Shift rotation snap", |ui| {
-            let mut degrees = view.rotation_snap_degrees;
-            if crate::primitives::NumberInput::new(
-                "rotation-snap",
-                "Shift rotation snap",
-                ui.available_width(),
-            )
-            .range(1. ..=180.)
-            .show(ui, tokens, &mut degrees)
-            .changed()
-            {
-                view.rotation_snap_degrees = degrees.round().clamp(1., 180.);
-                view.layer_gesture = None;
-            }
+    if view.tool_shows_transform_chrome() {
+        inspector::section(ui, tokens, |ui| {
+            inspector::labelled(ui, tokens, "Shift rotation snap", |ui| {
+                let mut degrees = view.rotation_snap_degrees;
+                if crate::primitives::NumberInput::new(
+                    "rotation-snap",
+                    "Shift rotation snap",
+                    ui.available_width(),
+                )
+                .range(1. ..=180.)
+                .show(ui, tokens, &mut degrees)
+                .changed()
+                {
+                    view.rotation_snap_degrees = degrees.round().clamp(1., 180.);
+                    view.layer_gesture = None;
+                }
+            });
+            inspector::hint(
+                ui,
+                tokens,
+                &format!(
+                    "Hold Shift while dragging the rotate handle to snap in {}° increments.",
+                    view.rotation_snap_degrees
+                ),
+            );
         });
-        inspector::hint(
-            ui,
-            tokens,
-            &format!(
-                "Hold Shift while dragging the rotate handle to snap in {}° increments.",
-                view.rotation_snap_degrees
-            ),
-        );
-    });
+    }
     inspector::section(ui, tokens, |ui| match element {
         Element::Text(_) => show_text(ui, tokens, view, tx),
         Element::Image(image) => show_image_geometry(ui, tokens, view, tx, image),
@@ -5569,12 +5679,10 @@ fn show_layer_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx
                     "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
                 ),
             );
-            if !shape.base.locked {
-                ui.add_enabled_ui(!view.pending, |ui| {
-                    ui.spacing_mut().item_spacing.y = tokens.number("s-5");
-                    canvas::show_curve_controls(ui, tokens, view, tx, shape);
-                });
-            }
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.y = tokens.number("s-5");
+                canvas::show_curve_controls(ui, tokens, view, tx, shape);
+            });
         }
         Element::Path(path) => {
             show_annotation(ui, tokens, view, tx, &path.base.id, &path.style, false);
@@ -6420,6 +6528,7 @@ mod tests {
         let document = initial.document.clone();
         let pixels = initial.pixels.clone();
         view.receive(&ctx, Ok(initial));
+        view.select_layer_exact(Some("other".into()));
         view.output = Some((view.texture.as_ref().unwrap().clone(), 101));
         let (tx, rx) = mpsc::channel();
         let frame = |view: &mut View, events| {
@@ -6571,6 +6680,119 @@ mod tests {
             Ok(Job::Apply(Request::PasteLayer { after_id: None, .. }))
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn properties_titles_stay_fixed_while_the_minimum_inspector_scrolls() {
+        for (section, shape, selected, title, field) in [
+            (
+                Section::Layers,
+                DrawShape::Rectangle,
+                true,
+                "Original screenshot",
+                "Shift rotation snap",
+            ),
+            (
+                Section::Draw,
+                DrawShape::Rectangle,
+                false,
+                "Rectangle",
+                "Stroke",
+            ),
+            (
+                Section::Draw,
+                DrawShape::Text,
+                false,
+                "Text",
+                "New text style",
+            ),
+            (
+                Section::Geometry,
+                DrawShape::Rectangle,
+                false,
+                "Crop",
+                "Aspect ratio",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+            let (tx, _rx) = mpsc::channel();
+            let mut view = View::default();
+            view.receive(&ctx, Ok(presented(true)));
+            view.section = section;
+            view.draw_shape = shape;
+            view.select_layer_exact(selected.then(|| "capture-background".into()));
+            if section == Section::Geometry {
+                // A staged crop exposes the size/actions below Aspect ratio;
+                // the no-selection hint alone fits without scrolling.
+                view.crop_tool = true;
+                view.crop_previous = Some(view.crop);
+                view.crop = [1., 0., 3., 2.];
+            }
+            let document = view.presented.as_ref().unwrap().document.clone();
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 540.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, view, &tx),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let position = |output: &egui::FullOutput, label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .rev()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.job.text == label
+                                // The Text style preview also says "Text";
+                                // layer rows repeat image titles in smaller type.
+                                && (label != title || text.galley.job.sections.first().is_some_and(|section| {
+                                    section.format.font_id.size == tokens.number("text-md")
+                                        && section.format.font_id.family == egui::FontFamily::Name("semibold".into())
+                                })) => Some(text.pos),
+                        _ => None,
+                    })
+            };
+            frame(&mut view, vec![]);
+            let before = frame(&mut view, vec![]);
+            let heading = position(&before, title).expect(title);
+            let initial_field = position(&before, field).expect(field);
+            let pointer = egui::pos2(600., heading.y + 60.);
+            frame(&mut view, vec![egui::Event::PointerMoved(pointer)]);
+            frame(
+                &mut view,
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0., -600.),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            for _ in 0..30 {
+                frame(&mut view, vec![]);
+            }
+            let after = frame(&mut view, vec![]);
+            assert_eq!(
+                position(&after, title),
+                Some(heading),
+                "{title}: title stays outside scrolling content"
+            );
+            assert_ne!(
+                position(&after, field),
+                Some(initial_field),
+                "{title}: fields actually scroll"
+            );
+            assert_eq!(view.presented.as_ref().unwrap().document, document);
+        }
     }
 
     #[test]
@@ -6816,20 +7038,37 @@ mod tests {
         frame(&mut view, vec![]);
         // 8px top padding, 38px buttons and 2px gaps, as in shipping.
         let rail = |row: usize| egui::pos2(28., 27. + row as f32 * 40.);
+        view.select_layer(Some("capture-background".into()));
         click(&mut view, rail(2));
         assert_eq!(
             (view.section, view.draw_shape),
             (Section::Draw, DrawShape::Text)
         );
+        assert!(view.selected_layer.is_none(), "rail tools clear selection");
+        view.select_layer(Some("capture-background".into()));
+        click(&mut view, rail(2));
+        assert!(
+            view.selected_layer.is_none(),
+            "reactivating Text also clears selection"
+        );
+        view.select_layer(Some("capture-background".into()));
         click(&mut view, rail(1));
         assert!(view.crop_previous.is_some());
+        assert!(view.selected_layer.is_none(), "Crop clears selection");
         view.crop = [13., 21., 97., 53.];
         click(&mut view, rail(1));
         assert_eq!(view.crop, [13., 21., 97., 53.]);
+        view.select_layer(Some("capture-background".into()));
         click(&mut view, rail(0));
         assert_eq!(view.section, Section::Layers);
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "Select retains selection"
+        );
         assert!(view.crop_previous.is_none());
         click(&mut view, rail(3));
+        assert!(view.selected_layer.is_none(), "Shapes clears selection");
         assert!(egui::Popup::is_any_open(&ctx));
         frame(&mut view, vec![]);
         // The flyout opens 10px right of Shapes, centred on it: a 3×2 grid of
@@ -6921,8 +7160,10 @@ mod tests {
             (egui::Key::P, DrawShape::Freehand),
             (egui::Key::B, DrawShape::Wand),
         ] {
+            view.select_layer(Some("capture-background".into()));
             frame(&mut view, vec![key(code, egui::Modifiers::SHIFT)]);
             assert_eq!((view.section, view.draw_shape), (Section::Draw, shape));
+            assert!(view.selected_layer.is_none(), "{code:?} clears selection");
         }
         for shape in [DrawShape::Erase, DrawShape::Restore] {
             view.draw_shape = shape;
@@ -6934,7 +7175,12 @@ mod tests {
         frame(&mut view, vec![key(egui::Key::R, egui::Modifiers::NONE)]);
         let gesture = Some((Point { x: 13., y: 21. }, Point { x: 97., y: 53. }));
         view.shape_drag = gesture;
+        view.select_layer(Some("capture-background".into()));
         frame(&mut view, vec![key(egui::Key::R, egui::Modifiers::NONE)]);
+        assert!(
+            view.selected_layer.is_none(),
+            "reactivating Rectangle clears selection"
+        );
         assert_eq!(view.shape_drag, gesture);
         frame(&mut view, vec![key(egui::Key::C, egui::Modifiers::NONE)]);
         assert!(view.shape_drag.is_none());
@@ -6948,8 +7194,14 @@ mod tests {
             [13., 21., 97., 53.],
             "repeat does not cancel the crop candidate"
         );
+        view.select_layer(Some("capture-background".into()));
         frame(&mut view, vec![key(egui::Key::V, egui::Modifiers::NONE)]);
         assert_eq!(view.section, Section::Layers);
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "V retains selection"
+        );
         assert_eq!(view.crop, previous);
         assert!(view.crop_previous.is_none());
         for modifiers in [
@@ -6974,6 +7226,11 @@ mod tests {
         output.textures_delta.clear();
         frame(&mut view, vec![key(egui::Key::P, egui::Modifiers::NONE)]);
         assert_eq!(view.section, Section::Layers, "typing keeps its keys");
+        assert_eq!(
+            view.selected_layer.as_deref(),
+            Some("capture-background"),
+            "blocked tool keys retain selection"
+        );
         let mut output = ctx.run_ui(Default::default(), |ui| {
             ui.add(egui::Slider::new(&mut 50., 0.0..=100.0))
                 .request_focus();
@@ -6990,6 +7247,101 @@ mod tests {
             rx.try_recv().is_err(),
             "tool selection never submits document, draft or export work"
         );
+    }
+
+    #[test]
+    fn tool_and_layer_shortcuts_in_one_frame_follow_input_order() {
+        for key in [egui::Key::Delete, egui::Key::D, egui::Key::ArrowRight] {
+            for tool_first in [true, false] {
+                let ctx = egui::Context::default();
+                let (mut view, id) = covered_canvas_view(&ctx);
+                view.section = Section::Draw;
+                view.draw_shape = DrawShape::Arrow;
+                view.select_layer(Some(id.clone()));
+                let (tx, rx) = mpsc::channel();
+                let event = |key, modifiers| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                };
+                let tool = event(egui::Key::A, egui::Modifiers::NONE);
+                let action = event(
+                    key,
+                    if key == egui::Key::D {
+                        egui::Modifiers::CTRL
+                    } else {
+                        egui::Modifiers::NONE
+                    },
+                );
+                let events = if tool_first {
+                    vec![tool, action]
+                } else {
+                    vec![action, tool]
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |_| {
+                        handle_document_shortcuts(&ctx, &mut view, &tx);
+                        if ctx.current_pass_index() == 0 {
+                            ctx.request_discard("ordered keys");
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                if tool_first {
+                    assert!(view.selected_layer.is_none());
+                    assert!(
+                        !view.pending && rx.try_recv().is_err(),
+                        "{key:?} has no target after A"
+                    );
+                } else {
+                    assert!(view.pending, "{key:?} must act before A");
+                    let Ok(Job::Apply(request)) = rx.try_recv() else {
+                        panic!("missing layer action")
+                    };
+                    match (key, request) {
+                        (
+                            egui::Key::Delete,
+                            Request::Layer {
+                                id: target,
+                                edit: LayerEdit::Delete,
+                            },
+                        )
+                        | (
+                            egui::Key::D,
+                            Request::Layer {
+                                id: target,
+                                edit: LayerEdit::Duplicate { .. },
+                            },
+                        ) => assert_eq!(target, id),
+                        (
+                            egui::Key::ArrowRight,
+                            Request::Layer {
+                                id: target,
+                                edit: LayerEdit::Translate { delta_x, delta_y },
+                            },
+                        ) => {
+                            assert_eq!(target, id);
+                            assert_eq!((delta_x, delta_y), (1., 0.));
+                        }
+                        _ => panic!("wrong ordered layer action"),
+                    }
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "multipass must not repeat an action"
+                    );
+                }
+                assert_eq!(
+                    (view.section, view.draw_shape),
+                    (Section::Draw, DrawShape::Arrow)
+                );
+            }
+        }
     }
 
     #[test]
@@ -7345,6 +7697,102 @@ mod tests {
     }
 
     #[test]
+    fn comparison_controls_own_gestures_before_the_select_canvas() {
+        for appearance in ["light-mustard", "dark-mustard"] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let tokens = crate::tokens::load().remove(appearance).unwrap();
+            let mut view = View::default();
+            let mut value = presented(false);
+            value.document = Arc::new(Document::new_capture("compare", 640., 360., None));
+            value.pixels = Arc::new(RgbaImage::new(640, 360));
+            view.receive(&ctx, Ok(value));
+            let original = view.presented.as_ref().unwrap().document.clone();
+            view.export_settings_open = true;
+            view.export_options.quality = ExportQuality::Compress;
+            view.output = Some((view.texture.as_ref().unwrap().clone(), 500));
+            view.compare_pending = false;
+            view.compare_key = Some((view.pixels_revision, view.export_options));
+            let (tx, rx) = mpsc::channel();
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000., 1000.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, &tokens, view, &tx),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let control = |output: &egui::FullOutput, label: &str| {
+                let rect = output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some(label))
+                    .and_then(|(_, node)| node.bounds())
+                    .unwrap_or_else(|| panic!("missing comparison control: {label}"));
+                egui::pos2(
+                    ((rect.x0 + rect.x1) / 2.) as f32,
+                    ((rect.y0 + rect.y1) / 2.) as f32,
+                )
+            };
+            let press = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut view, vec![]);
+            let output = frame(&mut view, vec![]);
+            let handle = control(&output, compare::HANDLE_LABEL);
+            let preview = fitted_image_rect(view.viewport_area.unwrap(), egui::vec2(640., 360.));
+            let end = egui::pos2(preview.left() + preview.width() * 0.25, handle.y);
+            frame(&mut view, vec![egui::Event::PointerMoved(handle)]);
+            frame(&mut view, vec![press(handle, true)]);
+            assert!(
+                view.layer_gesture.is_none(),
+                "{appearance}: split press must not select"
+            );
+            assert!(!view.compare_suppressed());
+            frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+            frame(&mut view, vec![press(end, false)]);
+            assert!((view.compare_split - 0.25).abs() < 1e-6);
+
+            // A complete click in one frame also belongs only to the overlay.
+            let output = frame(&mut view, vec![]);
+            let range = control(&output, compare::RANGE_LABEL);
+            frame(&mut view, vec![egui::Event::PointerMoved(range)]);
+            frame(&mut view, vec![press(range, true), press(range, false)]);
+            assert!((view.compare_split - 0.5).abs() < 1e-6);
+            let output = frame(&mut view, vec![]);
+            let dismiss = control(&output, compare::DISMISS_LABEL);
+            frame(&mut view, vec![egui::Event::PointerMoved(dismiss)]);
+            frame(&mut view, vec![press(dismiss, true), press(dismiss, false)]);
+            assert!(view.compare_dismissed);
+            assert!(view.selected_layer.is_none() && view.layer_gesture.is_none());
+            assert_eq!(view.presented.as_ref().unwrap().document, original);
+            assert!(rx.try_recv().is_err() && !view.pending);
+
+            // The ordinary canvas still starts a Select gesture away from chrome.
+            view.compare_dismissed = false;
+            frame(&mut view, vec![]);
+            let canvas = preview.min + egui::vec2(30., 40.);
+            frame(&mut view, vec![egui::Event::PointerMoved(canvas)]);
+            frame(&mut view, vec![press(canvas, true)]);
+            assert!(view.layer_gesture.is_some() && view.compare_suppressed());
+        }
+    }
+
+    #[test]
     fn comparison_hide_show_and_quality_modes_follow_the_shipping_export_bar() {
         let ctx = egui::Context::default();
         let mut view = View::default();
@@ -7660,6 +8108,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut view = View::default();
         view.receive(&ctx, Ok(presented(false)));
+        view.select_layer_exact(Some("capture-background".into()));
         view.section = Section::Draw;
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
         view.last_solid_background = "#123456".into();
@@ -7779,6 +8228,7 @@ mod tests {
         image.base.visible = false;
         let original_id = image.base.id.clone();
         view.receive(&ctx, Ok(initial));
+        view.select_layer_exact(Some(original_id.clone()));
         let (tx, rx) = mpsc::channel();
         let key = |key, ctrl| egui::Event::Key {
             key,
@@ -7827,10 +8277,17 @@ mod tests {
         );
         assert!(rx.try_recv().is_err(), "typing must not edit a layer");
         frame(&mut view, vec![], false);
+        frame(&mut view, vec![key(egui::Key::D, false)], false);
+        assert_eq!(
+            view.draw_shape,
+            DrawShape::Diamond,
+            "plain D selects a tool"
+        );
+        assert!(view.selected_layer.is_none() && rx.try_recv().is_err());
+        view.select_layer_exact(Some(original_id.clone()));
         frame(
             &mut view,
             vec![
-                key(egui::Key::D, false),
                 key(egui::Key::Delete, false),
                 key(egui::Key::Backspace, false),
                 key(egui::Key::ArrowUp, false),
@@ -7839,7 +8296,7 @@ mod tests {
         );
         assert!(
             rx.try_recv().is_err(),
-            "plain D and locked deletion do nothing"
+            "locked deletion and movement do nothing"
         );
         frame(
             &mut view,
@@ -8369,6 +8826,37 @@ mod tests {
         assert_eq!(view.last_solid_background, "#ff3b5c");
     }
 
+    #[test]
+    fn opening_and_refreshing_do_not_invent_a_layer_selection() {
+        let ctx = egui::Context::default();
+        for has_draft in [false, true] {
+            let mut view = View::default();
+            let mut initial = presented(false);
+            initial.has_draft = has_draft;
+            view.receive(&ctx, Ok(initial));
+            assert_eq!(view.section, Section::Layers, "Select is the initial tool");
+            assert!(view.selected_layer.is_none());
+            view.receive(&ctx, Ok(presented(false)));
+            assert!(
+                view.selected_layer.is_none(),
+                "a refresh keeps the empty selection"
+            );
+            view.select_layer_exact(Some("capture-background".into()));
+            view.receive(&ctx, Ok(presented(false)));
+            assert_eq!(view.selected_layer.as_deref(), Some("capture-background"));
+            view.select_layer_exact(None);
+            view.receive(&ctx, Ok(presented(false)));
+            assert!(
+                view.selected_layer.is_none(),
+                "a refresh does not undo deselection"
+            );
+            let mut created = presented_text("new-text", "Hello");
+            created.created_layer = Some("new-text".into());
+            view.receive(&ctx, Ok(created));
+            assert_eq!(view.selected_layer.as_deref(), Some("new-text"));
+        }
+    }
+
     pub(super) fn presented(unsaved: bool) -> Presented {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
@@ -8889,6 +9377,137 @@ mod tests {
     }
 
     #[test]
+    fn selected_draw_properties_edit_the_layer_not_creation_defaults() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (mut view, id) = covered_canvas_view(&ctx);
+        view.section = Section::Draw;
+        view.draw_shape = DrawShape::Arrow;
+        view.select_layer(Some(id.clone()));
+        let defaults = view.new_annotation_style.clone();
+        let (tx, rx) = mpsc::channel();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 1600.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Shift rotation snap"))
+        );
+        let bounds = nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("Fill color: #2d9cff"))
+            .and_then(|(_, node)| node.bounds())
+            .expect("selected-layer color control");
+        let blue = egui::pos2(
+            ((bounds.x0 + bounds.x1) / 2.) as f32,
+            ((bounds.y0 + bounds.y1) / 2.) as f32,
+        );
+        assert_eq!(
+            (view.section, view.properties_section()),
+            (Section::Draw, Section::Layers)
+        );
+        assert!(rx.try_recv().is_err(), "showing Properties is not an edit");
+        frame(&mut view, vec![egui::Event::PointerMoved(blue)]);
+        for pressed in [true, false] {
+            frame(
+                &mut view,
+                vec![egui::Event::PointerButton {
+                    pos: blue,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
+            panic!("selected swatch applies live")
+        };
+        assert_eq!(key, format!("style:{id}:fill-color"));
+        assert!(
+            matches!(*request, Request::Layer { id: target, edit: LayerEdit::AnnotationStyle { patch } }
+            if target == id && patch.fill == OptionalNullable::Value("#2d9cff".into()))
+        );
+        assert_eq!(view.new_annotation_style, defaults);
+        assert_eq!(
+            (view.section, view.draw_shape),
+            (Section::Draw, DrawShape::Arrow)
+        );
+        view.pending = false; // No worker runs in this detached View fixture.
+        view.activate_tool(Section::Draw, Some(DrawShape::Arrow));
+        frame(&mut view, vec![]);
+        let output = frame(&mut view, vec![]);
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        assert!(
+            !nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Shift rotation snap"))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Color: #2d9cff"))
+        );
+        assert_eq!(view.properties_section(), Section::Draw);
+        assert!(rx.try_recv().is_err());
+
+        for (tool, title) in [(DrawShape::Text, "Text"), (DrawShape::Freehand, "Freehand")] {
+            view.activate_tool(Section::Draw, Some(tool));
+            view.select_layer(Some(id.clone()));
+            frame(&mut view, vec![]);
+            let output = frame(&mut view, vec![]);
+            let nodes = &output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes;
+            assert!(
+                !nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Shift rotation snap"))
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Fill color: #2d9cff")),
+                "selected style controls stay present with {title} active"
+            );
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == title)));
+            assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+            assert_eq!(view.new_annotation_style, defaults);
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
     fn annotation_stroke_color_uses_shared_swatches_and_applies_live() {
         let ctx = egui::Context::default();
         let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
@@ -9075,6 +9694,7 @@ mod tests {
             .edit_layer(&id, LayerEdit::Visibility { visible: false })
             .unwrap();
         view.receive(&ctx, Ok(value));
+        view.select_layer_exact(Some(id.clone()));
         assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
         let pixels = view.presented.as_ref().unwrap().pixels.clone();
         view.annotation.as_mut().unwrap().style.fill = Some("bad color".into());
@@ -11142,7 +11762,7 @@ mod tests {
         assert!(view.receive_import(&jobs));
         assert!(
             matches!(queued.recv().unwrap(), Job::Import { path, selected_id, point: None }
-            if path == Path::new("photo.png") && selected_id.as_deref() == Some("capture-background"))
+            if path == Path::new("photo.png") && selected_id.is_none())
         );
         assert!(view.pending && view.import_picker.is_none());
         assert!(Arc::ptr_eq(
@@ -11563,6 +12183,7 @@ mod tests {
             )
             .unwrap();
         view.receive(&ctx, Ok(value));
+        view.select_layer_exact(Some("copy".into()));
         assert_eq!(view.selected_layer.as_deref(), Some("copy"));
         assert_eq!(view.layer_geometry, [7., 3., 24., 24.]);
         let (tx, rx) = mpsc::channel();
@@ -11807,12 +12428,228 @@ mod tests {
                 );
                 let tokens = crate::tokens::load().into_values().next().unwrap();
                 canvas::receive_drops(ctx, view, Some(preview));
-                show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview, false);
+                let owned = view.shape_drag.is_none()
+                    && show_layer_canvas(&mut ui, &tokens, view, tx, screen, preview, false);
+                if view.section == Section::Draw && !view.pending {
+                    show_shape(&mut ui, &tokens, view, tx, screen, preview, owned);
+                }
                 canvas::show_expand(&mut ui, &tokens, view, tx, screen, preview);
                 canvas::paint_drop_guide(&ui, &tokens, view, screen, preview);
             },
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn active_shape_handles_and_body_own_the_whole_gesture_but_empty_space_draws() {
+        for action in ["click", "resize", "rotate", "move", "draw", "cancel"] {
+            let ctx = egui::Context::default();
+            let (mut view, _) = canvas_view(
+                &ctx,
+                Point { x: 20., y: 50. },
+                Point { x: 180., y: 50. },
+                OpenShapeKind::Line,
+            );
+            let document = Arc::make_mut(&mut view.presented.as_mut().unwrap().document);
+            document.elements.pop();
+            let id = document
+                .create_closed_shape(ClosedShapeCreate {
+                    shape: ClosedShapeKind::Rectangle,
+                    start: Point { x: 20., y: 20. },
+                    end: Point { x: 100., y: 70. },
+                    style: ElementStyle::default(),
+                    opacity: 100.,
+                })
+                .unwrap();
+            let outline = document
+                .elements
+                .last()
+                .unwrap()
+                .selection_outline()
+                .unwrap();
+            view.section = Section::Draw;
+            view.draw_shape = DrawShape::Rectangle;
+            view.select_layer_exact(Some(id.clone()));
+            let (tx, rx) = mpsc::channel();
+            let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+            let project =
+                |point: Point| egui::pos2(100. + point.x as f32 / 2., 100. + point.y as f32 / 2.);
+            let start = project(match action {
+                "move" => Point { x: 60., y: 45. },
+                "draw" => Point { x: 180., y: 85. },
+                "rotate" => {
+                    rotation_handle(outline, 0., 0.5, 200., 100.)
+                        .unwrap()
+                        .handle
+                }
+                _ => outline[0],
+            });
+            // A new drawing crosses the old selected body; hover cannot steal it.
+            let end = if action == "draw" {
+                project(Point { x: 60., y: 45. })
+            } else {
+                start + egui::vec2(23., 7.)
+            };
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let frame = |view: &mut View, events| {
+                run_canvas(
+                    &ctx,
+                    view,
+                    &tx,
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    preview,
+                )
+            };
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![egui::Event::PointerMoved(start)]);
+            if action == "click" {
+                frame(&mut view, vec![button(start, true), button(start, false)]);
+                assert!(rx.try_recv().is_err() && !view.pending && view.shape_drag.is_none());
+                assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
+                continue;
+            }
+            frame(&mut view, vec![button(start, true)]);
+            frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+            if action == "draw" {
+                assert_eq!(
+                    view.shape_drag,
+                    Some((Point { x: 180., y: 85. }, Point { x: 60., y: 45. }))
+                );
+                assert!(view.layer_gesture.is_none());
+            }
+            assert!(rx.try_recv().is_err(), "{action}: only release commits");
+            if action == "cancel" {
+                frame(
+                    &mut view,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(
+                &mut view,
+                vec![button(end, false), egui::Event::PointerMoved(start)],
+            );
+            if action == "cancel" {
+                assert!(rx.try_recv().is_err() && !view.pending);
+            } else {
+                let job = rx.try_recv().expect(action);
+                match (action, job) {
+                    (
+                        "resize",
+                        Job::Apply(Request::Layer {
+                            id: target,
+                            edit:
+                                LayerEdit::Resize {
+                                    handle: ResizeHandle::Nw,
+                                    current,
+                                    ..
+                                },
+                        }),
+                    ) => {
+                        assert_eq!(target, id);
+                        assert!((current.x - (outline[0].x + 46.)).abs() < 1e-12);
+                        assert!((current.y - (outline[0].y + 14.)).abs() < 1e-12);
+                    }
+                    (
+                        "rotate",
+                        Job::Apply(Request::Layer {
+                            id: target,
+                            edit: LayerEdit::Rotate { radians },
+                        }),
+                    ) => {
+                        assert_eq!(target, id);
+                        assert_ne!(radians, 0.);
+                    }
+                    (
+                        "move",
+                        Job::Apply(Request::Layer {
+                            id: target,
+                            edit:
+                                LayerEdit::DragMove {
+                                    delta_x,
+                                    delta_y,
+                                    display_scale,
+                                },
+                        }),
+                    ) => {
+                        assert_eq!(target, id);
+                        assert_eq!((delta_x, delta_y, display_scale), (46., 14., 0.5));
+                    }
+                    ("draw", Job::Apply(Request::CreateClosedShape { create })) => {
+                        assert_eq!(create.shape, ClosedShapeKind::Rectangle);
+                        assert_eq!(create.start, Point { x: 180., y: 85. });
+                        assert_eq!(create.end, Point { x: 60., y: 45. });
+                        assert!(view.selected_layer.is_none());
+                    }
+                    _ => panic!("{action}: wrong gesture owner"),
+                }
+                assert!(rx.try_recv().is_err(), "{action}: exactly one request");
+            }
+            assert_eq!(
+                (view.section, view.draw_shape),
+                (Section::Draw, DrawShape::Rectangle)
+            );
+            assert!(view.layer_gesture.is_none() && view.shape_drag.is_none());
+        }
+        for (kind, tool) in [
+            (OpenShapeKind::Line, DrawShape::Line),
+            (OpenShapeKind::Arrow, DrawShape::Arrow),
+        ] {
+            let ctx = egui::Context::default();
+            let (mut view, id) = canvas_view(
+                &ctx,
+                Point { x: 20., y: 50. },
+                Point { x: 180., y: 50. },
+                kind,
+            );
+            view.section = Section::Draw;
+            view.draw_shape = tool;
+            let (tx, rx) = mpsc::channel();
+            let preview = egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+            let start = egui::pos2(150., 125.);
+            let end = egui::pos2(150., 140.);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            for events in [
+                vec![],
+                vec![egui::Event::PointerMoved(start), button(start, true)],
+                vec![egui::Event::PointerMoved(end)],
+                vec![button(end, false)],
+            ] {
+                run_canvas(
+                    &ctx,
+                    &mut view,
+                    &tx,
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    preview,
+                );
+            }
+            assert!(
+                matches!(rx.try_recv(), Ok(Job::Apply(Request::Layer { id: target, edit: LayerEdit::Curve { edit: captures_app::editor_canvas::CurveEdit::Move { handle: captures_app::editor_canvas::CurveHandle::StarterControl { index: 1 }, point } } })) if target == id && point == Point { x: 100., y: 80. })
+            );
+            assert!(rx.try_recv().is_err() && view.shape_drag.is_none());
+            assert_eq!((view.section, view.draw_shape), (Section::Draw, tool));
+        }
     }
 
     #[test]
@@ -11936,6 +12773,218 @@ mod tests {
             egui::Color32::TRANSPARENT,
             "clipped to a circle"
         );
+    }
+
+    #[test]
+    fn locked_curve_inspector_submits_bend_and_straighten_without_canvas_handles() {
+        use captures_app::editor_canvas::CurveEdit;
+        for kind in [OpenShapeKind::Line, OpenShapeKind::Arrow] {
+            for multipoint in [false, true] {
+                let ctx = egui::Context::default();
+                ctx.enable_accesskit();
+                let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+                let (mut view, id) = canvas_view(
+                    &ctx,
+                    Point { x: 20., y: 50. },
+                    Point { x: 180., y: 50. },
+                    kind,
+                );
+                let document = Arc::make_mut(&mut view.presented.as_mut().unwrap().document);
+                let Element::Shape(shape) = document.elements.last_mut().unwrap() else {
+                    panic!()
+                };
+                shape.base.locked = true;
+                if multipoint {
+                    shape.controls = vec![Point { x: 60., y: 75. }, Point { x: 130., y: 25. }];
+                }
+                let label = if multipoint {
+                    captures_app::editor_canvas::straighten_label(shape)
+                } else {
+                    "Curve"
+                };
+                let document = document.clone();
+                assert!(
+                    canvas::selected_curve(&view).is_none(),
+                    "lock still hides canvas dots"
+                );
+                let (tx, rx) = mpsc::channel();
+                assert!(!canvas::double_click(
+                    &mut view,
+                    &tx,
+                    &document,
+                    Point { x: 100., y: 50. },
+                    6.
+                ));
+                let frame = |view: &mut View, events| {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(320., 1600.),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| show_layer_properties(ui, &tokens, view, &tx),
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                frame(&mut view, vec![]);
+                let output = frame(&mut view, vec![]);
+                let node = &output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some(label))
+                    .expect("locked curve property stays present")
+                    .1;
+                assert!(!node.is_disabled());
+                let bounds = node.bounds().unwrap();
+                let pos = egui::pos2(
+                    ((bounds.x0 + bounds.x1) / 2.) as f32,
+                    ((bounds.y0 + bounds.y1) / 2.) as f32,
+                );
+                assert!(
+                    rx.try_recv().is_err(),
+                    "showing locked Properties is not an edit"
+                );
+                frame(&mut view, vec![egui::Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    frame(
+                        &mut view,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                }
+                if !multipoint {
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "clicking the zero midpoint is not an edit"
+                    );
+                    frame(
+                        &mut view,
+                        vec![egui::Event::Key {
+                            key: egui::Key::End,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                }
+                let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
+                    panic!("locked inspector applies one curve edit")
+                };
+                let Request::Layer {
+                    id: target,
+                    edit: LayerEdit::Curve { edit },
+                } = *request
+                else {
+                    panic!("curve property")
+                };
+                assert!(key.starts_with(&format!("curve:{id}:once:")));
+                assert_eq!(target, id);
+                assert_eq!(
+                    edit,
+                    if multipoint {
+                        CurveEdit::Straighten
+                    } else {
+                        CurveEdit::Bend { bend: 1. }
+                    }
+                );
+                assert!(rx.try_recv().is_err());
+                assert_eq!(view.pending_layer_selection.as_deref(), Some(id.as_str()));
+                assert!(canvas::selected_curve(&view).is_none());
+                if !multipoint {
+                    let focus = ctx
+                        .memory(|memory| memory.focused())
+                        .expect("Curve holds keyboard focus");
+                    for (keys, expected) in [
+                        (vec![egui::Key::Home; 2], -100.),
+                        (vec![egui::Key::End], 100.),
+                        (vec![egui::Key::PageDown; 10], 0.),
+                        (vec![egui::Key::ArrowLeft, egui::Key::ArrowRight], 0.),
+                    ] {
+                        frame(
+                            &mut view,
+                            keys.into_iter()
+                                .map(|key| egui::Event::Key {
+                                    key,
+                                    physical_key: None,
+                                    pressed: true,
+                                    repeat: false,
+                                    modifiers: egui::Modifiers::NONE,
+                                })
+                                .collect(),
+                        );
+                        assert_eq!(ctx.memory(|memory| memory.focused()), Some(focus));
+                        assert_eq!(view.curve_bend, Some((id.clone(), expected)));
+                    }
+                    assert_eq!(
+                        view.live_queue.len(),
+                        14,
+                        "same-frame changes wait separately, even a zero-net pair; clamped no-ops don't"
+                    );
+                    let mut document = (*view.presented.as_ref().unwrap().document).clone();
+                    let mut keys = vec![key];
+                    let bends = [
+                        1., -1., 1., 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0., -0.01, 0.,
+                    ];
+                    for (index, bend) in bends.iter().copied().enumerate() {
+                        document
+                            .edit_layer(
+                                &id,
+                                LayerEdit::Curve {
+                                    edit: CurveEdit::Bend { bend },
+                                },
+                            )
+                            .unwrap();
+                        let mut accepted = presented(false);
+                        accepted.document = Arc::new(document.clone());
+                        accepted.pixels = Arc::new(RgbaImage::new(200, 100));
+                        view.receive(&ctx, Ok(accepted));
+                        if let Some(expected) = bends.get(index + 1) {
+                            assert_eq!(
+                                view.curve_bend,
+                                Some((id.clone(), 0.)),
+                                "older receipts cannot reset later keys"
+                            );
+                            view.flush_live(&tx);
+                            let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv()
+                            else {
+                                panic!("queued key")
+                            };
+                            let Request::Layer {
+                                id: target,
+                                edit:
+                                    LayerEdit::Curve {
+                                        edit: CurveEdit::Bend { bend: next },
+                                    },
+                            } = *request
+                            else {
+                                panic!("queued curve")
+                            };
+                            assert_eq!(target, id);
+                            assert_eq!(next, *expected);
+                            assert!(!keys.contains(&key), "each key is its own undo step");
+                            keys.push(key);
+                        }
+                    }
+                    assert!(view.curve_bend.is_none());
+                    assert!(view.live_queue.is_empty() && rx.try_recv().is_err());
+                    frame(&mut view, vec![]);
+                    assert_eq!(ctx.memory(|memory| memory.focused()), Some(focus));
+                }
+            }
+        }
     }
 
     #[test]

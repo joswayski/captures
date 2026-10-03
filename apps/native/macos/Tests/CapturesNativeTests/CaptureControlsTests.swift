@@ -236,6 +236,21 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertTrue(confirmed.isEmpty)
     }
 
+    func testCloseUsesSharedIconAndStillCancels() throws {
+        _ = NSApplication.shared
+        var cancelled = 0
+        let view = makeView(cancel: { cancelled += 1 })
+        let close = try XCTUnwrap(buttons(in: view.controls).first {
+            $0.accessibilityLabel() == "Close capture controls"
+        })
+        XCTAssertTrue(close.iconOnly)
+        XCTAssertEqual(close.iconSide, 15)
+        if case .shipping(let name)? = close.icon { XCTAssertEqual(name, "close") }
+        else { XCTFail("close uses the shared vector rather than a font glyph") }
+        close.performClick(nil)
+        XCTAssertEqual(cancelled, 1)
+    }
+
     func testEnterEscapeAndAutoStartRespectSelectionBoundaries() throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: frame, styleMask: [.borderless],

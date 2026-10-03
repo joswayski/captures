@@ -79,7 +79,8 @@ enum ShippingIcons {
     /// Stroke a named icon into `rect`, round strokes
     /// `width` units wide (1.8 unless the shipping CSS sets another).
     static func stroke(_ name: String, in rect: NSRect, width: CGFloat = 1.8, flipped: Bool = true) {
-        for line in polylines(name) where line.count > 1 {
+        let lines = polylines(name)
+        for (index, line) in lines.enumerated() where line.count > 1 {
             let path = NSBezierPath()
             path.lineWidth = width * rect.width / 24
             path.lineCapStyle = .round; path.lineJoinStyle = .round
@@ -89,7 +90,9 @@ enum ShippingIcons {
                                                 : rect.maxY - point.y * rect.height / 24)
                 if index == 0 { path.move(to: mapped) } else { path.line(to: mapped) }
             }
-            path.stroke()
+            // `.capture-icon-spark` is filled, unlike the viewfinder corners.
+            if name == "capture" && index == lines.count - 1 { path.fill() }
+            else { path.stroke() }
         }
     }
 }
@@ -801,9 +804,47 @@ enum BusyCaptureOutcome: Equatable {
     case inProgress(message: String)
 }
 
+/// Use the shipping product asset and macos_tray_icon's foreground selection.
+/// Core Graphics resamples the PNG; no system-symbol substitution or separate artwork.
+func statusItemTemplate(source: NSImage) -> NSImage? {
+    let size = NSSize(width: 22, height: 22)
+    guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 22, pixelsHigh: 22,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bitmapFormat: .alphaNonpremultiplied,
+        bytesPerRow: 22 * 4, bitsPerPixel: 32),
+        let pixels = bitmap.bitmapData,
+        let image = source.cgImage(forProposedRect: nil, context: nil, hints: nil),
+        let context = CGContext(data: pixels, width: 22, height: 22, bitsPerComponent: 8,
+            bytesPerRow: bitmap.bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+    context.interpolationQuality = .high
+    context.draw(image, in: CGRect(origin: .zero, size: size))
+    // CGContext writes premultiplied RGBA. Classify straight RGB, not RGB *
+    // alpha, or a translucent white edge is mistaken for dark background.
+    // Then write straight-alpha white/clear pixels for the NSBitmapImageRep.
+    for y in 0..<22 {
+        for x in 0..<22 {
+            let offset = y * bitmap.bytesPerRow + x * 4
+            let alpha = Int(pixels[offset + 3])
+            let rgb = (0..<3).map { alpha == 0 ? 0 : Int(pixels[offset + $0]) * 255 / alpha }
+            let minimum = min(rgb[0], rgb[1], rgb[2])
+            let maximum = max(rgb[0], rgb[1], rgb[2])
+            let foreground = alpha > 0 && minimum >= 180 && maximum - minimum <= 55
+            for channel in 0..<3 { pixels[offset + channel] = foreground ? 255 : 0 }
+            if !foreground { pixels[offset + 3] = 0 }
+        }
+    }
+    let template = NSImage(size: size)
+    template.addRepresentation(bitmap)
+    template.isTemplate = true
+    template.accessibilityDescription = "Captures"
+    return template
+}
+
 func configureStatusItemButton(_ button: NSStatusBarButton) {
-    if let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Captures") {
-        image.isTemplate = true
+    if let url = NativeResources.bundle.url(forResource: "tray-source", withExtension: "png"),
+       let source = NSImage(contentsOf: url), let image = statusItemTemplate(source: source) {
         button.image = image
     } else {
         button.title = "C"

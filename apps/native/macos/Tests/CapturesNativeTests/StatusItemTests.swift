@@ -64,14 +64,58 @@ final class StatusItemTests: XCTestCase {
         withExtendedLifetime(handler) {}
     }
 
-    func testStatusItemUsesNativeTemplateIconAndCanEmitPixelEvidence() throws {
+    func testStatusTemplateKeepsOnlyLightNeutralForegroundAndItsAlpha() throws {
+        _ = NSApplication.shared
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: 22, pixelsHigh: 22, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bitmapFormat: .alphaNonpremultiplied, bytesPerRow: 22 * 4, bitsPerPixel: 32))
+        let input = try XCTUnwrap(bitmap.bitmapData)
+        for y in 0..<22 {
+            for x in 0..<22 {
+                // Explicit straight RGBA avoids NSBitmapImageRep.setColor's unsupported
+                // grayscale-to-RGB conversion on the macOS 26 test runner.
+                let rgba: [UInt8] = x < 6 ? [0, 0, 0, 255]
+                    : x < 11 ? [255, 255, 255, y < 11 ? 128 : 64]
+                    : x < 16 ? [255, 0, 0, 255] : [173, 173, 173, 255]
+                let offset = y * bitmap.bytesPerRow + x * 4
+                for channel in 0..<4 { input[offset + channel] = rgba[channel] }
+            }
+        }
+        // Verify the fixture before invoking the conversion under test.
+        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 8, y: 10)).alphaComponent, 0.5, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 8, y: 16)).alphaComponent, 0.25, accuracy: 0.01)
+        let source = NSImage(size: NSSize(width: 22, height: 22))
+        source.addRepresentation(bitmap)
+        let template = try XCTUnwrap(statusItemTemplate(source: source))
+        let pixels = try XCTUnwrap(template.representations.first as? NSBitmapImageRep)
+        for x in [2, 13, 19] {
+            XCTAssertEqual(try XCTUnwrap(pixels.colorAt(x: x, y: 10)).alphaComponent, 0,
+                           "dark background, saturated color and sub-threshold gray are transparent")
+        }
+        let foreground = try XCTUnwrap(pixels.colorAt(x: 8, y: 10)?.usingColorSpace(.deviceRGB))
+        XCTAssertEqual(foreground.alphaComponent, 0.5, accuracy: 0.01)
+        XCTAssertEqual(foreground.redComponent, 1, accuracy: 0.01)
+        let faint = try XCTUnwrap(pixels.colorAt(x: 8, y: 16)?.usingColorSpace(.deviceRGB))
+        XCTAssertEqual(faint.alphaComponent, 0.25, accuracy: 0.01)
+        XCTAssertEqual(faint.redComponent, 1, accuracy: 0.01)
+        XCTAssertTrue(template.isTemplate)
+    }
+
+    func testStatusItemUsesProductTemplateIconAndCanEmitPixelEvidence() throws {
         _ = NSApplication.shared
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         defer { NSStatusBar.system.removeStatusItem(item) }
         let button = try XCTUnwrap(item.button)
         configureStatusItemButton(button)
         XCTAssertEqual(button.accessibilityLabel(), "Captures")
-        XCTAssertTrue(button.image?.isTemplate == true || button.title == "C")
+        let image = try XCTUnwrap(button.image, "the product resource must load, not use the fallback")
+        XCTAssertTrue(image.isTemplate)
+        XCTAssertEqual(image.size, NSSize(width: 22, height: 22))
+        let pixels = try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
+        XCTAssertEqual(try XCTUnwrap(pixels.colorAt(x: 0, y: 0)).alphaComponent, 0)
+        XCTAssertGreaterThan(try XCTUnwrap(pixels.colorAt(x: 11, y: 11)).alphaComponent, 0,
+                             "the product's central spark is present")
 
         guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
         button.layoutSubtreeIfNeeded()

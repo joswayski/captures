@@ -51,6 +51,17 @@ fn split_x(frame: Rect, split: f64) -> f32 {
     frame.left() + frame.width() * compare::clamp_split(split) as f32
 }
 
+/// Whether comparison chrome owns this frame's press, drag or release.
+/// Read the registered widget responses before handling raw canvas events,
+/// which otherwise bypass egui's same-layer widget hit tests.
+pub fn owns_pointer(ctx: &egui::Context, id: egui::Id) -> bool {
+    ["handle", "range", "dismiss"].into_iter().any(|control| {
+        ctx.read_response(id.with(control)).is_some_and(|response| {
+            response.is_pointer_button_down_on() || response.clicked() || response.drag_stopped()
+        })
+    })
+}
+
 /// Paint the encoded After image right of the divider. Call this right after
 /// the Before media so editor overlays (selection, crop) stay above it.
 pub fn paint_after(

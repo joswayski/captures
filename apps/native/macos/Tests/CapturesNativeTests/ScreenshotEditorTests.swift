@@ -65,10 +65,32 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(controller.window.isVisible)
     }
 
+    func testFreshAndRestoredEditorsStartWithoutSelectingALayer() throws {
+        _ = NSApplication.shared
+        for draft in [false, true] {
+            let image = layer(id: "base", name: "Base", x: 0, y: 0,
+                              visible: true, locked: false, opacity: 100)
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", draft: draft, layers: [image]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            let layers = try table("Screenshot layers", in: controller.root)
+            XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 1,
+                           "Select is the initial tool")
+            XCTAssertEqual(layers.selectedRow, -1)
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "base")
+            XCTAssertTrue(worker.requests.isEmpty, "selection is UI state, not a document edit")
+        }
+    }
+
     func testToolRailSelectionMenuFocusBusyGatesAndMinimumLayout() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
-            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            let base = layer(id: "base", name: "Base", x: 0, y: 0,
+                             visible: true, locked: true, opacity: 100)
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [base]))
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
                 worker: worker, writeClipboard: { _ in true })
             defer { controller.window.orderOut(nil) }
@@ -102,12 +124,21 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(rail[0].frame.minY, 52 + 8)
             XCTAssertEqual(rail[1].frame.minY - rail[0].frame.minY, 40, "38pt buttons with 2pt gaps")
             let sections = try segmented("Editor section", in: controller.root)
+            let layers = try table("Screenshot layers", in: controller.root)
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            rail[0].performClick(nil)
+            XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "base", "Select retains selection")
             rail[2].performClick(nil)
+            XCTAssertEqual(layers.selectedRow, -1, "Text clears selection")
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
             XCTAssertEqual(sections.selectedSegment, 2)
             XCTAssertEqual(controller.drawOverlay.shape, .text)
             XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
             XCTAssertTrue(rail[2].selected)
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             rail[1].performClick(nil)
+            XCTAssertEqual(layers.selectedRow, -1, "Crop clears selection")
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
             XCTAssertTrue(controller.cropOverlay.croppingEnabled)
             XCTAssertTrue(rail[1].selected)
             rail[0].performClick(nil)
@@ -165,20 +196,27 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testToolKeysSelectExistingToolsPreserveRepeatsAndCancelUnfinishedGestures() throws {
         _ = NSApplication.shared
-        let original = snapshot(id: "shot", unsaved: true, draft: true)
+        let base = layer(id: "base", name: "Base", x: 0, y: 0,
+                         visible: true, locked: true, opacity: 100)
+        let original = snapshot(id: "shot", unsaved: true, draft: true, layers: [base])
         let worker = FakeEditorWorker(snapshot: original)
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         controller.window.makeFirstResponder(nil)
         let sections = try segmented("Editor section", in: controller.root)
+        let layers = try table("Screenshot layers", in: controller.root)
         for (key, shape) in [("T", EditorDrawOverlay.Shape.text), ("r", .rectangle),
                              ("o", .ellipse), ("l", .line), ("d", .diamond), ("s", .star),
                              ("a", .arrow), ("p", .pen), ("b", .wand)] {
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            controller.window.makeFirstResponder(nil)
             controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 0, characters: key))
             XCTAssertEqual(sections.selectedSegment, 2)
             XCTAssertEqual(controller.drawOverlay.shape, shape)
             XCTAssertTrue(controller.drawOverlay.drawingEnabled)
+            XCTAssertEqual(layers.selectedRow, -1, "\(key) clears selection")
+            XCTAssertNil(controller.selectionOverlay.selectedLayerID)
         }
         // The rail alone picks tools; Eraser offers shipping's mode group.
         XCTAssertFalse(descendants(in: controller.root).contains {
@@ -227,6 +265,7 @@ final class ScreenshotEditorTests: XCTestCase {
             worker: worker, writeClipboard: { _ in true })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showGeometry(in: controller.root)
         let sections = try segmented("Editor section", in: controller.root)
         let canvasWidth = try field("Canvas width", in: controller.root)
         XCTAssertTrue(controller.window.makeFirstResponder(canvasWidth))
@@ -844,12 +883,15 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-export-bar-pending-\(appearance)")
             worker.completePendingEncode()
             XCTAssertEqual(copies, 1)
-            XCTAssertEqual(copy.title, "✓ Copied"); XCTAssertEqual(copy.accessibilityLabel(), "Copied")
+            XCTAssertEqual(copy.title, "Copied"); XCTAssertEqual(copy.accessibilityLabel(), "Copied")
+            if case .shipping(let name)? = copy.icon { XCTAssertEqual(name, "check") }
+            else { XCTFail("copy confirmation uses the shared check icon") }
             XCTAssertTrue(copy.isEnabled); XCTAssertTrue(save.isEnabled)
             try render(controller.root, name: "screenshot-editor-export-bar-copied-\(appearance)")
             waitUntil(timeout: ScreenshotEditorController.exportConfirmationDuration + 2) {
                 copy.title == "Copy image"
             }
+            XCTAssertNil(copy.icon)
             XCTAssertTrue(worker.requests.isEmpty)
         }
     }
@@ -879,9 +921,13 @@ final class ScreenshotEditorTests: XCTestCase {
             let panel = try XCTUnwrap(descendants(in: controller.root).first {
                 !($0 is CaptureButton) && $0.accessibilityLabel() == "Export settings" })
             XCTAssertTrue(panel.isHidden)
+            let chevron = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorExportChevron }.first)
+            XCTAssertEqual(chevron.glyph, "editor-chevron-down")
+            XCTAssertNil(chevron.hitTest(.zero), "the disclosure owns icon clicks")
             try showOutput(in: controller.root)
             XCTAssertFalse(panel.isHidden)
             XCTAssertTrue(controller.exportSettingsOpen)
+            XCTAssertEqual(chevron.glyph, "editor-chevron-up")
             XCTAssertEqual(controller.exportBarHeight, 208)
             XCTAssertTrue(labels(in: controller.root).contains("≈ 240 KB"))
             XCTAssertTrue(labels(in: controller.root).contains("−20%"))
@@ -2554,7 +2600,8 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.response = { request in
             guard request["operation"] as? String == "create_closed_shape" else { return nil }
             return self.snapshot(id: "shot", width: 1280, height: 640,
-                                 unsaved: true, draft: true, layers: [original, created])
+                                 unsaved: true, draft: true, layers: [original, created],
+                                 annotations: ["fresh-shape": self.annotationStyle()])
         }
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
                                                      worker: worker)
@@ -2589,6 +2636,34 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["opacity"] as? Double, 100)
         XCTAssertTrue(controller.compareView.isHidden, "Preserve with settings closed never compares")
         XCTAssertTrue(worker.compares.isEmpty)
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "fresh-shape",
+                       "drawing selects the result without switching tools")
+        let properties = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Layer properties"
+        })
+        let defaults = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Drawing controls"
+        })
+        XCTAssertFalse(properties.isHidden, "the created layer's Properties replace drawing defaults")
+        XCTAssertTrue(defaults.isHidden)
+        XCTAssertEqual(try rangeSlider("Stroke width", in: properties).value, 4,
+                       "Properties reflect the selected layer, not the 8px creation default")
+        XCTAssertEqual(try rangeSlider("New drawing stroke width", in: defaults).value, 8)
+        XCTAssertTrue(overlay.drawingEnabled)
+        XCTAssertEqual(overlay.shape, .ellipse, "showing Properties keeps the drawing tool active")
+        XCTAssertTrue(controller.selectionOverlay.selectionEnabled,
+                      "newly placed shapes keep their transform grips live")
+        XCTAssertTrue(controller.selectionOverlay.selectedOnly,
+                      "empty space still belongs to the active drawing tool")
+        try render(controller.root, name: "screenshot-editor-created-properties")
+        controller.selectDrawTool(.ellipse)
+        XCTAssertNil(controller.selectionOverlay.selectedLayerID,
+                     "reactivating the same tool clears the freshly selected shape")
+        XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, -1)
+        XCTAssertTrue(properties.isHidden)
+        XCTAssertFalse(defaults.isHidden, "clearing selection restores drawing defaults")
+        XCTAssertTrue(overlay.drawingEnabled)
+        try render(controller.root, name: "screenshot-editor-tool-deselection")
         try showLayers(in: controller.root)
         XCTAssertEqual(try selectedLayerName(in: controller), "Shape")
         XCTAssertEqual(try table("Screenshot layers", in: controller.root).selectedRow, 0,
@@ -3739,6 +3814,8 @@ final class ScreenshotEditorTests: XCTestCase {
         try showComparison(controller, worker)
         let sections = try segmented("Editor section", in: controller.root)
         sections.selectedSegment = 1; _ = sections.sendAction(sections.action, to: sections.target)
+        try table("Screenshot layers", in: controller.root)
+            .selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         XCTAssertTrue(worker.requests.isEmpty)
         XCTAssertNotNil(controller.compareView.afterImage, "showing the style is not an edit")
         worker.deferRequests = true
@@ -3784,6 +3861,57 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(try swatchRow("Fill color", in: controller.root).isHiddenOrHasHiddenAncestor)
         layerTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         XCTAssertEqual(try swatchRow("Fill color", in: controller.root).selectedHex, "#E04090")
+    }
+
+    func testPropertiesHeadingsStayOutsideTheScrolledFieldsAtMinimumSize() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true,
+                layers: [shapeLayer(id: "shape", x: 5, y: 7)], annotations: ["shape": annotationStyle()]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            for tool in ["selected", "text", "crop", "erase"] {
+                let control: NSView
+                switch tool {
+                case "selected":
+                    try showLayers(in: controller.root)
+                    control = try field("Shadow Y offset", in: controller.root)
+                case "text":
+                    controller.selectDrawTool(.text)
+                    control = try field("New text size", in: controller.root)
+                case "crop":
+                    try showGeometry(in: controller.root)
+                    control = try popup("Crop aspect", in: controller.root)
+                default:
+                    controller.selectDrawTool(.erase)
+                    control = try rangeSlider("Brush softness", in: controller.root).slider
+                }
+                let scroll = try XCTUnwrap(control.enclosingScrollView)
+                let heading = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+                    .first { $0.accessibilityLabel() == "Properties heading" && !$0.isHiddenOrHasHiddenAncestor })
+                XCTAssertNil(heading.enclosingScrollView, "\(tool): title cannot scroll with the fields")
+                XCTAssertFalse(heading.stringValue.isEmpty)
+                for size in [NSSize(width: 1000, height: 600), NSSize(width: 760, height: 540)] {
+                    controller.window.setContentSize(size)
+                    let initial = heading.convert(heading.bounds, to: controller.root)
+                    let document = try XCTUnwrap(scroll.documentView)
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0,
+                        document.bounds.height - scroll.contentView.bounds.height)))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    control.scrollToVisible(control.bounds)
+                    controller.root.layoutSubtreeIfNeeded()
+                    XCTAssertEqual(heading.convert(heading.bounds, to: controller.root), initial)
+                    XCTAssertTrue(heading.visibleRect.contains(heading.bounds))
+                    let clip = scroll.contentView.convert(scroll.contentView.bounds, to: controller.root)
+                    XCTAssertGreaterThanOrEqual(clip.minY, initial.maxY, "title cannot cover a reachable control")
+                    XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)),
+                                  "\(tool): the requested field remains reachable")
+                }
+                try render(controller.root, name: "screenshot-editor-pinned-\(tool)-\(appearance)")
+            }
+            XCTAssertTrue(worker.requests.isEmpty, "scrolling and tool changes never edit the document")
+        }
     }
 
     func testAnnotationRenderedStates() throws {
@@ -4088,7 +4216,13 @@ final class ScreenshotEditorTests: XCTestCase {
         try render(controller.root, name: "screenshot-editor-new-drawing-shadow-retained-light")
         controller.window.setContentSize(NSSize(width: 760, height: 540))
         controller.root.layoutSubtreeIfNeeded()
-        for input in shadowInputs {
+        // The fixed title leaves less room than the entire multi-row color
+        // group. Each swatch and custom well must still be fully reachable.
+        let compactInputs = shadowInputs.flatMap { input -> [NSView] in
+            if let row = input as? ColorSwatchRow { return row.swatchButtons + [row.customWell] }
+            return [input]
+        }
+        for input in compactInputs {
             input.scrollToVisible(input.bounds)
             XCTAssertTrue(input.visibleRect.contains(input.bounds), "compact \(input) remains reachable by scrolling")
         }
@@ -4238,6 +4372,74 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(overlay.movePreview?.outline[0].x, 0)
         overlay.drag(to: CGPoint(x: 41, y: 50))
         XCTAssertNil(overlay.movePreview)
+    }
+
+    func testShapeToolOverlayPassesEmptyCanvasThroughAndRetainsOwnedTransforms() throws {
+        _ = NSApplication.shared
+        // hitTest takes superview coordinates. Match the real viewport's
+        // flipped Surface parent instead of an unattached top-level view.
+        let container = Surface(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        let parent = EditorViewportGestureView(frame: NSRect(x: 0, y: 0, width: 300, height: 220))
+        container.addSubview(parent)
+        let drawing = EditorDrawOverlay(frame: parent.bounds)
+        drawing.canvasSize = parent.bounds.size; drawing.drawingEnabled = true
+        let overlay = EditorSelectionOverlay(frame: parent.bounds)
+        parent.addSubview(drawing); parent.addSubview(overlay)
+        overlay.canvasSize = parent.bounds.size; overlay.selectionEnabled = true; overlay.selectedOnly = true
+        let element: [String: Any] = [
+            "kind": "shape", "id": "selected", "shape": "rectangle", "x": 100.0, "y": 70.0,
+            "endX": 180.0, "endY": 130.0, "controls": [], "locked": false, "visible": true,
+            "opacity": 100.0, "blendMode": "source-over",
+            "style": ["color": "#ff3b5c", "fill": "#ff3b5c", "strokeWidth": 8.0],
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "width": 300.0, "height": 220.0, "elements": [element],
+        ]), as: UTF8.self)
+        overlay.documentJSON = json; overlay.selectedLayerID = "selected"
+        let outline = [CGPoint(x: 95, y: 65), CGPoint(x: 185, y: 65),
+                       CGPoint(x: 185, y: 135), CGPoint(x: 95, y: 135)]
+        overlay.selectedOutline = outline; overlay.rotationEnabled = true; overlay.resizeEnabled = true
+        overlay.hitTestLayer = { point, tolerance in
+            try NativeEditorCanvas.shapeBodyHit(documentJSON: json, layerID: "selected",
+                shape: "rectangle", point: point, radius: tolerance * 10 / 8) ? "selected" : nil
+        }
+        overlay.outlineForLayer = { _ in outline }
+        let empty = CGPoint(x: 20, y: 200), body = CGPoint(x: 140, y: 100)
+        XCTAssertTrue(parent.hitTest(empty) === drawing)
+        XCTAssertTrue(parent.hitTest(body) === overlay)
+        overlay.begin(at: empty); overlay.end(at: empty)
+        XCTAssertNil(overlay.startPoint, "empty canvas never becomes a deselection/move gesture")
+
+        var moves: [(String, CGFloat, CGFloat)] = []
+        overlay.onMove = { id, dx, dy, _ in moves.append((id, dx, dy)) }
+        overlay.begin(at: body)
+        XCTAssertTrue(parent.hitTest(empty) === overlay, "the original owner survives leaving the shape")
+        overlay.drag(to: CGPoint(x: 155, y: 94))
+        XCTAssertTrue(moves.isEmpty)
+        overlay.end(at: CGPoint(x: 157, y: 91))
+        XCTAssertEqual(moves.count, 1); XCTAssertEqual(moves[0].0, "selected")
+        XCTAssertEqual(moves[0].1, 17); XCTAssertEqual(moves[0].2, -9)
+        XCTAssertTrue(parent.hitTest(empty) === drawing)
+
+        var resize: (String, String, CGPoint)?
+        overlay.onResize = { id, handle, point, _, _ in resize = (id, handle, point) }
+        XCTAssertTrue(parent.hitTest(outline[0]) === overlay)
+        overlay.begin(at: outline[0]); overlay.end(at: CGPoint(x: 84, y: 55))
+        XCTAssertEqual(resize?.0, "selected"); XCTAssertEqual(resize?.1, "nw")
+        XCTAssertEqual(resize?.2, CGPoint(x: 84, y: 55))
+        let grip = try XCTUnwrap(NativeEditorRotationHandle(outline: outline, radians: 0,
+            displayScale: 1, canvas: overlay.canvasSize))
+        XCTAssertTrue(parent.hitTest(grip.handle) === overlay)
+        var rotations = 0; overlay.onRotate = { _, _ in rotations += 1 }
+        overlay.begin(at: grip.handle); overlay.end(at: grip.handle)
+        XCTAssertEqual(rotations, 0, "a grip click does not create a layer or undo entry")
+        overlay.begin(at: grip.handle); overlay.drag(to: CGPoint(x: grip.handle.x + 12, y: grip.handle.y + 5))
+        overlay.cancelGesture(); overlay.end(at: body)
+        XCTAssertEqual(rotations, 0, "Escape/cancel cannot fall through into drawing")
+        overlay.begin(at: grip.handle); overlay.end(at: CGPoint(x: grip.handle.x + 12, y: grip.handle.y + 5))
+        XCTAssertEqual(rotations, 1)
+        overlay.selectedOnly = false
+        XCTAssertTrue(parent.hitTest(empty) === overlay, "Select still owns empty-space deselection")
     }
 
     func testCanvasRotationGripHasPriorityUsesReleaseAndNoOpDoesNotCommit() throws {
@@ -4925,7 +5127,8 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.response = { request in
             var layer = self.shapeLayer(id: "new-\(worker.requests.count)", x: 11, y: 17)
             if request["operation"] as? String == "create_freehand_path" { layer["kind"] = "path" }
-            return self.snapshot(id: "shot", unsaved: true, layers: [layer])
+            return self.snapshot(id: "shot", unsaved: true, layers: [layer],
+                                 annotations: ["new-\(worker.requests.count)": self.annotationStyle()])
         }
         let tool = DrawToolChoice(controller)
         let overlay = controller.drawOverlay
@@ -4939,8 +5142,15 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(worker.requests.last?["operation"] as? String, operation)
             XCTAssertEqual(controller.state.snapshot?.layers.first?.id, "new-\(count + 1)")
             XCTAssertTrue(controller.compareView.isHidden && worker.compares.isEmpty)
+            XCTAssertEqual(try field("Shift rotation snap", in: controller.root).isHidden, index == 4,
+                           "Line/Arrow expose transforms; Pen keeps only style Properties")
             if index == 4 {
                 XCTAssertEqual((worker.requests.last?["points"] as? [[String: CGFloat]])?.count, 2)
+                let heading = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSTextField }
+                    .first { $0.accessibilityLabel() == "Properties heading" && !$0.isHiddenOrHasHiddenAncestor })
+                XCTAssertEqual(heading.stringValue, "Freehand")
+                XCTAssertEqual(try rangeSlider("Stroke width", in: controller.root).value, 4)
+                try render(controller.root, name: "screenshot-editor-pen-properties-no-transform")
             } else { XCTAssertEqual(worker.requests.last?["shape"] as? String, index == 2 ? "line" : "arrow") }
         }
         let count = worker.requests.count
@@ -5291,6 +5501,98 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(controller.compareView.afterImage, "the accepted commit drops the stale After side")
         waitUntil(timeout: 3) { !controller.comparisonPending && controller.compareView.afterImage != nil }
         XCTAssertFalse(controller.compareView.isHidden, "the comparison returns once text is resolved")
+        let properties = try XCTUnwrap(descendants(in: controller.root).first {
+            $0.accessibilityLabel() == "Layer properties"
+        })
+        XCTAssertFalse(properties.isHidden, "finished text exposes its Properties without changing tools")
+        XCTAssertEqual(controller.drawOverlay.shape, .text)
+        XCTAssertTrue(controller.drawOverlay.drawingEnabled)
+        let content = try textView("Text content", in: properties)
+        XCTAssertTrue(content.isEditable, "the selected text remains editable with Text active")
+        XCTAssertTrue(try field("Text size", in: properties).isEnabled)
+        XCTAssertEqual(try field("Text size", in: properties).stringValue, "32")
+        XCTAssertEqual(try field("New text size", in: controller.root).stringValue, "24",
+                       "selected text size does not replace creation defaults")
+        XCTAssertTrue(try field("Shift rotation snap", in: properties).isHidden)
+        XCTAssertEqual(try field("Properties heading", in: properties).stringValue, "Text")
+        try render(controller.root, name: "screenshot-editor-text-properties-no-transform")
+        content.string = "Properties edit"
+        controller.textDidChange(Notification(name: NSText.didChangeNotification, object: content))
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "edit_text")
+        XCTAssertEqual(worker.requests.last?["id"] as? String, "fresh")
+        XCTAssertEqual(worker.requests.last?["patch"] as? NSDictionary,
+                       ["text": "Properties edit"] as NSDictionary)
+    }
+
+    func testInlineTextFinishReleasesHiddenResponderWithoutStealingClickAwayFocus() throws {
+        _ = NSApplication.shared
+        for focusElsewhere in [false, true] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            worker.response = { request in
+                guard ["begin_text_input", "update_text_input"].contains(request["operation"] as? String ?? "")
+                    else { return nil }
+                return self.snapshot(id: "shot",
+                    layers: [self.textLayer(id: "fresh", text: request["text"] as? String ?? "")],
+                    activeTextInput: ["input_id": request["input_id"] as! String,
+                                      "layer_id": "fresh", "is_new": true])
+            }
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showDraw(in: controller.root)
+            let tool = DrawToolChoice(controller)
+            tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
+            let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            let editor = try textView("Edit text on canvas", in: controller.root)
+            try typeInline("Revised\nline two", in: controller)
+            worker.deferRequests = true
+            try finishInlineText(in: controller)
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
+            worker.completePendingFailure("finish failed")
+            XCTAssertTrue(controller.window.firstResponder === editor)
+            XCTAssertTrue(editor.isEditable && !editor.isHiddenOrHasHiddenAncestor)
+            XCTAssertEqual(editor.string, "Revised\nline two", "failure preserves the editable buffer")
+
+            let count = worker.requests.count
+            var nextResponder: NSResponder?
+            if focusElsewhere {
+                // A real field editor must keep focus when click-away Finish
+                // completes; its Undo belongs to the field, not the document.
+                let other = NSTextField(string: "Another field")
+                other.frame = NSRect(x: 20, y: 20, width: 150, height: 24)
+                controller.root.addSubview(other)
+                XCTAssertTrue(controller.window.makeFirstResponder(other))
+                nextResponder = controller.window.firstResponder
+            } else {
+                try finishInlineText(in: controller)
+            }
+            waitUntil { worker.requests.count == count + 1 && controller.state.busy }
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
+            XCTAssertTrue(controller.drawOverlay.isHidden, "input keeps the canvas inactive until Finish resolves")
+            if !focusElsewhere {
+                XCTAssertTrue(controller.window.firstResponder === editor,
+                              "Escape retains the text responder during the accepted Finish")
+            }
+            worker.completePending(with: snapshot(id: "shot", unsaved: true,
+                layers: [textLayer(id: "fresh", text: "Revised\nline two")]))
+            XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+            XCTAssertFalse(controller.drawOverlay.isHidden, "the canvas must be available before receiving focus")
+            let finishedCount = worker.requests.count
+            let undo = try keyEvent(window: controller.window, keyCode: 6, characters: "z", modifiers: .command)
+            if focusElsewhere {
+                XCTAssertTrue(controller.window.firstResponder === nextResponder)
+                _ = controller.window.performKeyEquivalent(with: undo)
+                XCTAssertEqual(worker.requests.count, finishedCount, "field Undo must remain native")
+            } else {
+                XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
+                XCTAssertTrue(controller.window.performKeyEquivalent(with: undo))
+                XCTAssertEqual(worker.requests.count, finishedCount + 1)
+                XCTAssertEqual(worker.requests.last?["operation"] as? String, "undo",
+                               "the first Undo after Escape must reach document history")
+                worker.completePending(with: snapshot(id: "shot", canRedo: true))
+            }
+        }
     }
 
     func testInlineTextDelayedBeginPreservesSelectionAndMarkedEscapeStaysNative() throws {
@@ -5733,7 +6035,7 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         XCTAssertEqual(controller.state.snapshot?.fontFamilyOptions.map(\.key), ["sans", "serif", "mono", "rounded"],
                        "rows for fonts the draft does not pin are dropped")
-        try showDraw(in: controller.root)
+        try showLayers(in: controller.root)
         let family = try popup("Text font", in: controller.root)
         XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Rounded"])
         XCTAssertEqual(family.titleOfSelectedItem, "Serif")
@@ -5843,12 +6145,14 @@ final class ScreenshotEditorTests: XCTestCase {
             let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showLayers(in: controller.root)
             try showDraw(in: controller.root)
             let tool = DrawToolChoice(controller)
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
             let future = try popup("New text style", in: controller.root)
             let futureSize = try field("New text size", in: controller.root)
             let futureColor = try swatchRow("Color", in: controller.root)
+            try showLayers(in: controller.root)
             let selected = try popup("Text style preset", in: controller.root)
             let selectedSize = try field("Text size", in: controller.root)
             let selectedColor = try swatchRow("Text color", in: controller.root)
@@ -5875,6 +6179,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(future.titleOfSelectedItem, "Box")
             XCTAssertEqual(selectedSize.stringValue, "71")
             XCTAssertEqual(selectedColor.selectedHex, "#2d9cff")
+            controller.selectDrawTool(.text)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
@@ -5915,6 +6220,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 default: return nil
                 }
             }
+            try showLayers(in: controller.root)
             choose("Outlined")
             XCTAssertEqual((worker.requests.last?["patch"] as? [String: Any])?["outlined"] as? Bool, true,
                            "fake accepted Outlined style must match the requested edit")
@@ -5923,6 +6229,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try press("Undo", in: controller.root)
             XCTAssertEqual(future.titleOfSelectedItem, "Outlined", "undo must not restore prior creation defaults")
 
+            controller.selectDrawTool(.text)
             let overlay = controller.drawOverlay
             XCTAssertTrue(overlay.drawingEnabled)
             XCTAssertEqual(overlay.shape, .text)
@@ -5956,11 +6263,12 @@ final class ScreenshotEditorTests: XCTestCase {
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showDraw(in: controller.root)
+        try showLayers(in: controller.root)
         let future = try popup("New text style", in: controller.root)
         let selected = try popup("Text style preset", in: controller.root)
         selected.selectItem(withTitle: "Box"); _ = selected.sendAction(selected.action, to: selected.target)
         XCTAssertEqual(future.titleOfSelectedItem, "Box")
+        controller.selectDrawTool(.text)
         future.selectItem(withTitle: "Plain")
         XCTAssertEqual(future.titleOfSelectedItem, "Plain")
         XCTAssertEqual(worker.requests.map { $0["operation"] as? String }, ["edit_text"],
@@ -6490,6 +6798,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(stale.item(withTitle: "Merge visible")!.isEnabled)
         XCTAssertFalse(stale.item(withTitle: "Flatten image")!.isEnabled)
         // The ⋯ popover's Combine actions follow the same capabilities.
+        controller.toggleLayerMenu(id: "target")
         let mergeDown = try button("Merge down", in: controller.root)
         XCTAssertTrue(mergeDown.isEnabled)
         XCTAssertFalse(try button("Merge visible", in: controller.root).isEnabled)
@@ -7176,7 +7485,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.window.setContentSize(NSSize(width: 1000, height: 600))
         let order = controller.keyViewOrder
-        XCTAssertTrue(order.first === controller.cropOverlay, "The active section's canvas starts focused")
+        XCTAssertTrue(order.first === controller.selectionOverlay, "Select's canvas starts focused")
         var previous = -1
         for name in ["Output size", "Save quality", "Export settings", "Change save location", "Saved filename",
                      "Format", "Show in Folder", "Copy image", "Save as new file"] {
@@ -7392,6 +7701,12 @@ final class ScreenshotEditorTests: XCTestCase {
         let sections = try segmented("Editor section", in: view)
         sections.selectedSegment = 1
         _ = sections.sendAction(sections.action, to: sections.target)
+        // Inspector fixtures need a selected layer; opening the editor no
+        // longer supplies one implicitly. Preserve any explicit selection.
+        let layers = try table("Screenshot layers", in: view)
+        if layers.selectedRow == -1 && layers.numberOfRows > 0 {
+            layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        }
     }
 
     private func showGeometry(in view: NSView) throws {
@@ -7419,7 +7734,7 @@ final class ScreenshotEditorTests: XCTestCase {
 
     private func copyButton(in view: NSView) throws -> CaptureButton {
         try XCTUnwrap(descendants(in: view).compactMap { $0 as? CaptureButton }
-            .first { $0.title == "Copy image" || $0.title == "✓ Copied" })
+            .first { $0.title == "Copy image" || $0.title == "Copied" })
     }
 
     private func saveAsNewSwitch(in view: NSView) throws -> NSSwitch {
@@ -8057,6 +8372,97 @@ extension ScreenshotEditorTests {
         waitUntil { worker.requests.count == 3 && !controller.state.busy }
         edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
         XCTAssertEqual(edit["kind"] as? String, "straighten")
+    }
+
+    func testLockedCurvesKeepPropertiesButNotCanvasDots() throws {
+        _ = NSApplication.shared
+        for visible in [false, true] {
+            var line = shapeLayer(id: "line", x: 180, y: 150)
+            line["locked"] = true; line["visible"] = visible
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [line],
+                extra: ["curve_handles": ["line": curveHandlesValue()]]))
+            let controller = fittedController(worker)
+            defer { controller.window.orderOut(nil) }
+            try showLayers(in: controller.root)
+            let curve = try XCTUnwrap(controller.curveControls)
+            XCTAssertFalse(curve.isHiddenOrHasHiddenAncestor)
+            XCTAssertTrue(curve.bendSlider.isEnabled)
+            XCTAssertNil(controller.selectionOverlay.curveHandles)
+            XCTAssertFalse(controller.selectionOverlay.rotationEnabled)
+            XCTAssertFalse(controller.selectionOverlay.resizeEnabled)
+            XCTAssertTrue(worker.requests.isEmpty, "showing locked fields is not an edit")
+            worker.response = { _ in
+                self.snapshot(id: "shot", layers: [line], extra: ["curve_handles": ["line":
+                    self.curveHandlesValue(slider: false,
+                        controls: [["x": 280, "y": 210], ["x": 480, "y": 110]])]])
+            }
+            curve.bendSlider.doubleValue = -35
+            _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+            waitUntil { worker.requests.count == 1 && !controller.state.busy }
+            let edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+            XCTAssertEqual(edit["kind"] as? String, "bend")
+            XCTAssertEqual(edit["bend"] as? Double, -0.35)
+            XCTAssertEqual(worker.requests.last?["id"] as? String, "line")
+            XCTAssertFalse(curve.straightenButton.isHiddenOrHasHiddenAncestor)
+            XCTAssertTrue(curve.straightenButton.isEnabled)
+            XCTAssertNil(controller.selectionOverlay.curveHandles)
+            curve.straightenButton.scrollToVisible(curve.straightenButton.bounds)
+            try render(controller.root, name: "screenshot-editor-locked-curve-\(visible)")
+            curve.straightenButton.performClick(nil)
+            waitUntil { worker.requests.count == 2 && !controller.state.busy }
+            XCTAssertEqual(((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])?["kind"] as? String,
+                           "straighten")
+            XCTAssertNil(controller.selectionOverlay.curveHandles)
+            XCTAssertTrue(controller.state.snapshot?.layers.first?.locked == true)
+        }
+    }
+
+    func testCurvePropertiesQueueDiscreteEditsWithoutLosingFocusOrResettingNewerInput() throws {
+        _ = NSApplication.shared
+        let line = shapeLayer(id: "line", x: 180, y: 150)
+        let initial = snapshot(id: "shot", layers: [line], extra: ["curve_handles": ["line": curveHandlesValue()]])
+        let worker = FakeEditorWorker(snapshot: initial)
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let curve = try XCTUnwrap(controller.curveControls)
+        curve.bendSlider.scrollToVisible(curve.bendSlider.bounds)
+        XCTAssertTrue(controller.window.makeFirstResponder(curve.bendSlider))
+        worker.deferRequests = true
+        for value in [50.0, 0.0, -35.0] {
+            curve.bendSlider.doubleValue = value
+            _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+            XCTAssertTrue(curve.bendSlider.isEnabled)
+            XCTAssertTrue(controller.window.firstResponder === curve.bendSlider)
+        }
+        XCTAssertEqual(worker.requests.count, 1, "later values wait for the worker")
+        XCTAssertEqual(curve.bendValue.stringValue, "-35%")
+        for (index, value) in [50.0, 0.0, -35.0].enumerated() {
+            let edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
+            XCTAssertEqual(edit["bend"] as? Double, value / 100)
+            worker.completePending(with: snapshot(id: "shot", layers: [line],
+                extra: ["curve_handles": ["line": curveHandlesValue(bend: value)]]))
+            if index < 2 {
+                waitUntil { worker.requests.count == index + 2 && controller.state.busy }
+                XCTAssertEqual(curve.bendValue.stringValue, "-35%", "old receipts cannot reset newer input")
+            } else { waitUntil { !controller.state.busy } }
+            XCTAssertTrue(controller.window.firstResponder === curve.bendSlider)
+        }
+        XCTAssertEqual(Set(worker.liveKeys).count, 3, "each discrete edit has its own undo key")
+        for value in [100.0, 20.0] {
+            curve.bendSlider.doubleValue = value
+            _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        }
+        XCTAssertEqual(worker.requests.count, 4)
+        worker.completePendingFailure()
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertEqual(curve.bendSlider.doubleValue, -35)
+        XCTAssertEqual(curve.bendValue.stringValue, "-35%")
+        curve.bendSlider.doubleValue = 100
+        _ = curve.bendSlider.sendAction(curve.bendSlider.action, to: curve.bendSlider.target)
+        XCTAssertEqual(worker.requests.count, 5, "the failed value can be retried; queued edits were dropped")
+        worker.completePending(with: snapshot(id: "shot", layers: [line],
+            extra: ["curve_handles": ["line": curveHandlesValue(bend: 100)]]))
     }
 
     func testFileDropShowsTheSharedGuideAndImportsAtThePointerSample() throws {

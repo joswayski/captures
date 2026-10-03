@@ -42,8 +42,13 @@ supplies 390 recording and 195 platform-display differential test vectors.
 
 On X11, `x11_preview_smoke.py --lifecycle --shortcut-editing` exercises all seven
 storage paths with native input, registered-key delivery, invalid/cancel/blur,
-duplicate rejection, restart persistence and a saved global launch chord. AppKit
-XCTest renders both appearances and checks controller/bridge input. Synthetic
+duplicate rejection, restart persistence and saved Region/New Capture chords.
+The existing `CAPTURES_NATIVE_LAYOUT_PROBE` waits for settled navigation and
+recorder focus before sending each chord once; it reports named rectangles and
+focus, never typed keys or binding values. wgpu invalidates cached Preferences
+focus on every native focus event so transferring to History cannot briefly
+re-suspend restored shortcuts. AppKit is unchanged.
+AppKit XCTest renders both appearances and checks controller/bridge input. Synthetic
 virtual-key mapping does not prove physical Mac media/external-keyboard input;
 physical Windows/macOS, Wayland and screen-reader acceptance remain open.
 

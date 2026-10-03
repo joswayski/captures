@@ -415,6 +415,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
             window?.invalidateCursorRects(for: self)
         }
     }
+    var onBegin: (() -> Void)?
     var onComplete: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
     var onPreview: ((Shape, NSPoint, NSPoint, [NSPoint]) -> Void)?
     var onPreviewCancel: (() -> Void)?
@@ -480,6 +481,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         if (shape == .wand || shape == .text || shape.isBackgroundBrush)
             && (!bounds.contains(point) || !presentedImageRect.contains(point)) { return }
         cancelGesture()
+        onBegin?()
         startPoint = point; currentPoint = point; needsDisplay = true
         if shape == .pen {
             penPoints = [canvasPoint(for: point)]
@@ -747,6 +749,10 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var selectionEnabled = false {
         didSet { if !selectionEnabled { cancelGesture() }; isHidden = !selectionEnabled; layoutExpandButton() }
     }
+    /// Shape tools leave empty canvas to the drawing overlay underneath.
+    var selectedOnly = false {
+        didSet { if selectedOnly != oldValue { cancelGesture(); layoutExpandButton() } }
+    }
     var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
     var selectedLayerID: String? { didSet { if selectedLayerID != oldValue { cancelGesture() }; needsDisplay = true } }
     var documentJSON: String? { didSet { if documentJSON != oldValue { cancelGesture() } } }
@@ -830,6 +836,29 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let target = super.hitTest(point) else { return nil }
+        guard selectedOnly, target === self else { return target }
+        let local = convert(point, from: superview)
+        // AppKit keeps the original mouse-down responder through mouse-up.
+        // Never hand an owned transform to the drawing view mid-gesture.
+        return startPoint != nil || isViewportPanning || ownsSelectedPoint(local) ? self : nil
+    }
+    func ownsSelectedPoint(_ point: CGPoint) -> Bool {
+        guard selectionEnabled, presentedImageRect.contains(point), canvasSize.width > 0 else { return false }
+        let documentPoint = canvasPoint(for: point)
+        let scale = presentedImageRect.width / canvasSize.width
+        if let geometry = rotationHandle(),
+           hypot(documentPoint.x - geometry.handle.x, documentPoint.y - geometry.handle.y) <= geometry.hitRadius {
+            return true
+        }
+        if resizeEnabled, let id = selectedLayerID, let documentJSON,
+           let result = try? NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
+                point: documentPoint, displayScale: scale), result.1 != nil { return true }
+        if curveHandles != nil, let id = selectedLayerID,
+           curveHitTest?(id, documentPoint, 10 / scale)?.handle != nil { return true }
+        return (try? hitTestLayer?(documentPoint, 8 / scale)) != nil
+    }
     override func setFrameSize(_ newSize: NSSize) {
         if newSize != frame.size { cancelGesture() }
         super.setFrameSize(newSize)
@@ -862,7 +891,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     /// Place the action outside the largest overflow gap, kept inside the view.
     func layoutExpandButton() {
         guard let expandButton else { return }
-        guard let expandPreview, selectionEnabled, startPoint == nil, canvasSize.width > 0 else {
+        guard let expandPreview, selectionEnabled, !selectedOnly, startPoint == nil, canvasSize.width > 0 else {
             expandButton.isHidden = true; expandArmed = false; return
         }
         let image = presentedImageRect, scale = image.width / canvasSize.width
@@ -931,6 +960,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
                 needsDisplay = true; return
             }
             hitLayerID = try hitTestLayer?(documentPoint, 8 / scale)
+            if selectedOnly && hitLayerID == nil { return }
             if let id = hitLayerID {
                 guard let documentJSON else { throw AppBridgeError.invalidResponse }
                 moveDrag = try NativeEditorMoveDrag.begin(documentJSON: documentJSON,
@@ -1175,6 +1205,20 @@ private final class EditorPassthroughLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// Decorative disclosure arrow; the containing button owns input and accessibility.
+final class EditorExportChevron: NSView {
+    override var isFlipped: Bool { true }
+    var expanded = false { didSet { needsDisplay = true } }
+    var ink = NSColor.labelColor { didSet { needsDisplay = true } }
+    var glyph: String { expanded ? "editor-chevron-up" : "editor-chevron-down" }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        ink.setStroke()
+        ShippingIcons.stroke(glyph,
+            in: NSRect(x: (bounds.width - 15) / 2, y: (bounds.height - 15) / 2, width: 15, height: 15))
+    }
+}
+
 private final class EditorInlineTextView: NSTextView {
     var onEscape: (() -> Void)?
     var onBlur: (() -> Void)?
@@ -1353,7 +1397,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputLocation = NSTextField(labelWithString: "")
     private let exportDisclosureTitle = EditorPassthroughLabel(labelWithString: "Export settings")
     private let exportSummary = EditorPassthroughLabel(labelWithString: "")
-    private let exportChevron = EditorPassthroughLabel(labelWithString: "▾")
+    private let exportChevron = EditorExportChevron()
     private let exportFilenameCaption = NSTextField(labelWithString: "Filename")
     private let exportSavingToCaption = NSTextField(labelWithString: "Saving to")
     private let exportStatus = NSTextField(labelWithString: "")
@@ -2099,6 +2143,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.frame = viewportInput.bounds
         drawOverlay.autoresizingMask = [.width, .height]
         drawOverlay.setAccessibilityLabel("Screenshot drawing canvas")
+        drawOverlay.onBegin = { [weak self] in
+            guard let self, self.toolShowsTransformChrome else { return }
+            self.selectCanvasLayer(nil)
+        }
         drawOverlay.onComplete = { [weak self] shape, start, end, points in
             self?.createDrawing(shape: shape, start: start, end: end, points: points)
         }
@@ -2124,7 +2172,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.setAccessibilityLabel("Screenshot layer selection canvas")
         selectionOverlay.toolTip = "Drag a layer to move, its border to resize, or its round grip to rotate. Shift constrains corner resize and rotation. Escape cancels."
         selectionOverlay.hitTestLayer = { [weak self] point, tolerance in
-            guard let json = self?.state.snapshot?.documentJSON else { return nil }
+            guard let self, let json = self.state.snapshot?.documentJSON else { return nil }
+            if self.sectionControl.selectedSegment == Section.draw {
+                guard let id = self.selectedLayerID,
+                      try NativeEditorCanvas.shapeBodyHit(documentJSON: json, layerID: id,
+                          shape: self.drawShape.rawValue, point: point, radius: tolerance * 10 / 8) else { return nil }
+                return id
+            }
             return try NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: tolerance)
         }
         selectionOverlay.outlineForLayer = { [weak self] id in
@@ -2142,6 +2196,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.onDoubleClick = { [weak self] point, tolerance in
             guard let self else { return false }
             if self.curveDoubleClick(at: point, radius: tolerance * 10 / 8) { return true }
+            guard self.sectionControl.selectedSegment == Section.layers else { return false }
             return self.beginExistingTextInput(at: point, tolerance: tolerance)
         }
         selectionOverlay.curveHitTest = { [weak self] id, point, radius in
@@ -2226,7 +2281,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                             target: self, action: #selector(changeSection))
         sectionControl.frame = NSRect(x: 688, y: 24, width: Self.panelWidth, height: 28)
         sectionControl.autoresizingMask = [.minXMargin]
-        sectionControl.selectedSegment = 0
+        sectionControl.selectedSegment = Section.layers
         sectionControl.setAccessibilityLabel("Editor section")
         // Shipping has no section tabs: the rail's tool chooses the inspector.
         // The hidden control keeps the section state and its action.
@@ -2255,7 +2310,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         geometryPanel.addSubview(geometryScroll)
 
         let width = Self.contentWidth
-        panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: width, height: 24),
+        let cropHeading = panelLabel("Crop", frame: NSRect(x: 0, y: 0, width: width, height: 24),
                    size: 16, weight: .semibold, parent: geometryContent)
         // Shipping "Aspect ratio": the label over a token select.
         panelFieldLabel("Aspect ratio", x: 0, y: 36, parent: geometryContent)
@@ -2301,6 +2356,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         applyCropHalo.surround(applyCropButton)
         geometryContent.addSubview(applyCropHalo, positioned: .below, relativeTo: applyCropButton)
         publishCropControls()
+        pinPropertiesHeading(cropHeading, in: geometryPanel, scroll: geometryScroll, height: 24)
 
         buildLayersPanel()
         buildDrawPanel()
@@ -2566,6 +2622,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         railTip.isHidden = false
     }
 
+    /// Keep the existing title outside the fields' clip, like shipping's sticky
+    /// heading. Rebase the document once; control positions on screen stay put.
+    private func pinPropertiesHeading(_ heading: NSTextField, in panel: Surface,
+                                      scroll: NSScrollView, height: CGFloat, rule: NSView? = nil) {
+        guard let content = scroll.documentView else { return }
+        panel.addSubview(heading)
+        heading.setAccessibilityLabel("Properties heading")
+        if let rule { panel.addSubview(rule) }
+        for view in content.subviews { view.frame.origin.y -= height }
+        content.frame.size.height = max(0, content.frame.height - height)
+        scroll.autoresizingMask = [.width]
+        panel.sizeDidChange = { [weak scroll] size in
+            scroll?.frame = NSRect(x: 0, y: height, width: size.width, height: max(0, size.height - height))
+        }
+        panel.sizeDidChange?(panel.bounds.size)
+    }
+
     private func buildDrawPanel() {
         let width = Self.contentWidth
         let scroll = NSScrollView(frame: drawPanel.bounds)
@@ -2634,15 +2707,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         content.addSubview(drawToolPreview)
         buildDrawingDefaultControls(in: content)
         buildCreateTextControls(in: content)
+        if let drawHeading {
+            pinPropertiesHeading(drawHeading, in: drawPanel, scroll: scroll, height: 24)
+        }
+        drawControlBaseY = drawControlBaseY.mapValues { $0 - 24 }
         publishDrawToolControls()
     }
 
     /// Top of the `DrawToolPreview` slot, below the Eraser mode row.
-    static let drawPreviewTop: CGFloat = 140
+    static let drawPreviewTop: CGFloat = 116
     /// The preview's height plus one row gap.
     private var drawPreviewShift: CGFloat { EditorDrawToolPreviewView.height + 12 }
-    /// Where drawing and new-text properties start, under the heading.
-    static let drawDefaultsTop: CGFloat = 36
+    /// Where drawing and new-text properties start in the scrollable body.
+    static let drawDefaultsTop: CGFloat = 12
 
     /// Height of a full-width shipping `ColorField` swatch grid in Properties.
     private var panelSwatchHeight: CGFloat {
@@ -3022,8 +3099,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportSummary.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
         exportSummary.lineBreakMode = .byTruncatingTail
         exportSummary.setAccessibilityLabel("Export summary")
-        exportChevron.alignment = .center
-        [exportDisclosureTitle, exportSummary, exportChevron].forEach { exportDisclosure.addSubview($0) }
+        exportChevron.setAccessibilityElement(false)
+        [exportDisclosureTitle as NSView, exportSummary, exportChevron].forEach { exportDisclosure.addSubview($0) }
 
         exportFilenameCaption.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         exportSavingToCaption.font = .systemFont(ofSize: tokens.number("text-xs"))
@@ -3211,10 +3288,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         curveControls = EditorCurveControls(tokens: tokens, width: Self.contentWidth)
         curveControls.apply = { [weak self] edit in
             guard let self, let id = self.selectedLayer?.id else { return }
-            self.curveCanvasLayer(id, edit: edit)
+            self.liveEdit(key: self.liveOnceKey("curve:\(id)"), request: ["operation": "layer", "id": id,
+                "edit": ["action": "curve", "edit": edit]])
         }
         curveControls.resized = { [weak self] _ in self?.layoutLayerInspectorTail() }
         layerContent.addSubview(curveControls)
+        pinPropertiesHeading(layerPropertiesHeading, in: layerPropertiesPanel,
+                             scroll: panelScroll, height: 48, rule: layerPropertiesRule)
         buildLayerMenu()
         layoutLayerInspectorTail()
     }
@@ -3596,9 +3676,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelCrop()
         cancelDrawing()
         cancelViewportPan()
-        geometryPanel.isHidden = sectionControl.selectedSegment != Section.geometry
-        layerPropertiesPanel.isHidden = sectionControl.selectedSegment != Section.layers
-        drawPanel.isHidden = sectionControl.selectedSegment != Section.draw
+        updatePropertiesPanels()
         if sectionControl.selectedSegment != Section.layers { closeLayerMenu(); finishLayerRename(commit: true) }
         layoutLayerInspectorTail()
         // The export bar and its encoded preview do not depend on the section.
@@ -3606,6 +3684,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateDrawing()
         // Shipping has no Crop section apart from the Crop tool.
         if sectionControl.selectedSegment == Section.geometry { beginCrop() }
+    }
+
+    private func updatePropertiesPanels() {
+        let active = sectionControl.selectedSegment
+        let section = active == Section.draw && selectedLayer != nil ? Section.layers : active
+        geometryPanel.isHidden = section != Section.geometry
+        layerPropertiesPanel.isHidden = section != Section.layers
+        drawPanel.isHidden = section != Section.draw
     }
 
     @objc private func changeEraserMode() {
@@ -3633,6 +3719,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func isGroupedShape(_ shape: EditorDrawOverlay.Shape) -> Bool {
         [.rectangle, .ellipse, .line, .triangle, .diamond, .star].contains(shape)
+    }
+
+    private var toolShowsTransformChrome: Bool {
+        sectionControl.selectedSegment == Section.layers
+            || (sectionControl.selectedSegment == Section.draw
+                && (isGroupedShape(drawShape) || drawShape == .arrow))
     }
 
     /// Shipping `.screenshot-tool-rail`, in `captures_app::editor_chrome` order.
@@ -3790,10 +3882,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // Each tool's rows end at a fixed, font-independent offset.
         let bottom: CGFloat
         if wand {
-            drawHelper.frame.origin.y = 216 + 24 + 8
+            drawHelper.frame.origin.y = 192 + 24 + 8
             bottom = drawHelper.frame.maxY
         } else if brush {
-            drawHelper.frame.origin.y = 218 + EditorMarkedSlider.height + 8 + shift
+            drawHelper.frame.origin.y = 194 + EditorMarkedSlider.height + 8 + shift
             bottom = drawHelper.frame.maxY
         } else {
             bottom = defaultsBottom
@@ -4367,8 +4459,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportEstimateValue.textColor = tokens.color(estimatePending ? "text-subtle" : "text")
         exportEstimateDelta.stringValue = bar?.deltaLabel ?? ""
         exportEstimateDelta.textColor = tokens.color((bar?.deltaPercent ?? 0) < 0 ? "positive-text" : "caution-text")
-        let copyTitle = copyConfirmed ? "✓ Copied" : "Copy image"
+        let copyTitle = copyConfirmed ? "Copied" : "Copy image"
         if copyImageButton.title != copyTitle { copyImageButton.title = copyTitle }
+        copyImageButton.icon = copyConfirmed ? .shipping("check") : nil
         copyImageButton.setAccessibilityLabel(copyConfirmed ? "Copied" : "Copy image")
         showInFolderButton.isHidden = lastSavedPath == nil
         exportSaveButton.toolTip = bar?.hint
@@ -4414,7 +4507,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func toggleExportSettings() {
         exportSettingsOpen.toggle()
-        exportChevron.stringValue = exportSettingsOpen ? "▴" : "▾"
+        exportChevron.expanded = exportSettingsOpen
         exportDisclosure.toolTip = exportSettingsOpen ? "Hide export settings" : "Show export settings"
         exportDisclosure.setAccessibilityExpanded(exportSettingsOpen)
         layoutEditor()
@@ -5374,6 +5467,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func activateTool(section: Int, shape: EditorDrawOverlay.Shape?) {
+        // Shipping clears selection even when reactivating the current tool.
+        // The table's selection callback also resets its outline and inspector.
+        if section != Section.layers { layerTable.deselectAll(nil) }
         if sectionControl.selectedSegment == section {
             if let shape, drawOverlay.shape == shape { return }
             if section == Section.layers || (section == Section.geometry && cropActive) {
@@ -5496,6 +5592,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func hideInlineTextEditor() {
         defer { publishComparison() }
+        // Escape leaves the text view first responder; hiding its frame must
+        // not leave document Undo routed to that invisible field. Preserve a
+        // control the user already focused by clicking away.
+        // The canvas overlays were hidden during input. Restore their state
+        // before asking AppKit to make the active canvas first responder.
+        updateDrawing()
+        if window.firstResponder === inlineTextEditor { focusActiveCanvas() }
         inlineTextFrame?.isHidden = true
         inlineTextStyleKey = nil
     }
@@ -5629,9 +5732,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         brushSize?.isEnabled = active; brushSoftness?.isEnabled = active
         createTextPreset.isEnabled = active && createTextPreset.numberOfItems > 1
         createTextSize.isEnabled = active
-        // Selected text edits live under Select and stay editable while an
+        // Selected text edits stay editable while an
         // edit applies; changes made meanwhile queue (see `liveEdit`).
-        let textReady = sectionControl?.selectedSegment == Section.layers && state.snapshot != nil
+        let textReady = sectionControl?.selectedSegment != Section.geometry && state.snapshot != nil
             && inputResolved && selectedLayer?.kind == .text
         textEditor.isEditable = textReady
         textFamily.isEnabled = textReady && textFamily.numberOfItems > 1
@@ -5646,7 +5749,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inlineTextEditor.isEditable = inlineTextInput?.finishInFlight != true
         drawOverlay.drawingEnabled = active
         if !active || drawShape != .wand { hideWandLoupe() }
-        selectionOverlay.selectionEnabled = sectionControl?.selectedSegment == Section.layers
+        selectionOverlay.selectedOnly = sectionControl?.selectedSegment == Section.draw
+        selectionOverlay.selectionEnabled = toolShowsTransformChrome
             && state.snapshot != nil && !state.busy && inputResolved && !importLoading
     }
 
@@ -5656,21 +5760,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func layoutLayerInspectorTail() {
         guard let curveControls, let layerGeometryHint else { return }
         let layer = selectedLayer
-        layerPropertiesHeading.stringValue = layer.map { $0.kind == .image ? $0.name : $0.rowKind } ?? ""
+        layerPropertiesHeading.stringValue = layer.map {
+            toolShowsTransformChrome ? ($0.kind == .image ? $0.name : $0.rowKind)
+                : EditorChrome.toolLabel(drawShape == .text ? "t" : drawShape.rawValue)
+        } ?? ""
         layerPropertiesHeading.isHidden = layer == nil
         layerPropertiesRule.isHidden = layer == nil
-        // Shipping sections: the 48 pt heading and its `--s-4` margin, then
-        // `--s-5` padding. The Shift rotation snap section comes first.
+        // The pinned 48 pt heading is outside this body. Its `--s-4` margin
+        // and `--s-5` section padding remain; Shift rotation snap comes first.
         let pad: CGFloat = 12
-        var y: CGFloat = 48 + 8 + pad
-        rotationSnapLabel.isHidden = layer == nil; rotationSnap.isHidden = layer == nil
-        rotationSnapHint.isHidden = layer == nil; layerSectionRule.isHidden = layer == nil
-        rotationSnapLabel.frame.origin.y = y
-        rotationSnap.frame.origin.y = y + 22
-        rotationSnapHint.frame.origin.y = rotationSnap.frame.maxY + pad
-        y = rotationSnapHint.frame.maxY + pad
-        layerSectionRule.frame.origin.y = y
-        y += 1 + pad
+        var y: CGFloat = 8 + pad
+        let transforms = layer != nil && toolShowsTransformChrome
+        rotationSnapLabel.isHidden = !transforms; rotationSnap.isHidden = !transforms
+        rotationSnapHint.isHidden = !transforms; layerSectionRule.isHidden = !transforms
+        if transforms {
+            rotationSnapLabel.frame.origin.y = y
+            rotationSnap.frame.origin.y = y + 22
+            rotationSnapHint.frame.origin.y = rotationSnap.frame.maxY + pad
+            y = rotationSnapHint.frame.maxY + pad
+            layerSectionRule.frame.origin.y = y
+            y += 1 + pad
+        }
         let image = layer?.kind == .image
         let geometryViews: [NSView] = layerGeometryLabels + [layerWidth, layerHeight, layerX, layerY, layerGeometryHint]
         geometryViews.forEach { $0.isHidden = !image }
@@ -5712,7 +5822,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func curveCanvasLayer(_ id: String, edit: [String: Any]) {
         guard !state.busy, let layer = state.snapshot?.layers.first(where: { $0.id == id }),
-              !layer.locked else { return }
+              !layer.locked || edit["kind"] as? String == "bend" || edit["kind"] as? String == "straighten" else { return }
         command(["operation": "layer", "id": id, "edit": ["action": "curve", "edit": edit]],
                 message: "Editing curve…", preferredSelection: id)
     }
@@ -5740,7 +5850,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 return true
             }
         }
-        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+        guard sectionControl.selectedSegment == Section.layers,
+              let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
               id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
               let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
               hit.onPath, let closest = hit.closest else { return false }
@@ -5755,7 +5866,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                         point: point, radius: radius))?.hint {
             return hint
         }
-        guard let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+        guard sectionControl.selectedSegment == Section.layers,
+              let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
               id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
               let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
               hit.onPath else { return nil }
@@ -6286,6 +6398,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.liveQueue.removeAll()
                 self.showError("Editor action failed: \(error.localizedDescription)")
                 if !preserveStagedTextOnFailure { self.publishSelectedLayerFields() }
+                else { self.curveControls?.setHandles(self.selectedLayer.flatMap { self.state.snapshot?.curveHandles[$0.id] }) }
                 self.publishBackgroundFields()
             }
             self.textApplyPending = false
@@ -6394,9 +6507,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if ready && !liveQueue.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.flushLiveQueue() }
         }
-        curveControls?.setReady(ready)
         // Live fields stay editable while an edit applies; their edits queue.
         let live = state.snapshot != nil && inlineTextInput == nil
+        curveControls?.setReady(live)
         annotationControls?.setReady(live)
         let layer = live ? selectedLayer : nil
         rotationSnap.isEnabled = layer != nil
@@ -6414,7 +6527,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self.selectedLayerID = selectedLayerID
         } else if layers.isEmpty {
             selectedLayerID = nil; selectedLayerIndex = 0
-        } else if allowFallback {
+        } else if allowFallback && selectedLayerID != nil {
             selectedLayerIndex = min(selectedLayerIndex, layers.count - 1)
             selectedLayerID = layers[selectedLayerIndex].id
         }
@@ -6452,10 +6565,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let curve = selectedLayer.flatMap { state.snapshot?.curveHandles[$0.id] }
         selectionOverlay.curveHandles = selectionOverlay.resizeEnabled ? curve : nil
         selectionOverlay.expandPreview = selectedLayer.flatMap { state.snapshot?.canvasExpand[$0.id] }
-        curveControls?.setHandles(selectedLayer?.locked == false ? curve : nil)
+        if !liveQueue.contains(where: { layerID != nil && $0.key.hasPrefix("curve:\(layerID!):") }) {
+            curveControls?.setHandles(curve)
+        }
         publishLayerGeometry()
         if layerMenuID != nil && layerMenuID != selectedLayerID { closeLayerMenu() }
         if renamingLayerID != nil && renamingLayerID != selectedLayerID { finishLayerRename(commit: true) }
+        updatePropertiesPanels()
         layoutLayerInspectorTail()
         updateControls()
     }
@@ -6614,7 +6730,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         for label in [exportFilenameCaption, saveAsNewLabel, exportDisclosureTitle] {
             label.textColor = tokens.color("text")
         }
-        for label in [exportSavingToCaption, outputLocation, exportSummary, exportChevron, outputDimensions] {
+        exportChevron.ink = tokens.color("text-subtle")
+        for label in [exportSavingToCaption, outputLocation, exportSummary, outputDimensions] {
             label.textColor = tokens.color("text-subtle")
         }
         for group in exportGroups.values { group.caption.textColor = tokens.color("text-muted") }

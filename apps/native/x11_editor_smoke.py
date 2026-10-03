@@ -122,6 +122,10 @@ def main():
                         help="Exercise confirmed original replacement, History identity and retained drafts")
     parser.add_argument("--canvas-interactions-only", action="store_true",
                         help="Exercise image file drop guides, Expand canvas and line curve editing")
+    parser.add_argument("--shape-transforms-only", action="store_true",
+                        help="Transform freshly drawn shapes without switching tools; undo and reopen")
+    parser.add_argument("--properties-heading-only", action="store_true",
+                        help="Keep Properties titles visible while fields scroll at minimum size")
     parser.add_argument("--external-image-only", action="store_true",
                         help="Open external images, preserve per-file errors and safely reopen drafts/sources")
     args = parser.parse_args()
@@ -1382,6 +1386,12 @@ def main():
 
         if args.history_shortcuts_only:
             resize_editor(1000, 901, "sleep", ".3")  # Integer-pixel Fit origin for exact movement.
+            run("xdotool", "windowactivate", "--sync", editor, "key", "ctrl+d", "sleep", "1")
+            assert not draft.exists(), "opening with no selection must not duplicate an implicit layer"
+            shot(editor, "initial-no-selection")
+            layer_click(0)
+            shot(editor, "explicit-layer-selection")
+            assert not draft.exists(), "selecting a layer does not edit the document"
             rail_click("shapes")  # Persistent Shapes rail button.
             shot(editor, "tool-rail-shapes-menu")
             run("xdotool", "key", "Escape", "sleep", ".3")
@@ -1390,6 +1400,26 @@ def main():
             drag((320, 250), (480, 370))
             arrow = save_layers(lambda values: len(values) == 2, "rail Arrow creates one layer")[-1]
             assert arrow["shape"] == "arrow", arrow
+            shot(editor, "created-shape-properties")
+            # Open shapes omit the 28px Stroke checkbox and its 12px gap.
+            prop_swatch(ANNOTATION["stroke-row"] - 40, "#2d9cff")
+            recolored = save_layers(lambda values: values[-1]["style"]["color"] == "#2d9cff",
+                                    "Properties edit the created arrow without selecting another tool")[-1]
+            assert recolored == dict(arrow, style=dict(arrow["style"], color="#2d9cff"))
+            shot(editor, "created-shape-properties-edited")
+            resize_editor(760, 540, "sleep", ".3")
+            shot(editor, "created-shape-properties-minimum")
+            properties_end()
+            shot(editor, "created-shape-properties-minimum-end")
+            resize_editor(1000, 901, "sleep", ".3")
+            properties_start()
+            blur_click()
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == arrow, "selected style undo")[-1] == arrow
+            before_deselection = draft_bytes()
+            run("xdotool", "key", "a", "Delete", "ctrl+d", "Right", "sleep", "1")
+            assert draft_bytes() == before_deselection, "reactivating Arrow clears layer shortcut targets"
+            shot(editor, "tool-cleared-shape-selection")
             resize_editor(760, 540, "sleep", ".3")
             rail_click("shapes")  # Shapes at the minimum size.
             shot(editor, "tool-rail-minimum-menu")
@@ -1414,6 +1444,8 @@ def main():
                                  endX=star["endX"] + 21, endY=star["endY"] + 17), moved
             before_crop = draft_bytes()
             run("xdotool", "key", "c", "sleep", ".3")
+            run("xdotool", "key", "Delete", "ctrl+d", "Right", "sleep", "1")
+            assert draft_bytes() == before_crop, "switching to Crop clears layer shortcut targets"
             drag((330, 270), (460, 350))
             run("xdotool", "key", "c", "sleep", ".3")
             shot(editor, "shortcut-crop-candidate")
@@ -1455,6 +1487,7 @@ def main():
                             visible=True, locked=False)
             assert copied == expected, (copied, expected)
             nudged = copied
+            positions = [copied]
             for key, dx, dy in [("Left", -1, 0), ("shift+Up", 0, -10),
                                 ("shift+Right", 10, 0), ("Down", 0, 1)]:
                 expected = dict(nudged, x=nudged["x"] + dx, y=nudged["y"] + dy,
@@ -1462,9 +1495,13 @@ def main():
                 run("xdotool", "key", key, "sleep", ".3")
                 nudged = save_layers(lambda values: len(values) == 3 and values[-1] == expected,
                                      f"keyboard nudge {key}")[-1]
-            for _ in range(4):
+                positions.append(expected)
+            # Busy commands intentionally do not queue; verify each accepted
+            # undo before sending the next, even on slow software rendering.
+            for expected in reversed(positions[:-1]):
                 run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            assert save_layers(lambda values: len(values) == 3, "undo nudges exactly")[-1] == copied
+                save_layers(lambda values: len(values) == 3 and values[-1] == expected,
+                            "undo each nudge exactly")
             layer_click(0)  # Restore the copy selection after Undo.
             canvas_click("width")
             run("xdotool", "key", "ctrl+d", "Delete", "Left", "shift+Up", "sleep", ".3")
@@ -1546,13 +1583,17 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
+                "checks": ["open-no-selection", "explicit-layer-selection",
+                           "keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
                            "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged",
                            "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
                            "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
                            "nudge-undo-exact", "field-nudge-focus", "locked-nudge-guard",
                            "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters",
                            "rail-arrow-create", "rail-menu-escape", "rail-minimum",
+                           "same-tool-clears-selection", "crop-clears-selection",
+                           "created-layer-properties-edit", "created-layer-properties-undo",
+                           "created-layer-properties-minimum",
                            "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",
                            "layer-paste-once-with-OS-text", "layer-paste-cumulative-offset",
                            "layer-paste-undo-redo", "layer-clipboard-session-local",
@@ -1744,7 +1785,9 @@ def main():
             shot(editor, "drawing-styled-committed")
             # Independently blend 37% #36c96b / #111318 over the #286ea6 source.
             document_pixel("drawing-styled-committed", 300, 95, (45, 144, 144), 1)
-            document_pixel("drawing-styled-committed", 300, 40, (31, 76, 113), 1)
+            # The active shape's north resize grip covers the stroke midpoint.
+            # Keep the same border-color check ten pixels away from that chrome.
+            document_pixel("drawing-styled-committed", 290, 40, (31, 76, 113), 1)
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "one undo removes the new shape")
 
@@ -1915,6 +1958,161 @@ def main():
             print("PASS native polygons: previews, cancellation, silhouettes, undo/redo, minimum, draft")
             return
 
+        if args.properties_heading_only:
+            resize_editor(760, 540)
+            before = draft_bytes()
+            for name in ("image", "rectangle", "text", "crop"):
+                if name == "image":
+                    toolbar_click("layers")
+                    layer_click(0)
+                elif name == "crop":
+                    toolbar_click("geometry")
+                    start, end = document_point((50, 70)), document_point((500, 280))
+                    run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                        "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                        *map(str, end), "sleep", ".2", "mouseup", "1", "sleep", ".3")
+                else:
+                    draw_tool(name)
+                top = properties_top()
+                # Wheel inside the small fields viewport, not on its pinned title.
+                run("xdotool", "mousemove", "--window", editor, str(inspector_x(180)),
+                    str(top + 65), "click", "--repeat", "20", "--delay", "40", "4", "sleep", ".6")
+                shot(editor, f"properties-{name}-top")
+                run("xdotool", "click", "--repeat", "20", "--delay", "40", "5", "sleep", ".6")
+                shot(editor, f"properties-{name}-scrolled")
+
+                def band(state, offset, height):
+                    return run("convert", str(output / f"properties-{name}-{state}.png"),
+                               "-crop", f"280x{height}+{inspector_x(8)}+{top + offset}", "rgba:-")
+
+                assert band("top", 1, 46) == band("scrolled", 1, 46), f"{name}: title scrolled away"
+                assert band("top", 58, 20) != band("scrolled", 58, 20), f"{name}: fields did not scroll"
+                assert draft_bytes() == before, f"{name}: scrolling changed the draft"
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "Properties heading suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["image-title", "shape-title", "text-title", "crop-title",
+                           "real-fields-scroll", "minimum-layout", "unchanged-draft", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native Properties: pinned image/shape/text/crop titles, real scroll, unchanged draft")
+            return
+
+        if args.shape_transforms_only:
+            resize_editor(1200, 701)
+            save(640, 360, 0, 0)
+
+            def shape_gesture(start, end, capture=None, cancel=False):
+                before = draft_bytes()
+                start, end = document_point(start), document_point(end)
+                run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                    "sleep", ".2", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+                    "--window", editor, *map(str, end), "sleep", ".3")
+                if capture:
+                    shot(editor, capture)
+                    assert draft_bytes() == before, "transient transform wrote a draft"
+                if cancel:
+                    run("xdotool", "key", "Escape", "sleep", ".2")
+                run("xdotool", "mouseup", "1", "sleep", ".3")
+
+            def rectangle_is(x, y, end_x, end_y):
+                values = layers()
+                return len(values) == 2 and all(math.isclose(values[-1][key], value, abs_tol=1e-6)
+                    for key, value in (("x", x), ("y", y), ("endX", end_x), ("endY", end_y)))
+
+            draw_tool("rectangle")
+            shape_gesture((260, 110), (380, 210))
+            rectangle = save_layers(lambda values: len(values) == 2, "fresh rectangle")[-1]
+            rectangle_id = rectangle["id"]
+            assert rectangle["style"]["strokeWidth"] == 8
+            shot(editor, "shape-active-created")
+            pixel("shape-active-created", 14, rail_point("shapes")[1], (255, 202, 40))
+            shape_gesture((320, 160), (357, 191), capture="shape-active-moving")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "active Rectangle moves its body")
+            assert layers()[-1]["id"] == rectangle_id
+            shot(editor, "shape-active-moved")
+            document_pixel("shape-active-moved", 350, 190, (255, 59, 92))
+            document_pixel("shape-active-moved", 300, 120, (40, 110, 166))
+            toolbar_click("undo")
+            save_until(lambda: rectangle_is(260, 110, 380, 210), "body move is one undo step")
+            toolbar_click("redo")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "body move redo")
+
+            # Shipping scales the padded selection box affinely: 130x110
+            # becomes 150x130. Endpoints lie 5px inside that original box.
+            resized = (272 + 5 * 150 / 130, 116 + 5 * 130 / 110,
+                       272 + 125 * 150 / 130, 116 + 105 * 130 / 110)
+            shape_gesture((292, 136), (272, 116), capture="shape-active-resizing")
+            save_until(lambda: rectangle_is(*resized), "active Rectangle resizes")
+            shot(editor, "shape-active-resized")
+            pixel("shape-active-resized", 14, rail_point("shapes")[1], (255, 202, 40))
+            toolbar_click("undo")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "resize is one undo step")
+            toolbar_click("redo")
+            save_until(lambda: rectangle_is(*resized), "resize redo")
+
+            # Center (347,181), padded top near 117, grip 28px above it.
+            # The release vector is (31,-73), independently deriving the angle.
+            before = draft_bytes()
+            shape_gesture((347, 88), (378, 108), capture="shape-active-rotation-cancel", cancel=True)
+            assert draft_bytes() == before
+            shape_gesture((347, 88), (378, 108))
+            angle = math.atan2(31, 73)
+            save_layers(lambda values: len(values) == 2 and math.isclose(
+                values[-1].get("rotation", 0), angle, abs_tol=1e-12), "active Rectangle rotates")
+            shot(editor, "shape-active-rotated")
+            pixel("shape-active-rotated", 14, rail_point("shapes")[1], (255, 202, 40))
+            document_pixel("shape-active-rotated", 347, 181, (255, 59, 92))
+            toolbar_click("undo")
+            save_layers(lambda values: values[-1].get("rotation", 0) == 0, "rotation single undo")
+            toolbar_click("redo")
+            save_layers(lambda values: math.isclose(values[-1].get("rotation", 0), angle,
+                abs_tol=1e-12), "rotation redo")
+
+            # Empty space must draw another rectangle, not move/select the original.
+            shape_gesture((470, 270), (560, 320))
+            created = save_layers(lambda values: len(values) == 3, "empty space starts another shape")[-1]
+            assert created["id"] != rectangle_id and created["shape"] == "rectangle"
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 2 and values[-1]["id"] == rectangle_id,
+                        "new shape is one undo step")
+
+            # Newly drawn Lines keep curve dots live; no Select click in between.
+            draw_tool("line")
+            shape_gesture((180, 290), (580, 290))
+            line = save_layers(lambda values: len(values) == 3, "fresh line")[-1]
+            shape_gesture((380, 290), (380, 250))
+            curved = save_layers(lambda values: len(values) == 3 and len(values[-1]["controls"]) == 3,
+                                 "active Line bends its starter dot")[-1]
+            assert curved["id"] == line["id"] and curved["shape"] == "line"
+            assert [(round(p["x"]), round(p["y"])) for p in curved["controls"]] == [
+                (280, 290), (380, 250), (480, 290)]
+            shot(editor, "shape-active-curve")
+            pixel("shape-active-curve", 14, rail_point("shapes")[1], (255, 202, 40))
+            document_pixel("shape-active-curve", 330, 270, (255, 59, 92), 8)
+            saved = layers()
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "active-shape editor closes")
+            editor = reopen()
+            assert layers() == saved
+            run("xdotool", "windowsize", "--sync", editor, "760", "540")
+            shot(editor, "shape-active-reopened-minimum")
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "active-shape suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["active-rectangle-body", "body-move-pixels", "active-corner-resize",
+                           "active-rotation", "rotation-cancel", "single-undo-redo",
+                           "empty-space-new-shape", "active-line-starter", "curve-pixels",
+                           "retained-active-tool", "exact-draft-reopen", "minimum-layout", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native active shapes: move, resize, rotate, cancel, curve, undo, pixels, draft")
+            return
+
         if args.canvas_interactions_only:
             accent = (255, 202, 40)
             stroke = (255, 59, 92)
@@ -1973,6 +2171,44 @@ def main():
             save_layers(lambda values: len(values[-1]["controls"]) == 3, "curve point undo")
             toolbar_click("redo")
             save_layers(lambda values: len(values[-1]["controls"]) == 2, "curve point redo")
+
+            # Lock blocks canvas dots, not the shipping Properties commands.
+            layer_click(0, "lock")
+            locked = save_layers(lambda values: values[-1]["locked"], "locked line")[-1]
+            assert len(locked["controls"]) == 2
+            document_drag((180, 150), (140, 110))
+            document_double_click((280, 150))
+            assert save_layers(lambda values: values[-1] == locked, "locked canvas gestures ignored")[-1] == locked
+            layer_click(0)  # The blocked canvas press cleared UI selection.
+            properties_end()
+            shot(editor, "locked-curve-straighten")
+            end_click(80, 82)
+            straight = save_layers(lambda values: values[-1]["controls"] == [], "locked Properties Straighten")[-1]
+            assert straight == dict(locked, controls=[])
+            toolbar_click("undo")
+            assert save_layers(lambda values: values[-1] == locked, "locked Straighten is one undo step")[-1] == locked
+            properties_end()
+            end_click(80, 82)
+            save_layers(lambda values: values[-1]["controls"] == [], "straighten before bending")
+            properties_end()
+            shot(editor, "locked-curve-slider")
+            # Keep focus through worker edits: Home is -100%, then three Right
+            # keys reach -97%, each with its own undo step.
+            end_slider(96, "Home", "Right", "Right", "Right", x=INSPECTOR_WIDTH // 2)
+            bent = save_layers(lambda values: len(values[-1]["controls"]) == 1 and
+                               values[-1]["controls"][0] == {"x": 380, "y": -238}, "locked Curve -97 percent")[-1]
+            assert bent == dict(locked, controls=[{"x": 380, "y": -238}])
+            shot(editor, "locked-curve-keyboard-result")
+            # Restore the earlier curve before the remainder of the canvas suite.
+            for controls in ([{"x": 380, "y": -242}], [{"x": 380, "y": -246}],
+                             [{"x": 380, "y": -250}], [], locked["controls"]):
+                toolbar_click("undo")
+                restored = dict(locked, controls=controls)
+                assert save_layers(lambda values: values[-1] == restored,
+                                   "undo each locked Properties edit")[-1] == restored
+            layer_click(0, "lock")
+            save_layers(lambda values: not values[-1]["locked"], "unlock line for canvas suite")
+            properties_start()
 
             # Expand canvas: a second line hangs past the right edge.
             draw_tool("line")
@@ -2050,6 +2286,8 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["curve-starter-drag", "curve-point-double-click-remove", "curve-undo-redo",
+                           "locked-canvas-curve-guard", "locked-properties-straighten", "locked-properties-bend",
+                           "curve-keyboard-focus-through-worker", "curve-discrete-key-undo", "locked-properties-undo",
                            "expand-canvas-action", "expand-canvas-single-undo", "xdnd-drop-guide-top",
                            "xdnd-drop-placed-above", "drop-single-undo", "curve-draft-reopen",
                            "original-unchanged"],
@@ -2281,8 +2519,13 @@ def main():
                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            check=True, timeout=10)
             run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".3")
-            assert run("xclip", "-selection", "clipboard", "-o") == oversized
+            # Clipboard publication follows a UI repaint. Wait for the one
+            # accepted Copy command, without reissuing it or relying on a
+            # fixed sleep under software rendering / concurrent build load.
+            copied = wait(lambda: value if (value := run("xclip", "-selection", "clipboard", "-o"))
+                          == oversized else None, "selected oversized input copied after preview error")
             shot(editor, "text-input-error")
+            assert copied == oversized, (len(copied), copied[:80])
             assert draft_bytes() == before, "failed previews must not save"
             run("xdotool", "key", "ctrl+a")
             type_text("Recovered", 1)
@@ -2323,10 +2566,15 @@ def main():
                                   "existing Text hit edits and commits on click-away")[-1]
             assert revised["id"] == created["id"]
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            assert save_layers(lambda values: len(values) == 2, "existing input single undo")[-1] == created
+            # An edit and its undo have the same layer count. Wait for the exact
+            # old layer, not a stable but not-yet-updated autosave manifest.
+            assert save_layers(lambda values: len(values) == 2 and values[-1] == created,
+                               "existing input single undo")[-1] == created
+            shot(editor, "text-input-existing-undo")
 
-            # Finishing/undo returns to Select. Double-click edits the same layer
+            # Select explicitly; finishing/undo keeps Text active. Double-click edits the same layer
             # without switching to the Text tool or committing a move/resize.
+            toolbar_click("layers")
             x, y = document_point((110, 78))
             run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
                 "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".3")
@@ -2343,7 +2591,95 @@ def main():
             assert math.isclose(double_clicked["x"] + double_clicked["width"] / 2,
                                 created["x"] + created["width"] / 2, abs_tol=1e-6)
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            assert save_layers(lambda values: len(values) == 2, "double-click edit single undo")[-1] == created
+            assert save_layers(lambda values: len(values) == 2 and values[-1] == created,
+                               "double-click edit single undo")[-1] == created
+
+            # Outlined typing must remain hollow even when TextEdit recolors
+            # selected glyphs. The document renderer already has this style;
+            # exercise the separate live input, not only the accepted preview.
+            resize_editor(1000, 1001, "sleep", ".3")
+            toolbar_click("layers")
+            click(editor, *document_point((600, 320)))
+            toolbar_click("draw")
+            draw_tool("text")
+            prop_click(95, TEXT_DEFAULTS["style"])
+            prop_click(60, 271)  # Outlined: Plain, Standard, Rounded, Outlined.
+            prop_field(TEXT_DEFAULTS["size"], 128, x=59)
+            before = draft_bytes()
+            begin_input((100, 140))
+            type_text("Oo", 1)
+            shot(editor, "text-input-outline-wide-stroke")
+            assert draft_bytes() == before
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            large = save_layers(lambda values: len(values) == 3, "large outlined input finishes")[-1]
+            assert large["outlined"] and large["fontSize"] == 128 and large["text"] == "Oo"
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 2 and values[-1] == created,
+                        "large outlined creation undo")
+            # Undo can restore the prior selected layer. Deselect before
+            # changing defaults, rather than typing into its live Properties.
+            toolbar_click("layers")
+            click(editor, *document_point((600, 320)))
+            toolbar_click("draw")
+            draw_tool("text")
+            prop_field(TEXT_DEFAULTS["size"], 72, x=59)
+            before = draft_bytes()
+            begin_input((300, 180))
+            type_text("BOLD", 1)
+            shot(editor, "text-input-outline-new")
+            assert draft_bytes() == before
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            outlined = save_layers(lambda values: len(values) == 3, "outlined input finishes")[-1]
+            assert outlined["text"] == "BOLD" and outlined["outlined"]
+            assert outlined["fontSize"] == 72 and outlined["background"] is None
+            toolbar_click("layers")
+            prop_click(37, 430)  # Existing Text Properties: Bold.
+            bold = save_layers(lambda values: values[-1]["bold"], "outlined bold applied")[-1]
+            before = draft_bytes()
+            begin_input((300, 200))
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"BOLD",
+                 "outlined selection copied from the live input")
+            shot(editor, "text-input-outline-selected")
+            run("xdotool", "key", "ctrl+End", "Left", "sleep", ".2")
+            shot(editor, "text-input-outline-caret")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == bold, "unchanged outlined input")[-1] == bold
+            assert draft_bytes() == before
+            toolbar_click("layers")
+            layer_click(0)  # Unchanged input restores its previous selection.
+            # A one-line 72pt label has a 90px frame. Turn its top grip to
+            # the right of the centre with the shipping Shift snap (90°).
+            center_x = bold["x"] + bold["width"] / 2
+            center_y = bold["y"] + 45
+            _, _, scale = fit_geometry()
+            radius = 45 + 28 / scale
+            # drag() uses the historical left-inspector fixture coordinates.
+            drag((center_x + 238, center_y - radius + 89),
+                 (center_x + radius + 238, center_y + 89), shift=True)
+            rotated = save_layers(lambda values: math.isclose(values[-1].get("rotation", 0),
+                                  math.pi / 2, abs_tol=1e-6), "outlined label rotated")[-1]
+            before = draft_bytes()
+            begin_input((center_x, center_y))
+            run("xdotool", "key", "ctrl+End", "Left", "sleep", ".2")
+            shot(editor, "text-input-outline-rotated")
+            run("xdotool", "key", "Escape", "sleep", ".3")
+            save_layers(lambda values: values[-1] == rotated, "unchanged rotated outlined input")
+            assert draft_bytes() == before
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: values[-1] == bold, "outlined rotation undo")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: values[-1] == outlined, "outlined bold undo")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 2 and values[-1] == created, "outlined creation undo")
+            toolbar_click("layers")
+            click(editor, *document_point((600, 320)))
+            toolbar_click("draw")
+            draw_tool("text")
+            prop_click(95, TEXT_DEFAULTS["style"])
+            prop_click(60, 431)  # Rounded Box, restoring the suite's defaults.
+            prop_field(TEXT_DEFAULTS["size"], 24, x=59)
+            resize_editor(1000, 700, "sleep", ".3")
 
             begin_input((400, 250))
             resize_editor(760, 540, "sleep", ".3")
@@ -2375,6 +2711,10 @@ def main():
                            "error-recovery-one-undo", "preview-no-draft", "multiline-exact", "one-create-undo",
                            "redo-exact", "existing-hit-same-id", "click-away-commits", "existing-one-undo", "minimum-input",
                            "select-double-click-same-id-position", "double-click-one-undo",
+                           "outlined-wide-stroke-preview", "outlined-wide-stroke-undo",
+                           "outlined-preview-no-draft", "outlined-input-style", "outlined-selection-clipboard",
+                           "outlined-unchanged-no-draft", "outlined-bold-and-create-undo",
+                           "outlined-rotated-input", "outlined-rotation-undo",
                            "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text input: transient typing, multiline, existing hit, undo, minimum and quit")
@@ -2395,6 +2735,7 @@ def main():
             assert rounded["align"] == "center" and rounded["y"] == 200
             assert math.isclose(rounded["x"] + rounded["width"] / 2, 480, abs_tol=1e-6)
             assert json.loads(draft.read_text())["fonts"]["families"]["rounded"] == "Nunito"
+            toolbar_click("layers")  # Deselect with Select; Text stays active after Finish.
             fixture_click((28, 109))
             shot(editor, "text-defaults-rounded")
             document_pixel("text-defaults-rounded", 480, 196, (17, 19, 24))
@@ -2434,6 +2775,7 @@ def main():
             assert text["text"] == "Native" and text["align"] == "center" and text["y"] == 80
             assert math.isclose(text["x"] + text["width"] / 2, 200, abs_tol=1e-6)
             assert text["background"] == "#111318" and text["autoWidth"]
+            toolbar_click("layers")
             fixture_click((28, 109))  # Deselect: the rotation stem crosses the plate sample.
             shot(editor, "text-defaults-created")
             document_pixel("text-defaults-created", 200, 76, (17, 19, 24))
@@ -2490,7 +2832,7 @@ def main():
             PLATE_ROWS = 106
             # With the shadow open and Properties scrolled to its end, rows
             # measured up from the bottom of the Properties area.
-            TEXT_SHADOW_END = {"blur": 85, "offset": 27}
+            TEXT_SHADOW_END = {"opacity": 154, "blur": 85, "offset": 27}
 
             def shadow_rows(plated):
                 check = TEXT["shadow"] + (PLATE_ROWS if plated else 0)
@@ -2512,6 +2854,12 @@ def main():
             assert created["text"] == "Text" and created["fontFamily"] == "sans"
             assert created["align"] == "left" and created.get("autoWidth") is True
             shot(editor, f"text-created-{args.appearance}")
+            pixel(f"text-created-{args.appearance}", 14, rail_point("text")[1], (255, 202, 40))
+            # Text keeps its live style fields without transform chrome. Select
+            # restores the rotation section used by these inspector coordinates.
+            toolbar_click("layers")
+            shot(editor, f"text-selected-{args.appearance}")
+            pixel(f"text-selected-{args.appearance}", 14, rail_point("select")[1], (255, 202, 40))
             prop_click(95, TEXT["style"])
             shot(editor, f"text-style-menu-{args.appearance}")
             run("xdotool", "key", "Escape")
@@ -2538,10 +2886,13 @@ def main():
             save_layers(lambda values: values[-1].get("dropShadow") is True
                         and values[-1]["background"] is None, "glyph shadow applied")
             prop_swatch(rows["color"], "#2d9cff", indent=SHADOW_INDENT)
-            prop_slider(rows["opacity"], "Home", *["Prior"] * 6, *["Right"] * 5)  # 65%.
-            # The Blur slider and offsets sit below the window: scroll to the end.
+            # Expanded numeric rows sit below the viewport; reach them before
+            # pressing keys rather than clicking clipped inspector content.
             properties_end()
             shot(editor, "text-shadow-scrolled")
+            end_slider(TEXT_SHADOW_END["opacity"], "Home", *["Prior"] * 6, *["Right"] * 5)  # 65%.
+            save_layers(lambda values: values[-1]["dropShadowStyle"]["opacity"] == 65,
+                        "shadow opacity applied")
             end_slider(TEXT_SHADOW_END["blur"], "Home", *["Right"] * 3)  # 3 px.
             end_field(TEXT_SHADOW_END["offset"], "17", x=100)
             end_field(TEXT_SHADOW_END["offset"], "-8", x=240)
@@ -2653,6 +3004,22 @@ def main():
             assert reopened.get("dropShadow") is True
             assert reopened["dropShadowStyle"] == custom_shadow
             assert not reopened["outlined"]
+            toolbar_click("draw")
+            draw_tool("pen")
+            start, end = document_point((100, 60)), document_point((180, 100))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
+            placed = save_layers(lambda values: len(values) == 3, "Pen Properties fixture")
+            assert placed[-1]["kind"] == "path" and placed[-1]["points"]
+            properties_start()
+            shot(editor, f"pen-created-properties-{args.appearance}")
+            pixel(f"pen-created-properties-{args.appearance}", 14, rail_point("pen")[1], (255, 202, 40))
+            toolbar_click("layers")
+            properties_start()
+            shot(editor, f"pen-selected-properties-{args.appearance}")
+            pixel(f"pen-selected-properties-{args.appearance}", 14, rail_point("select")[1], (255, 202, 40))
+            assert layers() == placed, "switching tool Properties must not edit layers"
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "text suite quits")
@@ -2668,7 +3035,8 @@ def main():
                            "text-plate-shadow", "text-shadow-undo-redo-reopen",
                            "text-outlined-style-pixels", "text-outlined-style-undo",
                            "text-undo-redo", "text-draft-reopen",
-                           "text-minimum-appearance", "original-unchanged"],
+                           "text-minimum-appearance", "pen-properties-tool-switch-no-edit",
+                           "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text UI: create, style, undo/redo, save/reopen, minimum")
             return
@@ -3384,7 +3752,8 @@ def main():
         assert all(abs(actual - expected) < 1e-12 for actual, expected in zip(
             (arrow["x"], arrow["y"], arrow["endX"], arrow["endY"]), (512, 231, 342, 101)))
         shot(editor, "open-shape-arrow")
-        fixture_pixel("open-shape-arrow", 435, 255, (255, 59, 92))
+        # Sample 40% along the shaft, document (444,179), not its 50% starter dot.
+        fixture_pixel("open-shape-arrow", 452, 268, (255, 59, 92))
         fixture_pixel("open-shape-arrow", 310, 260, (255, 59, 92))
         drag((500, 400), (502, 400))  # Two screen/document pixels is below the 3px gesture threshold.
         save_layers(lambda values: len(values) == 5, "short arrow cancellation")
@@ -3489,8 +3858,10 @@ def main():
         # Two swatch rows put Opacity, Blur and the offsets 32px higher.
         annotation_slider(shadow + 177, shadowed, "End", "Next", "Next")  # 80%.
         annotation_slider(shadow + 246, shadowed, "Home")  # 0 px blur.
-        annotation_field(shadow + 306, shadowed, "25", 100)
-        annotation_field(shadow + 306, shadowed, "-12", 240)
+        # The pinned-heading layout puts the text centres 12px above the old
+        # click points, which hit the lower padding instead of focusing input.
+        annotation_field(shadow + 294, shadowed, "25", 100)
+        annotation_field(shadow + 294, shadowed, "-12", 240)
         styled = save_layers(lambda values: values[-1]["style"].get("dropShadowStyle", {}) == {"color": "#ff8a22", "opacity": 80, "blur": 0, "offsetX": 25, "offsetY": -12}, "custom annotation shadow")[-1]
         assert styled["id"] == annotation["id"] and styled["locked"]
         assert styled["style"]["fill"] == "#36c96b" and styled["style"]["strokeWidth"] == 12

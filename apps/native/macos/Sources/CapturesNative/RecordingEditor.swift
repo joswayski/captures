@@ -993,8 +993,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var cropAdjustmentButton: CaptureButton!
     private var previewFitButton: CaptureButton!
     private var previewActualButton: CaptureButton!
-    private let playbackLoop = RecordingPreviewToggle(title: "Loop preview", leadingGlyph: "↻")
-    private let playbackSound = RecordingPreviewToggle(title: "Sound", leadingGlyph: nil)
+    private let playbackLoop = RecordingPreviewToggle(title: "Loop preview", leadingIcon: "loop")
+    private let playbackSound = RecordingPreviewToggle(title: "Sound", leadingIcon: nil)
     private var destinationDirectory = ""
     private var compressQuality = "highest"
     private var estimating = false
@@ -3855,13 +3855,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 /// on/off state, keyboard activation and accessibility.
 final class RecordingPreviewToggle: NSButton {
     var tokens: Tokens? { didSet { needsDisplay = true } }
-    /// A leading text glyph, e.g. the shipping "↻" before Loop preview.
-    let leadingGlyph: String?
+    /// A shared vector glyph, independent of platform font coverage.
+    let leadingIcon: String?
     private var hoverTracking: NSTrackingArea?
     private var hovered = false
 
-    init(title: String, leadingGlyph: String?) {
-        self.leadingGlyph = leadingGlyph
+    init(title: String, leadingIcon: String?) {
+        self.leadingIcon = leadingIcon
         super.init(frame: .zero)
         self.title = title
         setButtonType(.pushOnPushOff)
@@ -3903,15 +3903,16 @@ final class RecordingPreviewToggle: NSButton {
         let ink = tokens.color(!isEnabled ? "text-faint" : on || lit ? "text" : "text-subtle")
         let label: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium), .foregroundColor: ink]
-        let glyph: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: ink]
         let titleSize = (title as NSString).size(withAttributes: label)
-        let glyphSize = leadingGlyph.map { ($0 as NSString).size(withAttributes: glyph) } ?? .zero
-        let gap = leadingGlyph == nil ? 0 : tokens.number("s-3")
-        var x = max(tokens.number("s-4"), (bounds.width - glyphSize.width - gap - titleSize.width) / 2)
-        if let leadingGlyph {
-            (leadingGlyph as NSString).draw(at: NSPoint(x: x, y: (bounds.height - glyphSize.height) / 2),
-                                            withAttributes: glyph)
-            x += glyphSize.width + gap
+        let iconSize: CGFloat = leadingIcon == nil ? 0 : 12
+        let gap = leadingIcon == nil ? 0 : tokens.number("s-3")
+        var x = max(tokens.number("s-4"), (bounds.width - iconSize - gap - titleSize.width) / 2)
+        if let leadingIcon {
+            ink.setStroke()
+            ShippingIcons.stroke(leadingIcon,
+                in: NSRect(x: x, y: (bounds.height - iconSize) / 2, width: iconSize, height: iconSize),
+                width: 2.8, flipped: isFlipped)
+            x += iconSize + gap
         }
         (title as NSString).draw(at: NSPoint(x: x, y: (bounds.height - titleSize.height) / 2),
                                  withAttributes: label)

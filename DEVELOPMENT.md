@@ -328,6 +328,12 @@ font-bearing draft manifests also retain it. Run `apps/native/x11_editor_smoke.p
 exercise real Text controls; `--text-draft-only` retains the synthetic-font regression.
 Use `--text-defaults-only` for pre-placement style/size/color, centered boxes,
 unchanged drafts while configuring, undo/redo and default reset after reopening.
+Use `--text-input-only` for transient composing, preview-error clipboard ownership,
+outlined glyphs with selection/caret and rotation, unchanged drafts, undo and quit.
+Use `--properties-heading-only` for pinned image/shape/Text/Crop titles, actual
+field scrolling at minimum size, and unchanged drafts/originals.
+The `--canvas-interactions-only` suite also checks locked-line Curve/Straighten
+Properties, exact geometry and undo, while canvas curve gestures stay blocked.
 Use `--output-presets-only` to exercise native compression presets and their
 descriptions, the automatic before/after comparison with a dragged split handle,
 Page Up/Home keys and Hide/Show, folder reveals after each Save, exact Highest

@@ -147,6 +147,16 @@ enum NativeEditorCanvas {
         return guide
     }
 
+    static func shapeBodyHit(documentJSON: String, layerID: String, shape: String,
+                             point: CGPoint, radius: Double) throws -> Bool {
+        let result = try query(documentJSON: documentJSON, [
+            "operation": "shape_body", "id": layerID, "shape": shape,
+            "point": ["x": Double(point.x), "y": Double(point.y)], "radius": radius,
+        ])
+        guard let hit = result["hit"] as? Bool else { throw AppBridgeError.invalidResponse }
+        return hit
+    }
+
     static func curveHit(documentJSON: String, layerID: String, point: CGPoint, radius: Double) throws -> NativeCurveHit {
         let result = try query(documentJSON: documentJSON, [
             "operation": "curve", "id": layerID,
@@ -293,6 +303,7 @@ final class EditorCurveControls: NSView {
     private(set) var straightenButton: CaptureButton!
     private let help = NSTextField(wrappingLabelWithString: NativeEditorCanvas.curveHelp)
     private(set) var handles: NativeCurveHandles?
+    private var stagedBend: Double?
     private var ready = false
 
     init(tokens: Tokens, width: CGFloat = ScreenshotEditorController.contentWidth) {
@@ -338,6 +349,7 @@ final class EditorCurveControls: NSView {
 
     func setHandles(_ value: NativeCurveHandles?) {
         handles = value
+        stagedBend = nil
         isHidden = value == nil
         let slider = value?.slider ?? true
         bendSlider.isHidden = !slider; bendValue.isHidden = !slider
@@ -367,7 +379,8 @@ final class EditorCurveControls: NSView {
         guard ready, let handles else { return }
         let percent = bendSlider.doubleValue.rounded()
         bendValue.stringValue = "\(Int(percent))%"
-        guard percent != handles.bendPercent else { return }
+        guard percent != (stagedBend ?? handles.bendPercent) else { return }
+        stagedBend = percent
         apply(["kind": "bend", "bend": percent / 100])
     }
 }

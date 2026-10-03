@@ -1,6 +1,10 @@
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        OnceLock,
+        mpsc::{self, Receiver, Sender},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -250,6 +254,8 @@ pub struct Preferences {
     shortcut_recorder: Option<ShortcutRecorder>,
     shortcut_input: shortcut_input::Bridge,
     suppress_shortcut_commands: bool,
+    shortcut_rects: BTreeMap<&'static str, [f32; 4]>,
+    last_shortcut_probe: Option<Value>,
     feedback: crate::feedback::FeedbackWindow,
     login_root: Option<PathBuf>,
     login_enabled: Option<bool>,
@@ -349,6 +355,8 @@ impl Preferences {
             shortcut_recorder: None,
             shortcut_input,
             suppress_shortcut_commands: false,
+            shortcut_rects: BTreeMap::new(),
+            last_shortcut_probe: None,
             feedback: crate::feedback::FeedbackWindow::default(),
             login_root: None,
             login_enabled: None,
@@ -832,6 +840,7 @@ impl Preferences {
                     ui.spacing_mut().item_spacing.y = 0.;
                     self.find_rows.clear();
                     self.card_tops.clear();
+                    self.shortcut_rects.clear();
                     self.appearance(ui, t);
                     self.capture(ui, t);
                     self.shortcuts(ui, t);
@@ -850,6 +859,20 @@ impl Preferences {
             viewport.top() + 80.,
             at_end && output.state.offset.y > 0.,
         );
+        if shortcut_probe_enabled() {
+            let probe = json!({
+                "section": preferences::SECTIONS[self.active_section].id,
+                "card_top": self.card_tops[2],
+                "page": [viewport.left(), viewport.top(), viewport.right(), viewport.bottom()],
+                "controls": self.shortcut_rects,
+                "recording": self.shortcut_recorder.as_ref().map(|recorder| recorder.field.label()),
+                "save_error": self.save_error.is_some(),
+            });
+            if self.last_shortcut_probe.as_ref() != Some(&probe) {
+                crate::emit("preferences-shortcuts-layout", probe.clone());
+                self.last_shortcut_probe = Some(probe);
+            }
+        }
         history
     }
 
@@ -865,6 +888,7 @@ impl Preferences {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = t.number("s-6");
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.;
                         ui.label(RichText::new(preferences::TITLE).size(t.number("text-xl")));
@@ -901,11 +925,22 @@ impl Preferences {
                             if pop.running(elapsed, reduced) {
                                 ui.ctx().request_repaint();
                             }
+                            // Reserve History after the pill in this RTL layout.
+                            // Shipping caps errors at 360px and other statuses at 42vw.
+                            let cap = if kind == "error" {
+                                360.
+                            } else {
+                                ui.ctx().content_rect().width() * 0.42
+                            };
+                            let available = ui.available_width()
+                                - widgets::button_width(ui, t, preferences::HISTORY_ACTION)
+                                - t.number("s-4");
                             widgets::status_pill(
                                 ui,
                                 t,
                                 kind,
                                 &message,
+                                cap.min(available),
                                 pop.pose_at(elapsed, reduced),
                             );
                         }
@@ -1893,6 +1928,13 @@ impl Preferences {
                     )
                     .inner;
                 let started = response.clicked() && !recording;
+                if shortcut_probe_enabled() {
+                    let rect = response.rect;
+                    this.shortcut_rects.insert(
+                        field.label(),
+                        [rect.left(), rect.top(), rect.right(), rect.bottom()],
+                    );
+                }
                 if started {
                     this.shortcut_recorder = Some(ShortcutRecorder::new(field));
                     this.shortcut_input.start();
@@ -2301,6 +2343,13 @@ fn shortcut_recording_lost_focus(active: bool, just_started: bool, has_focus: bo
     active && !just_started && !has_focus
 }
 
+/// The existing opt-in UI probe reports geometry and readiness only,
+/// never bindings, typed keys or settings paths.
+fn shortcut_probe_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some())
+}
+
 pub(crate) fn shortcut_platform() -> ShortcutPlatform {
     #[cfg(target_os = "windows")]
     return ShortcutPlatform::Windows;
@@ -2528,6 +2577,89 @@ fn set(v: &mut Value, path: &[&str], value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_status_stays_single_line_and_clear_of_copy_at_supported_widths() {
+        let error = "The Region shortcut conflicts with New Capture. Choose a different combination before trying to save these preferences again.";
+        for light in [false, true] {
+            let tokens = crate::tokens::load()[if light {
+                "light-mustard"
+            } else {
+                "dark-mustard"
+            }]
+            .clone();
+            for width in [880., 721., 720., 560.] {
+                let dir = tempfile::tempdir().unwrap();
+                let ctx = egui::Context::default();
+                tokens.apply(&ctx, light);
+                let mut prefs =
+                    Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+                for kind in ["error", "idle", "saving", "saved"] {
+                    prefs.saving = kind == "saving";
+                    prefs.saved_until =
+                        (kind == "saved").then(|| Instant::now() + Duration::from_secs(2));
+                    prefs.save_error = (kind == "error").then(|| error.to_owned());
+                    prefs.status_shown_at = Some(Instant::now() - Duration::from_secs(1));
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 660.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            if !captures_app::app_windows::compact(width) {
+                                ui.set_max_width(width - 196.);
+                            }
+                            prefs.header(ui, &tokens);
+                        },
+                    );
+                    output.textures_delta.clear();
+                    let painted_text = |label: &str| {
+                        output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text() == label => {
+                                    Some(text)
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| panic!("missing {label:?} at {width}, {kind}"))
+                    };
+                    let caption = painted_text(preferences::SUBTITLE);
+                    let history = painted_text(preferences::HISTORY_ACTION);
+                    assert_eq!(caption.galley.rows.len(), 1);
+                    assert!(
+                        caption.pos.x + caption.galley.size().x + tokens.number("s-6")
+                            <= history.pos.x - tokens.number("s-5"),
+                        "{width}, {kind}: header controls must not cover the subtitle"
+                    );
+                    let message = match kind {
+                        "saving" => Some(preferences::SAVING.to_owned()),
+                        "saved" => Some(preferences::SAVED.to_owned()),
+                        "error" => Some(preferences::save_error(error)),
+                        _ => None,
+                    };
+                    if let Some(message) = message {
+                        let status = painted_text(&message);
+                        assert_eq!(status.galley.rows.len(), 1, "{width}, {kind}");
+                        assert_eq!(status.galley.elided, kind == "error", "{width}, {kind}");
+                        let right = status.pos.x + status.galley.size().x + tokens.number("s-4");
+                        if kind == "error" {
+                            let retry = painted_text("Retry");
+                            assert!(
+                                right + tokens.number("s-4") <= retry.pos.x - tokens.number("s-5")
+                            );
+                        } else {
+                            assert!(right <= width - tokens.number("s-8"));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn login_item_is_explicit_pending_guarded_and_os_authoritative() {

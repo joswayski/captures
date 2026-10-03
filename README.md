@@ -627,6 +627,9 @@ edited preview into shared document coordinates, including reverse and off-canva
 gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
 cancels transient geometry without editing the document. Arrow outlines and Pen
 smoothing come from shared Rust; Pen supports click-only dots and round caps.
+In both native hosts, newly placed shapes keep their move, resize, rotation and
+curve grips live without switching to Select. The active shape tool moves the body
+of its own selected shape; dragging empty space starts another shape.
 Both native editors offer stroke/fill colors, stroke width and opacity before
 drawing. These choices stay local to the editor; drawing creates one undoable
 layer. Pre-placement drop-shadow controls include color, opacity, blur and X/Y
@@ -636,13 +639,15 @@ An approximate vector guide appears until the first pixel frame is ready.
 Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
 as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
 persistence.
+Both native hosts keep the Properties title visible while its fields scroll,
+including at the minimum window size; the title does not cover the controls.
 In both native hosts, **Layers** supports clicking the edited preview to select an
 unlocked visible layer, or empty space to clear selection. Drag shows a translated
 selection outline; release moves the layer in one undoable edit. Escape, focus loss,
 preview resizing or leaving Layers cancels the drag. Pixels update on release, not
 continuously during dragging; selection alone does not change the document.
 The selected layer also exposes a **rotation grip** when it fits inside the image.
-Drag it to rotate; hold Shift for stops configured under **Layers → Shift rotation snap**
+Drag it to rotate; hold Shift for stops configured under **Properties → Shift rotation snap**
 (1–180°, initially 15°). The increment is per-editor UI state, not a document edit
 or saved preference. Rotation uses the same outline-only
 preview, cancellation, undo and draft behavior. Hidden or locked layers have no
@@ -654,7 +659,11 @@ Resizing uses an outline-only preview and commits on release.
 Selected lines and arrows show curve dots: drag a dot to bend the stroke, double-click
 the path to add a point and double-click a point to remove it. Layers offers a Curve
 slider for straight or single-bend strokes and Straighten for multi-point ones. Curves
-survive saves and drafts. A selected layer that hangs past the canvas shows an
+survive saves and drafts. Like shipping, Curve and Straighten remain available in
+Properties on locked or hidden layers; locked layers still reject canvas-dot edits.
+Curve controls keep keyboard focus while edits run in the background. Consecutive
+steps apply in order, with a separate undo step for each key or slider release.
+A selected layer that hangs past the canvas shows an
 **Expand canvas** action; hovering previews the grown canvas and one click grows it as
 a single undo step. Dropping PNG, JPEG, WebP or TIFF files on the canvas adds image
 layers where the placement guide shows (Place above/left/right/below, or stacked);
@@ -697,11 +706,14 @@ Focused native controls retain typing and letter navigation.
 Both hosts also keep a left tool rail visible beside the canvas, with the shipping
 labels and hover tips: Select & move, Crop, Text, Shapes, Arrow, Freehand and Eraser.
 Shapes opens Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last
-choice. The rail chooses the inspector (there are no section tabs); pending work
-disables it. Like shipping, the header holds the canvas W × H fields, Trim edges and
-the canvas background, then Undo/Redo (hidden at 1040 points and narrower), the zoom
-group and Add images. Like shipping, both hosts autosave the edit draft 700 ms after
-each change and flush it when the editor closes, without a save prompt. Reopening a
+choice. The rail chooses the tool (there are no section tabs); pending work
+disables it. Drawing selects the new layer and shows its Properties while keeping
+the drawing tool active. Choosing Crop or a drawing tool clears selection and
+restores that tool's controls. Like shipping, the header holds the canvas W × H
+fields, Trim edges and the canvas background, then Undo/Redo (hidden at 1040 points
+and narrower), the zoom group and Add images. Like shipping, both hosts autosave
+the edit draft 700 ms after each change and flush it when the editor closes,
+without a save prompt. Reopening a
 draft shows the shipping restored-edits notice with Discard, and Recenter
 appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.

@@ -1048,8 +1048,14 @@ impl<'a> NumberInput<'a> {
         {
             set(value, self.clamp(parsed));
         }
-        if text.has_focus() {
+        // The final character can arrive with Enter. Keep that updated buffer
+        // through the following frame's lost_focus report, not the prior text.
+        if text.has_focus() || focused_before {
             ui.data_mut(|data| data.insert_temp(buffer_id, buffer.clone()));
+        } else {
+            ui.data_mut(|data| data.remove::<String>(buffer_id));
+        }
+        if text.has_focus() {
             // Keep vertical arrows for stepping instead of moving focus.
             ui.memory_mut(|memory| {
                 memory.set_focus_lock_filter(
@@ -1062,10 +1068,6 @@ impl<'a> NumberInput<'a> {
                 );
             });
             focus_ring(ui, t, rect, radius);
-        } else if !focused_before {
-            // Kept for one frame after focus leaves: egui reports
-            // `lost_focus` on the following frame.
-            ui.data_mut(|data| data.remove::<String>(buffer_id));
         }
 
         if steppers {
@@ -1202,6 +1204,17 @@ impl<'a> RangeSlider<'a> {
     /// Returns the track's response (probe it for the thumb's travel),
     /// marked changed when `value` changed.
     pub fn show(self, ui: &mut egui::Ui, t: &Tokens, value: &mut f64) -> egui::Response {
+        self.show_steps(ui, t, value).0
+    }
+
+    /// Also returns individual keyboard changes in event order. Consumers
+    /// with discrete undo steps must not collapse keys received in one frame.
+    pub fn show_steps(
+        self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        value: &mut f64,
+    ) -> (egui::Response, Vec<f64>) {
         use captures_app::controls::range;
         let id = ui.make_persistent_id(self.id_salt);
         let enabled = ui.is_enabled();
@@ -1225,6 +1238,7 @@ impl<'a> RangeSlider<'a> {
         let mut response = ui.interact(track, id, egui::Sense::click_and_drag());
         let travel = track.x_range().shrink(7.);
         let mut next = *value;
+        let mut steps = Vec::new();
         if enabled {
             if response.is_pointer_button_down_on()
                 && let Some(pointer) = response.interact_pointer_pos()
@@ -1246,26 +1260,42 @@ impl<'a> RangeSlider<'a> {
                     );
                 });
                 let big = self.step * 10.;
-                for (key, delta) in [
-                    (egui::Key::ArrowRight, Some(self.step)),
-                    (egui::Key::ArrowUp, Some(self.step)),
-                    (egui::Key::ArrowLeft, Some(-self.step)),
-                    (egui::Key::ArrowDown, Some(-self.step)),
-                    (egui::Key::PageUp, Some(big)),
-                    (egui::Key::PageDown, Some(-big)),
-                    (egui::Key::Home, None),
-                    (egui::Key::End, None),
-                ] {
-                    // Every press counts, even several in one frame.
-                    while ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
-                        next = match (key, delta) {
-                            (egui::Key::Home, _) => self.min,
-                            (egui::Key::End, _) => self.max,
-                            (_, Some(delta)) => (next + delta).clamp(self.min, self.max),
-                            _ => next,
+                // Every press counts in arrival order. Grouping by key type
+                // would apply Home after an arrow received later in the frame.
+                ui.input_mut(|input| {
+                    input.events.retain(|event| {
+                        let egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } = event
+                        else {
+                            return true;
                         };
-                    }
-                }
+                        if !modifiers.matches_logically(egui::Modifiers::NONE) {
+                            return true;
+                        }
+                        let previous = next;
+                        next = match key {
+                            egui::Key::ArrowRight | egui::Key::ArrowUp => {
+                                (next + self.step).clamp(self.min, self.max)
+                            }
+                            egui::Key::ArrowLeft | egui::Key::ArrowDown => {
+                                (next - self.step).clamp(self.min, self.max)
+                            }
+                            egui::Key::PageUp => (next + big).clamp(self.min, self.max),
+                            egui::Key::PageDown => (next - big).clamp(self.min, self.max),
+                            egui::Key::Home => self.min,
+                            egui::Key::End => self.max,
+                            _ => return true,
+                        };
+                        if next != previous {
+                            steps.push(next);
+                        }
+                        false
+                    });
+                });
             }
         }
         if next != *value {
@@ -1368,7 +1398,7 @@ impl<'a> RangeSlider<'a> {
                 .wrap(),
             );
         }
-        response
+        (response, steps)
     }
 }
 
@@ -1813,6 +1843,53 @@ mod tests {
     }
 
     #[test]
+    fn number_input_keeps_final_text_received_with_enter() {
+        for deferred in [false, true] {
+            let (ctx, t) = setup();
+            let mut value = 0.;
+            let run = |events: Vec<egui::Event>, value: &mut f64| {
+                let mut field = Rect::NOTHING;
+                frame(&ctx, events, |ui| {
+                    let input = NumberInput::new("last-digit", "Shadow X offset", 120.);
+                    let input = if deferred {
+                        input.commit_on_enter()
+                    } else {
+                        input
+                    };
+                    field = input.show(ui, &t, value).rect;
+                });
+                field
+            };
+            let field = run(vec![], &mut value);
+            let text = egui::pos2(field.left() + 20., field.center().y);
+            run(
+                vec![egui::Event::PointerMoved(text), press(text, true)],
+                &mut value,
+            );
+            run(vec![press(text, false)], &mut value);
+            run(
+                vec![
+                    key(egui::Key::End),
+                    key(egui::Key::Backspace),
+                    egui::Event::Text("1".into()),
+                ],
+                &mut value,
+            );
+            run(
+                vec![egui::Event::Text("7".into()), key(egui::Key::Enter)],
+                &mut value,
+            );
+            for _ in 0..3 {
+                run(vec![], &mut value);
+            }
+            assert_eq!(
+                value, 17.,
+                "Enter must keep the last digit (deferred={deferred})"
+            );
+        }
+    }
+
+    #[test]
     fn range_slider_follows_pointer_and_keys_and_lays_out_marks() {
         let (ctx, t) = setup();
         let marks = [
@@ -1856,5 +1933,29 @@ mod tests {
         assert_eq!(value, 200.);
         run(vec![key(egui::Key::Home)], &mut value);
         assert_eq!(value, 0.);
+        run(
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::ArrowRight),
+                key(egui::Key::PageUp),
+            ],
+            &mut value,
+        );
+        assert_eq!(
+            value, 11.,
+            "Home must precede increments received in the same frame"
+        );
+        run(
+            vec![
+                key(egui::Key::End),
+                key(egui::Key::ArrowLeft),
+                key(egui::Key::PageDown),
+            ],
+            &mut value,
+        );
+        assert_eq!(
+            value, 189.,
+            "End must precede decrements received in the same frame"
+        );
     }
 }

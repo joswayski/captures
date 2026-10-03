@@ -661,7 +661,8 @@ pub(super) fn double_click(
             return true;
         }
     }
-    if let Ok(Some(Element::Shape(shape))) = document.hit_test(point, radius)
+    if view.section == Section::Layers
+        && let Ok(Some(Element::Shape(shape))) = document.hit_test(point, radius)
         && canvas::is_curveable(shape)
         && Some(&shape.base.id) != view.selected_layer.as_ref()
     {
@@ -757,6 +758,9 @@ pub(super) fn hover_hint(
     {
         return Some(hint);
     }
+    if view.section != Section::Layers {
+        return None;
+    }
     match document.hit_test(point, radius) {
         Ok(Some(Element::Shape(shape)))
             if canvas::is_curveable(shape)
@@ -801,6 +805,7 @@ pub(super) fn show_curve_controls(
     let Some(handles) = canvas::curve_handles(shape) else {
         return;
     };
+    let mut edits = Vec::new();
     if handles.slider {
         let staged = view
             .curve_bend
@@ -810,8 +815,9 @@ pub(super) fn show_curve_controls(
         let mut value = staged;
         let marks =
             canvas::CURVE_MARKS.map(|(value, label)| crate::primitives::RangeMark { value, label });
+        let mut steps = Vec::new();
         let response = super::inspector::labelled(ui, tokens, canvas::CURVE_LABEL, |ui| {
-            crate::primitives::RangeSlider::new(
+            let (response, changes) = crate::primitives::RangeSlider::new(
                 ("curve-bend", shape.base.id.as_str()),
                 canvas::CURVE_LABEL,
                 ui.available_width(),
@@ -819,9 +825,11 @@ pub(super) fn show_curve_controls(
                 format!("{}%", value.round()),
             )
             .marks(&marks)
-            .show(ui, tokens, &mut value)
+            .show_steps(ui, tokens, &mut value);
+            steps = changes;
+            response
         });
-        if response.changed() {
+        if response.changed() || !steps.is_empty() {
             view.curve_bend = Some((shape.base.id.clone(), value));
         }
         // Pointer drags commit once on release; keyboard steps commit at once.
@@ -829,19 +837,42 @@ pub(super) fn show_curve_controls(
             || response.clicked()
             || (response.changed() && !response.is_pointer_button_down_on());
         if released
-            && let Some((id, value)) = view.curve_bend.take()
-            && value != handles.bend_percent
+            && steps.is_empty()
+            && let Some((_, value)) = view.curve_bend.as_ref()
+            && (view.pending || *value != handles.bend_percent)
         {
-            submit_curve(view, tx, id, CurveEdit::Bend { bend: value / 100. });
+            edits.push(CurveEdit::Bend { bend: value / 100. });
         }
+        edits.extend(
+            steps
+                .into_iter()
+                .map(|value| CurveEdit::Bend { bend: value / 100. }),
+        );
     } else {
         // Shipping `.screenshot-property-actions` with one button.
         let width = ((ui.available_width() - tokens.number("s-3")) / 2.).floor();
         if super::inspector::action_button(ui, tokens, handles.straighten_label, width, true)
             .clicked()
         {
-            submit_curve(view, tx, shape.base.id.clone(), CurveEdit::Straighten);
+            view.curve_bend = None;
+            edits.push(CurveEdit::Straighten);
         }
+    }
+    for edit in edits {
+        let id = shape.base.id.clone();
+        let key = view.live_once(&format!("curve:{id}"));
+        view.pending_layer_selection = Some(id.clone());
+        view.invalidate_output();
+        // Keep focus and retain every discrete property change in arrival
+        // order, with its own undo step, using the existing worker queue.
+        view.live_edit(
+            tx,
+            key,
+            Request::Layer {
+                id,
+                edit: LayerEdit::Curve { edit },
+            },
+        );
     }
     super::inspector::hint(ui, tokens, canvas::CURVE_HELP);
 }
