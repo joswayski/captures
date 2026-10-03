@@ -1869,6 +1869,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             showError("Couldn’t save screenshot draft before quitting: \(error.localizedDescription)")
             if inlineTextInput != nil { showInlineTextEditor() }
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            publishPresence()
             return false
         }
     }
@@ -6962,6 +6963,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
            !input.requestInFlight, input.finishRequested == nil {
             cancelClose()
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            publishPresence()
         }
         status.stringValue = message; status.textColor = tokens.color("danger-text")
         reportError(message)

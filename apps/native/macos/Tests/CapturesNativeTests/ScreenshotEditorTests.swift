@@ -2123,6 +2123,8 @@ final class ScreenshotEditorTests: XCTestCase {
             let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
                 worker: worker, didSaveCopy: { historyChanges += 1 },
                 writeClipboard: { _ in writes += 1; return true })
+            var presence: [String?] = []
+            controller.presenceChanged = { presence.append($0) }
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             try copyButton(in: controller.root).performClick(nil)
@@ -2154,6 +2156,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(historyChanges, 1, "accepted Save retains its History callback")
             XCTAssertTrue(controller.window.isVisible)
             XCTAssertEqual(controller.state.artifactID, "shot")
+            XCTAssertEqual(presence, ["shot", nil, "shot"], "failed Quit restores mini-preview presence")
             XCTAssertTrue(try copyButton(in: controller.root).isEnabled)
             XCTAssertEqual(worker.closeCount, 0)
 
@@ -2169,6 +2172,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(historyChanges, 1, "retry never repeats completed output")
             XCTAssertNil(controller.state.artifactID)
             XCTAssertFalse(controller.window.isVisible)
+            XCTAssertEqual(presence, ["shot", nil, "shot", nil])
         }
     }
 
@@ -5907,6 +5911,8 @@ final class ScreenshotEditorTests: XCTestCase {
                                   "layer_id": "fresh", "is_new": true])
         }
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        var presence: [String?] = []
+        controller.presenceChanged = { presence.append($0) }
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showDraw(in: controller.root)
@@ -5926,12 +5932,14 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.window.firstResponder === editor)
         XCTAssertEqual(worker.closeCount, 0)
         XCTAssertEqual(controller.state.artifactID, "shot")
+        XCTAssertEqual(presence, ["shot", nil, "shot"], "failed text Finish restores mini-preview presence")
         try render(controller.root, name: "screenshot-editor-close-text-recovered-dark")
         worker.deferRequests = false
         worker.response = { _ in self.snapshot(id: "shot", unsaved: true,
             layers: [self.textLayer(id: "fresh", text: "recoverable\nΩ🙂")]) }
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         XCTAssertEqual(worker.closeCount, 1, "the recovered buffer can finish and close on retry")
+        XCTAssertEqual(presence, ["shot", nil, "shot", nil])
     }
 
     func testQuitBarrierLeavesMainQueueResponsiveAndRejectsLateFocusFinish() throws {
