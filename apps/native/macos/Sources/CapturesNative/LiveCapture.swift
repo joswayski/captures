@@ -239,6 +239,7 @@ final class LiveCaptureController: NSObject {
     }()
     private var screenshotEditor: ScreenshotEditorController?
     private var recordingEditor: RecordingEditorController?
+    private var editorTerminationPending = false
     private var pendingOpenImages: [String] = []
     private(set) var externalOpenPending = false
     private var externalOpenErrors: [String] = []
@@ -1252,7 +1253,7 @@ final class LiveCaptureController: NSObject {
 
     private var historyBusy: Bool {
         capturing || clearingHistory || recoveryBusy
-            || recordingRetiring || externalOpenPending || permissionsVisible
+            || recordingRetiring || externalOpenPending || permissionsVisible || editorTerminationPending
     }
     /// No capture or History operation holds the workspace.
     var historyIdle: Bool { !historyBusy }
@@ -3227,11 +3228,13 @@ final class LiveCaptureController: NSObject {
     private func presentEditor(_ artifact: CaptureArtifact, outputDirectory: String? = nil,
                                requiresCurrentSelection: Bool = true,
                                completion: (() -> Void)? = nil) {
+        guard !editorTerminationPending else { completion?(); return }
         run({ [settingsPath] in
             try outputDirectory ?? CapturePreferences.load(path: settingsPath).directory
         }) {
             [weak self] result in
             guard let self else { return }
+            guard !self.editorTerminationPending else { completion?(); return }
             guard completion != nil || !self.externalOpenPending else { return }
             guard completion != nil || !requiresCurrentSelection
                 || self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
@@ -3372,7 +3375,7 @@ final class LiveCaptureController: NSObject {
     private func processNextOpenImage() {
         guard !externalOpenPending, !historyRoot.isEmpty, !capturing,
               !clearingHistory, !recoveryBusy,
-              !recordingRetiring, !permissionsVisible else { return }
+              !recordingRetiring, !permissionsVisible, !editorTerminationPending else { return }
         guard !pendingOpenImages.isEmpty else {
             if !externalOpenErrors.isEmpty {
                 let message = externalOpenErrors.joined(separator: "\n")
@@ -3500,6 +3503,30 @@ final class LiveCaptureController: NSObject {
 
     // One process-wide queue also drains operations from a closed workspace view.
     func prepareEditorForTermination() -> Bool {
+        guard !editorTerminationPending, canPrepareEditorsForTermination() else { return false }
+        guard screenshotEditor?.prepareForTermination() ?? true else { return false }
+        return recordingEditor?.prepareForTermination() ?? true
+    }
+
+    func prepareEditorForTermination(completion: @escaping (Bool) -> Void) {
+        guard !editorTerminationPending, canPrepareEditorsForTermination() else { completion(false); return }
+        editorTerminationPending = true
+        updateActions()
+        let finished: (Bool) -> Void = { [weak self] prepared in
+            guard let self else { completion(false); return }
+            // Media arriving during the drain remains queued and cancels Quit.
+            let accepted = prepared && self.canPrepareEditorsForTermination()
+                && (self.recordingEditor?.prepareForTermination() ?? true)
+            self.editorTerminationPending = false
+            self.updateActions()
+            completion(accepted)
+            if !accepted { self.processNextOpenImage() }
+        }
+        if let screenshotEditor { screenshotEditor.prepareForTermination(completion: finished) }
+        else { finished(true) }
+    }
+
+    private func canPrepareEditorsForTermination() -> Bool {
         if externalOpenPending || !pendingOpenImages.isEmpty {
             status.stringValue = "Wait for external images to finish opening before quitting."
             return false
@@ -3510,8 +3537,7 @@ final class LiveCaptureController: NSObject {
                 : "Wait for or cancel recording recovery before quitting."
             return false
         }
-        guard screenshotEditor?.prepareForTermination() ?? true else { return false }
-        return recordingEditor?.prepareForTermination() ?? true
+        return true
     }
 
     static func flush() { queue.sync {}; EditorWorker.flush(); RecordingEditorWorker.flush() }

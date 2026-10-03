@@ -1015,7 +1015,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
          didSaveCopy: @escaping () -> Void = {},
          didReplaceOriginal: @escaping (String) -> Void = { _ in },
          confirmDiscard: (() -> Bool)? = nil,
-         requestTermination: @escaping () -> Void = { NSApp.terminate(nil) }) {
+         requestTermination: @escaping () -> Void = { requestApplicationTermination() }) {
         self.tokens = tokens; self.worker = worker; self.reportError = reportError
         self.didSaveCopy = didSaveCopy; self.didReplaceOriginal = didReplaceOriginal
         self.confirmDiscard = confirmDiscard ?? RecordingEditorController.confirmDiscardAlert
