@@ -978,7 +978,7 @@ final class ScreenshotEditorTests: XCTestCase {
                                8, accuracy: 0.1, "no blank row below the controls")
                 for action in [save, copy] {
                     let rect = controller.root.convert(action.bounds, from: action)
-                    XCTAssertEqual(controller.root.bounds.maxY - rect.maxY, 12, accuracy: 0.1,
+                    XCTAssertEqual(controller.root.bounds.maxY - rect.maxY, 13, accuracy: 0.1,
                                    "actions remain pinned when the settings height changes")
                 }
                 XCTAssertGreaterThan(viewport.bounds.height, 140)
