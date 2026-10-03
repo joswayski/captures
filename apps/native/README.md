@@ -534,6 +534,12 @@ python3 apps/native/profile.py \
   --output /tmp/captures-native-results
 ```
 
+Development/test profiles use wrapping arithmetic only for `tiny-skia 0.11.4`
+in both Cargo workspaces. Its scalar Overlay pipeline evaluates an unused
+expression that can underflow; wrapping matches its SIMD and release arithmetic.
+Application overflow checks stay enabled. Release settings and rendered pixels
+are unchanged; re-evaluate the override when updating that dependency.
+
 The runner records raw CPU counters, RSS samples, binary hash, readiness, and
 separate effect/scene-construction timings. It fails on missing actions, premature
 exit and effect errors. **RSS is not physical footprint**. CPU is process-only;

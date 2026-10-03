@@ -517,6 +517,26 @@ fn blend_modes_include_source_backdrop_for_images_shapes_text_and_brushes() {
 }
 
 #[test]
+fn overlay_wraps_unselected_lanes_over_partial_alpha_backdrop() {
+    let mut rectangle = layer(Shape::Rectangle {
+        origin: point(1., 1.),
+        width: 4.,
+        height: 3.,
+    });
+    rectangle.fill = Some([0, 0, 0, 255]);
+    rectangle.stroke_width = 0.;
+    rectangle.blend_mode = BlendMode::Overlay;
+    let mut doc = document(vec![rectangle]);
+    doc.source = Arc::new(RgbaImage::from_pixel(8, 6, Rgba([32, 64, 96, 128])));
+    let rendered = render(&doc).unwrap();
+    // All backdrop channels are below 0.5: Overlay's selected branch is
+    // 2 * black * backdrop = 0. The unselected branch may underflow in u16.
+    assert_eq!(rendered.get_pixel(2, 2).0, [0, 0, 0, 255]);
+    assert_eq!(rendered.get_pixel(0, 0).0, [32, 64, 96, 128]);
+    assert_eq!(doc.source.get_pixel(2, 2).0, [32, 64, 96, 128]);
+}
+
+#[test]
 fn blend_opacity_and_layer_order_preserve_untouched_source_pixels() {
     let mut image = layer(Shape::Image {
         origin: point(10.0, 11.0),
