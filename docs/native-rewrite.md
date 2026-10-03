@@ -40,10 +40,16 @@ worker retains session memory and can delay same-artifact reopen or Quit. Regres
 tests cover the exact deadline, repeated close, blocked Copy, queued Save, delayed
 History notification, exact saved pixels and final draft retention.
 Windows and Wayland use this same wgpu path; physical-host acceptance is open.
-AppKit is unchanged: it refuses close while busy, and its synchronous Quit barrier
-can retire a session before Copy's main-thread completion dispatches a queued Save.
-Its equivalent close/accepted-queue drain needs an asynchronous termination slice;
-these Linux tests do not establish AppKit parity or choose the renderer.
+AppKit now also hides a busy screenshot window after 400 ms while its controller
+retains accepted Copy/Save and inspector/text callbacks. Its final best-effort
+autosave, session free and subsequent open are ordered on the existing worker
+queue. Normal Quit uses `.terminateLater`, drains main-thread callbacks first,
+then runs the existing failure-aware worker barrier off-main. A failed final draft
+restores the hidden editor; retry does not repeat completed output. Permission
+restart/style rebuild keep their synchronous contract and refuse pending UI work.
+XCTest covers deferred success/failure, reopen ordering, typed-buffer recovery
+and exact real-worker saved pixels/draft retention; macOS execution is required.
+These lifecycle slices do not establish physical-platform parity or choose the renderer.
 
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,

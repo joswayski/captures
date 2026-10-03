@@ -426,6 +426,9 @@ final class OpenImageTests: XCTestCase {
         XCTAssertTrue(controller.externalOpenPending)
         XCTAssertFalse(controller.capture(.display), "a global capture shortcut must not race image open")
         XCTAssertFalse(controller.newCapture(), "the global New Capture shortcut shares the gate")
+        var quitReply: Bool?
+        controller.prepareEditorForTermination { quitReply = $0 }
+        XCTAssertEqual(quitReply, false, "asynchronous Quit also refuses an unresolved external import")
         let importing = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }
             .first?.documentView as? HistoryGridView)
         XCTAssertEqual(importing.numberOfRows, 0)

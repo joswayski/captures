@@ -894,6 +894,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var shortcutSelectorGeneration: UInt64?
     private var captureBusy = false
     private var terminating = false
+    private var terminationPending = false
     private var onboardingReady = false
     private var onboardingWasPresented = false
     private var onboardingController: OnboardingController?
@@ -1069,13 +1070,28 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Drain the editor's dedicated worker before capture teardown. A failed
-        // draft save keeps its session/window recoverable and cancels this quit.
-        if liveController?.prepareEditorForTermination() == false {
-            terminating = false
-            return .terminateCancel
-        }
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
         terminating = true
+        // Reply only after returning .terminateLater, even with no live editor.
+        // The main queue must keep running to submit Save queued during Copy.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let finished: (Bool) -> Void = { [weak self] accepted in
+                guard let self, self.terminationPending else { return }
+                if accepted { self.finishTermination() }
+                else { self.terminating = false }
+                self.terminationPending = false
+                sender.reply(toApplicationShouldTerminate: accepted)
+            }
+            if let liveController = self.liveController {
+                liveController.prepareEditorForTermination(completion: finished)
+            } else { finished(true) }
+        }
+        return .terminateLater
+    }
+
+    private func finishTermination() {
         nativeInstance?.stopAccepting()
         onboardingController?.flush()
         permissionController?.flush()
@@ -1095,7 +1111,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }
         nativeInstance?.close()
         nativeInstance = nil
-        return .terminateNow
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -1561,6 +1561,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var copyInFlight = false
     /// Shipping coalesces Save clicks while Copy owns the worker.
     private var pendingSaveAfterCopy = false
+    private var closeRequested = false
+    private var closeWork: DispatchWorkItem?
+    private var pendingPresentation: (open: () -> Void, cancel: () -> Void)?
+    private var terminationCompletion: ((Bool) -> Void)?
+    private var terminationInFlight = false
+    private var draining: Bool { closeRequested || terminationCompletion != nil }
+    static let closeDelay: TimeInterval = 0.4
     private let exportBarRule = Surface()
     private(set) var lastSavedPath: String?
     private var estimate: EditorEstimate?
@@ -1672,6 +1679,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String? = nil,
                  completion: ((Bool) -> Void)? = nil) {
+        guard terminationCompletion == nil else { completion?(false); return }
+        if closeRequested {
+            pendingPresentation?.cancel()
+            pendingPresentation = (open: { [weak self] in
+                self?.present(artifact: artifact, historyRoot: historyRoot,
+                              outputDirectory: outputDirectory, completion: completion)
+            }, cancel: { completion?(false) })
+            return
+        }
         guard !state.busy else {
             showError("Wait for the current editor action to finish before opening another screenshot.")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -1768,15 +1784,67 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         presenceChanged(current)
     }
 
+    /// Permission restart/style rebuild require an immediate answer. Refuse
+    /// UI-side pending work rather than freeing a session ahead of its callbacks.
     func prepareForTermination() -> Bool {
+        guard !draining, !state.busy, liveQueue.isEmpty, queuedBackground == nil,
+              inlineTextInput?.requestInFlight != true else {
+            showError("Wait for the current editor action to finish before restarting.")
+            return false
+        }
         cancelDrawing()
         cancelPendingImport()
-        let terminationInput = inlineTextInput.flatMap {
+        let input = terminationTextInput
+        return completeTermination(worker.prepareForTermination(textInput: input), input: input)
+    }
+
+    /// Normal Quit leaves AppKit's main queue running so Copy can dispatch a
+    /// queued Save and accepted inspector/text completions retain their ordering.
+    func prepareForTermination(completion: @escaping (Bool) -> Void) {
+        guard terminationCompletion == nil else { completion(false); return }
+        cancelClose()
+        cancelDrawing()
+        cancelPendingImport()
+        autosaveWork?.cancel(); autosaveWork = nil; autosaveSerial += 1
+        terminationCompletion = completion
+        updateControls()
+    }
+
+    private var terminationTextInput: EditorTerminationTextInput? {
+        inlineTextInput.flatMap {
             $0.finishInFlight ? nil
                 : EditorTerminationTextInput(inputID: $0.inputID, text: inlineTextEditor.string,
                                              commit: $0.finishRequested ?? true)
         }
-        let result = worker.prepareForTermination(textInput: terminationInput)
+    }
+
+    private func driveTermination() {
+        guard terminationCompletion != nil, !terminationInFlight, !state.busy else { return }
+        flushQueuedBackground()
+        flushLiveQueue()
+        guard !state.busy, liveQueue.isEmpty, queuedBackground == nil,
+              inlineTextInput?.requestInFlight != true else { return }
+        terminationInFlight = true
+        autosaveWork?.cancel(); autosaveWork = nil; autosaveSerial += 1
+        let input = terminationTextInput, worker = worker
+        _ = state.beginCommand() // No late focus/input command may pass the final barrier.
+        // The existing failure-aware worker barrier is safe off-main. No session
+        // object leaves its own queue, and all AppKit state stays on the main queue.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = worker.prepareForTermination(textInput: input)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let completion = self.terminationCompletion else { return }
+                let accepted = self.completeTermination(result, input: input)
+                self.terminationInFlight = false
+                self.terminationCompletion = nil
+                self.updateControls()
+                completion(accepted)
+            }
+        }
+    }
+
+    private func completeTermination(_ result: Result<Void, Error>,
+                                     input: EditorTerminationTextInput?) -> Bool {
         switch result {
         case .success:
             inlineTextInput = nil; hideInlineTextEditor()
@@ -1792,7 +1860,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                state.complete(presentation.snapshot, generation: state.generation) {
                 publish(presentation, resetCrop: false)
                 if presentation.snapshot.activeTextInput == nil {
-                    if terminationInput?.commit == true { invalidateOutput() }
+                    if input?.commit == true { invalidateOutput() }
                     inlineTextInput = nil; hideInlineTextEditor()
                 }
             } else {
@@ -1806,27 +1874,54 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard terminationCompletion == nil else { return false }
         cancelCrop()
         cancelDrawing()
+        cancelPendingImport()
+        autosaveWork?.cancel(); autosaveWork = nil; autosaveSerial += 1
+        closeRequested = true
+        if closeWork == nil {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.closeRequested else { return }
+                self.window.orderOut(nil); self.publishPresence()
+            }
+            closeWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeDelay, execute: work)
+        }
         if inlineTextInput != nil {
             closeAfterTextInput = true
             finishInlineTextInput(commit: true)
-            return false
         }
-        guard !state.busy else {
-            status.stringValue = "Wait for the current editor action to finish."
-            return false
-        }
-        // Shipping closes without asking; `closeNow` flushes the draft first.
-        closeNow()
+        driveClose()
+        updateControls()
         return false
+    }
+
+    private func driveClose() {
+        guard closeRequested, terminationCompletion == nil, !state.busy else { return }
+        flushQueuedBackground()
+        flushLiveQueue()
+        guard !state.busy, liveQueue.isEmpty, queuedBackground == nil,
+              inlineTextInput == nil else { return }
+        // The final best-effort autosave and close share the worker queue; a
+        // subsequent open is ordered behind them without blocking the main queue.
+        closeNow()
+    }
+
+    private func cancelClose() {
+        closeRequested = false
+        closeWork?.cancel(); closeWork = nil
+        closeAfterTextInput = false
+        let pending = pendingPresentation
+        pendingPresentation = nil
+        pending?.cancel()
     }
 
     func windowDidResignKey(_ notification: Notification) {
         cropOverlay.cancelGesture()
         cancelDrawing()
         cancelViewportPan()
-        finishInlineTextInput(commit: true)
+        if !terminationInFlight { finishInlineTextInput(commit: true) }
     }
 
     func windowDidResize(_ notification: Notification) { layoutEditor() }
@@ -3650,6 +3745,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func liveEdit(key: String, request: [String: Any]) {
+        guard !draining else { return }
         if let last = liveQueue.last, last.key == key {
             liveQueue[liveQueue.count - 1].request = request
         } else {
@@ -4314,7 +4410,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let current = directory.isEmpty ? nil : URL(fileURLWithPath: directory, isDirectory: true)
         let completion: (URL?) -> Void = { [weak self] selected in
             DispatchQueue.main.async {
-                guard let self, let selected,
+                guard let self, let selected, !self.draining,
                       self.state.generation == generation,
                       self.state.artifactID == artifactID else { return }
                 // A folder other than the source's turns on "Save as new file".
@@ -4702,12 +4798,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func updateOutputOptionControls() {
         guard outputFormat != nil, outputQuality != nil else { return }
-        let ready = state.snapshot != nil && !state.busy
+        let ready = state.snapshot != nil && !state.busy && !draining
         let compress = outputQuality.indexOfSelectedItem == 1
         let maximum = outputQuality.indexOfSelectedItem == 2
         outputMaximumSize.isEnabled = ready && maximum
         outputMaximumUnit.isEnabled = ready && maximum
-        showComparisonButton?.isEnabled = state.snapshot != nil
+        showComparisonButton?.isEnabled = state.snapshot != nil && !draining
         outputCompressionPreset.isEnabled = ready && compress
         outputSizeMode?.isEnabled = ready
         let custom = outputSizeMode?.indexOfSelectedItem == 3
@@ -5358,6 +5454,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func handleEditorShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
+        if draining { return true }
         if event.keyCode == 53, cropSelection != nil { clearCropSelection(); return true }
         guard state.snapshot != nil else { return false }
         let command = event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control)
@@ -5493,7 +5590,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         zoomPreset.selectItem(at: values.firstIndex(of: current) ?? 0)
         fitButton?.selected = current == 0; fitButton?.needsDisplay = true
-        publishZoomLimits(ready: state.snapshot != nil && !state.busy && inlineTextInput == nil)
+        publishZoomLimits(ready: state.snapshot != nil && !state.busy && inlineTextInput == nil && !draining)
     }
 
     /// Shipping disables − and + at the 5% and 800% bounds.
@@ -5695,7 +5792,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func updateDrawing() {
         updateToolRail()
-        let inputResolved = inlineTextInput == nil
+        let inputResolved = inlineTextInput == nil && !draining
         let cropReady = sectionControl?.selectedSegment == Section.geometry && state.snapshot != nil
             && !state.busy && inputResolved
         cropOverlay.croppingEnabled = cropReady && cropActive
@@ -5721,7 +5818,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textShadowSettings?.isEnabled = textReady
         // Freeze the native responder only during an accepted Finish and restore
         // its normal state once that input has resolved.
-        inlineTextEditor.isEditable = inlineTextInput?.finishInFlight != true
+        inlineTextEditor.isEditable = inlineTextInput?.finishInFlight != true && !draining
         drawOverlay.drawingEnabled = active
         if !active || drawShape != .wand { hideWandLoupe() }
         selectionOverlay.selectedOnly = sectionControl?.selectedSegment == Section.draw
@@ -6047,7 +6144,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private var layerActionsReady: Bool {
         state.snapshot != nil && !state.busy && !importLoading
-            && inlineTextInput == nil && window.attachedSheet == nil
+            && inlineTextInput == nil && window.attachedSheet == nil && !draining
     }
 
     private func duplicateLayer() {
@@ -6269,7 +6366,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Shipping applies each background change at once as its own undo step;
     /// an unchanged value adds none (the session skips identical commits).
     private func setBackground(_ color: String?) {
-        guard state.snapshot != nil, inlineTextInput == nil else { return }
+        guard state.snapshot != nil, inlineTextInput == nil, !draining else { return }
         if let color { lastSolidBackground = color }
         if state.busy {
             queuedBackground = .some(color); publishBackgroundFields(); return
@@ -6301,6 +6398,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func armAutosave() {
+        guard !draining else { return } // The close/quit path owns the final write.
         let work = DispatchWorkItem { [weak self] in self?.autosaveNow() }
         autosaveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.autosaveDelay, execute: work)
@@ -6416,6 +6514,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func closeNow() {
+        closeRequested = false
+        closeWork?.cancel(); closeWork = nil
         cancelCrop()
         cancelDrawing()
         showShapeFlyout(false)
@@ -6434,10 +6534,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         viewport = NativeEditorViewport(); viewportCanvasSize = .zero
         worker.close(); window.orderOut(nil); updateControls()
         publishPresence()
+        let pending = pendingPresentation
+        pendingPresentation = nil
+        pending?.open()
     }
 
     private func updateControls() {
-        let ready = state.snapshot != nil && !state.busy && inlineTextInput == nil
+        let settled = state.snapshot != nil && !state.busy && inlineTextInput == nil
+        let ready = settled && !draining
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready
         if let applyCropButton {
@@ -6450,10 +6554,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         refreshTrimPreview()
         // The card stays live while a change applies, like shipping; changes
         // made meanwhile queue (see `setBackground`).
-        let backgroundLive = state.snapshot != nil && inlineTextInput == nil
+        let backgroundLive = state.snapshot != nil && inlineTextInput == nil && !draining
         backgroundSolid?.isEnabled = backgroundLive
         backgroundSwatches?.isEnabled = backgroundLive
-        if ready && queuedBackground != nil {
+        if settled && queuedBackground != nil {
             DispatchQueue.main.async { [weak self] in self?.flushQueuedBackground() }
         }
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
@@ -6463,7 +6567,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         addLayerButton?.isEnabled = ready && !importLoading
         sectionControl?.isEnabled = ready
         outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
-        exportDisclosure?.isEnabled = state.snapshot != nil
+        exportDisclosure?.isEnabled = state.snapshot != nil && !draining
         copyImageButton?.isEnabled = ready
         outputFilename.isEnabled = ready
         changeOutputDirectoryButton?.isEnabled = ready
@@ -6471,7 +6575,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveAsNewSwitch.isEnabled = ready
         let exportReady = exportBarState.map { $0.plan != nil && $0.error == nil } == true
             && exportOptionsError == nil
-        exportSaveButton?.isEnabled = (ready || copyInFlight) && exportReady
+        exportSaveButton?.isEnabled = (ready || copyInFlight) && exportReady && !draining
         exportSaveButton?.title = saveInFlight ? "Saving…" : "Save"
         fitButton?.isEnabled = ready
         publishZoomLimits(ready: ready)
@@ -6480,11 +6584,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateOutputOptionControls()
         updateDrawing()
         layerTable?.isEnabled = ready
-        if ready && !liveQueue.isEmpty {
+        if settled && !liveQueue.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.flushLiveQueue() }
         }
         // Live fields stay editable while an edit applies; their edits queue.
-        let live = state.snapshot != nil && inlineTextInput == nil
+        let live = state.snapshot != nil && inlineTextInput == nil && !draining
         curveControls?.setReady(live)
         annotationControls?.setReady(live)
         let layer = live ? selectedLayer : nil
@@ -6492,6 +6596,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let resizable = layer?.kind == .image && layer?.locked == false
         [layerWidth, layerHeight, layerX, layerY].forEach { $0.isEnabled = resizable }
         if layerMenuID != nil { publishLayerMenu() } else { publishLayerMenuStates() }
+        if draining {
+            // Run after the current completion has submitted any dependent Save.
+            DispatchQueue.main.async { [weak self] in
+                self?.driveTermination()
+                self?.driveClose()
+            }
+        }
     }
 
     private func reconcileLayerSelection(_ layers: [NativeEditorLayer], allowFallback: Bool = true) {
@@ -6650,7 +6761,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         for (control, on) in [(visibility, !layer.visible), (lock, layer.locked), (menu, layerMenuID == id)] {
             control.quiet = true; control.iconSide = 14
             control.cornerRadius = tokens.number("r-sm"); control.selected = on
-            control.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil
+            control.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil && !draining
         }
         let cell = EditorLayerCell(title: title, detail: detail, rename: rename, iconName: layer.rowIcon,
                                    thumbnail: EditorLayerThumbnails.image(layer.thumbnail),
@@ -6847,6 +6958,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func showError(_ message: String) {
+        if closeRequested, let input = inlineTextInput,
+           !input.requestInFlight, input.finishRequested == nil {
+            cancelClose()
+            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        }
         status.stringValue = message; status.textColor = tokens.color("danger-text")
         reportError(message)
     }

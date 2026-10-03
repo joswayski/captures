@@ -2114,27 +2114,130 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.exportSaves.count, 1, "invalid queued Save does not get stuck or retry itself")
     }
 
-    func testStaleClipboardCompletionCannotWriteAfterTermination() throws {
+    func testAsyncQuitDrainsCopyAndQueuedSaveBeforeItsFailureAwareBarrier() throws {
+        _ = NSApplication.shared
+        for copyFails in [false, true] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+            worker.deferEncodes = true; worker.deferExportSaves = true
+            var writes = 0, historyChanges = 0, replies: [Bool] = []
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                worker: worker, didSaveCopy: { historyChanges += 1 },
+                writeClipboard: { _ in writes += 1; return true })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try copyButton(in: controller.root).performClick(nil)
+            try button("Save", in: controller.root).performClick(nil)
+            try button("Save", in: controller.root).performClick(nil)
+            XCTAssertFalse(controller.prepareForTermination(), "synchronous restart refuses pending UI work")
+            XCTAssertTrue(worker.terminationTextInputs.isEmpty)
+            XCTAssertFalse(controller.windowShouldClose(controller.window))
+            waitUntil { !controller.window.isVisible }
+            XCTAssertEqual(worker.closeCount, 0, "retain the hidden session until callbacks drain")
+
+            let finished = expectation(description: "failed final draft cancels Quit")
+            worker.terminationResult = .failure(AppBridgeError.backend("disk unavailable"))
+            controller.prepareForTermination { accepted in
+                XCTAssertTrue(Thread.isMainThread)
+                replies.append(accepted); finished.fulfill()
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertTrue(worker.terminationTextInputs.isEmpty && replies.isEmpty)
+            worker.failEncode = copyFails
+            worker.completePendingEncode()
+            XCTAssertEqual(writes, copyFails ? 0 : 1)
+            XCTAssertEqual(worker.exportSaves.count, 1, "Save follows successful or failed Copy")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertTrue(worker.terminationTextInputs.isEmpty, "the barrier must still wait for Save")
+            worker.completePendingExportSave()
+            wait(for: [finished], timeout: 5)
+            XCTAssertEqual(replies, [false])
+            XCTAssertEqual(historyChanges, 1, "accepted Save retains its History callback")
+            XCTAssertTrue(controller.window.isVisible)
+            XCTAssertEqual(controller.state.artifactID, "shot")
+            XCTAssertTrue(try copyButton(in: controller.root).isEnabled)
+            XCTAssertEqual(worker.closeCount, 0)
+
+            worker.terminationResult = .success(())
+            let retried = expectation(description: "retry final draft only")
+            controller.prepareForTermination { accepted in
+                replies.append(accepted); retried.fulfill()
+            }
+            wait(for: [retried], timeout: 5)
+            XCTAssertEqual(replies, [false, true])
+            XCTAssertEqual(worker.encodes.count, 1)
+            XCTAssertEqual(worker.exportSaves.count, 1)
+            XCTAssertEqual(historyChanges, 1, "retry never repeats completed output")
+            XCTAssertNil(controller.state.artifactID)
+            XCTAssertFalse(controller.window.isVisible)
+        }
+    }
+
+    func testCloseHidesPendingCopyAndReopensAfterQueuedSaveAndBackgroundDrain() throws {
+        _ = NSApplication.shared
+        XCTAssertEqual(ScreenshotEditorController.closeDelay, 0.4, accuracy: 1e-9)
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+            worker.deferEncodes = true; worker.deferExportSaves = true; worker.deferRequests = true
+            var order: [String] = []
+            worker.onAutosave = { order.append("draft") }
+            worker.onClose = { order.append("close") }
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                worker: worker, didSaveCopy: { order.append("save") },
+                writeClipboard: { _ in order.append("copy"); return true })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            try showBackgroundCard(in: controller.root)
+            let blue = try swatchButton("Canvas background: #2d9cff", in: controller.root)
+            try copyButton(in: controller.root).performClick(nil)
+            try button("Save", in: controller.root).performClick(nil)
+            blue.performClick(nil)
+            XCTAssertFalse(controller.windowShouldClose(controller.window))
+            XCTAssertTrue(controller.window.isVisible, "pending work gets the visible grace period")
+            XCTAssertFalse(controller.windowShouldClose(controller.window))
+            waitUntil { !controller.window.isVisible }
+            XCTAssertEqual(controller.state.artifactID, "shot")
+            XCTAssertNil(controller.presentArtifactID)
+            XCTAssertFalse(blue.isEnabled)
+            XCTAssertTrue(order.isEmpty)
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            XCTAssertEqual(worker.openArtifactIDs, ["shot"], "reopen waits for accepted work")
+            worker.completePendingEncode()
+            XCTAssertEqual(order, ["copy"])
+            worker.completePendingExportSave()
+            waitUntil { worker.requests.last?["operation"] as? String == "set_background" }
+            XCTAssertEqual(worker.requests.last?["color"] as? String, "#2d9cff")
+            XCTAssertEqual(order, ["copy", "save"])
+            worker.completePending(with: snapshot(id: "shot", background: "#2d9cff", unsaved: true))
+            waitUntil { worker.openArtifactIDs.count == 2 }
+            XCTAssertEqual(order, ["copy", "save", "draft", "close"])
+            XCTAssertEqual(worker.exportSaves.count, 1)
+            XCTAssertEqual(controller.state.snapshot?.background, "#2d9cff")
+            XCTAssertTrue(controller.window.isVisible)
+            try render(controller.root, name: "screenshot-editor-close-reopened-\(appearance)")
+        }
+    }
+
+    func testAsyncQuitDrainsLatestQueuedBackgroundBeforeBarrier() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
-        worker.deferEncodes = true
-        var writes = 0
-        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
-            worker: worker, writeClipboard: { _ in writes += 1; return true })
+        worker.deferRequests = true
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        try showOutput(in: controller.root)
-        let copy = try copyButton(in: controller.root)
-        copy.performClick(nil)
-        XCTAssertTrue(controller.state.busy); XCTAssertFalse(copy.isEnabled)
-        try button("Save", in: controller.root).performClick(nil)
-        XCTAssertFalse(controller.windowShouldClose(controller.window))
-        XCTAssertEqual(worker.closeCount, 0, "accepted worker work must not be freed during copy")
-        XCTAssertTrue(controller.prepareForTermination())
-        worker.completePendingEncode()
-        XCTAssertEqual(writes, 0)
-        XCTAssertTrue(worker.exportSaves.isEmpty, "a stale Copy cannot dispatch the queued Save")
-        XCTAssertNil(controller.state.artifactID)
+        try showBackgroundCard(in: controller.root)
+        try swatchButton("Canvas background: #2d9cff", in: controller.root).performClick(nil)
+        try swatchButton("Canvas background: #ff3b5c", in: controller.root).performClick(nil)
+        let finished = expectation(description: "drain latest queued background before Quit")
+        controller.prepareForTermination { accepted in XCTAssertTrue(accepted); finished.fulfill() }
+        XCTAssertTrue(worker.terminationTextInputs.isEmpty)
+        worker.completePending(with: snapshot(id: "shot", background: "#2d9cff", unsaved: true))
+        waitUntil { worker.requests.count == 2 }
+        XCTAssertEqual(worker.requests.last?["color"] as? String, "#ff3b5c")
+        XCTAssertTrue(worker.terminationTextInputs.isEmpty)
+        worker.completePending(with: snapshot(id: "shot", background: "#ff3b5c", unsaved: true))
+        wait(for: [finished], timeout: 5)
+        XCTAssertEqual(worker.terminationTextInputs.count, 1)
     }
 
     func testRealClipboardContainsCroppedEditedPngAfterWorkerCloseWithoutCopyPersistence() throws {
@@ -2174,6 +2277,56 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: originalURL), original)
         worker.close(); EditorWorker.flush()
         XCTAssertEqual(pasteboard.data(forType: .png), png, "pasteboard owns bytes after the editor worker closes")
+    }
+
+    func testRealAsyncQuitRetainsQueuedSavePixelsAndFinalDraft() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exports = fixture.root.appendingPathComponent("Exports")
+        try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+        let originalURL = fixture.history.appendingPathComponent(fixture.id).appendingPathComponent("capture.png")
+        let original = try Data(contentsOf: originalURL)
+        let worker = EditorWorker()
+        var copied: Data?, historyChanges = 0
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, didSaveCopy: { historyChanges += 1 }, revealFiles: { _ in },
+            writeClipboard: { copied = $0; return true })
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path,
+                           outputDirectory: exports.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+        try stageCrop(NSRect(x: 2, y: 1, width: 4, height: 2), in: controller)
+        try button("Apply crop", in: controller.root).performClick(nil)
+        waitUntil { controller.state.snapshot?.width == 4 && !controller.state.busy }
+        let filename = try field("Saved filename", in: controller.root)
+        filename.stringValue = "quit-export"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
+        try copyButton(in: controller.root).performClick(nil)
+        try button("Save", in: controller.root).performClick(nil)
+        let finished = expectation(description: "real accepted Copy and queued Save survive Quit")
+        controller.prepareForTermination { accepted in XCTAssertTrue(accepted); finished.fulfill() }
+        wait(for: [finished], timeout: 10)
+        XCTAssertEqual(historyChanges, 1)
+        XCTAssertNil(controller.state.artifactID)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exports.path), ["quit-export.png"])
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: exports.appendingPathComponent("quit-export.png"))))
+        XCTAssertEqual(bitmap.pixelsWide, 4); XCTAssertEqual(bitmap.pixelsHigh, 2)
+        var pixel = [UInt](repeating: 0, count: bitmap.samplesPerPixel)
+        bitmap.getPixel(&pixel, atX: 3, y: 1)
+        XCTAssertEqual(pixel, [155, 142, 19, 255], "independent source pixel (5,2) survives the crop and Save")
+        XCTAssertNotNil(copied)
+        XCTAssertEqual(try Data(contentsOf: originalURL), original)
+        let reopened = expectation(description: "final draft reopens")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id) { result in
+            let presentation = try? result.get()
+            XCTAssertEqual(presentation?.snapshot.width, 4)
+            XCTAssertEqual(presentation?.snapshot.height, 2)
+            XCTAssertTrue(presentation?.snapshot.hasDraft == true)
+            reopened.fulfill()
+        }
+        wait(for: [reopened], timeout: 5)
     }
 
     func testMaximumFileSizeTakesAValueAndUnitAndFailuresStayInTheComparison() throws {
@@ -5731,12 +5884,96 @@ final class ScreenshotEditorTests: XCTestCase {
         try finishInlineText(in: controller)
         XCTAssertEqual(worker.requests.last?["operation"] as? String, "finish_text_input")
 
-        XCTAssertTrue(controller.prepareForTermination())
-        XCTAssertNil(worker.terminationTextInputs.last!,
-                     "termination drains the accepted Finish instead of reusing its now-stale token")
+        let finished = expectation(description: "drain accepted text Finish before Quit")
+        controller.prepareForTermination { accepted in XCTAssertTrue(accepted); finished.fulfill() }
+        XCTAssertTrue(worker.terminationTextInputs.isEmpty, "do not retire ahead of the Finish callback")
         worker.completePending(with: snapshot(id: "shot", unsaved: true,
             layers: [textLayer(id: "fresh", text: "accepted before quit")]))
+        wait(for: [finished], timeout: 5)
+        XCTAssertNil(worker.terminationTextInputs.last!,
+                     "termination does not replay the now-consumed token")
         XCTAssertNil(controller.state.snapshot)
+    }
+
+    func testInlineTextCloseFailureRestoresHiddenWindowAndTypedBuffer() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        worker.response = { request in
+            guard ["begin_text_input", "update_text_input"].contains(request["operation"] as? String ?? "")
+                else { return nil }
+            return self.snapshot(id: "shot",
+                layers: [self.textLayer(id: "fresh", text: request["text"] as? String ?? "")],
+                activeTextInput: ["input_id": request["input_id"] as! String,
+                                  "layer_id": "fresh", "is_new": true])
+        }
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        controller.selectDrawTool(.text)
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        try typeInline("recoverable\nΩ🙂", in: controller)
+        let editor = try textView("Edit text on canvas", in: controller.root)
+        worker.deferRequests = true
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        waitUntil { !controller.window.isVisible }
+        XCTAssertFalse(editor.isEditable)
+        worker.completePendingFailure("finish unavailable")
+        XCTAssertTrue(controller.window.isVisible)
+        XCTAssertTrue(editor.isEditable && !editor.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(editor.string, "recoverable\nΩ🙂")
+        XCTAssertTrue(controller.window.firstResponder === editor)
+        XCTAssertEqual(worker.closeCount, 0)
+        XCTAssertEqual(controller.state.artifactID, "shot")
+        try render(controller.root, name: "screenshot-editor-close-text-recovered-dark")
+        worker.deferRequests = false
+        worker.response = { _ in self.snapshot(id: "shot", unsaved: true,
+            layers: [self.textLayer(id: "fresh", text: "recoverable\nΩ🙂")]) }
+        XCTAssertFalse(controller.windowShouldClose(controller.window))
+        XCTAssertEqual(worker.closeCount, 1, "the recovered buffer can finish and close on retry")
+    }
+
+    func testQuitBarrierLeavesMainQueueResponsiveAndRejectsLateFocusFinish() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        worker.response = { request in
+            guard request["operation"] as? String == "begin_text_input" else { return nil }
+            return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh", text: "")],
+                activeTextInput: ["input_id": request["input_id"] as! String,
+                                  "layer_id": "fresh", "is_new": true])
+        }
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        try showDraw(in: controller.root)
+        controller.selectDrawTool(.text)
+        let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+        controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+        let editor = try textView("Edit text on canvas", in: controller.root)
+        editor.string = "latest local buffer"
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        worker.terminationGate = gate
+        worker.terminationResult = .failure(AppBridgeError.backend("final draft unavailable"))
+        let started = expectation(description: "worker barrier started off-main")
+        worker.onTermination = { XCTAssertFalse(Thread.isMainThread); started.fulfill() }
+        let finished = expectation(description: "failed barrier restores input")
+        controller.prepareForTermination { accepted in XCTAssertFalse(accepted); finished.fulfill() }
+        wait(for: [started], timeout: 5)
+        XCTAssertTrue(controller.state.busy)
+        let count = worker.requests.count
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification,
+                                                   object: controller.window))
+        XCTAssertEqual(worker.requests.count, count, "no Finish may enqueue behind the final barrier")
+        let responsive = expectation(description: "main queue executes while barrier is blocked")
+        DispatchQueue.main.async { responsive.fulfill() }
+        wait(for: [responsive], timeout: 2)
+        gate.signal()
+        wait(for: [finished], timeout: 5)
+        XCTAssertFalse(controller.state.busy)
+        XCTAssertTrue(editor.isEditable)
+        XCTAssertEqual(editor.string, "latest local buffer")
     }
 
     func testInlineTextBeginFailureRetainsLocalBufferRetriesAndDiscardsBlank() throws {
@@ -7563,6 +7800,7 @@ final class ScreenshotEditorTests: XCTestCase {
     }
 
     private func snapshot(id: String, width: Double = 640, height: Double = 360,
+                          background: String? = nil,
                           unsaved: Bool = false, draft: Bool = false,
                           canRedo: Bool = false,
                           originalExportPath: String? = nil,
@@ -7581,6 +7819,7 @@ final class ScreenshotEditorTests: XCTestCase {
                           extra: [String: Any] = [:]) -> NativeEditorSnapshot {
         var value: [String: Any] = [
             "artifact_id": id, "document": ["width": width, "height": height,
+                                                  "background": background.map { $0 as Any } ?? NSNull(),
                                                   "elements": layers],
             "initial_text_size": initialTextSize,
             "initial_annotation_style": ["color": "#ff3b5c", "fill": "#ff3b5c",
@@ -8059,6 +8298,8 @@ private final class FakeEditorWorker: EditorWorking {
     var importedSnapshot: NativeEditorSnapshot?
     var response: (([String: Any]) -> NativeEditorSnapshot?)?
     var terminationResult: Result<Void, Error> = .success(())
+    var terminationGate: DispatchSemaphore?
+    var onTermination: () -> Void = {}
     /// Background autosaves; they never appear in `requests`.
     var autosaves = 0
     /// What an autosave returns; nil keeps `snapshot`.
@@ -8222,6 +8463,8 @@ private final class FakeEditorWorker: EditorWorking {
     func close() { closeCount += 1; onClose() }
     func prepareForTermination(textInput: EditorTerminationTextInput? = nil) -> Result<Void, Error> {
         terminationTextInputs.append(textInput)
+        onTermination()
+        terminationGate?.wait()
         return terminationResult
     }
 }
