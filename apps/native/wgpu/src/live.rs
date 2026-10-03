@@ -1626,6 +1626,8 @@ pub struct Live {
     display_id: Option<String>,
     artifacts: Vec<Artifact>,
     editors: HashMap<String, crate::editor::Editor>,
+    /// A hidden editor must finish its draft before this capture opens again.
+    pending_editor_opens: HashMap<String, (PathBuf, captures_capture::CaptureMode)>,
     recording_editors: HashMap<String, crate::recording_editor::Editor>,
     recovery: crate::recording_recovery::Recovery,
     recovery_selection: u64,
@@ -1998,6 +2000,7 @@ impl Live {
             display_id: None,
             artifacts: vec![],
             editors: HashMap::new(),
+            pending_editor_opens: HashMap::new(),
             recording_editors: HashMap::new(),
             history_filter: HistoryFilter::All,
             selection: Selection::default(),
@@ -2168,6 +2171,11 @@ impl Live {
         output_directory: PathBuf,
         mode: captures_capture::CaptureMode,
     ) {
+        if self.editors.get(&id).is_some_and(|editor| editor.closing()) {
+            self.pending_editor_opens
+                .insert(id, (output_directory, mode));
+            return;
+        }
         let clipboard = self.tx.clone();
         self.editors
             .entry(id.clone())
@@ -2985,6 +2993,7 @@ impl Live {
 
     pub fn flush(&mut self) {
         self.open_media.clear();
+        self.pending_editor_opens.clear();
         self.editors.clear();
         self.recording_editors.clear();
         self.recording_notice = None;
@@ -3201,7 +3210,20 @@ impl Live {
                 self.previews.remove(id);
             }
         }
-        self.editors.retain(|_, editor| !editor.closed());
+        self.editors.retain(|_, editor| !editor.retired());
+        // Failed inline composition cancels close and restores that editor.
+        self.pending_editor_opens
+            .retain(|id, _| self.editors.get(id).is_none_or(|editor| editor.closing()));
+        let ready = self
+            .pending_editor_opens
+            .keys()
+            .filter(|id| !self.editors.contains_key(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in ready {
+            let (directory, mode) = self.pending_editor_opens.remove(&id).unwrap();
+            self.open_screenshot_editor(ctx, id, directory, mode);
+        }
         if editor_history_changed {
             self.load_history();
         }

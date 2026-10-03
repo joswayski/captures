@@ -578,9 +578,11 @@ struct View {
     inline: Option<text_input::InlineText>,
     pending: bool,
     closed: bool,
-    /// Close was asked for; the draft flushes before the window closes.
+    /// Retain the session while accepted work and the final draft drain.
     close_requested: bool,
-    /// The close flush is in flight; its reply closes the window.
+    /// Shipping bounds the visible close wait to 400 ms, not worker lifetime.
+    close_deadline: Option<Instant>,
+    /// The close flush is in flight; its reply retires the session.
     close_after_save: bool,
     /// Shipping's 700 ms draft autosave timer.
     autosave: DraftAutosave,
@@ -698,6 +700,7 @@ impl Default for View {
             pending: true,
             closed: false,
             close_requested: false,
+            close_deadline: None,
             close_after_save: false,
             autosave: DraftAutosave::default(),
             autosaves: false,
@@ -802,8 +805,18 @@ impl View {
         self.presented.as_ref().is_some_and(|value| value.unsaved)
     }
 
+    fn window_closed(&self, now: Instant) -> bool {
+        self.closed || self.close_deadline.is_some_and(|deadline| now >= deadline)
+    }
+
     fn request_close(&mut self) {
+        // Dialog results not yet submitted are not accepted edits/exports.
+        self.import_picker = None;
+        self.folder_picker = None;
         if self.close_inline() {
+            self.close_requested = true;
+            self.close_deadline
+                .get_or_insert(Instant::now() + Duration::from_millis(400));
             return;
         }
         self.cancel_drawing();
@@ -821,15 +834,22 @@ impl View {
         // Shipping closes without asking and flushes the draft (see
         // `View::drive_close`).
         self.close_requested = true;
+        self.close_deadline
+            .get_or_insert(Instant::now() + Duration::from_millis(400));
     }
 
-    /// Close once nothing is in flight: flush a pending or unsaved draft on
-    /// the worker first (the reply closes the window), else close now.
+    /// Finish accepted work even after the viewport disappears. Shutdown is
+    /// queued after the final draft reply; the owner prunes only finished workers.
     fn drive_close(&mut self, tx: &Sender<Job>) {
+        if self.closed && std::mem::take(&mut self.close_requested) {
+            let _ = tx.send(Job::Shutdown);
+            return;
+        }
         if !self.close_requested || self.close_after_save || self.pending {
             return;
         }
-        if self.inline.is_some() || !self.live_queue.is_empty() {
+        if self.inline.is_some() || !self.live_queue.is_empty() || self.background_queued.is_some()
+        {
             return;
         }
         if self.presented.is_some() && self.autosave.take_flush(self.unsaved()) {
@@ -841,6 +861,8 @@ impl View {
             }
         } else {
             self.closed = true;
+            self.close_requested = false;
+            let _ = tx.send(Job::Shutdown);
         }
     }
 
@@ -1991,7 +2013,21 @@ impl Editor {
     }
 
     pub fn closed(&self) -> bool {
+        self.view.lock().unwrap().window_closed(Instant::now())
+    }
+
+    pub fn closing(&self) -> bool {
+        let view = self.view.lock().unwrap();
+        view.closed || view.close_deadline.is_some()
+    }
+
+    /// Removing a hidden editor must not join a still-running render/write.
+    pub fn retired(&self) -> bool {
         self.view.lock().unwrap().closed
+            && self
+                .worker
+                .as_ref()
+                .is_none_or(thread::JoinHandle::is_finished)
     }
 
     pub fn take_history_changed(&self) -> bool {
@@ -2024,27 +2060,61 @@ impl Editor {
         if canvas::drain_drops(&mut self.view.lock().unwrap(), &self.tx) {
             ctx.request_repaint_of(self.viewport);
         }
+        let mut view = self.view.lock().unwrap();
+        if view.close_requested {
+            view.flush_background(&self.tx);
+            view.flush_live(&self.tx);
+        }
+        view.drive_close(&self.tx);
+        if view.closed
+            && self
+                .worker
+                .as_ref()
+                .is_some_and(|worker| !worker.is_finished())
+        {
+            // Shutdown's final deallocations have no reply; retire on a later
+            // root pass, never by joining on this one.
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::ROOT,
+                egui::ViewportCommand::RequestPaintWhileHidden,
+            );
+            ctx.request_repaint_after(Duration::from_millis(10));
+        }
     }
 
     /// Application quit drains accepted edits and saves their final draft on the
     /// worker. Failure cancels normal quit; the live session/window stays usable.
     pub fn flush(&self, ctx: &egui::Context) -> Result<(), String> {
-        if self.closed() {
-            return Ok(());
+        {
+            let mut view = self.view.lock().unwrap();
+            if view.closed {
+                return Ok(());
+            }
+            // Quit takes over an in-progress best-effort Close, including a
+            // hidden window. A failed final draft must still restore its session.
+            view.cancel_close();
+            // Files not yet submitted must not enter after the final flush.
+            view.import_picker = None;
+            view.drop.queue.clear();
         }
-        // A ready picker result is not an accepted edit yet. Do not let receive
-        // enqueue a new import after the worker has finished its final save.
-        self.view.lock().unwrap().import_picker = None;
-        // A Save accepted during Copy still lives on the UI side. Dispatch it
-        // before the final flush so normal quit drains that output too.
-        while self.view.lock().unwrap().pending_save_after_copy {
+        // Consume completions in order, including one Save queued during Copy
+        // and buffered inspector edits. Rejections retain their ordinary policy
+        // (dependent live edits drop); never bulk-enqueue past an unseen failure.
+        loop {
+            {
+                let mut view = self.view.lock().unwrap();
+                view.drain_save(&self.tx);
+                view.flush_background(&self.tx);
+                view.flush_live(&self.tx);
+                if !view.pending {
+                    break;
+                }
+            }
             let reply = self
                 .rx
                 .recv()
                 .map_err(|_| "Editor worker stopped.".to_owned())?;
-            let mut view = self.view.lock().unwrap();
-            view.receive(ctx, reply);
-            view.drain_save(&self.tx);
+            self.view.lock().unwrap().receive(ctx, reply);
         }
         let (tx, rx) = mpsc::channel();
         let input = self.view.lock().unwrap().inline_for_flush();
@@ -2089,15 +2159,25 @@ impl Editor {
                 if ui.input(|input| input.viewport().close_requested()) {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    let first = view.close_deadline.is_none();
                     view.request_close();
+                    if first && let Some(deadline) = view.close_deadline {
+                        let ctx = ui.ctx().clone();
+                        thread::spawn(move || {
+                            thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                            wake(&ctx, viewport);
+                        });
+                    }
                 }
                 view.flush_live(&tx);
                 view.drive_close(&tx);
-                if view.closed {
+                if view.window_closed(Instant::now()) {
                     wake(ui.ctx(), viewport);
                     return;
                 }
-                ui.push_id(viewport, |ui| show(ui, &tokens, &mut view, &tx));
+                ui.add_enabled_ui(!view.close_requested, |ui| {
+                    ui.push_id(viewport, |ui| show(ui, &tokens, &mut view, &tx));
+                });
                 if ui.input(|input| input.viewport().title.as_deref() != Some(view.title())) {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Title(view.title().into()));
@@ -12129,11 +12209,22 @@ mod tests {
         receive(&editor, &ctx);
         let (selection, picked) = mpsc::channel();
         editor.view.lock().unwrap().import_picker = Some(picked);
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .drop
+            .queue
+            .push_back((path.clone(), None));
         selection.send(Some(vec![path.clone()])).unwrap();
         editor.flush(&ctx).unwrap();
         {
             let view = editor.view.lock().unwrap();
             assert!(!view.pending && !view.unsaved() && view.import_picker.is_none());
+            assert!(
+                view.drop.queue.is_empty(),
+                "no unsubmitted import may enter after the final flush"
+            );
             assert_eq!(view.presented.as_ref().unwrap().document.elements.len(), 1);
         }
         assert!(!data.path().join("editor-drafts").exists());
@@ -12391,11 +12482,132 @@ mod tests {
     }
 
     #[test]
+    fn close_hides_a_blocked_copy_without_dropping_queued_save_or_draft() {
+        for quit in [false, true] {
+            let (data, id) = fixture();
+            let ctx = egui::Context::default();
+            let (started, copying) = mpsc::channel();
+            let (release, blocked) = mpsc::channel();
+            let editor = Editor::open(
+                &ctx,
+                data.path().join("history"),
+                id.clone(),
+                data.path().join("exports"),
+                CaptureMode::Region,
+                move |_| {
+                    started.send(()).unwrap();
+                    let _ = blocked.recv();
+                    Ok(())
+                },
+            );
+            // Drop before the editor on assertion failure, unblocking its worker.
+            let release = release;
+            receive(&editor, &ctx);
+            editor.view.lock().unwrap().submit(&editor.tx, crop());
+            receive(&editor, &ctx);
+            {
+                let mut view = editor.view.lock().unwrap();
+                view.update_export_target(|target, _| target.set_stem("close-queued"));
+                view.copy(&editor.tx);
+                view.save(&editor.tx);
+                view.set_background(&editor.tx, Some("#123456".into()));
+                view.request_close();
+            }
+            copying.recv_timeout(Duration::from_secs(5)).unwrap();
+            thread::sleep(Duration::from_millis(410));
+            assert!(editor.closed(), "window close must not wait for Copy");
+            assert!(
+                !editor.view.lock().unwrap().closed,
+                "retain the draining session"
+            );
+            assert!(!editor.retired(), "the app must retain the blocked worker");
+            let before = Instant::now();
+            for _ in 0..100 {
+                editor.receive(&ctx);
+            }
+            eprintln!("100 hidden-editor receive passes: {:?}", before.elapsed());
+            assert!(
+                before.elapsed() < Duration::from_millis(100),
+                "UI receive must not join Copy"
+            );
+            release.send(()).unwrap();
+            if quit {
+                fs::write(data.path().join("editor-drafts"), b"blocked").unwrap();
+                assert!(
+                    editor.flush(&ctx).is_err(),
+                    "Quit must report a failed draft even during close"
+                );
+                assert!(!editor.closed(), "failed Quit restores the hidden window");
+                assert!(
+                    !editor.closing(),
+                    "a pending reopen must not replace the recovered session"
+                );
+                assert!(
+                    editor.take_history_changed(),
+                    "Save completed before the failed draft"
+                );
+                fs::remove_file(data.path().join("editor-drafts")).unwrap();
+                editor.flush(&ctx).unwrap();
+                assert!(
+                    !editor.take_history_changed(),
+                    "retry does not repeat the accepted Save"
+                );
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !quit && !editor.retired() {
+                assert!(Instant::now() < deadline, "hidden editor failed to drain");
+                editor.receive(&ctx);
+                thread::sleep(Duration::from_millis(10));
+            }
+            if !quit {
+                assert!(
+                    editor.take_history_changed(),
+                    "retain delayed Save notifications"
+                );
+            }
+            let saved = image::open(data.path().join("exports/close-queued.png"))
+                .unwrap()
+                .into_rgba8();
+            assert_eq!(saved.dimensions(), (4, 2));
+            assert_eq!(saved.get_pixel(3, 1).0, [155, 142, 9, 255]);
+            assert_eq!(
+                fs::read_dir(data.path().join("exports")).unwrap().count(),
+                1
+            );
+            assert!(
+                copying.try_recv().is_err(),
+                "Quit retry does not repeat Copy"
+            );
+            drop(editor);
+            let reopened = EditorSession::open(OpenRequest {
+                history_root: data.path().join("history"),
+                drafts_root: data.path().join("editor-drafts"),
+                artifact_id: id,
+            })
+            .unwrap();
+            assert_eq!(reopened.pixels().dimensions(), (4, 2));
+            assert_eq!(
+                reopened.snapshot().document.background.as_deref(),
+                Some("#123456")
+            );
+        }
+    }
+
+    #[test]
     fn close_waits_for_pending_edits_then_flushes_the_draft_without_asking() {
         let ctx = egui::Context::default();
         let (tx, rx) = mpsc::channel();
         let mut view = View::default();
         view.request_close();
+        let deadline = view.close_deadline.unwrap();
+        assert!(!view.window_closed(deadline - Duration::from_nanos(1)));
+        assert!(view.window_closed(deadline));
+        view.request_close();
+        assert_eq!(
+            view.close_deadline,
+            Some(deadline),
+            "repeated close does not extend the wait"
+        );
         view.drive_close(&tx);
         assert!(
             !view.closed && rx.try_recv().is_err(),
@@ -12424,7 +12636,7 @@ mod tests {
         saved.receive(&ctx, Ok(presented(false)));
         saved.request_close();
         saved.drive_close(&tx);
-        assert!(saved.closed && rx.try_recv().is_err());
+        assert!(saved.closed && matches!(rx.try_recv(), Ok(Job::Shutdown)));
         // A pending autosave still flushes.
         let mut timed = View::default();
         timed.receive(&ctx, Ok(presented(false)));

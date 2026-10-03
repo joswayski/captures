@@ -28,11 +28,22 @@ macOS execution. The private-X11 preset suite checks both appearances, open menu
 minimum size, comparison controls, Tiny palettes and exact Highest pixels.
 Physical macOS/Windows, Wayland, accessibility and mixed-DPI acceptance stay open.
 
-wgpu screenshot-editor close still has no timeout for pending work or the final
-draft write, and destruction joins its worker. Matching shipping's 400 ms
-best-effort close needs a separate lifecycle slice: a window-only timer would
-still block during worker teardown. Normal application quit deliberately drains
-accepted output before saving the draft; this export slice preserves that policy.
+wgpu screenshot-editor close now bounds the visible wait to shipping's 400 ms.
+The root retains hidden editors until accepted Copy/Save, buffered inspector/text
+edits and the final best-effort draft write finish; pruning joins only a finished
+worker. Same-artifact reopen requests coalesce and wait for retirement, avoiding
+a new session racing a late draft write. A failed inline finish restores its
+window and typed buffer for retry. Normal Quit still drains hidden editor queues;
+it takes over an unfinished Close and restores its session on draft failure,
+without repeating an already completed Save. Quit has no 400 ms timeout: a blocked
+worker retains session memory and can delay same-artifact reopen or Quit. Regression
+tests cover the exact deadline, repeated close, blocked Copy, queued Save, delayed
+History notification, exact saved pixels and final draft retention.
+Windows and Wayland use this same wgpu path; physical-host acceptance is open.
+AppKit is unchanged: it refuses close while busy, and its synchronous Quit barrier
+can retire a session before Copy's main-thread completion dispatches a queued Save.
+Its equivalent close/accepted-queue drain needs an asynchronous termination slice;
+these Linux tests do not establish AppKit parity or choose the renderer.
 
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
