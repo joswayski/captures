@@ -51,8 +51,12 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
         "history" => &["M3 12a9 9 0 1 0 3-6.7L3 8", "M3 3v5h5M12 7v5l3 2"],
-        // These shipping preview SVGs use a 16-unit viewBox. `polylines`
+        // These shipping SVGs use a 16-unit viewBox. `polylines`
         // normalizes them to the native hosts' shared 24-unit coordinate space.
+        "external-link" => &[
+            "M6.5 3H4a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V9.5",
+            "M9 3h4v4M8.5 7.5 13 3",
+        ],
         "preview-stack" => &[
             "m3 5.5 5-2.75 5 2.75-5 2.75L3 5.5Z",
             "m3.5 8.5 4.5 2.5 4.5-2.5",
@@ -186,7 +190,7 @@ pub fn polylines(name: &str) -> Option<Vec<Vec<[f32; 2]>>> {
     let mut lines: Vec<Vec<[f32; 2]>> = paths(name)?.iter().flat_map(|d| flatten(d)).collect();
     if matches!(
         name,
-        "preview-stack" | "preview-overflow-up" | "preview-overflow-down"
+        "external-link" | "preview-stack" | "preview-overflow-up" | "preview-overflow-down"
     ) {
         for point in lines.iter_mut().flatten() {
             point[0] *= 1.5;
@@ -546,6 +550,7 @@ mod tests {
     fn preview_paths_match_shipping_svg_sources() {
         let app = include_str!("../../../apps/desktop/ui/src/App.tsx");
         for (name, component) in [
+            ("external-link", "ExternalPreferenceIcon"),
             ("close", "CloseIcon"),
             ("trash", "TrashIcon"),
             ("edit", "EditIcon"),
@@ -566,6 +571,13 @@ mod tests {
 
     #[test]
     fn sixteen_unit_preview_icons_normalize_to_twenty_four_units() {
+        let external = polylines("external-link").unwrap();
+        assert_eq!(external[0][0], [9.75, 4.5]);
+        assert_eq!(external[0].last(), Some(&[19.5, 14.25]));
+        assert!(
+            external[0].len() > 8,
+            "rounded box corners must not become square"
+        );
         assert_eq!(polylines("preview-stack").unwrap()[0][0], [4.5, 8.25]);
         assert_eq!(
             polylines("preview-overflow-up").unwrap()[0],
@@ -603,6 +615,7 @@ mod tests {
             "folder",
             "edit",
             "history",
+            "external-link",
             "preview-stack",
             "preview-overflow-up",
             "preview-overflow-down",

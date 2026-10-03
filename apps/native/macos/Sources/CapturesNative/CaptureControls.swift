@@ -657,18 +657,12 @@ final class CaptureNoteLink: NSButton {
         // Shipping `ExternalPreferenceIcon`: an open box with an outward arrow.
         let origin = NSPoint(x: Self.padding.width + ceil(size.width) + 5,
             y: (bounds.height - Self.icon) / 2)
-        func at(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-            NSPoint(x: origin.x + x * Self.icon / 16, y: origin.y + y * Self.icon / 16)
-        }
-        let glyph = NSBezierPath()
-        glyph.move(to: at(6.5, 3)); glyph.line(to: at(3, 3)); glyph.line(to: at(3, 13))
-        glyph.line(to: at(13, 13)); glyph.line(to: at(13, 9.5))
-        glyph.move(to: at(9, 3)); glyph.line(to: at(13, 3)); glyph.line(to: at(13, 7))
-        glyph.move(to: at(8.5, 7.5)); glyph.line(to: at(13, 3))
-        glyph.lineWidth = 1.2; glyph.lineCapStyle = .round; glyph.lineJoinStyle = .round
         (active ? tokens.color("theme-accent-text-strong")
             : tokens.color("glass-text-subtle").withAlphaComponent(0.72)).setStroke()
-        glyph.stroke()
+        // Shipping's 1.6-unit stroke on a 16-unit viewBox becomes 2.4/24.
+        ShippingIcons.stroke("external-link",
+            in: NSRect(origin: origin, size: NSSize(width: Self.icon, height: Self.icon)),
+            width: 2.4, flipped: isFlipped)
     }
 }
 

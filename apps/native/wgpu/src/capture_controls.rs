@@ -1114,20 +1114,17 @@ impl NotePiece<'_> {
         } else {
             tokens.color("glass-text-subtle").gamma_multiply(0.72)
         };
-        let stroke = Stroke::new(1., color);
-        let at = |x: f32, y: f32| icon.min + egui::vec2(x, y) * (Self::ICON / 16.);
-        painter.line(
-            vec![
-                at(6.5, 3.),
-                at(3., 3.),
-                at(3., 13.),
-                at(13., 13.),
-                at(13., 9.5),
-            ],
-            stroke,
-        );
-        painter.line(vec![at(9., 3.), at(13., 3.), at(13., 7.)], stroke);
-        painter.line_segment([at(8.5, 7.5), at(13., 3.)], stroke);
+        let stroke = Stroke::new(2.4 * Self::ICON / 24., color);
+        for line in
+            captures_app::icons::polylines("external-link").expect("shared external-link icon")
+        {
+            painter.line(
+                line.iter()
+                    .map(|[x, y]| icon.min + egui::vec2(*x, *y) * (Self::ICON / 24.))
+                    .collect(),
+                stroke,
+            );
+        }
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 }
