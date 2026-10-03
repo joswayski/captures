@@ -19,6 +19,7 @@ import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
+from Xlib import X, display, protocol
 
 from x11_capture_smoke import ScreenSaver
 
@@ -178,31 +179,20 @@ def main():
         run("xdotool", "key", "Return", "sleep", ".3")
 
     def close(window):
-        # Alt+F4 goes to whichever client Openbox has focused; while it briefly
-        # clears the active window during activation the key closes nothing.
-        # Openbox can also hand focus back to another client (the History
-        # root) after activation, and Alt+F4 would then close that instead.
-        # Wait until the target or a modal child transient for it owns focus,
-        # re-activating the target meanwhile.
-        run("xdotool", "windowactivate", "--sync", window)
-
-        def target_focused():
-            active = active_window()
-            if active is None:
-                return False
-            if int(active) == int(window):
-                return True
-            transient = subprocess.run(["xprop", "-id", active, "WM_TRANSIENT_FOR"], env=env,
-                                       capture_output=True, text=True, timeout=5).stdout
-            match = re.search(r"window id # (0x[0-9a-f]+)", transient)
-            if match and int(match.group(1), 16) == int(window):
-                return True
-            subprocess.run(["xdotool", "windowactivate", window], env=env,
-                           capture_output=True, timeout=5)
-            return False
-
-        wait(target_focused, "close target owns focus")
-        run("xdotool", "key", "alt+F4", "sleep", ".5")
+        # Address the client directly, as x11_recording_smoke does. Focus can
+        # change after an Alt+F4 preflight and close History instead. This is
+        # the normal WM close request, not xdotool windowclose's forced destroy;
+        # dirty-editor vetoes and accepted-work draining must still run.
+        connection = display.Display(env["DISPLAY"])
+        try:
+            target = connection.create_resource_object("window", int(window))
+            target.send_event(protocol.event.ClientMessage(
+                window=target, client_type=connection.intern_atom("WM_PROTOCOLS"),
+                data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])))
+            connection.sync()
+        finally:
+            connection.close()
+        time.sleep(.5)
 
     # The editor reports named control rectangles (CAPTURES_NATIVE_LAYOUT_PROBE)
     # as `recording-editor-layout` events on stdout. Interactions target those
@@ -1311,14 +1301,20 @@ def main():
                 missing.rename(source)
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             assert len(list(history.glob("*/metadata.json"))) == 1 and not exported()
+            # Close the background editor while History owns focus. A global
+            # keyboard close can otherwise hide History and leave this open.
+            run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
+            wait(lambda: active_window() == root, "History owns focus before background editor close")
             close(editor)
             wait(lambda: not windows("Captures Editor"), "display-only scaling closes without dirty prompt")
+            assert root in windows("Capture History"), "editor close must not hide History"
             close(root)
             wait(lambda: app.poll() is not None, "preview scale quit")
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "checks": ["fit-ratio", "actual-pixel-scale", "inner-scroll", "fit-restores",
-                           "actual-scroll-reset", "minimum-controls", "no-decode", "immutable-source-history", "clean-close"]}, indent=2) + "\n")
+                           "actual-scroll-reset", "minimum-controls", "no-decode", "immutable-source-history",
+                           "unfocused-editor-close-preserves-history", "clean-close"]}, indent=2) + "\n")
             print("PASS recording preview scale: Fit/100%, bounded scroll, no decode or dirty state")
             return
         if args.graphical_crop:
