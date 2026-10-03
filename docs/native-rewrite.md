@@ -23,8 +23,8 @@ field. Save stays enabled during Copy; repeated clicks request one Save after
 Copy succeeds or fails, using the current validated export inputs. Copy stays
 blocked during Save, and only an active Save shows “Saving…”. wgpu regressions
 cover input validation, coalescing, stale completions, exact saved pixels and
-normal-quit draining. AppKit has deferred-worker XCTest regressions; those need
-macOS execution. The private-X11 preset suite checks both appearances, open menus,
+normal-quit draining. AppKit's deferred-worker XCTest regressions passed in macOS
+CI. The private-X11 preset suite checks both appearances, open menus,
 minimum size, comparison controls, Tiny palettes and exact Highest pixels.
 Physical macOS/Windows, Wayland, accessibility and mixed-DPI acceptance stay open.
 
@@ -50,7 +50,10 @@ AppKit's nested termination loop. A failed final draft
 restores the hidden editor; retry does not repeat completed output. Permission
 restart/style rebuild keep their synchronous contract and refuse pending UI work.
 XCTest covers deferred success/failure, reopen ordering, typed-buffer recovery
-and exact real-worker saved pixels/draft retention; macOS execution is required.
+and exact real-worker saved pixels/draft retention. macOS CI executed 540 tests
+with five expected skips and zero failures; normal Quit/restart and both native
+media-opening smokes passed. Light/dark reopen and failed-text recovery renders
+were inspected. Recovered editors restore mini-preview “In editor” presence.
 These lifecycle slices do not establish physical-platform parity or choose the renderer.
 
 Both Preferences hosts keep save status on one line, with shipping's 360px error
