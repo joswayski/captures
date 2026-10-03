@@ -4686,20 +4686,20 @@ fn show_crop(
     painter.galley(origin, label, tokens.color("glass-text"));
 }
 
-/// The collapsed bar keeps the former pinned footer's height; the disclosure
-/// adds a fixed settings area. Both are even, whole pixels so the canvas
-/// geometry stays predictable and odd window heights center images on pixels.
-fn export_bar_height(tokens: &Tokens, open: bool) -> f32 {
-    let collapsed = tokens.number("s-12") + tokens.number("s-6");
-    if open {
-        collapsed + export_settings_height(tokens)
-    } else {
-        collapsed
-    }
+fn export_row_height(ui: &egui::Ui, tokens: &Tokens) -> f32 {
+    let caption = ui
+        .fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(tokens.number("text-xs"))));
+    ((caption + tokens.number("s-2") + tokens.number("h-md")) / 2.).ceil() * 2.
 }
 
-fn export_settings_height(tokens: &Tokens) -> f32 {
-    tokens.number("s-12") * 2.
+fn export_settings_height(ui: &egui::Ui, tokens: &Tokens, view: &View) -> f32 {
+    // Outer bar padding, then the settings card's padding and border.
+    let available = ui.available_width() - 4. * tokens.number("s-5") - 2.;
+    let rows = export_settings_rows(view, available, tokens.number("s-5")).len() as f32;
+    rows * export_row_height(ui, tokens)
+        + (rows - 1.) * tokens.number("s-2")
+        + 2. * tokens.number("s-4")
+        + 2.
 }
 
 const EXPORT_DISCLOSURE_WIDTH: std::ops::RangeInclusive<f32> = 160.0..=210.0;
@@ -4730,7 +4730,19 @@ fn show_export_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sen
         && !view.closed
         && !view.close_requested;
     let (horizontal, vertical) = (tokens.number("s-5"), tokens.number("s-4"));
-    let height = export_bar_height(tokens, view.export_settings_open);
+    let settings_height = if view.export_settings_open {
+        export_settings_height(ui, tokens, view)
+    } else {
+        0.
+    };
+    // Keep the footer pinned; whole, even row heights keep canvas pixels aligned.
+    let height = tokens.number("s-12")
+        + tokens.number("s-6")
+        + if view.export_settings_open {
+            settings_height + tokens.number("s-2")
+        } else {
+            0.
+        };
     egui::Panel::bottom("editor-export-bar")
         .resizable(false)
         .show_separator_line(false)
@@ -4752,7 +4764,6 @@ fn show_export_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sen
             );
             ui.spacing_mut().item_spacing.y = tokens.number("s-2");
             if view.export_settings_open {
-                let height = export_settings_height(tokens) - tokens.number("s-4");
                 egui::Frame::new()
                     .fill(tokens.color("surface-sunken"))
                     .stroke(egui::Stroke::new(1., tokens.color("border")))
@@ -4762,22 +4773,10 @@ fn show_export_bar(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sen
                         tokens.number("s-4") as i8,
                     ))
                     .show(ui, |ui| {
-                        let inner = height - 2. * tokens.number("s-4") - 2.;
+                        let inner = settings_height - 2. * tokens.number("s-4") - 2.;
                         ui.set_width(ui.available_width());
                         ui.set_height(inner);
-                        crate::primitives::scroll_area(
-                            ui,
-                            tokens,
-                            egui::ScrollArea::vertical()
-                                .id_salt("export-settings")
-                                .max_height(inner)
-                                .auto_shrink([false, false]),
-                            |ui| {
-                                ui.add_enabled_ui(ready, |ui| {
-                                    show_export_settings(ui, tokens, view)
-                                });
-                            },
-                        );
+                        ui.add_enabled_ui(ready, |ui| show_export_settings(ui, tokens, view));
                     });
             }
             let bar = view.export_view();
@@ -5278,8 +5277,7 @@ enum ExportGroup {
 /// Export settings behind the disclosure: output size, save quality and the
 /// live size estimate. The format lives in the filename suffix menu. Groups
 /// wrap into rows explicitly; egui cannot measure nested groups before placing.
-fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
-    let previous = view.export_options;
+fn export_settings_rows(view: &View, available: f32, spacing: f32) -> Vec<Vec<(ExportGroup, f32)>> {
     let mut groups = vec![(ExportGroup::Size, 200.)];
     if matches!(view.export_options.size, ExportSize::Custom { .. }) {
         groups.push((ExportGroup::Custom, 250.));
@@ -5294,8 +5292,6 @@ fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
     if view.export_options.quality != ExportQuality::Preserve && view.compare_dismissed {
         groups.push((ExportGroup::Comparison, 160.));
     }
-    let spacing = tokens.number("s-5");
-    let available = ui.available_width();
     let mut rows: Vec<Vec<(ExportGroup, f32)>> = vec![Vec::new()];
     let mut used = 0.;
     for (group, width) in groups {
@@ -5312,7 +5308,14 @@ fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             row.push((group, width));
         }
     }
-    let height = tokens.number("text-xs") + tokens.number("s-2") + tokens.number("h-md");
+    rows
+}
+
+fn show_export_settings(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
+    let previous = view.export_options;
+    let spacing = tokens.number("s-5");
+    let rows = export_settings_rows(view, ui.available_width(), spacing);
+    let height = export_row_height(ui, tokens);
     for row in rows {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = spacing;
@@ -7457,6 +7460,119 @@ mod tests {
                 assert_eq!(
                     (view.section, view.draw_shape),
                     (Section::Draw, DrawShape::Arrow)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn expanded_export_settings_fit_visible_rows_without_blank_reservation() {
+        for appearance in ["light-mustard", "dark-mustard"] {
+            let tokens = crate::tokens::load().remove(appearance).unwrap();
+            for (width, quality, custom, dismissed, rows) in [
+                (1032., ExportQuality::Compress, false, false, 1),
+                (1032., ExportQuality::Maximum, false, false, 1),
+                (780., ExportQuality::Maximum, false, false, 1),
+                (772., ExportQuality::Maximum, false, false, 2),
+                (760., ExportQuality::Compress, false, false, 1),
+                (760., ExportQuality::Maximum, false, false, 2),
+                (760., ExportQuality::Compress, true, true, 2),
+            ] {
+                let ctx = egui::Context::default();
+                ctx.enable_accesskit();
+                let mut view = View::default();
+                view.receive(&ctx, Ok(presented(false)));
+                view.export_settings_open = true;
+                view.export_options.quality = quality;
+                view.compare_dismissed = dismissed;
+                if custom {
+                    view.export_options.size = ExportSize::Custom {
+                        width: 13,
+                        height: 7,
+                    };
+                    view.custom_export_size = [13, 7];
+                }
+                let (tx, _rx) = mpsc::channel();
+                let mut frame = || {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 540.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| show(ui, &tokens, &mut view, &tx),
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                frame();
+                frame();
+                let output = frame();
+                let card = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill == tokens.color("surface-sunken")
+                                && rect.rect.width() > width - 50. =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .expect("full-width settings card");
+                if rows == 1 {
+                    assert!(
+                        card.height() < 85.,
+                        "single row must not reserve 120px: {card:?}"
+                    );
+                } else {
+                    assert!(card.height() > 100., "wrapped rows must expand, not clip");
+                }
+                let labels = ["Output size", "Save quality", "Est. size"]
+                    .into_iter()
+                    .chain(custom.then_some("Width × height"))
+                    .chain(dismissed.then_some(compare::SHOW_CAPTION));
+                for label in labels {
+                    let rect = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing {label}"));
+                    assert!(
+                        card.contains_rect(rect),
+                        "{label} must remain inside the expanded card"
+                    );
+                }
+                let control = if quality == ExportQuality::Compress {
+                    "Compression quality"
+                } else {
+                    "Screenshot file size unit"
+                };
+                let bounds = output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some(control))
+                    .and_then(|(_, node)| node.bounds())
+                    .unwrap_or_else(|| panic!("missing {control}"));
+                assert!(
+                    bounds.y1 <= f64::from(card.bottom()),
+                    "last control must be fully visible"
+                );
+                assert!(
+                    view.viewport_area.unwrap().height() > 200.,
+                    "minimum canvas remains usable"
                 );
             }
         }

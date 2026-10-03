@@ -28,6 +28,16 @@ CI. The private-X11 preset suite checks both appearances, open menus,
 minimum size, comparison controls, Tiny palettes and exact Highest pixels.
 Physical macOS/Windows, Wayland, accessibility and mixed-DPI acceptance stay open.
 
+Both screenshot-editor hosts size expanded export settings to their visible rows
+instead of reserving a fixed blank area. Copy/Save stay pinned; custom dimensions,
+Maximum file size and a hidden comparison wrap without clipping and update the
+canvas height. At 1x, a single-row wgpu bar shrinks from 208 to 152 px; AppKit's
+single-row bar shrinks from 208 to 158 pt. Host regressions cover compact/wrapped
+layouts, both appearances and minimum size. Private-X11 checks exercise the
+wrapped comparison action, units menus, custom exports and exact saved pixels.
+AppKit execution requires macOS CI; physical macOS/Windows, Wayland,
+accessibility and mixed-DPI acceptance remain open.
+
 wgpu screenshot-editor close now bounds the visible wait to shipping's 400 ms.
 The root retains hidden editors until accepted Copy/Save, buffered inspector/text
 edits and the final best-effort draft write finish; pruning joins only a finished

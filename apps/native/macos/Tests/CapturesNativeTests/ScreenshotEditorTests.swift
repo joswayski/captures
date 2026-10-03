@@ -932,7 +932,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(panel.isHidden)
             XCTAssertTrue(controller.exportSettingsOpen)
             XCTAssertEqual(chevron.glyph, "editor-chevron-up")
-            XCTAssertEqual(controller.exportBarHeight, 208)
+            XCTAssertEqual(controller.exportBarHeight, 158)
             XCTAssertTrue(labels(in: controller.root).contains("≈ 240 KB"))
             XCTAssertTrue(labels(in: controller.root).contains("−20%"))
             XCTAssertTrue(labels(in: controller.root).contains("1,920 × 1,080")
@@ -947,6 +947,73 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(panel.isHidden)
             XCTAssertEqual(controller.exportBarHeight, 80)
             XCTAssertTrue(worker.requests.isEmpty && worker.exportSaves.isEmpty)
+        }
+    }
+
+    func testExportSettingsHeightFollowsWrappingAndModeChanges() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 640, height: 360))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!,
+                                                         worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            controller.window.setContentSize(NSSize(width: 1032, height: 700))
+            try showOutput(in: controller.root)
+            let panel = try exportSettingsPanel(in: controller.root)
+            let save = try button("Save", in: controller.root)
+            let copy = try button("Copy image", in: controller.root)
+            let quality = try popup("Save quality", in: controller.root)
+            let size = try popup("Output size", in: controller.root)
+            let viewport = try XCTUnwrap(descendants(in: controller.root).first {
+                $0.accessibilityLabel() == "Screenshot viewport" })
+
+            func checkPanel(height: CGFloat) {
+                XCTAssertEqual(controller.exportBarHeight, height)
+                let visible = panel.subviews.filter { !$0.isHidden }
+                XCTAssertFalse(visible.isEmpty)
+                XCTAssertTrue(visible.allSatisfy { panel.bounds.contains($0.frame) },
+                              "wrapped captions and controls stay inside the settings card")
+                XCTAssertEqual(panel.bounds.height - (visible.map { $0.frame.maxY }.max() ?? 0),
+                               8, accuracy: 0.1, "no blank row below the controls")
+                for action in [save, copy] {
+                    let rect = controller.root.convert(action.bounds, from: action)
+                    XCTAssertEqual(controller.root.bounds.maxY - rect.maxY, 12, accuracy: 0.1,
+                                   "actions remain pinned when the settings height changes")
+                }
+                XCTAssertGreaterThan(viewport.bounds.height, 140)
+            }
+
+            quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
+            checkPanel(height: 158)
+            try render(controller.root, name: "screenshot-editor-export-compact-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            waitUntil { controller.root.bounds.width == 760 }
+            checkPanel(height: 158)
+            let singleRowViewport = viewport.bounds.height
+            quality.selectItem(withTitle: "Maximum file size")
+            _ = quality.sendAction(quality.action, to: quality.target)
+            checkPanel(height: 210)
+            XCTAssertEqual(singleRowViewport - viewport.bounds.height, 52, accuracy: 0.1,
+                           "wrapping also updates the canvas, not just the export card")
+            size.selectItem(withTitle: "Custom"); _ = size.sendAction(size.action, to: size.target)
+            checkPanel(height: 210)
+            XCTAssertFalse(try field("Output width", in: controller.root).isHidden)
+            try render(controller.root, name: "screenshot-editor-export-wrapped-custom-\(appearance)")
+            size.selectItem(withTitle: "Original"); _ = size.sendAction(size.action, to: size.target)
+            quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
+            checkPanel(height: 158)
+            controller.compareView.onDismiss?()
+            checkPanel(height: 210)
+            XCTAssertFalse(try button("Show before / after", in: controller.root).isHiddenOrHasHiddenAncestor)
+            try render(controller.root, name: "screenshot-editor-export-wrapped-comparison-\(appearance)")
+            try button("Show before / after", in: controller.root).performClick(nil)
+            checkPanel(height: 158)
+            try exportDisclosure(in: controller.root).performClick(nil)
+            XCTAssertEqual(controller.exportBarHeight, 80)
+            XCTAssertTrue(panel.isHidden)
+            XCTAssertTrue(worker.requests.isEmpty && worker.exportSaves.isEmpty && worker.encodes.isEmpty,
+                          "layout changes neither edit nor export the document")
         }
     }
 
