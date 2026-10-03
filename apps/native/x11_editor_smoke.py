@@ -199,7 +199,7 @@ def main():
         time.sleep(.5)
         run("import", "-window", window, str(output / f"{name}.png"))
         if editor is not None and str(window) == str(editor):
-            shot_layouts[name] = (window_size(), document_size())
+            shot_layouts[name] = (window_size(), document_size(), export_bar_height())
 
     def pixel(name, x, y, expected, tolerance=0):
         actual = run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
@@ -207,8 +207,8 @@ def main():
         assert len(actual) == 3 and all(abs(a - b) <= tolerance for a, b in zip(actual, expected)), (name, x, y, actual, expected)
 
     def document_pixel(name, x, y, expected, tolerance=0):
-        window, size = shot_layouts[name]
-        left, top, scale = fit_geometry(size, window)
+        window, size, bar = shot_layouts[name]
+        left, top, scale = fit_geometry(size, window, bar)
         pixel(name, round(left + x * scale), round(top + y * scale), expected, tolerance)
 
     def settled_document_pixel(name, x, y, expected, tolerance=0):
@@ -283,10 +283,11 @@ def main():
             return document["width"], document["height"]
         return 640, 360
 
-    def fit_geometry(size=None, window=None):
+    def fit_geometry(size=None, window=None, bar=None):
         width, height = window or window_size()
         image_width, image_height = size or document_size()
-        available = (64., 60., width - INSPECTOR_WIDTH - 8., height - 8. - export_bar_height())
+        available = (64., 60., width - INSPECTOR_WIDTH - 8.,
+                     height - 8. - (export_bar_height() if bar is None else bar))
         scale = min(1., max(.02, (available[2] - available[0]) / image_width),
                     max(.02, (available[3] - available[1]) / image_height))
         center = ((available[0] + available[2]) / 2, (available[1] + available[3]) / 2)
@@ -513,12 +514,29 @@ def main():
             str(start[0]), str(start[1] + 8), "sleep", ".1", "mousemove", "--sync",
             "--window", editor, *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
 
-    # The full-width export bar is below the canvas and inspector: a fixed
-    # collapsed height, plus a fixed settings area while its disclosure is open.
-    export_bar = {"open": False}
+    # Independent geometry expectations for the shipped token fonts at 1x.
+    # Only visible groups reserve space; captures retain their own geometry.
+    export_bar = {"open": False, "quality": 0, "custom": False, "dismissed": False}
+
+    def settings_rows():
+        widths = [200] + ([250] if export_bar["custom"] else []) + [150]
+        widths += {0: [], 1: [160], 2: [190]}[export_bar["quality"]] + [150]
+        if export_bar["quality"] and export_bar["dismissed"]:
+            widths.append(160)
+        available, used, rows = window_size()[0] - 50, 0, 1
+        for width in widths:
+            if used and used + 12 + width > available:
+                rows += 1
+                used = width
+            else:
+                used += (12 if used else 0) + width
+        return rows
 
     def export_bar_height():
-        return 80 + (128 if export_bar["open"] else 0)
+        if not export_bar["open"]:
+            return 80
+        rows = settings_rows()
+        return 80 + 22 + 50 * rows + 4 * (rows - 1)
 
     def export_widths(width):
         # Mirrors export_widths in the editor: fixed actions, then disclosure, then filename.
@@ -558,13 +576,15 @@ def main():
             time.sleep(.4)
 
     def setting_point(x, row=0):
-        # Settings groups start 25px from the window edge; row 0 controls sit
-        # 157px above the bottom while the disclosure is open.
+        # The caption and control centre are 51px below the bar's top. Each
+        # wrapped row adds its whole measured height and the 4px token gap.
         assert export_bar["open"]
-        return 25 + x, window_size()[1] - 157 + 55 * row
+        return 25 + x, window_size()[1] - export_bar_height() + 51 + 54 * row
 
     def setting_click(x, row=0):
         click(editor, *setting_point(x, row))
+        if x == 770:  # Show before / after, in the wide one-row fixtures.
+            export_bar["dismissed"] = False
 
     def preview_encoded():
         # Show the automatic before/after comparison (Compress) without
@@ -573,24 +593,25 @@ def main():
         quality_mode(1)
         compare_settled("comparison-before-copy")
 
-    def setting_menu(x, index, count, row=0):
-        # Menus of up to three items open below the control; longer menus open
-        # above it. Items are 44px apart.
+    def setting_menu(x, index, count, row=0, item_height=44):
+        # The compact card leaves less room below its controls. A described
+        # listbox flips above; the smaller, label-only units menu may fit below.
         px, py = setting_point(x, row)
         click(editor, px, py)
-        first = py + 39 if count <= 3 else py - 44 * count + 6
-        click(editor, px, first + 44 * index)
+        above = window_size()[1] - py < item_height * count + 42
+        first = (py - item_height * count - 31 + item_height / 2
+                 if above else py + 27 + item_height / 2)
+        click(editor, px, round(first + item_height * index))
 
     def quality_mode(index):
-        # The Save quality listbox opens below with little room and scrolls,
-        # so its clipped last row is chosen with End (egui's focus navigation
-        # takes the arrow keys, but Home/End reach the open listbox).
+        # Home/End reach the open listbox without egui's arrow-focus navigation.
         if index == 1:
             setting_menu(282, 1, 3)
-            return
-        setting_click(282)
-        for key in ("Home" if index == 0 else "End", "Return"):
-            run("xdotool", "key", key, "sleep", ".2")
+        else:
+            setting_click(282)
+            for key in ("Home" if index == 0 else "End", "Return"):
+                run("xdotool", "key", key, "sleep", ".2")
+        export_bar.update(quality=index, dismissed=False)
 
     def setting_field(x, value, row=0):
         setting_click(x, row)
@@ -603,8 +624,8 @@ def main():
 
     def divider_shown(name, split=.5):
         """The divider paints a glass-text column over the canvas at `split`."""
-        window, size = shot_layouts[name]
-        left, top, scale = fit_geometry(size, window)
+        window, size, bar = shot_layouts[name]
+        left, top, scale = fit_geometry(size, window, bar)
         x = round(left + size[0] * split * scale)
         for y in (30, 50, 70, 90):  # Clear of the centred handle.
             actual = run("convert", str(output / f"{name}.png"), "-crop",
@@ -1090,7 +1111,7 @@ def main():
             return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
 
         def reopen(edit_y=432, keep_banner=False):
-            export_bar["open"] = False  # Every editor window starts collapsed.
+            export_bar.update(open=False, quality=0, custom=False, dismissed=False)
             tool_state["draw"] = "rectangle"  # Each editor starts with Rectangle.
             click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
             restored = draft.exists()
@@ -2322,16 +2343,8 @@ def main():
                 shot(editor, f"output-size-{name}-saved")
 
             def output_size(index):
-                # The token Output size listbox opens below with little room
-                # and scrolls: its described rows are 40 px apart, and End
-                # reaches the clipped Custom row.
-                setting_click(54)
-                if index < 3:
-                    x, y = setting_point(54)
-                    click(editor, x, y + 40 + 40 * index)
-                else:
-                    for key in ("End", "Return"):
-                        run("xdotool", "key", key, "sleep", ".2")
+                setting_menu(54, index, 4, item_height=40)
+                export_bar["custom"] = index == 3
 
             setting_click(54)
             shot(editor, "output-size-menu")
@@ -2438,6 +2451,7 @@ def main():
             assert int(run("identify", "-format", "%k", str(tiny))) <= 32
             # Hide dismisses the comparison; Show before / after returns it.
             click(editor, *document_point((604, 24)))
+            export_bar["dismissed"] = True
             compare_settled("output-compare-hidden")
             assert not divider_shown("output-compare-hidden")
             setting_click(770)
@@ -2457,13 +2471,19 @@ def main():
             quality_mode(2)  # Maximum file size: 10 MB by default.
             compare_settled("output-maximum-default")
             setting_field(418, "9")  # 9 MB still encodes.
-            setting_menu(506, 0, 3)  # KB converts the typed value.
+            setting_menu(506, 0, 3, item_height=28)  # KB converts the typed value.
+            setting_click(418)
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            assert run("xclip", "-selection", "clipboard", "-o") == b"9000", "MB → KB conversion"
             compare_settled("output-maximum-kb")
             setting_field(418, "9")  # 9 KB is below the 10 KB floor.
             shot(editor, "output-maximum-error")
+            before_invalid_save = highest.read_bytes()
             export_click("save")  # The status explains the limit; Save stays disabled.
             time.sleep(.5)
             assert len(list(exports.iterdir())) == 2
+            assert highest.read_bytes() == before_invalid_save, "invalid Save cannot overwrite the last output"
+            assert file_manager.revealed == [tiny, highest], "invalid Save cannot publish or reveal a file"
             assert not draft.exists(), "output controls and exports never save a draft"
             assert (artifact / "capture.png").read_bytes() == original
             quality_mode(1)  # Inspect the affected preset control at minimum size too.
@@ -2473,6 +2493,24 @@ def main():
             setting_click(426)
             shot(editor, "output-preset-minimum-menu")
             run("xdotool", "key", "Escape")
+            # Extra groups resize the card and canvas; the comparison action
+            # stays reachable in its new second row at the minimum size.
+            click(editor, *document_point((604, 24)))
+            export_bar["dismissed"] = True
+            compare_settled("output-compare-minimum-hidden")
+            assert not divider_shown("output-compare-minimum-hidden")
+            setting_click(80, row=1)
+            export_bar["dismissed"] = False
+            compare_settled("output-compare-minimum-shown")
+            assert divider_shown("output-compare-minimum-shown")
+            quality_mode(2)
+            setting_field(418, "1000")  # Valid KB budget; estimate wraps below it.
+            compare_settled("output-maximum-minimum")
+            assert divider_shown("output-maximum-minimum")
+            setting_click(506)
+            shot(editor, "output-maximum-minimum-menu")
+            run("xdotool", "key", "Escape")
+            assert not draft.exists() and (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "output preset suite quits")
             assert app.returncode == 0
@@ -2483,7 +2521,8 @@ def main():
                            "tiny-saved-png-32-colors", "save-reveals-file", "compare-hide-and-show",
                            "highest-saved-png-exact-pixels", "maximum-size-units",
                            "maximum-size-floor-disables-save", "no-draft-or-original-write",
-                           "minimum-controls-and-menu"],
+                           "minimum-controls-and-menu", "minimum-wrapped-comparison-action",
+                           "minimum-wrapped-maximum-and-menu"],
             }, indent=2) + "\n")
             print("PASS native output presets: descriptions, automatic comparison, Tiny palette, Highest exact pixels, size units")
             return
@@ -2909,8 +2948,8 @@ def main():
             shot(editor, "text-glyph-shadow")
             def text_pixels(name, crop=None):
                 if crop is None:
-                    window, size = shot_layouts[name]
-                    left, top, scale = fit_geometry(size, window)
+                    window, size, bar = shot_layouts[name]
+                    left, top, scale = fit_geometry(size, window, bar)
                     crop = f"{round(size[0] * scale)}x{round(size[1] * scale)}+{round(left)}+{round(top)}"
                 return run("convert", str(output / f"{name}.png"), "-crop", crop,
                            "-depth", "8", "rgba:-")
@@ -3336,8 +3375,8 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "1000", "1000")
 
             def document_rgb(name, point):
-                window, size = shot_layouts[name]
-                left, top, scale = fit_geometry(size, window)
+                window, size, bar = shot_layouts[name]
+                left, top, scale = fit_geometry(size, window, bar)
                 x, y = round(left + point[0] * scale), round(top + point[1] * scale)
                 return run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
                            "-depth", "8", "rgb:-")
@@ -4108,8 +4147,8 @@ def main():
 
         def assert_transformed_pixels(name, gold_left, gold_above):
             shot(editor, name)
-            window, size = shot_layouts[name]
-            left, top, scale = fit_geometry(size, window)
+            window, size, bar = shot_layouts[name]
+            left, top, scale = fit_geometry(size, window, bar)
             crop_width, crop_height = round(size[0] * scale), round(size[1] * scale)
             pixels = run("convert", str(output / f"{name}.png"), "-crop",
                          f"{crop_width}x{crop_height}+{round(left)}+{round(top)}",
@@ -4447,6 +4486,7 @@ def main():
         compare_settled("output-jpeg")
         fixture_pixel("output-jpeg", 428, 289, (46, 158, 113), tolerance=4)
         click(editor, *document_point((448, 23)))  # Hide: the edited canvas alone.
+        export_bar["dismissed"] = True
         compare_settled("output-edited-canvas")
         assert not divider_shown("output-edited-canvas")
         fixture_pixel("output-edited-canvas", 428, 289, (46, 158, 113))

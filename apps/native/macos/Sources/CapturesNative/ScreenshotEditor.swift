@@ -1942,8 +1942,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         window.setContentSize(fitted)
     }
 
-    /// Collapsed export bar height, plus the fixed settings area while open.
-    var exportBarHeight: CGFloat { exportSettingsOpen ? 208 : 80 }
+    /// Keep the footer pinned; expanded settings reserve only their visible rows.
+    var exportBarHeight: CGFloat { 80 + (exportSettingsOpen ? exportSettingsHeight + 16 : 0) }
+
+    private var exportSettingsHeight: CGFloat {
+        2 * tokens.number("s-4") + 46 + (exportSettingsLayout().last?.row ?? 0) * 52
+    }
 
     /// Frame-based layout: the full-width export bar is pinned to the bottom;
     /// the viewport, zoom row and inspector sit above it.
@@ -2149,6 +2153,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         return (disclosure, min(320, max(120, flexible - disclosure)))
     }
 
+    private func updateExportLayout() {
+        // Estimates and worker receipts only need the footer. Reflow the canvas
+        // when the visible settings change height, without closing a layer menu
+        // or cancelling a gesture on every status update.
+        if exportBar.frame.height != exportBarHeight { layoutEditor() }
+        else { layoutExportBar() }
+    }
+
     private func layoutExportBar() {
         guard exportDisclosure != nil else { return }
         let width = root.bounds.width
@@ -2156,10 +2168,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                  width: width, height: exportBarHeight)
         exportBarRule.frame = NSRect(x: 0, y: 0, width: width, height: 1)
         exportSettingsPanel.isHidden = !exportSettingsOpen
-        exportSettingsPanel.frame = NSRect(x: 16, y: 10, width: width - 32, height: 112)
+        exportSettingsPanel.frame = NSRect(x: 16, y: 10, width: width - 32, height: exportSettingsHeight)
         layoutExportSettings()
         let (disclosure, filename) = Self.exportWidths(width)
-        let base: CGFloat = exportSettingsOpen ? 128 : 0
+        let base: CGFloat = exportSettingsOpen ? exportSettingsHeight + 16 : 0
         let headingY = base + 10, rowY = base + 32
         exportDisclosure.frame = NSRect(x: 16, y: rowY, width: disclosure, height: 36)
         exportDisclosureTitle.frame = NSRect(x: 12, y: 3, width: disclosure - 40, height: 16)
@@ -2185,8 +2197,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                     width: max(0, statusRight - headingEnd - 12), height: 16)
     }
 
-    /// Flow the visible settings groups into rows inside the fixed panel.
-    private func layoutExportSettings() {
+    /// The same row plan sizes the card and places its visible controls.
+    private func exportSettingsLayout() -> [(key: String, x: CGFloat, row: CGFloat)] {
         let compress = outputQuality?.indexOfSelectedItem == 1
         let visible: [String] = ["size"]
             + (outputSizeMode?.indexOfSelectedItem == 3 ? ["custom"] : [])
@@ -2195,16 +2207,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             + (outputQuality?.indexOfSelectedItem == 2 ? ["maximum"] : [])
             + ["estimate"]
             + (outputQuality?.indexOfSelectedItem != 0 && comparisonDismissed ? ["comparison"] : [])
-        let available = exportSettingsPanel.bounds.width - 24
+        let available = root.bounds.width - 32 - 24
         var x: CGFloat = 12, row: CGFloat = 0
-        for (key, group) in exportGroups {
-            let shown = visible.contains(key)
-            group.caption.isHidden = !shown
-            group.views.forEach { $0.0.isHidden = !shown }
-        }
+        var result: [(key: String, x: CGFloat, row: CGFloat)] = []
         for key in visible {
             guard let group = exportGroups[key] else { continue }
             if x > 12 && x + group.width > 12 + available { x = 12; row += 1 }
+            result.append((key, x, row))
+            x += group.width + 16
+        }
+        return result
+    }
+
+    private func layoutExportSettings() {
+        let layout = exportSettingsLayout()
+        for (key, group) in exportGroups {
+            let shown = layout.contains { $0.key == key }
+            group.caption.isHidden = !shown
+            group.views.forEach { $0.0.isHidden = !shown }
+        }
+        for (key, x, row) in layout {
+            guard let group = exportGroups[key] else { continue }
             let captionY = 8 + row * 52
             group.caption.frame = NSRect(x: x, y: captionY, width: group.width, height: 16)
             for (view, offset, viewWidth) in group.views {
@@ -2212,7 +2235,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 view.frame = NSRect(x: x + offset, y: captionY + (labelLike ? 24 : 18),
                                     width: viewWidth, height: labelLike ? 18 : 28)
             }
-            x += group.width + 16
         }
     }
 
@@ -4338,7 +4360,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func showComparison() {
         comparisonDismissed = false
-        layoutExportSettings()
+        updateExportLayout()
         scheduleComparison()
     }
 
@@ -4346,7 +4368,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         comparisonDismissed = true
         comparisonWork?.cancel(); comparisonWork = nil
         comparisonGeneration += 1; comparisonPending = false
-        layoutExportSettings()
+        updateExportLayout()
         publishComparison()
     }
 
@@ -4576,7 +4598,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportStatus.stringValue = message.0
         exportStatus.toolTip = message.0
         exportStatus.textColor = tokens.color(message.1)
-        layoutExportBar()
+        updateExportLayout()
         publishComparison()
     }
 
@@ -4811,7 +4833,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputWidth.isEnabled = ready && custom; outputHeight.isEnabled = ready && custom
         outputAspectLock.isEnabled = ready && custom
         // Visibility follows the shared group flow inside the settings panel.
-        layoutExportSettings()
+        updateExportLayout()
     }
 
     private func publishOutputDimensions() {
