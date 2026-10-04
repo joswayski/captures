@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod backend;
 mod cursor;
@@ -8,6 +8,9 @@ mod geometry;
 mod macos;
 mod model;
 mod window;
+#[cfg(any(target_os = "windows", test))]
+#[allow(unsafe_code)]
+mod windows_cursor;
 
 pub use backend::XcapBackend;
 pub use cursor::{

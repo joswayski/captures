@@ -913,9 +913,12 @@ async fn prepare_capture(
         if includes_capture_ui {
             recording::dismiss_capture_menu_after_nested_snapshot(&app, &state);
         }
-        // The real system cursor remains visible over the frozen selector.
-        // Baking another cursor into this preview would display it twice.
-        let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
+        let snapshot_png = storage::encode_overlay_snapshot(
+            &frame.image,
+            &frame.descriptor,
+            cursor.as_ref(),
+            state.settings().show_cursor_in_screenshots,
+        )?;
         let (targets, pending_windows) =
             take_ready_or_defer_windows(windows_task, &frame.descriptor, Some(&frame.image));
         (

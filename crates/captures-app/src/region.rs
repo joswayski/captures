@@ -215,6 +215,7 @@ mod tests {
             position: (-16, 10),
             image: Some(captures_capture::CursorImage {
                 pixels: RgbaImage::from_pixel(2, 2, image::Rgba([211, 19, 79, 255])),
+                and_mask: None,
                 logical_width: 1.,
                 logical_height: 1.,
                 hot_spot_x: 0.,
@@ -298,6 +299,7 @@ mod tests {
                                     2,
                                     image::Rgba([211, 19, 79, 255]),
                                 ),
+                                and_mask: None,
                                 logical_width: 1.,
                                 logical_height: 1.,
                                 hot_spot_x: 0.,

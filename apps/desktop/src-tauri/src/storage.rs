@@ -410,7 +410,24 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
 /// Crops still come from the uncompressed `RgbaImage`. Screenshot-like images
 /// encode faster as PNG `Fast`+`Sub` than JPEG, and that encode sits on the
 /// shortcut path before the webview can paint.
-pub fn encode_overlay_snapshot(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
+pub fn encode_overlay_snapshot(
+    image: &RgbaImage,
+    display: &captures_capture::DisplayDescriptor,
+    cursor: Option<&captures_capture::PointerCursor>,
+    include_cursor: bool,
+) -> Result<Vec<u8>, AppError> {
+    // On Windows the live selector pointer is a crosshair/selection control,
+    // not the cursor frozen into the capture. Show the captured cursor too so
+    // users can choose a crop that includes it. Keep source pixels untouched:
+    // commit composites once after cropping and checks the hotspot is inside.
+    if cfg!(target_os = "windows")
+        && include_cursor
+        && let Some(cursor) = cursor
+    {
+        let mut preview = image.clone();
+        captures_capture::overlay_pointer_cursor(&mut preview, display, cursor, 1.0);
+        return encode_png(&preview);
+    }
     encode_png(image)
 }
 
@@ -514,7 +531,18 @@ mod tests {
     #[test]
     fn overlay_snapshots_use_the_fast_png_path() {
         let image = RgbaImage::from_pixel(4, 4, Rgba([32, 64, 128, 255]));
-        let bytes = encode_overlay_snapshot(&image).expect("overlay snapshot encoded");
+        let display = captures_capture::DisplayDescriptor {
+            id: "test".into(),
+            name: "Test".into(),
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+            scale_factor: 1.,
+            is_primary: true,
+        };
+        let bytes = encode_overlay_snapshot(&image, &display, None, true)
+            .expect("overlay snapshot encoded");
         assert_eq!(overlay_snapshot_mime_type(&bytes), "image/png");
         assert_eq!(bytes, encode_png(&image).expect("png"));
         let decoded = image::load_from_memory(&bytes)
@@ -522,6 +550,45 @@ mod tests {
             .to_rgba8();
         assert_eq!(decoded.dimensions(), (4, 4));
         assert_eq!(decoded.get_pixel(0, 0).0, [32, 64, 128, 255]);
+    }
+
+    #[test]
+    fn frozen_cursor_preview_obeys_setting_without_mutating_capture_source() {
+        let image = RgbaImage::from_pixel(40, 30, Rgba([23, 61, 107, 255]));
+        let display = captures_capture::DisplayDescriptor {
+            id: "test".into(),
+            name: "Test".into(),
+            x: -100,
+            y: 20,
+            width: 40,
+            height: 30,
+            scale_factor: 2.,
+            is_primary: false,
+        };
+        let cursor = captures_capture::PointerCursor {
+            position: (-90, 36),
+            image: Some(captures_capture::CursorImage {
+                pixels: RgbaImage::from_pixel(3, 2, Rgba([201, 19, 73, 128])),
+                and_mask: None,
+                logical_width: 3.,
+                logical_height: 2.,
+                hot_spot_x: 1.,
+                hot_spot_y: 1.,
+            }),
+        };
+        for enabled in [false, true] {
+            let bytes = encode_overlay_snapshot(&image, &display, Some(&cursor), enabled).unwrap();
+            let preview = image::load_from_memory(&bytes).unwrap().to_rgba8();
+            let expected = if enabled && cfg!(target_os = "windows") {
+                [112, 39, 89, 255]
+            } else {
+                [23, 61, 107, 255]
+            };
+            assert_eq!(preview.get_pixel(9, 15).0, expected);
+            assert_eq!(preview.get_pixel(8, 15).0, [23, 61, 107, 255]);
+            assert_eq!(preview.get_pixel(12, 17).0, [23, 61, 107, 255]);
+        }
+        assert!(image.pixels().all(|pixel| pixel.0 == [23, 61, 107, 255]));
     }
 
     #[test]
