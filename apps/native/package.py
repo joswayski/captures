@@ -7,6 +7,7 @@ location before opting into Open With. Existing output is never overwritten.
 import argparse
 from pathlib import Path
 import plistlib
+import re
 import shutil
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +21,11 @@ FORMATS = (
     ("MPEG-4 video", ("mp4",), "video/mp4", "public.mpeg-4"),
     ("WebM video", ("webm",), "video/webm", "org.webmproject.webm"),
 )
+MEDIA_TARGETS = {
+    "macos": ("aarch64-apple-darwin", "x86_64-apple-darwin"),
+    "windows": ("x86_64-pc-windows-msvc",),
+    "linux": ("x86_64-unknown-linux-gnu",),
+}
 
 
 def mac_info():
@@ -104,11 +110,30 @@ def windows_registry(binary):
     return "\r\n".join(sections) + "\r\n", "\r\n".join(removal)
 
 
-def stage(platform, binary, output, resources=None):
+def stage(platform, binary, output, resources=None, media_target=None):
     binary = binary.resolve(strict=True)
     output = output.resolve()
     if not binary.is_file():
         raise ValueError("Binary must be a file")
+    media_tools, media_sources = [], []
+    if media_target is not None:
+        if media_target not in MEDIA_TARGETS[platform]:
+            raise ValueError(f"Media target {media_target} does not match {platform}")
+        suffix = ".exe" if platform == "windows" else ""
+        media_tools = [ROOT / "apps/desktop/src-tauri/binaries" / f"{name}-{media_target}{suffix}"
+                       for name in ("ffmpeg", "ffprobe")]
+        # Reuse the builder's pin and complete corresponding-source payload,
+        # rather than copying arbitrary system FFmpeg builds or only notices.
+        builder = (ROOT / "scripts/build-ffmpeg-sidecars.sh").read_text()
+        version = re.search(r'^FFMPEG_VERSION="([^"]+)"', builder, re.MULTILINE).group(1)
+        dist = ROOT / "target/ffmpeg-dist"
+        media_sources = [dist / f"ffmpeg-{version}{ending}" for ending in (
+            ".tar.xz", ".tar.xz.asc", "-BUILD_CONFIG.txt", "-COPYING.LGPLv2.1", "-NOTICE.md")]
+        media_sources += [ROOT / "apps/desktop/src-tauri/openh264" / name
+                          for name in ("LICENSE", "NOTICE.md")]
+        for source in media_tools + media_sources:
+            if not source.is_file():
+                raise ValueError(f"Missing media package input: {source}; run npm run prepare:media first")
     if platform == "macos":
         if resources is None or not resources.is_dir():
             raise ValueError("macOS requires the SwiftPM resource bundle directory")
@@ -135,6 +160,18 @@ def stage(platform, binary, output, resources=None):
         (output / "unregister-open-with.reg").write_text(registry[1], encoding="utf-16", newline="")
     else:
         launcher.write_text(descriptor, encoding="utf-8")
+    if media_tools:
+        tools_directory = executable.parent / "binaries"
+        tools_directory.mkdir()
+        for source in media_tools:
+            destination = tools_directory / source.name
+            shutil.copy2(source, destination)
+            destination.chmod(destination.stat().st_mode | 0o111)
+        licenses = (launcher / "Contents/Resources" if platform == "macos" else output) / "media-licenses"
+        for source in media_sources:
+            destination = licenses / ("ffmpeg" if source.parent == dist else "openh264") / source.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
     shutil.copy2(ROOT / "LICENSE", output / "LICENSE")
     shutil.copy2(ROOT / "TRADEMARKS.md", output / "TRADEMARKS.md")
     print(f"Staged unsigned development package: {output}")
@@ -148,8 +185,10 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resources", type=Path, help="macOS SwiftPM .bundle directory")
+    parser.add_argument("--media-target", choices=tuple(target for targets in MEDIA_TARGETS.values() for target in targets),
+                        help="Bundle this target's prepared FFmpeg/FFprobe and corresponding source/licenses")
     args = parser.parse_args()
-    stage(args.platform, args.binary, args.output, args.resources)
+    stage(args.platform, args.binary, args.output, args.resources, args.media_target)
 
 
 if __name__ == "__main__":

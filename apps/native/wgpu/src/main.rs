@@ -12,6 +12,7 @@ mod feedback;
 mod glass_tooltip;
 mod history;
 mod live;
+mod media_tools;
 mod mini_preview;
 mod motion;
 mod onboarding;

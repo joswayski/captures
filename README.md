@@ -291,9 +291,11 @@ muted, hidden, or changing the take. Physical microphone and device acceptance
 remain open. Hide removes only the controls, shows a temporary
 noninteractive notice, and preserves the session, timer, pause and microphone state. New Capture
 (its shortcut and the menu bar/tray item) and app reactivation restore the controls; Linux disables Hide without a
-usable tray and restores the controls and workspace if its tray host disappears. FFmpeg and FFprobe must
-be installed separately for these development builds; native media-tool bundling
-is not connected. Started recordings are saved on session loss instead of being
+usable tray and restores the controls and workspace if its tray host disappears.
+Unsigned native development packages can include FFmpeg and FFprobe with their
+corresponding source and licenses; unpackaged workbenches can use prepared checkout
+tools, explicit executable paths or system commands. Signed distribution remains open.
+Started recordings are saved on session loss instead of being
 discarded; failed finalization retains recovery data. Linux cannot exclude the
 controls from captured pixels, so Hide is the native workaround on X11. Shared
 native recovery can identify, assemble, or explicitly discard interrupted takes

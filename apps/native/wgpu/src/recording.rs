@@ -5,7 +5,7 @@ use std::{
 };
 
 use captures_capture::DisplayDescriptor;
-use captures_media::{CancelToken, MediaToolchain};
+use captures_media::CancelToken;
 use captures_recording::{AudioDevice, RecordingOptions, RecordingSessionSnapshot};
 use captures_recording_platform::{FinalizedRecording, RecordingSession};
 use eframe::egui;
@@ -119,13 +119,13 @@ impl Worker {
         let (events, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
             let mut session: Option<RecordingSession> = None;
-            let tools = MediaToolchain::from_command_names();
+            let tools = crate::media_tools::locate();
             while let Ok(command) = commands.recv() {
                 let event = match command {
                     Command::VerifyToolchain { generation } => Event::ToolchainVerified {
                         generation,
                         result: tools.verify().map_err(|error| {
-                            format!("Native recording requires FFmpeg and ffprobe on PATH: {error}")
+                            format!("Native recording requires FFmpeg and ffprobe (bundled, explicit overrides or PATH): {error}")
                         }),
                     },
                     Command::ListMicrophones { generation } => Event::Microphones {
@@ -319,8 +319,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let recovery_root = root.path().join("recording-recovery");
         let history_root = root.path().join("history");
-        let recovery =
-            RecordingRecovery::new(history_root.clone(), MediaToolchain::from_command_names());
+        let recovery = RecordingRecovery::new(
+            history_root.clone(),
+            captures_media::MediaToolchain::from_command_names(),
+        );
         let worker = Worker::new(egui::Context::default());
         let prepare = || Command::Prepare {
             generation: 4,

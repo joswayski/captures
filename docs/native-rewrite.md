@@ -1595,6 +1595,16 @@ physical macOS input, accessibility, playback audio, physical audio output, draf
 restoration and physical original-replacement verification remain open. No
 recording-editor or cross-platform parity gate closes.
 
+Unsigned native development packages can now include the existing target-suffixed
+FFmpeg/FFprobe sidecars with their corresponding source archive, signature,
+configuration and FFmpeg/OpenH264 licenses. `package.py --media-target` validates
+the target and complete inputs before staging; it neither builds/downloads tools
+nor installs or registers the app. wgpu recording, recovery and editing now use
+AppKit's override → bundle → checkout → PATH lookup order. Missing tools retain
+the existing worker verification/error path. This connects development packaging,
+not signed distribution, updater integration, installed migration or physical
+macOS/Windows/Wayland playback/audio acceptance.
+
 ### Update notice surface: stub status source, no updater
 
 Both native hosts now render the shipping update notice: a solid

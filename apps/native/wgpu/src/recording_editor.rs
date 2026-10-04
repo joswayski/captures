@@ -26,7 +26,7 @@ use captures_app::recording_timeline::{
 };
 use captures_media::{
     AudioEdit, CancelToken, CropDragHandle, CropRect, CropResizeAxis, EditSpec, ExportEstimate,
-    ExportFormat, ExportProgress, ExportSpec, MediaMetadata, MediaToolchain, QualityPreset,
+    ExportFormat, ExportProgress, ExportSpec, MediaMetadata, QualityPreset,
 };
 use captures_recording::MaxResolution;
 use eframe::egui;
@@ -1421,7 +1421,7 @@ impl Editor {
                     history_root,
                     artifact_id,
                 },
-                MediaToolchain::from_command_names(),
+                crate::media_tools::locate(),
             ) {
                 Ok(session) => {
                     let _ = out.send(Event::Opened(
