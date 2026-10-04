@@ -968,14 +968,14 @@ final class ScreenshotEditorTests: XCTestCase {
             let viewport = try XCTUnwrap(descendants(in: controller.root).first {
                 $0.accessibilityLabel() == "Screenshot viewport" })
 
-            func checkPanel(height: CGFloat) {
+            func checkPanel(height: CGFloat, bottomPadding: CGFloat = 8) {
                 XCTAssertEqual(controller.exportBarHeight, height)
                 let visible = panel.subviews.filter { !$0.isHidden }
                 XCTAssertFalse(visible.isEmpty)
                 XCTAssertTrue(visible.allSatisfy { panel.bounds.contains($0.frame) },
                               "wrapped captions and controls stay inside the settings card")
                 XCTAssertEqual(panel.bounds.height - (visible.map { $0.frame.maxY }.max() ?? 0),
-                               8, accuracy: 0.1, "no blank row below the controls")
+                               bottomPadding, accuracy: 0.1, "no blank row below the controls")
                 for action in [save, copy] {
                     let rect = controller.root.convert(action.bounds, from: action)
                     XCTAssertEqual(controller.root.bounds.maxY - rect.maxY, 13, accuracy: 0.1,
@@ -993,12 +993,12 @@ final class ScreenshotEditorTests: XCTestCase {
             let singleRowViewport = viewport.bounds.height
             quality.selectItem(withTitle: "Maximum file size")
             _ = quality.sendAction(quality.action, to: quality.target)
-            checkPanel(height: 210)
+            checkPanel(height: 210, bottomPadding: 12) // The estimate-only row's labels are 4pt shorter.
             XCTAssertEqual(singleRowViewport - viewport.bounds.height, 52, accuracy: 0.1,
                            "wrapping also updates the canvas, not just the export card")
             size.selectItem(withTitle: "Custom"); _ = size.sendAction(size.action, to: size.target)
             checkPanel(height: 210)
-            XCTAssertFalse(try field("Output width", in: controller.root).isHidden)
+            XCTAssertFalse(try field("Custom output width", in: controller.root).isHidden)
             try render(controller.root, name: "screenshot-editor-export-wrapped-custom-\(appearance)")
             size.selectItem(withTitle: "Original"); _ = size.sendAction(size.action, to: size.target)
             quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
