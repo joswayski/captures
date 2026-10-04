@@ -158,6 +158,26 @@ handoff and resource collection. Root `cargo test --workspace` does not include
 this experiment; run its manifest-specific checks too. It connects capture and
 recording engines for development but does not select a production renderer.
 
+### Native exploratory test archives
+
+Native pull-request CI publishes `native-development-macos-ARM64`,
+`native-development-windows-X64` and `native-development-linux-X64` artifacts
+after their build/unit-test dependencies pass. Download the matching artifact
+from the PR's Actions run, then extract both GitHub's artifact ZIP and the
+package archive inside it. Read the included [TESTING.md](apps/native/TESTING.md)
+before launching; use a new output folder and quit shipping Captures first.
+Check the full run's results: an archive alone does not prove all GUI smokes passed.
+
+These are isolated development packages, not Preview installers or updates.
+They include pinned FFmpeg/FFprobe, corresponding source/licenses, and
+`BUILD_INFO.json` with the CI source commit and final executable SHA-256.
+macOS CI uses Apple Silicon/macOS 26 and ad-hoc signing, not notarization;
+Windows is unsigned; Linux targets Ubuntu 24.04 x86_64/X11, not Wayland.
+Platform runtime dependencies and physical acceptance remain open.
+Windows/Linux archives omit absolute-path Open With registration files; use
+local staging below if you explicitly want to register your own package.
+Artifacts expire under GitHub's retention policy; none is a stable release.
+
 Both native hosts accept `--live --open-media "/path/to/file"`; repeat
 `--open-media` for PNG/JPEG/WebP/GIF/MP4/WebM paths. `--open-image` remains an alias
 in the same ordered queue. Stills import owned History pixels; GIF/video entries
@@ -260,7 +280,16 @@ Omit the flag for a package that uses development tools instead. Both hosts
 prefer executable `CAPTURES_FFMPEG` / `CAPTURES_FFPROBE` overrides, then bundled
 tools, then checkout sidecars, then `PATH`; invalid overrides fall back.
 Platform runtime dependencies remain those of the workbenches; these are not
-signed, installed-release or redistributable builds.
+trusted release-signed or installed-release builds.
+
+Add `--archive /path/outside/package/native.zip` for macOS/Windows or
+`--archive /path/outside/package/native.tar.gz` for Linux to create a portable
+archive with `TESTING.md` and build metadata. Existing archives are never
+overwritten. Local metadata leaves the source commit unset rather than claiming
+the checkout produced an arbitrary input binary. On macOS, `--adhoc-sign` signs
+and verifies before archiving so the recorded hash identifies the signed binary.
+The staging directory retains opt-in registration files; portable Windows/Linux
+archives omit them because moving the package would invalidate those paths.
 
 macOS, after `bash apps/native/macos/build.sh`:
 
@@ -269,8 +298,8 @@ python3 apps/native/package.py --platform macos \
   --binary apps/native/macos/.build/release/CapturesNative \
   --resources apps/native/macos/.build/release/CapturesNative_CapturesNative.bundle \
   --media-target "$(rustc -vV | sed -n 's/^host: //p')" \
+  --adhoc-sign \
   --output "$HOME/Applications/captures-native-dev"
-codesign --force --deep --sign - "$HOME/Applications/captures-native-dev/Captures Native Development.app"
 ```
 
 The `.app` uses its own packaged Swift resources and defaults to live mode.

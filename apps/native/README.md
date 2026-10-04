@@ -12,6 +12,14 @@ Its fade/settle probe is not equivalent to AppKit dust. DirectComposition/GTK
 comparators and full parity gates remain open. The instructions below cover
 AppKit; the candidate README has Windows/Linux build and test commands.
 
+For exploratory testing without a local build, native PR workflows publish
+development archives with pinned media tools, source/licenses and build identity.
+See [download instructions and platform limits](../../DEVELOPMENT.md#native-exploratory-test-archives)
+and the included [TESTING.md](TESTING.md). Use a new export folder and quit the
+shipping app first. macOS CI archives are ad-hoc signed, Windows unsigned and
+Linux X11-only; these artifacts do not close signing, updater, migration or
+physical-platform acceptance gates.
+
 ## Persisted native Preferences
 
 Both native hosts use the same `captures-settings` Rust types, migrations,

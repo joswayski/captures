@@ -491,6 +491,10 @@ default handlers; [local opt-in instructions](DEVELOPMENT.md#native-development-
 include removal. Signing, distribution and physical file-manager acceptance remain
 open; these are not replacement downloads. TIFF is supported by in-editor import,
 not this external-open path.
+Native pull-request CI also provides isolated exploratory test archives with
+media tools and a [testing guide](apps/native/TESTING.md); see
+[download and platform limits](DEVELOPMENT.md#native-exploratory-test-archives).
+They are not Preview installers, trusted signed releases or a shipping replacement.
 Native Preferences (and the tray/menu bar Send Feedback…) opens an optional
 feedback form in its own window, matching the shipping layout. Sending shares only
 the message, optional contact, category, and displayed app/system details with
