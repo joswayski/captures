@@ -1,12 +1,32 @@
 name: AWS image
 
 on:
+  # PRs only need this check when an input of the image changes. The paths are
+  # exactly what the root Dockerfile copies into its build context, plus the
+  # files that define the build. Pushes to main stay unfiltered so every main
+  # commit still publishes its immutable image.
   pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/web/**'
+      - 'apps/desktop/package.json'
+      - 'shared/**'
+      - 'docs/images/**'
+      - '.github/workflows/aws-image.yml'
   push:
     branches: [main]
 
 permissions:
   contents: read
+
+# Supersede stale PR runs only; main pushes publish images and each keeps its
+# own group so none is ever cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   image-arm64:
@@ -26,7 +46,8 @@ jobs:
           secrets: |
             github_token=${{ github.token }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # PRs reuse main's layers but do not export their own copy.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
       - name: Assert linux/arm64 image
         run: |
           os="$(docker image inspect captures:arm64 --format '{{.Os}}')"
