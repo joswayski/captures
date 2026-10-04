@@ -570,6 +570,26 @@ demultiplication. Measure its one-time initialization alone in a fresh process
 cargo test -p captures-image --release --locked benchmark_demultiply_cache_initialization -- --ignored --nocapture
 ```
 
+Large normal renders also build a temporary 256 KiB lookup for composition over
+the first source pixel, which usually matches the native canvas fill. It caches
+the exact, separately rounded dependency operations, uses the old path for other
+background pixels and is freed after each render. Renders of at most 65,536
+pixels and non-normal blend modes do not allocate it. Profile premultiplication,
+composition over transparent/partial/opaque fills, the mixed-background fallback
+and table construction with:
+
+```sh
+cargo test -p captures-image --release --locked benchmark_native_compositing_phases_4k -- --ignored --nocapture
+```
+
+This phase diagnostic excludes source preparation/fill and warms the process-wide
+demultiply cache. It discards one warmup, reports five single-operation trials
+and compares fallback pixels with the reference loop in alternating order.
+Use `benchmark_native_canvas_4k` for full-render costs including allocation/fill
+and table construction, and compare frozen old/new binaries in alternating order.
+Record the unfavorable fallback cost as well as the repeated-background gain;
+neither diagnostic is whole-app latency, memory/energy or physical-host acceptance.
+
 The shared editor worker reuses its existing canvas frame for layer Lock and
 Rename commands. Rename also keeps the layer thumbnail; labels, lock state,
 history and drafts still update. Visual edits and Undo/Redo retain their normal
