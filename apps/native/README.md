@@ -561,6 +561,11 @@ It checks identical pixels, includes allocation/fill and painting, discards one
 warmup, then reports five alternating-order trials of three renders each. Retain
 the raw trials, compiler and source/binary identity; repeat on the same idle host.
 This fixture excludes decoding, UI, encoding, presentation and process footprint.
+The `opaque-bitmap` fixture covers direct composition of one fully opaque,
+full-canvas identity image, which avoids the second full-size raster plane.
+Partial alpha, transforms, shadows, non-normal blends and later layers retain
+the raster path. The phase diagnostic below also measures the extra opacity
+scan when only the final image pixel is non-opaque; report this cost as well.
 
 The compositor retains a 64 KiB channel lookup built from tiny-skia's exact
 demultiplication. Measure its one-time initialization alone in a fresh process

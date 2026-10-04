@@ -1414,41 +1414,52 @@ fn render_validated(
         // Identity SourceOver onto an empty plane is exactly the premultiplied
         // bitmap. Keep transforms, shadows, reduced opacity and backdrop blends
         // on the raster path; later layers paint over this plane normally.
-        let mut canvas = if let Some(pixels) = first_bitmap {
-            image_pixmap(pixels)
+        if let Some(pixels) = first_bitmap
+            .filter(|pixels| layers.len() == 1 && pixels.pixels().all(|pixel| pixel[3] == 255))
+        {
+            // A single opaque identity image replaces every canvas pixel. Reuse
+            // the owned output directly, avoiding the second full-size plane.
+            // Partial alpha must retain the existing two-step rounding path.
+            let byte_len = width as usize * height as usize * 4;
+            output.as_mut()[..byte_len].copy_from_slice(&pixels.as_raw()[..byte_len]);
         } else {
-            Pixmap::new(width, height)
-        }
-        .ok_or("Source image is too large")?;
-        if blend_source {
-            // Non-normal blending needs the source image as its backdrop,
-            // not a transparent annotation plane composed over it afterward.
-            for (pixel, source) in canvas.pixels_mut().iter_mut().zip(output.pixels()) {
-                *pixel = tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
-                    .premultiply();
+            let mut canvas = if let Some(pixels) = first_bitmap {
+                image_pixmap(pixels)
+            } else {
+                Pixmap::new(width, height)
             }
-        }
-        for layer in layers.iter().skip(usize::from(first_bitmap.is_some())) {
-            draw_layer(&mut canvas, layer, shadows.get(&layer.id))?;
-        }
-        let channels = &*DEMULTIPLY_CHANNELS;
-        if blend_source {
-            for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
-                let original =
-                    tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
-                        .premultiply();
-                // Keep untouched source pixels, including hidden RGB and low
-                // alpha, exact rather than round-tripping them through skia.
-                if original != *rendered {
-                    *source = demultiply_cached(*rendered, channels);
+            .ok_or("Source image is too large")?;
+            if blend_source {
+                // Non-normal blending needs the source image as its backdrop,
+                // not a transparent annotation plane composed over it afterward.
+                for (pixel, source) in canvas.pixels_mut().iter_mut().zip(output.pixels()) {
+                    *pixel =
+                        tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
+                            .premultiply();
                 }
             }
-        } else {
-            // Match imageops::overlay's Pixel::blend operation without first
-            // materializing a second full-size RgbaImage. Pixel::blend is a
-            // no-op for transparent foreground pixels, so avoid demultiplying
-            // and visiting the output for the common untouched case.
-            composite_normal(&mut output, &canvas);
+            for layer in layers.iter().skip(usize::from(first_bitmap.is_some())) {
+                draw_layer(&mut canvas, layer, shadows.get(&layer.id))?;
+            }
+            let channels = &*DEMULTIPLY_CHANNELS;
+            if blend_source {
+                for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
+                    let original =
+                        tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
+                            .premultiply();
+                    // Keep untouched source pixels, including hidden RGB and low
+                    // alpha, exact rather than round-tripping them through skia.
+                    if original != *rendered {
+                        *source = demultiply_cached(*rendered, channels);
+                    }
+                }
+            } else {
+                // Match imageops::overlay's Pixel::blend operation without first
+                // materializing a second full-size RgbaImage. Pixel::blend is a
+                // no-op for transparent foreground pixels, so avoid demultiplying
+                // and visiting the output for the common untouched case.
+                composite_normal(&mut output, &canvas);
+            }
         }
     }
     if let Some(crop) = crop {
@@ -1726,6 +1737,115 @@ mod tests {
     }
 
     #[test]
+    fn opaque_identity_image_copy_preserves_crop_ownership_and_late_alpha_fallback() {
+        let (width, height) = (257, 19);
+        for last_alpha in [255, 254, 0] {
+            let pixels = Arc::new(RgbaImage::from_fn(width, height, |x, y| {
+                Rgba([
+                    x as u8,
+                    (x * 53 + y * 19) as u8,
+                    (x * 7 + y * 31) as u8,
+                    if x == width - 1 && y == height - 1 {
+                        last_alpha
+                    } else {
+                        255
+                    },
+                ])
+            }));
+            let image = Layer {
+                id: 7,
+                shape: Shape::Image {
+                    origin: Point { x: 0., y: 0. },
+                    width: width as f32,
+                    height: height as f32,
+                    pixels: pixels.clone(),
+                },
+                color: [0, 0, 0, 255],
+                stroke_width: 0.,
+                fill: None,
+                rotation_degrees: 0.,
+                rotation_origin: None,
+                blend_mode: BlendMode::Normal,
+            };
+            for following_layers in [false, true] {
+                for crop in [
+                    None,
+                    Some(PixelRect {
+                        x: 11,
+                        y: 3,
+                        width: 243,
+                        height: 15,
+                    }),
+                ] {
+                    let mut document = normal_document(width, height, false);
+                    if !following_layers {
+                        document.layers.clear();
+                    }
+                    document.layers.insert(0, image.clone());
+                    document.crop = crop;
+                    let original_source = (*document.source).clone();
+                    let original_pixels = (*pixels).clone();
+                    let expected = legacy_render(&document);
+                    if last_alpha == 255 && !following_layers && crop.is_none() {
+                        assert_eq!(
+                            expected, *pixels,
+                            "opaque pixels replace every background byte"
+                        );
+                    }
+                    assert_eq!(render(&document).unwrap(), expected);
+                    assert_eq!(*document.source, original_source);
+                    let shared = document.source.clone();
+                    assert_eq!(
+                        render_with_shadows_owned(document, &BTreeMap::new()).unwrap(),
+                        expected
+                    );
+                    assert_eq!(*shared, original_source);
+                    assert_eq!(*pixels, original_pixels);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_image_copy_accepts_oversized_image_buffers_without_overwriting_source_tail() {
+        // ImageBuffer::from_raw accepts storage larger than its dimensions.
+        // The raster path visits only the canvas pixels, retaining source tail.
+        let mut bytes = [19, 73, 211, 255].repeat(6);
+        bytes.extend_from_slice(&[1, 2, 3, 255]);
+        let pixels = Arc::new(RgbaImage::from_raw(2, 3, bytes).unwrap());
+        let image = Layer {
+            id: 7,
+            shape: Shape::Image {
+                origin: Point { x: 0., y: 0. },
+                width: 2.,
+                height: 3.,
+                pixels: pixels.clone(),
+            },
+            color: [0, 0, 0, 255],
+            stroke_width: 0.,
+            fill: None,
+            rotation_degrees: 0.,
+            rotation_origin: None,
+            blend_mode: BlendMode::Normal,
+        };
+        let mut source = [91, 37, 5, 127].repeat(6);
+        source.extend_from_slice(&[9, 8, 7, 6, 5, 4, 3, 2]);
+        let document = Document {
+            source: Arc::new(RgbaImage::from_raw(2, 3, source).unwrap()),
+            layers: vec![image],
+            crop: None,
+        };
+        let expected = legacy_render(&document);
+        assert_eq!(&expected.as_raw()[..24], &pixels.as_raw()[..24]);
+        assert_eq!(&expected.as_raw()[24..], &[9, 8, 7, 6, 5, 4, 3, 2]);
+        assert_eq!(render(&document).unwrap(), expected);
+        assert_eq!(
+            render_with_shadows_owned(document, &BTreeMap::new()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn first_bitmap_matches_raster_path_across_alpha_geometry_and_following_layers() {
         let width = 256;
         let height = 19;
@@ -1939,8 +2059,13 @@ mod tests {
     fn benchmark_native_compositing_phases_4k() {
         let (width, height) = (3840, 2160);
         let pixels = normal_document(width, height, false).source;
+        let mut late_alpha = (*pixels).clone();
+        for pixel in late_alpha.pixels_mut() {
+            pixel[3] = 255;
+        }
+        late_alpha.get_pixel_mut(width - 1, height - 1)[3] = 254;
         LazyLock::force(&DEMULTIPLY_CHANNELS);
-        let mut timings: [Vec<f64>; 7] = Default::default();
+        let mut timings: [Vec<f64>; 8] = Default::default();
         for trial in 0..6 {
             let started = Instant::now();
             let canvas = image_pixmap(black_box(&pixels)).unwrap();
@@ -1995,6 +2120,13 @@ mod tests {
             if trial > 0 {
                 timings[6].push(started.elapsed().as_secs_f64() * 1000.);
             }
+            // A non-opaque final pixel forces the entire eligibility scan,
+            // then the unmodified raster path. Measure that extra work alone.
+            let started = Instant::now();
+            assert!(!black_box(&late_alpha).pixels().all(|pixel| pixel[3] == 255));
+            if trial > 0 {
+                timings[7].push(started.elapsed().as_secs_f64() * 1000.);
+            }
         }
         for (name, timings) in [
             "premultiply",
@@ -2004,6 +2136,7 @@ mod tests {
             "mixed-reference",
             "mixed-cached",
             "table-build",
+            "late-alpha-scan",
         ]
         .into_iter()
         .zip(timings)
@@ -2038,10 +2171,17 @@ mod tests {
             rotation_origin: None,
             blend_mode: BlendMode::Normal,
         }];
+        let mut opaque_bitmap_layers = bitmap_layers.clone();
+        if let Shape::Image { pixels, .. } = &mut opaque_bitmap_layers[0].shape {
+            for pixel in Arc::make_mut(pixels).pixels_mut() {
+                pixel[3] = 255;
+            }
+        }
         for (name, layers) in [
             ("empty", Vec::new()),
             ("vectors", vector_layers),
             ("bitmap", bitmap_layers),
+            ("opaque-bitmap", opaque_bitmap_layers),
         ] {
             let prepare = || Document {
                 source: Arc::new(RgbaImage::from_pixel(
