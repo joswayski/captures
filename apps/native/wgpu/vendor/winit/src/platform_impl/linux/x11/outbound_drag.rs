@@ -16,6 +16,8 @@ use x11rb::{
     protocol::xproto::{self, ConnectionExt as _},
 };
 
+use crate::event::WindowEvent;
+
 use super::{atoms::*, ActiveEventLoop, CookieResultExt, WindowId};
 
 pub struct OutboundDrag {
@@ -26,6 +28,7 @@ pub struct OutboundDrag {
     dropped: bool,
     deadline: Option<Instant>,
     uri: Vec<u8>,
+    path: PathBuf,
     finished: Option<Box<dyn FnOnce(bool, bool, bool) + Send>>,
 }
 
@@ -135,6 +138,7 @@ impl ActiveEventLoop {
             dropped: false,
             deadline: None,
             uri: uri_list(&path),
+            path,
             finished: Some(finished),
         });
         let _ = conn.flush();
@@ -239,7 +243,11 @@ impl ActiveEventLoop {
         aware
     }
 
-    pub fn handle_outbound_drag_event(&self, event: &XEvent) -> bool {
+    pub fn handle_outbound_drag_event(
+        &self,
+        event: &XEvent,
+        mut emit: impl FnMut(crate::window::WindowId, WindowEvent),
+    ) -> bool {
         if self.outbound_drag.borrow().is_none() {
             return false;
         }
@@ -345,6 +353,18 @@ impl ActiveEventLoop {
                             .contains_key(&WindowId::from(client.window as u64))
                 });
                 if own_destination && client.message_type as u32 == atoms[XdndEnter] {
+                    let path = self.outbound_drag.borrow().as_ref().unwrap().path.clone();
+                    emit(
+                        super::mkwid(client.window as u32),
+                        WindowEvent::HoveredFile(path),
+                    );
+                    return true;
+                }
+                if own_destination && client.message_type as u32 == atoms[XdndLeave] {
+                    emit(
+                        super::mkwid(client.window as u32),
+                        WindowEvent::HoveredFileCancelled,
+                    );
                     return true;
                 }
                 if own_destination && client.message_type as u32 == atoms[XdndPosition] {
@@ -361,6 +381,20 @@ impl ActiveEventLoop {
                     return true;
                 }
                 if own_destination && client.message_type as u32 == atoms[XdndDrop] {
+                    // This connection owns both windows, so no selection read
+                    // is needed. Still deliver the file to the normal receiver
+                    // before acknowledging COPY; an acknowledgement alone
+                    // retains the source but never imports an editor layer.
+                    let path = self.outbound_drag.borrow().as_ref().and_then(|drag| {
+                        (drag.dropped && drag.target == Some(client.window as u32))
+                            .then(|| drag.path.clone())
+                    });
+                    let Some(path) = path else {
+                        return true;
+                    };
+                    let destination = super::mkwid(client.window as u32);
+                    emit(destination, WindowEvent::HoveredFileCancelled);
+                    emit(destination, WindowEvent::DroppedFile(path));
                     self.xconn
                         .send_client_msg(
                             client.window as u32,

@@ -684,6 +684,14 @@ enum PreviewMessage {
     },
 }
 
+/// History drags deliberately bypass `PreviewMessage`: their source remains in
+/// History regardless of the native drop outcome.
+#[derive(Debug)]
+struct HistoryDragFinished {
+    artifact_id: String,
+    result: Result<captures_app::preview::PreviewDragOutcome, String>,
+}
+
 #[derive(Clone, Copy)]
 struct CaptureTarget {
     monitor: usize,
@@ -1681,6 +1689,8 @@ pub struct Live {
     selector_rx: Receiver<SelectorMessage>,
     preview_tx: Sender<PreviewMessage>,
     preview_rx: Receiver<PreviewMessage>,
+    history_drag_tx: Sender<HistoryDragFinished>,
+    history_drag_rx: Receiver<HistoryDragFinished>,
     notice_tx: Sender<crate::recording_saved_notice::Action>,
     notice_rx: Receiver<crate::recording_saved_notice::Action>,
     recording_notice: Option<crate::recording_saved_notice::Notice>,
@@ -1784,6 +1794,7 @@ impl Live {
         let (out, rx) = mpsc::channel();
         let (selector_tx, selector_rx) = mpsc::channel();
         let (preview_tx, preview_rx) = mpsc::channel();
+        let (history_drag_tx, history_drag_rx) = mpsc::channel();
         let (notice_tx, notice_rx) = mpsc::channel();
         let capture_ctx = ctx.clone();
         let drag_root = root.clone();
@@ -2039,6 +2050,8 @@ impl Live {
             selector_rx,
             preview_tx,
             preview_rx,
+            history_drag_tx,
+            history_drag_rx,
             notice_tx,
             notice_rx,
             recording_notice: None,
@@ -5518,6 +5531,16 @@ impl Live {
                 }
             }
         }
+        while let Ok(finished) = self.history_drag_rx.try_recv() {
+            if let Err(error) = finished.result
+                && self
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.entry.id == finished.artifact_id)
+            {
+                self.card_errors.insert(finished.artifact_id, error);
+            }
+        }
         self.start_next_media();
     }
 
@@ -8274,6 +8297,24 @@ impl Live {
                             self.request_thumbnail(&ids[slot])
                         }
                         crate::history::Event::Select(slot) => self.select_card(&ids[slot]),
+                        crate::history::Event::DragFile(slot) => {
+                            let artifact_id = ids[slot].clone();
+                            self.card_errors.remove(&artifact_id);
+                            let completed = self.history_drag_tx.clone();
+                            let wake = ui.ctx().clone();
+                            crate::outbound_drag::request(
+                                ui.ctx(),
+                                self.root.clone(),
+                                artifact_id.clone(),
+                                Box::new(move |result| {
+                                    let _ = completed.send(HistoryDragFinished {
+                                        artifact_id,
+                                        result,
+                                    });
+                                    wake.request_repaint();
+                                }),
+                            );
+                        }
                         crate::history::Event::Open(slot) => {
                             self.select_card(&ids[slot]);
                             self.card_action(

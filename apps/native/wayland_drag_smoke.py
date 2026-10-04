@@ -111,7 +111,7 @@ def main():
         payload.write_bytes(bytes(range(256)))
         expected_uri = "file://" + quote(str(payload), safe="/") + "\r\n"
         config = root / "sway.conf"
-        config.write_text('output HEADLESS-1 resolution 900x500\nseat seat0 fallback true\nfocus_follows_mouse no\nfor_window [title="drag-(source|receiver)"] floating enable\n')
+        config.write_text('output HEADLESS-1 resolution 900x500\nseat seat0 fallback true\nfocus_follows_mouse no\nfor_window [title="drag-(source|receiver|own-receiver)"] floating enable\n')
         env = os.environ.copy()
         # Live hosts must never unbind the developer's real OS screenshot keys.
         env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
@@ -124,7 +124,8 @@ def main():
         try:
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
-                sockets = list(runtime.glob("wayland-*")); ipc_sockets = list(runtime.glob("sway-ipc.*.sock"))
+                sockets = [path for path in runtime.glob("wayland-*") if path.is_socket()]
+                ipc_sockets = [path for path in runtime.glob("sway-ipc.*.sock") if path.is_socket()]
                 if sockets and ipc_sockets: break
                 if sway.poll() is not None: raise RuntimeError("sway exited")
                 time.sleep(.05)
@@ -132,6 +133,8 @@ def main():
             env.update(WAYLAND_DISPLAY=sockets[0].name, SWAYSOCK=str(ipc_sockets[0]))
             source = subprocess.Popen([binary, "source", str(payload)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             source_output = Output(source); source_output.wait("READY")
+            source_output.wait("READY drag-own-receiver")
+            ipc(env, '[title="drag-own-receiver"] move position 440 270')
             accepted1 = drag(env, binary, source_output, expected_uri, "accept")
             rejected = drag(env, binary, source_output, expected_uri, "reject")
             cancelled = drag(env, binary, source_output, expected_uri, "cancel")
@@ -141,11 +144,26 @@ def main():
             source_output.wait("STARTED")
             self_drop = source_output.wait("FINISHED")
             assert self_drop == "FINISHED accepted=true own=true same_source=true", self_drop
+            self_received = next((line for line in source_output.seen if line.startswith("DROPPED target=source ")), None)
+            self_received = self_received or source_output.wait("DROPPED target=source ")
+            assert self_received == f"DROPPED target=source path={payload} bytes={bytes(range(256)).hex()}", self_received
+            # A different window in the same event loop must receive the file,
+            # not just acknowledge the source's COPY/dismissal classification.
+            ipc(env, '[title="drag-own-receiver"] move position 440 40')
+            time.sleep(.5)
+            subprocess.run([binary, "inject", "accept"], env=env, check=True, timeout=5)
+            source_output.wait("STARTED")
+            own_drop = source_output.wait("FINISHED")
+            assert own_drop == "FINISHED accepted=true own=true same_source=false", own_drop
+            own_received = next((line for line in source_output.seen if line.startswith("DROPPED target=own-receiver ")), None)
+            own_received = own_received or source_output.wait("DROPPED target=own-receiver ")
+            assert own_received == f"DROPPED target=own-receiver path={payload} bytes={bytes(range(256)).hex()}", own_received
+            ipc(env, '[title="drag-own-receiver"] move position 440 270')
             accepted2 = drag(env, binary, source_output, expected_uri, "accept")
             assert accepted1 == accepted2 == "FINISHED accepted=true own=false"
             assert rejected == cancelled == "FINISHED accepted=false own=false"
             assert timed_out == disappeared == "FINISHED accepted=false own=false"
-            print(json.dumps({"independent_receiver": "GTK3", "same_source_process": True, "exact_payload_bytes": 256, "exact_uri": expected_uri, "accept_results": [accepted1, accepted2], "reject_result": rejected, "cancel_result": cancelled, "timeout_result": timed_out, "disappeared_result": disappeared, "self_drop": self_drop}, indent=2))
+            print(json.dumps({"independent_receiver": "GTK3", "same_source_process": True, "exact_payload_bytes": 256, "exact_uri": expected_uri, "accept_results": [accepted1, accepted2], "reject_result": rejected, "cancel_result": cancelled, "timeout_result": timed_out, "disappeared_result": disappeared, "self_drop": self_drop, "own_window_drop": own_drop, "own_window_received_bytes": 256}, indent=2))
         finally:
             stop(source)
             if sway.poll() is None:

@@ -25,45 +25,47 @@ enum Mode {
 
 struct App {
     mode: Mode,
-    window: Option<Arc<Window>>,
-    surface: Option<Surface<Arc<Window>, Arc<Window>>>,
+    windows: Vec<Arc<Window>>,
+    surfaces: Vec<Surface<Arc<Window>, Arc<Window>>>,
     dragging: Arc<AtomicBool>,
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let title = match self.mode {
-            Mode::Source(_) => "drag-source",
-            Mode::Receiver => "drag-receiver",
+        let titles: &[&str] = match self.mode {
+            Mode::Source(_) => &["drag-source", "drag-own-receiver"],
+            Mode::Receiver => &["drag-receiver"],
         };
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    WindowAttributes::default()
-                        .with_title(title)
-                        .with_inner_size(winit::dpi::LogicalSize::new(300, 220)),
+        for title in titles {
+            let window = Arc::new(
+                event_loop
+                    .create_window(
+                        WindowAttributes::default()
+                            .with_title(*title)
+                            .with_inner_size(winit::dpi::LogicalSize::new(300, 220)),
+                    )
+                    .unwrap(),
+            );
+            let context = Context::new(window.clone()).unwrap();
+            let mut surface = Surface::new(&context, window.clone()).unwrap();
+            let size = window.inner_size();
+            surface
+                .resize(
+                    NonZeroU32::new(size.width).unwrap(),
+                    NonZeroU32::new(size.height).unwrap(),
                 )
-                .unwrap(),
-        );
-        let context = Context::new(window.clone()).unwrap();
-        let mut surface = Surface::new(&context, window.clone()).unwrap();
-        let size = window.inner_size();
-        surface
-            .resize(
-                NonZeroU32::new(size.width).unwrap(),
-                NonZeroU32::new(size.height).unwrap(),
-            )
-            .unwrap();
-        let mut buffer = surface.buffer_mut().unwrap();
-        buffer.fill(if matches!(self.mode, Mode::Source(_)) {
-            0xff224488
-        } else {
-            0xff228844
-        });
-        buffer.present().unwrap();
-        self.surface = Some(surface);
-        self.window = Some(window);
-        println!("READY {title}");
+                .unwrap();
+            let mut buffer = surface.buffer_mut().unwrap();
+            buffer.fill(if matches!(self.mode, Mode::Source(_)) {
+                0xff224488
+            } else {
+                0xff228844
+            });
+            buffer.present().unwrap();
+            self.windows.push(window);
+            self.surfaces.push(surface);
+            println!("READY {title}");
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -81,6 +83,7 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } if matches!(self.mode, Mode::Source(_))
+                && self.windows.first().is_some_and(|window| window.id() == id)
                 && !self.dragging.swap(true, Ordering::SeqCst) =>
             {
                 let Mode::Source(path) = &self.mode else {
@@ -110,7 +113,16 @@ impl ApplicationHandler for App {
             WindowEvent::HoveredFileCancelled => println!("HOVER_CANCELLED"),
             WindowEvent::DroppedFile(path) => {
                 let bytes = std::fs::read(&path).unwrap();
-                println!("DROPPED path={} bytes={}", path.display(), hex(&bytes));
+                let target = if self.windows.first().is_some_and(|window| window.id() == id) {
+                    "source"
+                } else {
+                    "own-receiver"
+                };
+                println!(
+                    "DROPPED target={target} path={} bytes={}",
+                    path.display(),
+                    hex(&bytes)
+                );
             }
             WindowEvent::CloseRequested => event_loop.exit(),
             _ => {}
@@ -139,8 +151,8 @@ fn main() {
     let event_loop = builder.build().unwrap();
     let mut app = App {
         mode,
-        window: None,
-        surface: None,
+        windows: Vec::new(),
+        surfaces: Vec::new(),
         dragging: Arc::new(AtomicBool::new(false)),
     };
     event_loop.run_app(&mut app).unwrap();

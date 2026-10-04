@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise native history Restore and confirmation on a private X11 desktop and disposable files.
+"""Exercise native History drag, Restore and confirmation on private X11 and disposable files.
 
 No screen-capture permission or session bypass. Requires Xvfb, Openbox, xdotool
 and ImageMagick. This is software-rendered UI evidence, not hardware acceptance.
@@ -52,6 +52,24 @@ def main():
                 time.sleep(.05)
             raise AssertionError("native history action did not settle")
 
+        def begin_drag(window, x, y):
+            run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
+                "mousemove", "--sync", "--window", window, str(x), str(y), "sleep", ".6", "mousedown", "1",
+                "sleep", ".6", "mousemove_relative", "--sync", "30", "0")
+
+            def started():
+                # Synchronize against the real OS source, not a fixed delay:
+                # the worker/renderer may still be processing the gesture.
+                run("xdotool", "mousemove", "--sync", "--window", window, str(x + 31), str(y),
+                    "mousemove", "--sync", "--window", window, str(x + 30), str(y))
+                owner = run("/usr/bin/python3", "-c",
+                    "from Xlib import display; d = display.Display(); "
+                    "owner = d.get_selection_owner(d.intern_atom('XdndSelection')); "
+                    "print(owner.id if owner else 0)")
+                return owner.decode().strip() == window
+
+            wait(started)
+
         try:
             xserver = spawn(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x900x24", "-nolisten", "tcp"], True)
             env["DISPLAY"] = ":" + xserver.stdout.readline().decode().strip()
@@ -66,7 +84,9 @@ def main():
                     protected = next(history.iterdir())  # Older item is deleted last.
                     write_history(root / "second")
                     shutil.move(str(next((root / "second").iterdir())), history)
-                    export = root / "export.png"
+                    for preview_path in history.glob("*/preview.png"):
+                        run("convert", str(preview_path), "-resize", "160x90", str(preview_path))
+                    export = root / "Café capture.png"
                     shutil.copyfile(next(history.glob("*/capture.png")), export)
                     original_export = export.read_bytes()
                     metadata = next(history.glob("*/metadata.json"))
@@ -90,6 +110,45 @@ def main():
 
                     screenshot("populated")
                     assert not previews(), "a preview opened before Restore"
+                    entries = sorted(history.glob("*/metadata.json"),
+                                     key=lambda path: json.loads(path.read_text())["created_at"], reverse=True)
+                    # Exercise the real OS drag source, not a synthetic editor
+                    # import: both recovery-only and saved Unicode files.
+                    for slot, source in enumerate(entries):
+                        destination = output / f"{prefix}-history-drag-{slot}.bin"
+                        receiver = spawn(["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_receiver.py")),
+                                          "--output", str(destination)], True)
+                        receiver.stdout.readline()  # Mapped XDND receiver.
+                        x = 90 + slot * 320
+                        begin_drag(window, x, 280)
+                        run("xdotool", "mousemove", "--sync", "700", "550", "sleep", ".3")
+                        events = destination.with_suffix(".jsonl")
+                        def negotiated():
+                            # The renderer/worker may accept the gesture after
+                            # the scripted pointer reaches the receiver. Keep
+                            # delivering motion as a real held drag would.
+                            run("xdotool", "mousemove", "--sync", "701", "550",
+                                "mousemove", "--sync", "700", "550")
+                            return events.exists() and '"position"' in events.read_text()
+                        wait(negotiated)
+                        run("xdotool", "mouseup", "1")
+                        wait(destination.exists)
+                        assert destination.read_bytes() == (source.parent / "capture.png").read_bytes(), "History drag transferred a thumbnail"
+                        received = next(json.loads(line) for line in events.read_text().splitlines()
+                                        if json.loads(line)["event"] == "received")
+                        saved = json.loads(source.read_text()).get("saved_path")
+                        if saved:
+                            assert Path(received["path"]) == Path(saved), "saved export did not win"
+                        assert not previews(), "History drag must not Restore"
+                        assert len(list(history.glob("*/metadata.json"))) == 2, "History drag removed its source"
+                        receiver.terminate(); receiver.wait(timeout=5)
+                    # Cancel a repeat gesture and verify it neither opens an
+                    # editor nor consumes History or pointer state.
+                    begin_drag(window, 90, 280)
+                    run("xdotool", "key", "Escape", "mouseup", "1")
+                    time.sleep(.3)
+                    assert not previews(), "cancelled History drag restored a preview"
+                    screenshot("drag-retained")
                     click(254, 433)  # First card's Restore brings back a floating preview.
                     preview = wait(previews)[0]
                     time.sleep(.5)  # Arrival motion.
@@ -99,6 +158,31 @@ def main():
                     time.sleep(.3)
                     assert len(previews()) == 1, "Restore duplicated the preview window"
                     assert len(list(history.glob("*/metadata.json"))) == 2, "Restore changed History"
+                    # Drop the first History capture into the second capture's
+                    # editor. The first already has a mini preview: this drag
+                    # must not run that preview's dismissal callback.
+                    click(420, 280)
+                    editor = run("xdotool", "search", "--all", "--sync", "--onlyvisible", "--pid", str(app.pid),
+                                 "--name", "^Captures Screenshot Editor$").decode().splitlines()[0]
+                    run("xdotool", "windowmove", window, "0", "30", "windowmove", editor, "350", "40")
+                    run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window)
+                    # Keep the source focused but expose the overlapping drop
+                    # target. Activating History otherwise covers the editor.
+                    run("xdotool", "windowraise", editor)
+                    time.sleep(1)
+                    preview_count = len(previews())
+                    draft_id = json.loads(entries[1].read_text())["id"]
+                    draft = root / "editor-drafts" / draft_id / "manifest.json"
+                    begin_drag(window, 90, 280)
+                    run("xdotool", "windowraise", editor,
+                        "mousemove", "--sync", "--window", editor, "300", "300", "sleep", ".6",
+                        "mousemove_relative", "--sync", "1", "0", "sleep", ".3", "mouseup", "1")
+                    wait(lambda: draft.exists() and len(json.loads(draft.read_text())["document"]["elements"]) == 2)
+                    assert len(previews()) == preview_count, "History-to-editor drag dismissed a mini preview"
+                    assert len(list(history.glob("*/metadata.json"))) == 2, "editor drop republished History"
+                    run("import", "-window", editor, str(output / f"{prefix}-history-editor-drop.png"))
+                    run("xdotool", "windowactivate", "--sync", editor, "key", "alt+F4")
+                    time.sleep(.5)
                     click(948, 79)  # Delete all arms "Delete all forever" in place.
                     screenshot("confirmation")
                     assert len(list(history.glob("*/metadata.json"))) == 2, "arming confirmation deleted files"
@@ -131,8 +215,9 @@ def main():
                     run("xdotool", "key", "alt+F4")
                     assert app.wait(timeout=10) == 0
                     assert not list(history.glob("*/metadata.json"))
-                    print(f"PASS {prefix}: Restore, confirmation, Escape/Cancel, clear, export preserved, clean exit", flush=True)
+                    print(f"PASS {prefix}: direct History COPY (saved/recovery bytes), editor layer drop with preview retained, cancelled drag, Restore, confirmation, Escape/Cancel, clear, export preserved, clean exit", flush=True)
             (output / "result.json").write_text(json.dumps({"passed": True, "appearances": 2, "partialFailureAndRetry": True, "restore": True,
+                "historyDrag": True, "historyEditorDrop": True,
                 "scope": "Disposable native history on private X11/software GL; not hardware or other OS acceptance."}, indent=2))
         finally:
             for child in reversed(children):

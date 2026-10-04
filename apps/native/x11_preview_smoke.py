@@ -607,11 +607,26 @@ def main():
                         destination = output / f"received-{mode}.bin"
                         spawn(f"receiver-{mode}", ["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_receiver.py")),
                               "--output", str(destination), "--mode", "accept" if mode == "cancel" else mode], True)
-                        run("xdotool", "mousemove", "--sync", "--window", preview, "60", "90", "mousedown", "1",
-                            "sleep", ".2", "mousemove", "--sync", "--window", preview, "90", "90", "sleep", ".5",
-                            "mousemove", "--sync", "700", "550", "sleep", ".3")
+                        run("xdotool", "mousemove", "--sync", "--window", preview, "60", "90", "sleep", ".6", "mousedown", "1",
+                            "sleep", ".6", "mousemove", "--sync", "--window", preview, "90", "90")
+                        def started():
+                            run("xdotool", "mousemove", "--sync", "--window", preview, "91", "90",
+                                "mousemove", "--sync", "--window", preview, "90", "90")
+                            owner = run("/usr/bin/python3", "-c",
+                                "from Xlib import display; d = display.Display(); "
+                                "owner = d.get_selection_owner(d.intern_atom('XdndSelection')); "
+                                "print(owner.id if owner else 0)")
+                            return owner.decode().strip() == preview
+                        wait(started, "preview owns the native file drag")
+                        run("xdotool", "mousemove", "--sync", "700", "550", "sleep", ".3")
                         events = destination.with_suffix(".jsonl")
-                        wait(lambda: events.exists() and '"position"' in events.read_text(), "receiver negotiates COPY")
+                        def negotiated():
+                            # Keep a held drag moving while asynchronous media
+                            # preparation catches up on a software renderer.
+                            run("xdotool", "mousemove", "--sync", "701", "550",
+                                "mousemove", "--sync", "700", "550")
+                            return events.exists() and '"position"' in events.read_text()
+                        wait(negotiated, "receiver negotiates COPY")
                         shot("root", f"outbound-drag-{mode}")
                         if mode == "cancel":
                             run("xdotool", "key", "Escape", "mouseup", "1")

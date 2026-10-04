@@ -2911,18 +2911,15 @@ async fn prepare_artifact_drag(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<ArtifactDragPayload> {
-    let artifact = state
-        .artifacts
-        .lock()
-        .iter()
-        .find(|artifact| artifact.id == artifact_id)
-        .cloned()
-        .ok_or_else(|| "artifact is no longer available".to_owned())?;
-    let files =
-        tauri::async_runtime::spawn_blocking(move || storage::prepare_artifact_drag(&artifact))
-            .await
-            .map_err(|error| error.to_string())?
-            .map_err(|error| error.to_string())?;
+    let artifact = state.find_artifact(&artifact_id);
+    let id = artifact_id.clone();
+    let files = tauri::async_runtime::spawn_blocking(move || match artifact {
+        Some(artifact) => storage::prepare_artifact_drag(&artifact),
+        None => storage::prepare_history_artifact_drag(&id),
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
     let file_name = files
         .path
         .file_name()

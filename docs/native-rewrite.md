@@ -2149,6 +2149,30 @@ mixed-DPI/overlapping windows need physical verification. Wayland tests exercise
 protocol recovery on one disposable compositor, not a physical desktop or the
 full capture host. No shipping Tauri behavior or parity gate changes.
 
+### Direct History file dragging — connected, acceptance open
+
+Shipping Tauri and both native History grids offer a capture's file directly
+from its thumbnail, without Restore. Screenshot, GIF and video sources reuse
+the mini-preview COPY transport and persisted-media preparation; posters are
+only drag images. Saved files win, otherwise private media is retained until
+the next startup. Every drop outcome leaves History and any mini preview intact.
+Clicks still open the editor; action controls, missing recordings and busy cards
+cannot start a drag. AppKit delays click dispatch until release and checks the
+same press/artifact before publishing asynchronous preparation; virtualized or
+released cards reject late results. wgpu reuses the event-loop press guards and
+an independent History completion channel, never preview dismissal callbacks.
+X11 and Wayland same-app COPY adapters now deliver hovered/dropped file events
+to the editor, rather than only acknowledging the drop to the source.
+
+| Host | Implementation | Verification / remaining acceptance |
+| --- | --- | --- |
+| macOS | AppKit History thumbnail source and worker preparation | XCTest click/drag, file URL, COPY-only, stale/removal and missing/busy cases added; macOS compilation and physical transfer not run in the Linux orb |
+| Windows | wgpu History source through existing OLE adapter | Shared gesture tests; Windows host compilation, Explorer transfer and mixed-DPI History drops unverified |
+| X11 | wgpu History source through existing XDND adapter | Private-X11 History smoke passes original bytes, saved Unicode paths, repeat/cancel, no Restore and a persisted editor layer with its existing preview retained; physical desktop acceptance open |
+| Wayland | wgpu History source through existing serial-bound adapter | Disposable compositor protocol smoke passes external URI/bytes, repeated/cancelled/rejected/timed-out/disappeared targets and same-app file delivery to a different window; live History-host execution and physical acceptance unverified |
+
+No platform parity gate closes from shared source or unit tests alone.
+
 The resident lifecycle slice adds live-only menu-bar/tray actions and three
 persisted screenshot shortcuts. One Rust dispatcher owns capture-launch and
 temporary Escape delivery; native event loops drain queued actions. Focused

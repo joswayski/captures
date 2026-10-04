@@ -17,12 +17,16 @@ use sctk::reexports::client::{
     Connection, Proxy, QueueHandle,
 };
 
+use crate::event::WindowEvent;
+
 use super::{make_wid, state::WinitState, WindowId};
 
 pub struct OutboundDrag {
     pub source: DragSource,
     pub source_window: WindowId,
     pub uri: Vec<u8>,
+    pub path: PathBuf,
+    pub destination: Option<WindowId>,
     pub action: DndAction,
     pub dropped: bool,
     pub over_own_window: bool,
@@ -63,6 +67,10 @@ impl WinitState {
             }
             let own = drag.own_drop;
             let same_source = drag.same_source_drop;
+            if let Some(destination) = drag.destination {
+                self.events_sink
+                    .push_window_event(WindowEvent::HoveredFileCancelled, destination);
+            }
             if let Some(finished) = drag.finished.take() {
                 finished(
                     accepted && drag.dropped && drag.action.contains(DndAction::Copy),
@@ -177,10 +185,13 @@ impl DataDeviceHandler for WinitState {
         let destination = make_wid(surface);
         let own = self.windows.borrow().contains_key(&destination);
         if let Some(drag) = self.outbound_drag.as_mut() {
+            drag.destination = own.then_some(destination);
             drag.over_own_window = own;
             drag.over_source_window = destination == drag.source_window;
             drag.own_offer_copy = false;
             if own {
+                self.events_sink
+                    .push_window_event(WindowEvent::HoveredFile(drag.path.clone()), destination);
                 if let Some(offer) = device.data().and_then(
                     |data: &sctk::data_device_manager::data_device::DataDeviceData| {
                         data.drag_offer()
@@ -195,6 +206,10 @@ impl DataDeviceHandler for WinitState {
 
     fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {
         if let Some(drag) = self.outbound_drag.as_mut() {
+            if let Some(destination) = drag.destination.take() {
+                self.events_sink
+                    .push_window_event(WindowEvent::HoveredFileCancelled, destination);
+            }
             drag.over_own_window = false;
             drag.over_source_window = false;
             drag.own_offer_copy = false;
@@ -203,14 +218,25 @@ impl DataDeviceHandler for WinitState {
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _: f64, _: f64) {}
     fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
-        if self
+        if let Some((destination, path)) = self
             .outbound_drag
             .as_ref()
-            .is_some_and(|drag| drag.over_own_window && drag.own_offer_copy)
+            .filter(|drag| drag.over_own_window && drag.own_offer_copy)
+            .and_then(|drag| {
+                drag.destination
+                    .map(|destination| (destination, drag.path.clone()))
+            })
+            .filter(|(destination, _)| self.windows.borrow().contains_key(destination))
         {
             if let Some(offer) = device.data().and_then(
                 |data: &sctk::data_device_manager::data_device::DataDeviceData| data.drag_offer(),
             ) {
+                // The source is ours, but COPY still has to reach the normal
+                // editor receiver. Finishing only the offer loses the import.
+                self.events_sink
+                    .push_window_event(WindowEvent::HoveredFileCancelled, destination);
+                self.events_sink
+                    .push_window_event(WindowEvent::DroppedFile(path), destination);
                 offer.finish();
             }
         }

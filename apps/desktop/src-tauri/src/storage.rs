@@ -66,6 +66,28 @@ pub fn prepare_artifact_drag(artifact: &CaptureArtifact) -> Result<ArtifactDragF
     prepare_artifact_drag_in(&crate::models::history_directory(), artifact)
 }
 
+pub fn prepare_history_artifact_drag(id: &str) -> Result<ArtifactDragFiles, AppError> {
+    prepare_history_artifact_drag_in(&crate::models::history_directory(), id)
+}
+
+fn prepare_history_artifact_drag_in(root: &Path, id: &str) -> Result<ArtifactDragFiles, AppError> {
+    // Share native hosts' persisted-media resolution and export lifetime. No
+    // restore, active-preview registration, or recording-poster substitution.
+    let path = captures_app::preview_drag::prepare(root, id)
+        .map_err(|error| AppError::Task(error.to_string()))?;
+    let preview = captures_history::read_image(root, id, true)?;
+    let directory = root
+        .join(DRAG_EXPORT_DIRECTORY)
+        .join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&directory)?;
+    let icon_path = directory.join(DRAG_ICON_FILE);
+    write_drag_file(&icon_path, &encode_drag_icon_png(&preview)?)?;
+    Ok(ArtifactDragFiles {
+        path,
+        icon_path: fs::canonicalize(icon_path)?,
+    })
+}
+
 pub fn clear_drag_exports() -> Result<(), AppError> {
     clear_drag_exports_in(&crate::models::history_directory())
 }
@@ -152,6 +174,8 @@ fn write_drag_file(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
 }
 
 fn clear_drag_exports_in(history_root: &Path) -> Result<(), AppError> {
+    captures_app::preview_drag::clear_previous_exports(history_root)
+        .map_err(|error| AppError::Task(error.to_string()))?;
     match fs::remove_dir_all(history_root.join(DRAG_EXPORT_DIRECTORY)) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -460,6 +484,8 @@ fn unique_path(directory: &Path, stem: &str, extension: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use captures_capture::CaptureMode;
     use captures_image::{
         encode_png_export, encode_png_export_dithered, png_palette_colors_for_quality,
@@ -468,14 +494,15 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
     use image::{Rgba, RgbaImage};
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     use super::{
         DRAG_EXPORT_DIRECTORY, DRAG_ICON_FILE, DRAG_ICON_HEIGHT, DRAG_ICON_WIDTH,
         HISTORY_IMAGE_FILE, HISTORY_PREVIEW_FILE, clear_drag_exports_in, encode_drag_icon_png,
         encode_overlay_snapshot, encode_png, encode_preview_png, encode_thumbnail_png,
         load_capture_history_from, overlay_snapshot_mime_type, prepare_artifact_drag_in,
-        recording_destination_path, recording_destination_path_in,
-        recording_replacement_destination_path_in,
+        prepare_history_artifact_drag_in, recording_destination_path,
+        recording_destination_path_in, recording_replacement_destination_path_in,
         recording_replacement_destination_path_in_with_replaceable, save_encoded_capture,
         save_history_capture_in, save_history_entry_in, save_settings_to, unique_path,
     };
@@ -780,6 +807,67 @@ mod tests {
                 .to_string_lossy()
                 .starts_with('.')
         }));
+    }
+
+    #[test]
+    fn history_only_drag_retains_full_image_and_icon_after_history_deletion() {
+        let directory = tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let artifact = capture_artifact(&id, None, true);
+        let entry = history_entry(&id, Utc::now().to_rfc3339());
+        save_history_capture_in(
+            directory.path(),
+            &entry,
+            &artifact.image_png,
+            &artifact.preview_png,
+        )
+        .unwrap();
+        let drag = prepare_history_artifact_drag_in(directory.path(), &id).unwrap();
+        captures_history::delete(directory.path(), &id).unwrap();
+        assert_eq!(fs::read(&drag.path).unwrap(), artifact.image_png);
+        let icon = image::open(&drag.icon_path).unwrap();
+        assert_eq!(
+            (icon.width(), icon.height()),
+            (DRAG_ICON_WIDTH, DRAG_ICON_HEIGHT)
+        );
+        clear_drag_exports_in(directory.path()).unwrap();
+        assert!(!drag.path.exists());
+        assert!(!drag.icon_path.exists());
+    }
+
+    #[test]
+    fn history_recording_drag_transfers_media_and_prefers_saved_export() {
+        let directory = tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let poster = capture_artifact(&id, None, true).preview_png;
+        let saved = directory.path().join("Café.gif");
+        fs::write(&saved, b"saved moving GIF").unwrap();
+        let mut entry = history_entry(&id, Utc::now().to_rfc3339());
+        entry.kind = crate::models::ArtifactKind::Gif;
+        entry.saved_path = Some(saved.to_string_lossy().into_owned());
+        entry.mime_type = Some("image/gif".into());
+        entry.duration_ms = Some(1_000);
+        entry.target = Some(RecordingTarget::Display {
+            display_id: "1".into(),
+        });
+        captures_history::save_entry(
+            directory.path(),
+            &entry,
+            None,
+            &poster,
+            Some((&saved, "media.gif")),
+        )
+        .unwrap();
+        fs::write(&saved, b"newer saved GIF").unwrap();
+        let drag = prepare_history_artifact_drag_in(directory.path(), &id).unwrap();
+        assert_eq!(drag.path, fs::canonicalize(&saved).unwrap());
+        assert_eq!(fs::read(&drag.path).unwrap(), b"newer saved GIF");
+        clear_drag_exports_in(directory.path()).unwrap();
+        assert!(saved.exists());
+        fs::remove_file(&saved).unwrap();
+        let recovery = prepare_history_artifact_drag_in(directory.path(), &id).unwrap();
+        assert_eq!(recovery.path.extension().unwrap(), "gif");
+        assert_eq!(fs::read(&recovery.path).unwrap(), b"saved moving GIF");
     }
 
     #[test]
