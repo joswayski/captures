@@ -76,7 +76,11 @@ impl CursorImage {
                     background[channel] = (background[channel] & and) ^ foreground[channel];
                 }
             } else {
+                let alpha = background[3];
                 background.blend(foreground);
+                // Source-over cannot reduce destination opacity. Float blending
+                // can otherwise round an opaque alpha of 255 down to 254.
+                background[3] = background[3].max(alpha);
             }
             image.put_pixel(
                 target_x,
@@ -586,6 +590,25 @@ mod tests {
         assert_eq!(&image.get_pixel(9, 8).0[..3], &[128, 0, 0]);
         assert_eq!(&image.get_pixel(12, 11).0[..3], &[128, 0, 0]);
         assert_eq!(image.get_pixel(13, 12).0, [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn native_cursor_blending_preserves_opaque_and_transparent_backgrounds() {
+        let cursor = CursorImage {
+            pixels: image::RgbaImage::from_pixel(2, 1, image::Rgba([201, 19, 73, 128])),
+            and_mask: None,
+            logical_width: 2.,
+            logical_height: 1.,
+            hot_spot_x: 0.,
+            hot_spot_y: 0.,
+        };
+        let mut image = image::RgbaImage::from_pixel(2, 1, image::Rgba([23, 61, 107, 255]));
+        image.put_pixel(1, 0, image::Rgba([23, 61, 107, 0]));
+
+        cursor.overlay(&mut image, (0, 0), 1., 1.);
+
+        assert_eq!(image.get_pixel(0, 0).0, [112, 39, 89, 255]);
+        assert_eq!(image.get_pixel(1, 0).0, [201, 19, 73, 128]);
     }
 
     #[test]
