@@ -3,8 +3,9 @@ use image::{GrayImage, RgbaImage};
 use crate::CursorImage;
 
 /// GetDIBits expands the AND/XOR monochrome planes to black/white BGRA.
-/// Color cursors with alpha contain premultiplied channels; older color and
-/// monochrome cursors instead retain the AND mask for destination-aware XOR.
+/// GetIconInfo's color bitmap keeps straight-alpha channels; DrawIconEx
+/// premultiplies its drawing copy. Older color and monochrome cursors instead
+/// retain the AND mask for destination-aware XOR.
 fn from_bitmaps(
     color: Option<RgbaImage>,
     mask: RgbaImage,
@@ -19,21 +20,13 @@ fn from_bitmaps(
     if width == 0 || height == 0 {
         return None;
     }
-    let mut pixels = match color {
+    let pixels = match color {
         Some(color) if color.dimensions() == (width, height) => color,
         Some(_) => return None,
         None => image::imageops::crop_imm(&mask, 0, height, width, height).to_image(),
     };
     let has_alpha = pixels.pixels().any(|pixel| pixel[3] != 0);
     let and_mask = if has_alpha {
-        for pixel in pixels.pixels_mut() {
-            let alpha = u32::from(pixel[3]);
-            if alpha > 0 {
-                for channel in &mut pixel.0[..3] {
-                    *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
-                }
-            }
-        }
         None
     } else {
         Some(GrayImage::from_fn(width, height, |x, y| {
@@ -297,12 +290,15 @@ mod win32 {
                             assert!(
                                 expected[channel].abs_diff(actual[channel]) <= 1,
                                 "cursor {}, background {background:?}, pixel ({x}, {y}): \
-                                 composited {:?}, Windows {:?}, size {:?}, mask {}",
+                                 composited {:?}, Windows {:?}, size {:?}, mask {}, source {:?}",
                                 id as usize,
                                 expected.0,
                                 actual.0,
                                 cursor.pixels.dimensions(),
                                 cursor.and_mask.is_some(),
+                                cursor
+                                    .pixels
+                                    .get_pixel_checked(x.saturating_sub(5), y.saturating_sub(5),),
                             );
                         }
                     }
@@ -319,10 +315,10 @@ mod tests {
     use super::from_bitmaps;
 
     #[test]
-    fn color_cursor_keeps_size_hotspot_and_unpremultiplies_alpha() {
+    fn color_cursor_keeps_size_hotspot_and_straight_alpha() {
         let color = RgbaImage::from_fn(48, 36, |x, y| {
             if (x, y) == (3, 7) {
-                Rgba([40, 70, 10, 128])
+                Rgba([80, 139, 20, 128])
             } else {
                 Rgba([0, 0, 0, 0])
             }
@@ -332,6 +328,10 @@ mod tests {
         assert_eq!((cursor.logical_width, cursor.logical_height), (48., 36.));
         assert_eq!((cursor.hot_spot_x, cursor.hot_spot_y), (3., 7.));
         assert!(cursor.and_mask.is_none());
+        let mut image = image::RgbImage::from_pixel(48, 36, image::Rgb([23, 61, 107]));
+        cursor.overlay(&mut image, (3, 7), 1., 1.);
+        assert_eq!(image.get_pixel(3, 7).0, [51, 100, 63]);
+        assert_eq!(image.get_pixel(7, 3).0, [23, 61, 107]);
     }
 
     #[test]
