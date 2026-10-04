@@ -115,6 +115,9 @@ fn copy(platform: ShortcutPlatform) -> Value {
                 .iter().map(|target| target[0]).collect::<Vec<_>>(),
         },
         "updates": {
+            "version": preferences::UPDATES_VERSION,
+            "channel": preferences::UPDATES_CHANNEL,
+            "action_width": preferences::UPDATES_ACTION_WIDTH,
             "title": preferences::UPDATES_TITLE,
             "detail": preferences::UPDATES_DETAIL,
             "action": preferences::UPDATES_ACTION,
@@ -228,7 +231,10 @@ mod tests {
     fn copy_carries_sections_rows_options_and_platform_help() {
         let copy = call(json!({"operation": "copy"}));
         let result = &copy["result"];
-        assert_eq!(result["sections"][4]["title"], "GIF export");
+        assert_eq!(result["sections"][0]["title"], "General");
+        assert_eq!(result["sections"][5]["title"], "GIF export");
+        assert_eq!(result["updates"]["channel"], "Native development");
+        assert_eq!(result["updates"]["version"], preferences::UPDATES_VERSION);
         assert_eq!(
             result["rows"]["recording.gif_max_colors"]["accessibility_label"],
             "GIF palette colors"

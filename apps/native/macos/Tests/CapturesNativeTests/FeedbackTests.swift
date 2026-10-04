@@ -146,6 +146,14 @@ final class FeedbackTests: XCTestCase {
             // Three equal radio cards in one row; right-aligned footer with the
             // status to its left.
             let cards = form.categoryButtons.map { $0.convert($0.bounds, to: document) }
+            let details = try XCTUnwrap(document.subviews.first { view in
+                view.subviews.contains { ($0 as? NSTextField)?.stringValue == FeedbackCopy.text("meta_title") }
+            })
+            let intro = try XCTUnwrap(document.subviews.compactMap { $0 as? NSTextField }.first {
+                $0.stringValue == FeedbackCopy.text("intro")
+            })
+            XCTAssertGreaterThan(details.frame.minY, intro.frame.maxY)
+            XCTAssertLessThan(details.frame.maxY, cards[0].minY, "included details precede Category")
             XCTAssertEqual(Set(cards.map(\.minY)).count, 1)
             XCTAssertLessThan(cards[0].maxX, cards[1].minX); XCTAssertLessThan(cards[1].maxX, cards[2].minX)
             XCTAssertGreaterThanOrEqual(cards[0].height, 62)

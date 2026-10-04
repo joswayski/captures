@@ -625,6 +625,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let appearanceChanged: (String, String, [String: Any]) -> Void
     private let settingsChanged: ([String: Any]) -> Void
     private let settingsPersisted: ([String: Any]) -> Void
+    private let shortcutRecordingChanged: (Bool) -> Void
     private let shortcutPolicy: ShortcutPolicy
     private let shortcutDisplay: ShortcutDisplay
     private let showHistory: () -> Void
@@ -669,7 +670,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var sectionViews: [String: NSView] = [:]
     /// Nav entries, highlighted for the section in view (shipping scroll-spy).
     private var navButtons: [String: PreferenceNavButton] = [:]
-    private(set) var activeSection = "appearance"
+    private(set) var activeSection = "general"
     private var scrollObserver: NSObjectProtocol?
     /// Find targets: a hidden wash behind each row and the row's text.
     private var searchable: [(NSView, String)] = []
@@ -700,6 +701,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
          appearanceChanged: @escaping (String, String, [String: Any]) -> Void,
          settingsChanged: @escaping ([String: Any]) -> Void = { _ in },
          settingsPersisted: @escaping ([String: Any]) -> Void = { _ in },
+         shortcutRecordingChanged: @escaping (Bool) -> Void = { _ in },
          shortcutPolicy: @escaping ShortcutPolicy = { code, control, shift, alt, meta in
              try NativeCaptureShortcuts.record(code: code, control: control, shift: shift,
                  alt: alt, meta: meta)
@@ -714,6 +716,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         self.showFeedback = showFeedback
         self.settingsChanged = settingsChanged
         self.settingsPersisted = settingsPersisted
+        self.shortcutRecordingChanged = shortcutRecordingChanged
         self.shortcutPolicy = shortcutPolicy; self.shortcutDisplay = shortcutDisplay
         self.liveCaptureAvailable = liveCaptureAvailable
         self.loginItemService = loginItemService
@@ -746,6 +749,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private var tokens: Tokens { tokensProvider() }
     private var dark: Bool { tokens.color("text").brightnessComponent > 0.5 }
+    var isRecordingShortcut: Bool { recordingShortcut != nil }
 
     // MARK: Shell
 
@@ -894,10 +898,14 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func rebuildCards() {
         let oldY = scroll.contentView.bounds.origin.y
+        if let recorder = recordingShortcut {
+            stopShortcutRecording(recorder, identifier: shortcutIdentifier(recorder))
+        }
         document.subviews.forEach { $0.removeFromSuperview() }; sectionViews.removeAll(); searchable.removeAll()
         document.frame.size.width = scroll.contentSize.width
         var y = tokens.number("s-8")
-        y = appearanceCard(y); y = captureCard(y); y = shortcutsCard(y); y = recordingCard(y); y = gifCard(y)
+        y = generalCard(y); y = appearanceCard(y); y = captureCard(y); y = shortcutsCard(y)
+        y = recordingCard(y); y = gifCard(y)
         y = updatesCard(y); y = aboutCard(y)
         document.frame.size = NSSize(width: scroll.contentSize.width, height: y - tokens.number("s-6") + tokens.number("s-12"))
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(oldY, max(0, document.frame.height - scroll.contentSize.height))))
@@ -1054,10 +1062,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// control frame.
     private func inlineRow(_ title: String, detail: String, emphasis: PreferencesPolicy.Emphasized? = nil,
                            control: NSSize, y: CGFloat, card: NSView, enabled: Bool = true,
-                           highlight key: String? = nil) -> (row: NSRect, control: NSRect) {
+                           keepInline: Bool = false, highlight key: String? = nil) -> (row: NSRect, control: NSRect) {
         // A compact window stacks the control under the copy
         // (`.setting-row-inline { grid-template-columns: minmax(0, 1fr) }`).
-        let stacked = compactLayout
+        let stacked = compactLayout && !keepInline
         let width = stacked ? contentWidth : contentWidth - control.width - tokens.number("s-6")
         let text = emphasis?.text ?? detail
         let copy = copyHeight(title, detail: text, width: width)
@@ -1544,6 +1552,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             stopShortcutRecording(current, identifier: shortcutIdentifier(current))
         }
         recordingShortcut = recorder
+        shortcutRecordingChanged(true)
         recorder.startRecording()
         setShortcutError("", identifier: shortcutIdentifier(recorder))
         root.window?.makeFirstResponder(recorder)
@@ -1627,6 +1636,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         if let observer = shortcutFocusObserver {
             NotificationCenter.default.removeObserver(observer); shortcutFocusObserver = nil
         }
+        shortcutRecordingChanged(false)
     }
 
     private func setShortcut(_ shortcut: String, identifier: String) {
@@ -1774,21 +1784,35 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func updatesCard(_ y: CGFloat) -> CGFloat {
         let (card, top) = makeCard("updates", y: y)
-        var y = utilityRow(PreferencesPolicy.text("updates.title"), detail: PreferencesPolicy.text("updates.detail"),
-            action: PreferencesPolicy.text("updates.action"), y: top, card: card, enabled: false,
-            identifier: "updates.check") {}
+        let width = CGFloat((PreferencesPolicy.copy["updates"] as? [String: Any])?["action_width"] as? Double ?? 160)
+        let status = PreferencesPolicy.text("updates.title")
+        let statusHeight = textHeight(status, size: tokens.number("text-xs"), width: width)
+        let layout = inlineRow(PreferencesPolicy.text("updates.version"),
+            detail: PreferencesPolicy.text("updates.channel"),
+            control: NSSize(width: width, height: tokens.number("h-md") + tokens.number("s-2") + statusHeight),
+            y: top, card: card, keepInline: true)
+        let button = CaptureButton(PreferencesPolicy.text("updates.action"),
+            frame: NSRect(x: layout.control.minX, y: layout.control.minY, width: width, height: tokens.number("h-md")),
+            tokens: tokens, action: {})
+        button.isEnabled = false
+        button.identifier = NSUserInterfaceItemIdentifier("updates.check")
+        button.toolTip = PreferencesPolicy.text("updates.detail")
+        card.addSubview(button)
+        let statusLabel = wrappingLabel(status,
+            frame: NSRect(x: layout.control.minX, y: button.frame.maxY + tokens.number("s-2"),
+                width: width, height: statusHeight), size: tokens.number("text-xs"), parent: card)
+        statusLabel.alignment = .right
+        statusLabel.identifier = NSUserInterfaceItemIdentifier("updates.status")
+        var y = layout.row.maxY
         y = divider(y, card)
         let copy = PreferencesPolicy.row("show_update_changelog")
         y = switchRow(["show_update_changelog"], title: copy.title, detail: copy.detail, y: y, card: card)
         return finish(card, y)
     }
 
-    private func aboutCard(_ y: CGFloat) -> CGFloat {
-        let (card, top) = makeCard("about", y: y)
-        var y = utilityRow(PreferencesPolicy.text("feedback.title"), detail: PreferencesPolicy.text("feedback.detail"),
-            action: PreferencesPolicy.text("feedback.action"), y: top, card: card,
-            identifier: "about.feedback") { [weak self] in self?.showFeedback() }
-        y = divider(y, card)
+    private func generalCard(_ y: CGFloat) -> CGFloat {
+        let (card, top) = makeCard("general", y: y)
+        var y = top
         let title = PreferencesPolicy.text("login_item.title")
         guard loginItemService != nil else {
             // Fixtures and exercise runs cannot register a login item.
@@ -1817,6 +1841,14 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         button.isEnabled = !loginItemPending
         card.addSubview(button)
         return finish(card, layout.row.maxY)
+    }
+
+    private func aboutCard(_ y: CGFloat) -> CGFloat {
+        let (card, top) = makeCard("about", y: y)
+        let y = utilityRow(PreferencesPolicy.text("feedback.title"), detail: PreferencesPolicy.text("feedback.detail"),
+            action: PreferencesPolicy.text("feedback.action"), y: top, card: card,
+            identifier: "about.feedback") { [weak self] in self?.showFeedback() }
+        return finish(card, y)
     }
 
     private func queryLoginItem() { requestLoginItem(nil) }

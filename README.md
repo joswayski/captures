@@ -474,13 +474,16 @@ same History directory, preserving file order and sender-relative paths; a launc
 without files restores hidden recording controls or focuses the open setup, editor,
 History or Preferences window in that order, else opens Preferences. A visible
 native launch opens Preferences (setup on first run), as the shipping app does.
-Native Preferences → About offers explicit **Launch native Captures at login**
+Native Preferences → General offers opt-in **Start Captures on login**
 for macOS, Windows and X11 development profiles. It starts that profile hidden;
 relaunch or the tray/menu bar restores it. This uses a separate user-owned login
 entry, not Tauri's setting or registration. Disable it before moving/removing the
 development binary. Wayland hidden startup and physical sign-in acceptance remain
 open; [development setup/removal](DEVELOPMENT.md#native-development-login-items)
 documents the platform entries and conflict recovery.
+Native capture shortcuts remain available while Preferences is focused, except
+while a shortcut recorder is active. Updates keep the version and **Native
+development** identity visible; signed native updates remain unavailable.
 Fixture launches remain independent. Optional unsigned development packages provide
 Open With metadata for these six formats on macOS, Windows and Linux, under a separate
 **Captures Native Development** identity. Staging does not install them or change

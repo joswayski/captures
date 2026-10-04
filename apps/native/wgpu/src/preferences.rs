@@ -253,6 +253,7 @@ pub struct Preferences {
     persisted_generation: u64,
     shortcut_recorder: Option<ShortcutRecorder>,
     shortcut_input: shortcut_input::Bridge,
+    shortcut_recording_changed: Option<Box<dyn Fn(bool)>>,
     suppress_shortcut_commands: bool,
     shortcut_rects: BTreeMap<&'static str, [f32; 4]>,
     last_shortcut_probe: Option<Value>,
@@ -354,6 +355,7 @@ impl Preferences {
             persisted_generation: 0,
             shortcut_recorder: None,
             shortcut_input,
+            shortcut_recording_changed: None,
             suppress_shortcut_commands: false,
             shortcut_rects: BTreeMap::new(),
             last_shortcut_probe: None,
@@ -623,6 +625,11 @@ impl Preferences {
         self.shortcut_recorder.is_some()
     }
 
+    /// Release OS grabs synchronously when a recorder starts, before the next key.
+    pub fn set_shortcut_recording_changed(&mut self, changed: impl Fn(bool) + 'static) {
+        self.shortcut_recording_changed = Some(Box::new(changed));
+    }
+
     pub fn set_presented(&mut self, presented: bool) {
         if !presented {
             self.cancel_shortcut_recording();
@@ -841,6 +848,7 @@ impl Preferences {
                     self.find_rows.clear();
                     self.card_tops.clear();
                     self.shortcut_rects.clear();
+                    self.general(ui, t);
                     self.appearance(ui, t);
                     self.capture(ui, t);
                     self.shortcuts(ui, t);
@@ -862,7 +870,7 @@ impl Preferences {
         if shortcut_probe_enabled() {
             let probe = json!({
                 "section": preferences::SECTIONS[self.active_section].id,
-                "card_top": self.card_tops[2],
+                "card_top": self.card_tops[3],
                 "page": [viewport.left(), viewport.top(), viewport.right(), viewport.bottom()],
                 "controls": self.shortcut_rects,
                 "recording": self.shortcut_recorder.as_ref().map(|recorder| recorder.field.label()),
@@ -1452,7 +1460,7 @@ impl Preferences {
     }
 
     fn appearance(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui, t, 0, |this, ui| {
+        self.card(ui, t, 1, |this, ui| {
             let copy = preferences::row("appearance");
             let selected = string_at(&this.value, &["appearance"]);
             let mut chosen = None;
@@ -1690,7 +1698,7 @@ impl Preferences {
     }
 
     fn capture(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui, t, 1, |this, ui| {
+        self.card(ui, t, 2, |this, ui| {
             let copy = preferences::row("output_directory");
             let background = ui.painter().add(egui::Shape::Noop);
             let response = ui
@@ -1827,11 +1835,11 @@ impl Preferences {
 
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         let help = preferences::shortcut_help(shortcut_platform());
-        let mut intro = format!("{} {}", preferences::SECTIONS[2].description, help.intro);
+        let mut intro = format!("{} {}", preferences::SECTIONS[3].description, help.intro);
         if !self.live {
             intro = format!("{intro} {}", preferences::FIXTURE_SHORTCUTS_NOTE);
         }
-        self.card_described(ui, t, 2, &intro, |this, ui| {
+        self.card_described(ui, t, 3, &intro, |this, ui| {
             let live = this.live;
             let mut open = false;
             this.row(
@@ -1936,8 +1944,7 @@ impl Preferences {
                     );
                 }
                 if started {
-                    this.shortcut_recorder = Some(ShortcutRecorder::new(field));
-                    this.shortcut_input.start();
+                    this.start_shortcut_recording(field);
                     response.request_focus();
                 }
                 let active = this
@@ -2044,12 +2051,23 @@ impl Preferences {
         }
     }
 
+    fn start_shortcut_recording(&mut self, field: ShortcutField) {
+        self.shortcut_recorder = Some(ShortcutRecorder::new(field));
+        self.shortcut_input.start();
+        if let Some(changed) = &self.shortcut_recording_changed {
+            changed(true);
+        }
+    }
+
     fn cancel_shortcut_recording(&mut self) {
-        self.shortcut_recorder = None;
+        let was_recording = self.shortcut_recorder.take().is_some();
         self.shortcut_input.stop();
+        if was_recording && let Some(changed) = &self.shortcut_recording_changed {
+            changed(false);
+        }
     }
     fn recording(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui, t, 3, |this, ui| {
+        self.card(ui, t, 4, |this, ui| {
             this.combo(
                 ui,
                 t,
@@ -2176,7 +2194,7 @@ impl Preferences {
     }
 
     fn gif(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui, t, 4, |this, ui| {
+        self.card(ui, t, 5, |this, ui| {
             this.select_grid(
                 ui,
                 t,
@@ -2203,7 +2221,7 @@ impl Preferences {
         &mut self,
         ui: &mut egui::Ui,
         t: &Tokens,
-        title: &str,
+        title: &'static str,
         detail: &str,
         action: &str,
         enabled: bool,
@@ -2218,25 +2236,85 @@ impl Preferences {
             detail,
             None,
             egui::vec2(reserve, t.number("h-md")),
-            |_, ui| {
-                clicked = ui
+            |this, ui| {
+                let response = ui
                     .add_enabled_ui(enabled, |ui| widgets::button(ui, t, action, false))
-                    .inner
-                    .clicked();
+                    .inner;
+                clicked = response.clicked();
+                if shortcut_probe_enabled() {
+                    let rect = response.rect;
+                    this.shortcut_rects.insert(
+                        title,
+                        [rect.left(), rect.top(), rect.right(), rect.bottom()],
+                    );
+                }
             },
         );
         clicked
     }
 
     fn updates(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui, t, 5, |this, ui| {
-            this.utility_row(
-                ui,
-                t,
-                preferences::UPDATES_TITLE,
-                preferences::UPDATES_DETAIL,
-                preferences::UPDATES_ACTION,
-                false,
+        self.card(ui, t, 6, |this, ui| {
+            let width = preferences::UPDATES_ACTION_WIDTH;
+            let background = ui.painter().add(egui::Shape::Noop);
+            // Unlike other compact rows, build identity and actions keep their columns.
+            let row = ui
+                .horizontal_top(|ui| {
+                    let copy_width = ui.available_width() - width - t.number("s-6");
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(copy_width, 0.),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_min_width(copy_width);
+                            ui.label(
+                                RichText::new(preferences::UPDATES_VERSION)
+                                    .size(t.number("text-md"))
+                                    .color(t.color("text")),
+                            );
+                            ui.add_space(3.);
+                            ui.label(
+                                RichText::new(preferences::UPDATES_CHANNEL)
+                                    .size(t.number("text-sm"))
+                                    .color(t.color("text-subtle")),
+                            );
+                        },
+                    );
+                    ui.add_space(t.number("s-6"));
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, 0.),
+                        egui::Layout::top_down(egui::Align::Max),
+                        |ui| {
+                            ui.set_min_width(width);
+                            ui.add_enabled_ui(false, |ui| {
+                                widgets::button_with_size(
+                                    ui,
+                                    t,
+                                    preferences::UPDATES_ACTION,
+                                    false,
+                                    egui::vec2(width, t.number("h-md")),
+                                )
+                                .on_disabled_hover_text(preferences::UPDATES_DETAIL);
+                            });
+                            ui.add_space(t.number("s-2"));
+                            ui.label(
+                                RichText::new(preferences::UPDATES_TITLE)
+                                    .size(t.number("text-xs"))
+                                    .color(t.color("text-subtle")),
+                            );
+                        },
+                    );
+                })
+                .response
+                .rect;
+            this.remember(
+                format!(
+                    "{} {} {}",
+                    preferences::UPDATES_VERSION,
+                    preferences::UPDATES_CHANNEL,
+                    preferences::UPDATES_TITLE
+                ),
+                row,
+                background,
             );
             Self::divider(ui, t);
             let copy = preferences::row("show_update_changelog");
@@ -2251,19 +2329,8 @@ impl Preferences {
         });
     }
 
-    fn about(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        self.card(ui, t, 6, |this, ui| {
-            if this.utility_row(
-                ui,
-                t,
-                preferences::FEEDBACK_TITLE,
-                preferences::FEEDBACK_DETAIL,
-                preferences::FEEDBACK_ACTION,
-                true,
-            ) {
-                this.feedback.open(ui.ctx());
-            }
-            Self::divider(ui, t);
+    fn general(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        self.card(ui, t, 0, |this, ui| {
             let detail = if let Some(error) = &this.login_error {
                 preferences::login_item_error(error)
             } else if this.login_root.is_none() {
@@ -2316,7 +2383,28 @@ impl Preferences {
                     on,
                     preferences::LOGIN_ITEM_TITLE,
                 );
+                if shortcut_probe_enabled() {
+                    this.shortcut_rects.insert(
+                        preferences::LOGIN_ITEM_TITLE,
+                        [rect.left(), rect.top(), rect.right(), rect.bottom()],
+                    );
+                }
             });
+        });
+    }
+
+    fn about(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        self.card(ui, t, 7, |this, ui| {
+            if this.utility_row(
+                ui,
+                t,
+                preferences::FEEDBACK_TITLE,
+                preferences::FEEDBACK_DETAIL,
+                preferences::FEEDBACK_ACTION,
+                true,
+            ) {
+                this.feedback.open(ui.ctx());
+            }
         });
     }
 }
@@ -2577,6 +2665,113 @@ fn set(v: &mut Value, path: &[&str], value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_updates_keep_identity_left_and_reserved_action_status_right() {
+        for appearance in ["dark-mustard", "light-mustard"] {
+            let tokens = crate::tokens::load()[appearance].clone();
+            for width in [1000., 720., 560.] {
+                let dir = tempfile::tempdir().unwrap();
+                let ctx = egui::Context::default();
+                let mut prefs =
+                    Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+                prefs.compact = width <= 720.;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 600.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        prefs.updates(ui, &tokens);
+                    },
+                );
+                output.textures_delta.clear();
+                let text_rect = |label: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing {label} at {width}"))
+                };
+                let version = text_rect(preferences::UPDATES_VERSION);
+                let channel = text_rect(preferences::UPDATES_CHANNEL);
+                let action = text_rect(preferences::UPDATES_ACTION);
+                let status = text_rect(preferences::UPDATES_TITLE);
+                let action_left = action.center().x - 80.;
+                let action_right = action.center().x + 80.;
+                assert!(
+                    version.right() < action_left && channel.right() < action_left,
+                    "{width}: identity stays left"
+                );
+                assert!(version.top() < action.bottom() && channel.top() > version.bottom());
+                assert!(status.top() > action.bottom());
+                assert!(
+                    (status.right() - action_right).abs() < 1.,
+                    "{width}: status {status:?} right aligned with action {action:?} ({action_right})"
+                );
+                assert!(action_right < width);
+            }
+        }
+    }
+
+    #[test]
+    fn every_recorder_notifies_immediately_and_restores_on_cancel_complete_hide_and_blur() {
+        use std::{cell::RefCell, rc::Rc};
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let observed = changes.clone();
+        prefs.set_shortcut_recording_changed(move |active| observed.borrow_mut().push(active));
+        for field in SHORTCUT_FIELDS {
+            prefs.start_shortcut_recording(field);
+            assert!(prefs.is_recording_shortcut() && prefs.shortcut_input.is_active());
+            assert_eq!(changes.borrow().last(), Some(&true));
+            assert!(prefs.apply_shortcut_key("KeyP", true, shortcut_input::Modifiers::default()));
+            assert!(
+                prefs.is_recording_shortcut(),
+                "invalid keys retain interception"
+            );
+            prefs.apply_shortcut_key("Escape", true, shortcut_input::Modifiers::default());
+            assert!(!prefs.is_recording_shortcut() && !prefs.shortcut_input.is_active());
+            assert_eq!(changes.borrow().as_slice(), [true, false]);
+            changes.borrow_mut().clear();
+        }
+        prefs.start_shortcut_recording(ShortcutField::NewCapture);
+        prefs.apply_shortcut_key(
+            "KeyN",
+            true,
+            shortcut_input::Modifiers {
+                ctrl: true,
+                alt: true,
+                ..Default::default()
+            },
+        );
+        assert!(!prefs.is_recording_shortcut());
+        prefs.start_shortcut_recording(ShortcutField::NewCapture);
+        prefs.set_presented(false);
+        prefs.start_shortcut_recording(ShortcutField::NewCapture);
+        prefs.shortcut_input.blur();
+        prefs.receive_shortcut_input();
+        assert_eq!(
+            changes.borrow().as_slice(),
+            [true, false, true, false, true, false]
+        );
+        prefs.cancel_shortcut_recording();
+        assert_eq!(
+            changes.borrow().len(),
+            6,
+            "idle cancellation does not notify twice"
+        );
+    }
 
     #[test]
     fn header_status_stays_single_line_and_clear_of_copy_at_supported_widths() {

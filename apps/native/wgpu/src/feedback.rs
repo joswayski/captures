@@ -1,6 +1,6 @@
 //! Shipping `Feedback.tsx` in its own window: the "Captures" eyebrow, heading
-//! and intro, a settings card with category radio cards, message and optional
-//! contact, an "Included automatically" details card, and a right-aligned
+//! and intro, an "Included automatically" details card, a settings card with
+//! category radio cards, message and optional contact, and a right-aligned
 //! footer with the status to the left of Send. Copy, placeholders and limits
 //! come from `captures_app::feedback`; sending from `captures-feedback`.
 use std::{
@@ -202,7 +202,43 @@ impl Feedback {
 
     fn form(&mut self, ui: &mut egui::Ui, t: &Tokens, live: bool) {
         ui.spacing_mut().item_spacing = Vec2::ZERO;
+        let header_top = ui.cursor().min;
         header(ui, t);
+        self.probe(
+            "Header",
+            Rect::from_min_max(header_top, pos2(ui.max_rect().right(), ui.cursor().top())),
+        );
+        ui.add_space(t.number("s-6"));
+        let details = card(ui, t, |ui| {
+            ui.label(
+                RichText::new(copy::META_TITLE)
+                    .size(t.number("text-md"))
+                    .color(t.color("text")),
+            );
+            rule(ui, t, t.number("s-4"));
+            let system = self
+                .context
+                .as_ref()
+                .map(|context| copy::system_label(&context.os, &context.os_version, &context.arch));
+            let version = self
+                .context
+                .as_ref()
+                .map(|context| context.app_version.as_str());
+            meta_row(
+                ui,
+                t,
+                copy::APP_VERSION_LABEL,
+                version.unwrap_or(copy::LOADING),
+            );
+            ui.add_space(t.number("s-3"));
+            meta_row(
+                ui,
+                t,
+                copy::SYSTEM_LABEL,
+                system.as_deref().unwrap_or(copy::LOADING),
+            );
+        });
+        self.probe("Details", details);
         ui.add_space(t.number("s-6"));
         let sending = self.pending.is_some();
         card(ui, t, |ui| {
@@ -260,36 +296,6 @@ impl Feedback {
                 ui.add_space(t.number("s-3"));
                 help_text(ui, t, copy::CONTACT_HELP, f32::INFINITY);
             });
-        });
-        ui.add_space(t.number("s-6"));
-        card(ui, t, |ui| {
-            ui.label(
-                RichText::new(copy::META_TITLE)
-                    .size(t.number("text-md"))
-                    .color(t.color("text")),
-            );
-            rule(ui, t, t.number("s-4"));
-            let system = self
-                .context
-                .as_ref()
-                .map(|context| copy::system_label(&context.os, &context.os_version, &context.arch));
-            let version = self
-                .context
-                .as_ref()
-                .map(|context| context.app_version.as_str());
-            meta_row(
-                ui,
-                t,
-                copy::APP_VERSION_LABEL,
-                version.unwrap_or(copy::LOADING),
-            );
-            ui.add_space(t.number("s-3"));
-            meta_row(
-                ui,
-                t,
-                copy::SYSTEM_LABEL,
-                system.as_deref().unwrap_or(copy::LOADING),
-            );
         });
         ui.add_space(t.number("s-6"));
         self.footer(ui, t, live);
@@ -669,7 +675,7 @@ fn field_focus(ui: &egui::Ui, t: &Tokens, response: &egui::Response) {
 }
 
 /// `.settings-card`.
-fn card(ui: &mut egui::Ui, t: &Tokens, add: impl FnOnce(&mut egui::Ui)) {
+fn card(ui: &mut egui::Ui, t: &Tokens, add: impl FnOnce(&mut egui::Ui)) -> Rect {
     egui::Frame::new()
         .fill(t.color("surface-raised"))
         .stroke(Stroke::new(1., t.color("border-subtle")))
@@ -680,7 +686,9 @@ fn card(ui: &mut egui::Ui, t: &Tokens, add: impl FnOnce(&mut egui::Ui)) {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing = Vec2::ZERO;
             add(ui);
-        });
+        })
+        .response
+        .rect
 }
 
 /// `.settings-card > * + *`: the card gap, a subtle rule, then `--s-5`.
@@ -869,6 +877,12 @@ mod tests {
             let bug = rect(&probes, "Category.Bug");
             let idea = rect(&probes, "Category.Idea");
             let other = rect(&probes, "Category.Other");
+            let details = rect(&probes, "Details");
+            assert!(details.top() >= rect(&probes, "Header").bottom());
+            assert!(
+                details.bottom() < bug.top(),
+                "details precede editable fields"
+            );
             // Three equal radio cards in one row inside the settings card.
             assert_eq!(bug.top(), other.top());
             assert!(bug.right() < idea.left() && idea.right() < other.left());

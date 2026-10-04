@@ -344,7 +344,28 @@ def main():
             wait(lambda: bus.name_has_owner("org.kde.StatusNotifierWatcher"), "real SNI watcher")
 
         if args.login_item_only:
+            env["CAPTURES_NATIVE_LAYOUT_PROBE"] = "1"
             autostart = output / "config/autostart"
+
+            def click_login(window, log_name):
+                def settled_control():
+                    latest = None
+                    for line in (output / f"{log_name}.stdout.log").read_text().splitlines():
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        if event.get("event") == "preferences-shortcuts-layout":
+                            latest = event["detail"]
+                    if latest and latest["section"] == "general":
+                        rect = latest["controls"].get("Start Captures on login")
+                        page = latest["page"]
+                        if rect and page[1] <= rect[1] and rect[3] <= page[3]:
+                            return rect
+                    return None
+                rect = wait(settled_control, "General login control visible")
+                click(window, round((rect[0] + rect[2]) / 2), round((rect[1] + rect[3]) / 2))
+
             for appearance in ("dark", "light"):
                 history = output / f"login {appearance} % profile"
                 settings = output / f"login {appearance} % settings.json"
@@ -359,14 +380,27 @@ def main():
                 app = spawn(f"login-{appearance}", common + ["--open-preferences"])
                 prefs = wait(lambda: windows("Captures Preferences"), "login Preferences window")[0]
                 time.sleep(1)
-                click(prefs, 90, 285)  # About, in the Preferences window's section nav.
+                click(prefs, 90, 85)  # General is first.
                 time.sleep(1)
                 shot(prefs, f"login-{appearance}-off")
                 assert not list(autostart.glob("*.desktop")), "saved setting must not register a login item"
-                click(prefs, 822, 540)  # Launch at login.
+                click_login(prefs, f"login-{appearance}")
                 entry = wait(lambda: next(autostart.glob("*.desktop"), None), "explicit login registration")
                 owned = entry.read_bytes()
+                time.sleep(.5)  # OS reply precedes painting the authoritative On state.
                 shot(prefs, f"login-{appearance}-on")
+                click(prefs, 90, 289)  # Updates.
+                time.sleep(1)
+                shot(prefs, f"updates-{appearance}-normal")
+                run("xdotool", "windowsize", "--sync", prefs, "560", "600")
+                time.sleep(1)
+                # Compact rows reflow above this card; re-reveal the action with
+                # real Preferences Find instead of retaining the old scroll y.
+                run("xdotool", "key", "ctrl+f", "type", "--delay", "40", "Updates unavailable")
+                time.sleep(1)
+                run("xdotool", "key", "Escape")
+                time.sleep(.5)
+                shot(prefs, f"updates-{appearance}-minimum")
                 # Exit normally, not close-to-background, then launch the real
                 # Desktop Entry through GIO to test its escaping and exact argv.
                 run("xdotool", "key", "ctrl+q")
@@ -392,10 +426,10 @@ def main():
                     assert result.returncode == 0, result.stderr
                     # No window is open, so the relaunch opens Preferences.
                     prefs = wait(lambda: windows("Captures Preferences"), "relaunch opens Preferences")[0]
-                    click(prefs, 90, 285)
+                    click(prefs, 90, 85)
                     time.sleep(1)
                     shot(prefs, f"login-{appearance}-restored")
-                    click(prefs, 822, 540)
+                    click_login(prefs, f"gio-login-{appearance}")
                     wait(lambda: not entry.exists(), "explicit disable after hidden launch")
                     run("xdotool", "key", "ctrl+q")
                     wait(lambda: not Path(f"/proc/{pid}").exists(), "normal exit after login launch")
@@ -413,7 +447,7 @@ def main():
                 conflict_app = spawn(f"login-conflict-{appearance}", common + ["--open-preferences"])
                 prefs = wait(lambda: windows("Captures Preferences"), "conflicting login entry Preferences")[0]
                 time.sleep(1)
-                click(prefs, 90, 285)
+                click(prefs, 90, 85)
                 time.sleep(1)
                 shot(prefs, f"login-{appearance}-conflict")
                 assert entry.read_bytes() == conflict
@@ -1352,7 +1386,7 @@ def main():
                     # Layout events precede presentation. In this dark fixture,
                     # the selected nav wash is brighter than hover/idle. Check
                     # actual pixels too, not a screenshot of the previous frame.
-                    strip = run("import", "-window", root, "-crop", "1x69+15+85", "-depth", "8", "rgb:-")
+                    strip = run("import", "-window", root, "-crop", "1x69+15+119", "-depth", "8", "rgb:-")
                     washes = [sum(strip[y * 3:y * 3 + 3]) for y in (0, 34, 68)]
                     return washes[2] > max(washes[:2])
 
@@ -1368,7 +1402,7 @@ def main():
                     # it up again rather than reuse an earlier window id.
                     nonlocal root
                     root = wait(lambda: windows("Captures Preferences"), "Preferences window")[0]
-                    click(root, 98, 153)
+                    click(root, 98, 187)
                     wait(shortcuts_ready, "settled Shortcuts page with all seven recorders visible")
 
                 def click_recorder(index):
@@ -1409,6 +1443,31 @@ def main():
                 # chord is already globally registered. Merely suppressing its
                 # callback (without releasing the OS grab) cannot pass this.
                 record(1, "ctrl+shift+F7", "Control+Shift+F7")
+                # Do not blur Preferences to regain shortcuts. Hold an existing
+                # New Capture chord through recorder completion, then release it:
+                # the consumed press must not arm a capture on its later keyup.
+                click_recorder(0)
+                run("xdotool", "keydown", "ctrl", "keydown", "shift", "keydown", "F10")
+                wait(lambda: shortcut_layout().get("recording") is None
+                     and stored_keys()[0] == "Control+Shift+F10", "held New Capture chord completes")
+                assert not windows(CONTROLS) and not windows(SELECTOR)
+                run("xdotool", "keyup", "F10", "keyup", "shift", "keyup", "ctrl", "sleep", ".3")
+                assert not windows(CONTROLS) and not windows(SELECTOR), "recorded keyup launched capture"
+                for chord, title in [("ctrl+shift+F7", SELECTOR), ("ctrl+shift+F10", CONTROLS)]:
+                    run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root,
+                        "key", chord)
+                    wait(lambda: windows(title), "global shortcut while Preferences is focused")
+                    run("xdotool", "key", "Escape")
+                    wait(lambda: not windows(title) and windows("Captures Preferences"), "focused shortcut cancels")
+                    open_shortcuts()
+                # Recording shortcut launches Record mode from focused Preferences;
+                # Escape cancels before a recorder or media engine starts.
+                record(4, "ctrl+shift+F12", "Control+Shift+F12")
+                run("xdotool", "key", "ctrl+shift+F12")
+                wait(lambda: windows(CONTROLS), "recording shortcut from focused Preferences")
+                run("xdotool", "key", "Escape")
+                wait(lambda: not windows(CONTROLS) and windows("Captures Preferences"), "recording shortcut cancels")
+                open_shortcuts()
                 baseline = stored_keys()
                 click_recorder(0)
                 run("xdotool", "keydown", "ctrl", "sleep", ".2")
@@ -1591,6 +1650,7 @@ def main():
                   "timed/framebuffer completion quits with real tray",
                   "tray host loss restores/focuses hidden root and restores normal close"] if args.lifecycle else []) +
                 (["all seven shortcut persistence paths", "registered chord reaches recorder",
+                  "held recorded keyup never launches capture; fresh focused-Preferences screenshot/New Capture/recording chords work",
                   "modifier/invalid rendering and modified Escape/blur cancellation",
                   "duplicate save rejection", "Ctrl-F/Q interception while recording",
                   "raw PrintScreen/keypad/Super/media input", "leaving Preferences restores Quit",

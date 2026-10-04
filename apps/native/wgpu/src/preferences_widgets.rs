@@ -281,9 +281,25 @@ pub fn button_sized(
     raised: bool,
     height: f32,
 ) -> Response {
+    button_with_size(
+        ui,
+        t,
+        label,
+        raised,
+        vec2(button_width(ui, t, label), height),
+    )
+}
+
+/// The same button in a reserved action slot, independent of its label width.
+pub fn button_with_size(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    label: &str,
+    raised: bool,
+    size: Vec2,
+) -> Response {
     let enabled = ui.is_enabled();
     let galley = text(ui, label, t.number("text-sm"), t.color("text"));
-    let size = vec2(button_width(ui, t, label), height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let hovered = enabled && response.hovered();
