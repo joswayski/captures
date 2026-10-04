@@ -153,10 +153,15 @@ impl PointerOverlay {
         }
     }
 
+    pub fn shows_cursor(&self) -> bool {
+        self.show_cursor
+    }
+
     pub fn draw(
         &mut self,
         rgb: &mut [u8],
         sample: Option<PointerSample>,
+        cursor: Option<&captures_capture::CursorImage>,
         now: Instant,
     ) -> OverlayPatch {
         let mapped = sample.and_then(|sample| self.layout.map(sample));
@@ -194,15 +199,55 @@ impl PointerOverlay {
         if self.show_cursor
             && let Some(position) = mapped
         {
-            draw_cursor(
-                rgb,
-                self.layout.output_width,
-                self.layout.output_height,
-                position,
-                &mut patch,
-            );
+            if let Some(cursor) = cursor {
+                self.draw_native_cursor(rgb, position, cursor, &mut patch);
+            } else if !cfg!(target_os = "windows") {
+                draw_cursor(
+                    rgb,
+                    self.layout.output_width,
+                    self.layout.output_height,
+                    position,
+                    &mut patch,
+                );
+            }
         }
         patch
+    }
+
+    fn draw_native_cursor(
+        &self,
+        rgb: &mut [u8],
+        position: (i32, i32),
+        cursor: &captures_capture::CursorImage,
+        patch: &mut OverlayPatch,
+    ) {
+        let width = self.layout.output_width;
+        let height = self.layout.output_height;
+        let scale_x =
+            f64::from(width) / f64::from(self.layout.source.width) / self.layout.pointer_scale;
+        let scale_y =
+            f64::from(height) / f64::from(self.layout.source.height) / self.layout.pointer_scale;
+        let left = position.0 - (cursor.hot_spot_x * scale_x).round() as i32;
+        let top = position.1 - (cursor.hot_spot_y * scale_y).round() as i32;
+        let right = left + (cursor.logical_width * scale_x).round().max(1.) as i32;
+        let bottom = top + (cursor.logical_height * scale_y).round().max(1.) as i32;
+        // Retain the original rectangle before shared RGB/RGBA compositing.
+        // Click highlights may have saved some pixels already; keep those
+        // originals so restoring this frame removes both overlays.
+        for y in top.max(0)..bottom.min(height as i32) {
+            for x in left.max(0)..right.min(width as i32) {
+                let index = (y as usize * width as usize + x as usize) * 3;
+                patch
+                    .pixels
+                    .entry(index)
+                    .or_insert([rgb[index], rgb[index + 1], rgb[index + 2]]);
+            }
+        }
+        if let Some(mut image) =
+            image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(width, height, rgb)
+        {
+            cursor.overlay(&mut image, position, scale_x, scale_y);
+        }
     }
 }
 
@@ -515,9 +560,23 @@ mod tests {
                 primary_down: false,
                 secondary_down: false,
             }),
+            Some(&captures_capture::CursorImage {
+                pixels: image::RgbaImage::from_pixel(3, 2, image::Rgba([180, 23, 61, 128])),
+                and_mask: None,
+                logical_width: 3.,
+                logical_height: 2.,
+                hot_spot_x: 1.,
+                hot_spot_y: 0.,
+            }),
             now,
         );
-        assert_ne!(rgb, original);
+        // Physical cursor dimensions scale once: the output/source ratio is
+        // 2, but the pointer sample is also physical (pointer_scale = 2).
+        let pixel = |x: usize, y: usize| (y * 1_600 + x) * 3;
+        assert_eq!(&rgb[pixel(399, 300)..pixel(399, 300) + 3], &[106, 27, 46]);
+        assert_eq!(&rgb[pixel(401, 301)..pixel(401, 301) + 3], &[106, 27, 46]);
+        assert_eq!(&rgb[pixel(398, 300)..pixel(398, 300) + 3], &[32; 3]);
+        assert_eq!(&rgb[pixel(402, 301)..pixel(402, 301) + 3], &[32; 3]);
         patch.restore(&mut rgb);
         assert_eq!(rgb, original);
     }
@@ -535,6 +594,7 @@ mod tests {
                 primary_down: true,
                 secondary_down: false,
             }),
+            None,
             now + Duration::from_millis(100),
         );
         assert!(rgb.iter().any(|channel| *channel != 0));

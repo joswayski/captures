@@ -30,6 +30,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+captures-capture = { path = "../captures-capture" }
 tempfile.workspace = true
 
 [lints.rust]

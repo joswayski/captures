@@ -6720,6 +6720,9 @@ export function Thumbnail() {
     // Restart only when the stack crosses between empty and non-empty; ordinary
     // card additions still poll, but they lock hover until the pointer moves
     // so a leftover capture cursor cannot light Delete.
+    const platform = detectShortcutPlatform();
+    const webviewOwnsCursor = platform === "windows";
+    document.documentElement.dataset.thumbnailPlatform = platform;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let polling = false;
@@ -6756,6 +6759,7 @@ export function Thumbnail() {
      * delay schedule so the hand wins both transitions without a pointer poll.
      */
     const preserveInteractiveCursorAcrossHandoff = () => {
+      if (webviewOwnsCursor) return;
       reassertInteractiveCursor();
       clearCursorHandoffTimers();
       cursorHandoffTimers = THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS.map((delay) => (
@@ -6774,6 +6778,13 @@ export function Thumbnail() {
       // default arrow between AppKit grab/pointer updates.
       if (kind !== cursorKind) {
         applyThumbnailCssCursor(kind);
+      }
+      // Tao maps Grab to IDC_SIZEALL on Windows. Reasserting that native
+      // four-way arrow every poll fights WebView2's CSS cursor on every move.
+      // Keep one owner there, including clicks and editor focus handoffs.
+      if (webviewOwnsCursor) {
+        cursorKind = kind;
+        return;
       }
       const now = performance.now();
       const action = thumbnailCursorSyncAction(
@@ -7227,6 +7238,7 @@ export function Thumbnail() {
       );
       stopNativeTracking();
       unlockCardHover();
+      delete document.documentElement.dataset.thumbnailPlatform;
     };
   }, [hasThumbnailCards]);
 
