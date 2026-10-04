@@ -4610,40 +4610,51 @@ fn register_new_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), 
     }
     let parsed = parse_shortcut(shortcut)?;
     let armed = AtomicBool::new(false);
+    let suppressed_while_pressed = AtomicBool::new(false);
     app.global_shortcut()
         .on_shortcut(parsed, move |app, _shortcut, event| {
-            let state = app.state::<Arc<AppState>>().inner().clone();
-            let preferences_or_onboarding_focused = app
-                .get_webview_window("preferences")
-                .is_some_and(|window| window.is_focused().unwrap_or(false))
-                || app
-                    .get_webview_window(ONBOARDING_WINDOW_LABEL)
-                    .is_some_and(|window| window.is_focused().unwrap_or(false));
-            if event.state() == ShortcutState::Pressed {
-                clear_shortcut_capture_flow();
-                if !preferences_or_onboarding_focused
-                    && freeze_prefetch_is_allowed_for_selector(app, &state)
-                {
-                    let _ = begin_shortcut_capture_flow(app);
-                    prefetch_freeze_frame(app, &state, false);
-                }
-            }
-            if !should_trigger_shortcut(&armed, event.state()) {
-                return;
-            }
-            if shortcut_release_was_cancelled(app) {
-                return;
-            }
-            if preferences_or_onboarding_focused {
-                abort_prefetched_freeze_capture(app);
-                return;
-            }
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                open_capture_controls(&app, CaptureSelectorMode::Screenshot);
-            });
+            dispatch_new_capture_shortcut(app, event.state(), &armed, &suppressed_while_pressed);
         })
         .map_err(|error| AppError::Shortcut(error.to_string()))
+}
+
+fn dispatch_new_capture_shortcut(
+    app: &AppHandle,
+    event_state: ShortcutState,
+    armed: &AtomicBool,
+    suppressed_while_pressed: &AtomicBool,
+) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    if !state.settings().onboarding_completed {
+        if event_state == ShortcutState::Released {
+            show_onboarding(app);
+        }
+        return;
+    }
+    let suppressed = shortcut_capture_is_suppressed(app, &state);
+    if event_state == ShortcutState::Pressed {
+        clear_shortcut_capture_flow();
+        if !suppressed && freeze_prefetch_is_allowed_for_selector(app, &state) {
+            let _ = begin_shortcut_capture_flow(app);
+            prefetch_freeze_frame(app, &state, false);
+        }
+    }
+    let trigger_is_suppressed =
+        track_shortcut_suppression(suppressed_while_pressed, event_state, suppressed);
+    if !should_trigger_shortcut(armed, event_state) || trigger_is_suppressed {
+        if event_state == ShortcutState::Released && trigger_is_suppressed {
+            clear_shortcut_capture_flow();
+            abort_prefetched_freeze_capture(app);
+        }
+        return;
+    }
+    if shortcut_release_was_cancelled(app) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        open_capture_controls(&app, CaptureSelectorMode::Screenshot);
+    });
 }
 
 fn register_shortcut(app: &AppHandle, shortcut: &str, mode: CaptureMode) -> Result<(), AppError> {
@@ -4993,7 +5004,12 @@ fn on_win_shift_s(phase: captures_session::WinShiftSPhase) {
         .and_then(|slot| *slot)
         .unwrap_or(models::SuperShiftSAction::Region);
     match action {
-        models::SuperShiftSAction::NewCapture => dispatch_new_capture_shortcut(app, event_state),
+        models::SuperShiftSAction::NewCapture => dispatch_new_capture_shortcut(
+            app,
+            event_state,
+            &WIN_SHIFT_S_ARMED,
+            &WIN_SHIFT_S_SUPPRESSED,
+        ),
         models::SuperShiftSAction::Region => {
             dispatch_capture_shortcut(app, CaptureMode::Region, event_state)
         }
@@ -5013,40 +5029,6 @@ fn on_win_shift_s(phase: captures_session::WinShiftSPhase) {
             dispatch_recording_shortcut(app, CaptureMode::Display, event_state)
         }
     }
-}
-
-#[cfg(target_os = "windows")]
-fn dispatch_new_capture_shortcut(app: &AppHandle, event_state: ShortcutState) {
-    let state = app.state::<Arc<AppState>>().inner().clone();
-    let preferences_or_onboarding_focused = app
-        .get_webview_window("preferences")
-        .is_some_and(|window| window.is_focused().unwrap_or(false))
-        || app
-            .get_webview_window(ONBOARDING_WINDOW_LABEL)
-            .is_some_and(|window| window.is_focused().unwrap_or(false));
-    if event_state == ShortcutState::Pressed {
-        clear_shortcut_capture_flow();
-        if !preferences_or_onboarding_focused
-            && freeze_prefetch_is_allowed_for_selector(app, &state)
-        {
-            let _ = begin_shortcut_capture_flow(app);
-            prefetch_freeze_frame(app, &state, false);
-        }
-    }
-    if !should_trigger_shortcut(&WIN_SHIFT_S_ARMED, event_state) {
-        return;
-    }
-    if shortcut_release_was_cancelled(app) {
-        return;
-    }
-    if preferences_or_onboarding_focused {
-        abort_prefetched_freeze_capture(app);
-        return;
-    }
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        open_capture_controls(&app, CaptureSelectorMode::Screenshot);
-    });
 }
 
 #[cfg(target_os = "windows")]

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { listen, type EventCallback } from "@tauri-apps/api/event";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { Preferences } from "./App";
 import { detectShortcutPlatform, platformShortcutHelp } from "./lib/shortcut";
@@ -134,6 +134,25 @@ describe("Preferences", () => {
       });
     });
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it.each(["macos", "windows", "linux"])("can enable and disable login startup on %s", async (platform) => {
+    window.history.replaceState({}, "", `/?view=preferences&platform=${platform}`);
+    render(<Preferences />);
+
+    const general = await screen.findByRole("region", { name: "General" });
+    const login = within(general).getByRole("checkbox", { name: /Start Captures on login/ });
+    expect(login).not.toBeChecked();
+    expect(login).toBeEnabled();
+    fireEvent.click(login);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("update_settings", {
+      settings: expect.objectContaining({ launch_at_login: true }),
+    }));
+
+    fireEvent.click(login);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("update_settings", {
+      settings: expect.objectContaining({ launch_at_login: false }),
+    }));
   });
 
   it("persists custom screenshot and recording countdown preferences", async () => {
@@ -398,6 +417,25 @@ describe("Preferences", () => {
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
   });
 
+  it("suppresses New Capture only while assigning its shortcut", async () => {
+    render(<Preferences />);
+    const recorder = await screen.findByRole("button", { name: "New Capture" });
+    expect(invoke).not.toHaveBeenCalledWith("set_shortcut_capture_suppressed", { suppressed: true });
+
+    fireEvent.click(recorder);
+    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", { suppressed: true });
+    fireEvent.keyDown(recorder, { key: "Escape", code: "Escape" });
+    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", { suppressed: false });
+    expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
+
+    fireEvent.click(recorder);
+    fireEvent.keyDown(recorder, { key: "n", code: "KeyN", ctrlKey: true, shiftKey: true });
+    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", { suppressed: false });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("update_settings", {
+      settings: expect.objectContaining({ new_capture_shortcut: "Control+Shift+KeyN" }),
+    }));
+  });
+
   it("offers and persists shortcuts for every recording target", async () => {
     render(<Preferences />);
 
@@ -573,6 +611,33 @@ describe("Preferences", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("keeps the installed version separate from checking and successful results", async () => {
+    let publish: EventCallback<UpdateStatus> | undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "update-status-changed") publish = handler as EventCallback<UpdateStatus>;
+      return () => undefined;
+    });
+    render(<Preferences />);
+    const version = await screen.findByText("Version 0.1.0");
+    const versionCopy = version.parentElement;
+    const initialCopy = versionCopy?.textContent;
+    const base = { current_version: "0.1.0", current_display_version: "0.1.0" };
+
+    act(() => publish?.({ event: "update-status-changed", id: 1, payload: { ...base, state: "checking" } }));
+    expect(screen.getByRole("button", { name: "Checking now…" })).toBeDisabled();
+    expect(screen.getByText("Version 0.1.0")).toBe(version);
+    expect(versionCopy?.textContent).toBe(initialCopy);
+    expect(screen.queryByText("Checking for updates…")).not.toBeInTheDocument();
+
+    act(() => publish?.({ event: "update-status-changed", id: 1, payload: { ...base, state: "up_to_date" } }));
+    const result = screen.getByText("Up to date");
+    expect(result).toHaveClass("update-settings-status-current");
+    expect(result).toHaveAttribute("role", "status");
+    expect(versionCopy).not.toContainElement(result);
+    expect(versionCopy?.textContent).toBe(initialCopy);
+    expect(screen.getByRole("button", { name: "Check Now" })).toBeEnabled();
   });
 
   it("always offers an installer download that can replace a broken copy", async () => {

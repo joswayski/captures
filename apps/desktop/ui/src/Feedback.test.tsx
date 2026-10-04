@@ -39,6 +39,9 @@ describe("Feedback", () => {
 
     expect(await screen.findByText("2026.08.06.1")).toBeInTheDocument();
     expect(screen.getByText(/macos · 15\.5 · aarch64/i)).toBeInTheDocument();
+    const metadata = screen.getByRole("heading", { name: "Included automatically" }).closest("section");
+    expect(metadata?.previousElementSibling).toBe(screen.getByRole("heading", { name: "Send feedback" }).closest("header"));
+    expect(metadata?.nextElementSibling).toContainElement(screen.getByLabelText("Message"));
 
     const bug = screen.getByRole("radio", { name: /Bug/i });
     expect(bug).toHaveAttribute("aria-checked", "true");
