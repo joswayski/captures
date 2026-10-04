@@ -1359,8 +1359,8 @@ impl BackdropCompositor {
 
 fn composite_normal(output: &mut RgbaImage, canvas: &Pixmap) {
     let channels = &*DEMULTIPLY_CHANNELS;
-    // Building the byte-domain table cannot pay off below its own domain size.
-    // Smaller renders retain the existing path without allocating this table.
+    // Avoid setup on small renders; the byte-domain size is a conservative
+    // cutoff. Smaller renders keep the existing path without this allocation.
     let backdrop = (canvas.pixels().len() > 256 * 256)
         .then(|| BackdropCompositor::new(*output.get_pixel(0, 0), channels));
     for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
