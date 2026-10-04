@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use captures_media::{CancelToken, MediaToolchain};
+use captures_media::CancelToken;
 use captures_recording::RecordingKind;
 use captures_recording_platform::{
     RecordingRecovery, RecoveryDraft, RecoveryOutcome, RecoveryProgress,
@@ -348,7 +348,7 @@ impl Recovery {
         let (tx, jobs) = mpsc::channel();
         let (out, rx) = mpsc::channel();
         let worker = thread::spawn(move || {
-            let service = RecordingRecovery::new(root, MediaToolchain::from_command_names());
+            let service = RecordingRecovery::new(root, crate::media_tools::locate());
             while let Ok(job) = jobs.recv() {
                 let reply = match job {
                     Job::List => Reply::Listed(service.list()),

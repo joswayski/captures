@@ -112,4 +112,28 @@ final class RecordingBridgeTests: XCTestCase {
         XCTAssertEqual(tools.ffprobe, tool.path)
         XCTAssertNoThrow(try tools.verify())
     }
+
+    func testPackagedMediaPairWorksWithoutPathOrOverrides() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("captures-package-é-\(UUID().uuidString)")
+        let binaries = directory.appendingPathComponent("Contents/MacOS/binaries")
+        try FileManager.default.createDirectory(at: binaries, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #if arch(arm64)
+        let target = "aarch64-apple-darwin"
+        #else
+        let target = "x86_64-apple-darwin"
+        #endif
+        let ffmpeg = binaries.appendingPathComponent("ffmpeg-\(target)")
+        let ffprobe = binaries.appendingPathComponent("ffprobe-\(target)")
+        for tool in [ffmpeg, ffprobe] {
+            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: tool)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        }
+        let executable = directory.appendingPathComponent("Contents/MacOS/CapturesNative")
+        let tools = try NativeMediaTools.locate(environment: [:], executable: executable)
+        XCTAssertEqual(tools.ffmpeg, ffmpeg.path)
+        XCTAssertEqual(tools.ffprobe, ffprobe.path)
+        XCTAssertNoThrow(try tools.verify())
+    }
 }

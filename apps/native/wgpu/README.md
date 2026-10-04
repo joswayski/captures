@@ -235,11 +235,14 @@ Windows; a C compiler, pkg-config, Wayland/X11/xkbcommon development libraries o
 Linux). Linux tray builds additionally require the D-Bus development package
 (`libdbus-1-dev` on Ubuntu). A working Vulkan or other wgpu-supported graphics
 driver is required.
-This development host does not bundle the Tauri app's media sidecars. Recording is
-enabled only after `ffmpeg` and `ffprobe` are both verified from `PATH` on its worker;
-install compatible command-line builds before launching. Missing tools are reported
-in New Capture before recording can start. This is a development dependency, not
-distribution or packaging parity.
+Recording verifies FFmpeg/FFprobe on its worker before starting. Recording, recovery
+and the editor share AppKit's lookup order: executable `CAPTURES_FFMPEG` /
+`CAPTURES_FFPROBE` overrides, target-suffixed tools beside the executable or in its
+`binaries/`, prepared checkout sidecars, then commands on `PATH`. Invalid overrides
+fall back. [Development package staging](../../../DEVELOPMENT.md#native-development-open-with)
+can copy the pinned pair with corresponding source/licenses using `--media-target`.
+Missing tools remain visible in New Capture. This does not establish signed
+distribution, physical-platform playback or packaging acceptance.
 The isolated Cargo workspace/lockfile leaves the shipping Rust 1.94 workspace
 unchanged. The egui/eframe stack is pinned to upstream
 [`60d7caae`](https://github.com/emilk/egui/commit/60d7caaea38a795618e842925061ad2210028a2a),

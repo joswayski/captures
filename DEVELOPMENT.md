@@ -251,8 +251,16 @@ Preview installers. It never installs, registers, changes defaults, downloads
 dependencies or modifies shipping data. Build the native host first, then choose
 a new final output directory; staging refuses to overwrite one. Windows/Linux
 registration contains absolute paths, so unregister before moving the package.
-FFmpeg/FFprobe still need separate installation for GIF/video. Platform runtime
-dependencies remain those of the workbenches; these are not redistributable builds.
+For GIF/video, run `npm run prepare:media` on the target host first and include
+`--media-target` when staging. It copies the matching pinned FFmpeg/FFprobe pair
+into `binaries/` beside the executable, plus corresponding source, signature,
+configuration and licenses under `media-licenses/` (macOS: `Contents/Resources`).
+Missing tools or source/license inputs fail before creating the package.
+Omit the flag for a package that uses development tools instead. Both hosts
+prefer executable `CAPTURES_FFMPEG` / `CAPTURES_FFPROBE` overrides, then bundled
+tools, then checkout sidecars, then `PATH`; invalid overrides fall back.
+Platform runtime dependencies remain those of the workbenches; these are not
+signed, installed-release or redistributable builds.
 
 macOS, after `bash apps/native/macos/build.sh`:
 
@@ -260,6 +268,7 @@ macOS, after `bash apps/native/macos/build.sh`:
 python3 apps/native/package.py --platform macos \
   --binary apps/native/macos/.build/release/CapturesNative \
   --resources apps/native/macos/.build/release/CapturesNative_CapturesNative.bundle \
+  --media-target "$(rustc -vV | sed -n 's/^host: //p')" \
   --output "$HOME/Applications/captures-native-dev"
 codesign --force --deep --sign - "$HOME/Applications/captures-native-dev/Captures Native Development.app"
 ```
@@ -278,6 +287,7 @@ Windows, from PowerShell after building the wgpu host:
 ```powershell
 python apps/native/package.py --platform windows `
   --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe `
+  --media-target x86_64-pc-windows-msvc `
   --output "$env:LOCALAPPDATA\Captures Native Development"
 ```
 
@@ -296,6 +306,7 @@ Linux, after building the wgpu host:
 ```sh
 python3 apps/native/package.py --platform linux \
   --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --media-target x86_64-unknown-linux-gnu \
   --output "$HOME/.local/opt/captures-native-dev"
 # Optional per-user registration (does not select a default):
 desktop-file-install --dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications" \
@@ -358,9 +369,9 @@ Use `--history-shortcuts-only` for document Undo/Redo keys, exact restored layer
 duplicate offsets/selection, Delete/Backspace, locked-layer protection,
 text-field and confirmation focus, and unchanged source bytes.
 
-Native Record requires executable FFmpeg and FFprobe commands on `PATH`; native
-builds do not bundle their own media tools yet. AppKit also accepts `CAPTURES_FFMPEG`
-and `CAPTURES_FFPROBE` executable paths. Recording uses separate development
+Native Record verifies FFmpeg and FFprobe on its worker before starting. Both hosts
+resolve overrides, bundled development-package tools, prepared checkout sidecars
+and `PATH`, in that order; see the staging instructions above. Recording uses separate development
 History and a sibling `recording-recovery` directory. Do not point tests at real
 capture data. The Linux recording acceptance owns a private Xvfb desktop and D-Bus
 session; install the windowing dependencies from the wgpu README plus `ffmpeg`

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 import package
 
@@ -59,6 +60,71 @@ class DevelopmentPackageTests(unittest.TestCase):
                     self.assertEqual((launcher / "Contents/Resources/CapturesNative_CapturesNative.bundle/tokens.json").read_text(), "{}")
                 elif platform == "windows":
                     self.assertTrue(launcher.read_bytes().startswith(b"\xff\xfe"))
+
+    def test_media_packages_keep_target_pair_source_and_licenses_and_reject_incomplete_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = {
+                "scripts/build-ffmpeg-sidecars.sh": b'FFMPEG_VERSION="9.8.7"\n',
+                "target/ffmpeg-dist/ffmpeg-9.8.7.tar.xz": b"corresponding source",
+                "target/ffmpeg-dist/ffmpeg-9.8.7.tar.xz.asc": b"detached signature",
+                "target/ffmpeg-dist/ffmpeg-9.8.7-BUILD_CONFIG.txt": b"exact configuration",
+                "target/ffmpeg-dist/ffmpeg-9.8.7-COPYING.LGPLv2.1": b"LGPL license",
+                "target/ffmpeg-dist/ffmpeg-9.8.7-NOTICE.md": b"FFmpeg notice",
+                "apps/desktop/src-tauri/openh264/LICENSE": b"OpenH264 license",
+                "apps/desktop/src-tauri/openh264/NOTICE.md": b"OpenH264 notice",
+                "apps/desktop/src-tauri/Info.plist": plistlib.dumps({}),
+                "apps/desktop/src-tauri/icons/icon.icns": b"icon",
+                "LICENSE": b"Captures license",
+                "TRADEMARKS.md": b"Captures trademarks",
+            }
+            for name, data in inputs.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            binary = root / "native"
+            binary.write_bytes(b"native executable")
+            resources = root / "resources.bundle"
+            resources.mkdir()
+            targets = (
+                ("macos", "aarch64-apple-darwin", "ffmpeg-aarch64-apple-darwin", "ffprobe-aarch64-apple-darwin"),
+                ("macos", "x86_64-apple-darwin", "ffmpeg-x86_64-apple-darwin", "ffprobe-x86_64-apple-darwin"),
+                ("windows", "x86_64-pc-windows-msvc", "ffmpeg-x86_64-pc-windows-msvc.exe", "ffprobe-x86_64-pc-windows-msvc.exe"),
+                ("linux", "x86_64-unknown-linux-gnu", "ffmpeg-x86_64-unknown-linux-gnu", "ffprobe-x86_64-unknown-linux-gnu"),
+            )
+            with patch.object(package, "ROOT", root):
+                for platform, target, ffmpeg, ffprobe in targets:
+                    tools = root / "apps/desktop/src-tauri/binaries"
+                    tools.mkdir(exist_ok=True)
+                    for name in (ffmpeg, ffprobe):
+                        (tools / name).write_bytes(name.encode())
+                    output = root / f"package é {target}"
+                    launcher, executable = package.stage(platform, binary, output, resources, target)
+                    for name in (ffmpeg, ffprobe):
+                        staged = executable.parent / "binaries" / name
+                        self.assertEqual(staged.read_bytes(), name.encode())
+                        if os.name != "nt":
+                            self.assertTrue(staged.stat().st_mode & 0o111)
+                    self.assertEqual(len(list((executable.parent / "binaries").iterdir())), 2)
+                    licenses = (launcher / "Contents/Resources" if platform == "macos" else output) / "media-licenses"
+                    for name, data in inputs.items():
+                        if name.startswith("target/ffmpeg-dist/"):
+                            self.assertEqual((licenses / "ffmpeg" / Path(name).name).read_bytes(), data)
+                        elif name.startswith("apps/desktop/src-tauri/openh264/"):
+                            self.assertEqual((licenses / "openh264" / Path(name).name).read_bytes(), data)
+                output = root / "invalid-package"
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    package.stage("linux", binary, output, media_target="aarch64-apple-darwin")
+                self.assertFalse(output.exists())
+                for missing in ("apps/desktop/src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu",
+                                "target/ffmpeg-dist/ffmpeg-9.8.7.tar.xz"):
+                    path = root / missing
+                    data = path.read_bytes()
+                    path.unlink()
+                    with self.assertRaisesRegex(ValueError, "Missing media package input"):
+                        package.stage("linux", binary, output, media_target="x86_64-unknown-linux-gnu")
+                    self.assertFalse(output.exists(), "missing tool/source must fail before staging")
+                    path.write_bytes(data)
 
     @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("gio"),
                          "requires Linux GIO desktop-entry launch support")
