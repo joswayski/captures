@@ -1048,7 +1048,40 @@
 }
 
 .update-settings-row {
-  grid-template-rows: auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.update-settings-row > .settings-utility-copy {
+  padding-top: var(--s-3);
+}
+
+.update-settings-actions {
+  display: grid;
+  justify-items: end;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.update-settings-actions > button {
+  min-width: calc(2 * var(--s-12));
+}
+
+.update-settings-status {
+  min-height: calc(var(--text-sm) * var(--leading-snug));
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  text-align: right;
+}
+
+.update-settings-status small {
+  display: block;
+  margin-top: var(--s-1);
+}
+
+.update-settings-status-current {
+  color: var(--positive-text);
 }
 
 .update-settings-progress {

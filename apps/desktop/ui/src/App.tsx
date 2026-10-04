@@ -1083,24 +1083,18 @@ function UpdatePreferences({
       ? `Updating to version ${downloading.display_version}`
       : restarting
         ? "Update complete"
-        : status?.state === "checking"
-          ? "Checking for updates…"
-          : status?.state === "error"
-            ? "Couldn’t check for updates"
-            : `Version ${currentVersion}`;
+        : status?.state === "error"
+          ? "Couldn’t check for updates"
+          : status?.state === "up_to_date"
+            ? "Up to date"
+            : "";
   const detail = downloading
     ? progress === null ? downloadProgress : `${downloadProgress} · ${progress}%`
     : restarting
       ? "Reopening Captures…"
-      : status?.state === "up_to_date"
-        ? "Up to date."
-        : status?.state === "error"
-          ? status.message
-          : available
-            ? installableDownloadSize ? `${formatUpdateSize(installableDownloadSize)} download` : ""
-            : status?.state === "checking"
-              ? ""
-            : "Updates are checked automatically.";
+      : available && installableDownloadSize
+        ? `${formatUpdateSize(installableDownloadSize)} download`
+        : "";
 
   const run = async (command: "check_for_updates" | "install_update") => {
     setActionError("");
@@ -1122,29 +1116,38 @@ function UpdatePreferences({
       </header>
       <div className="settings-utility-row update-settings-row">
         <div className="settings-utility-copy">
-          <strong>{heading}</strong>
-          {detail && <small>{detail}</small>}
+          <strong>Version {currentVersion}</strong>
+          <small>Preview channel</small>
         </div>
-        <button
-          className="settings-utility-action"
-          type="button"
-          disabled={Boolean(status?.state === "checking" || downloading || restarting)}
-          onClick={() =>
-            void run(
-              available || (status?.state === "error" && status.retry_install)
-                ? "install_update"
-                : "check_for_updates",
-            )
-          }
-        >
-          {restarting
-            ? "Restarting…"
-            : downloading
-            ? "Installing…"
-            : available
-              ? available.installable ? "Update now" : "View release"
-              : status?.state === "checking" ? "Checking…" : "Check Now"}
-        </button>
+        <div className="update-settings-actions">
+          <button
+            className="settings-utility-action"
+            type="button"
+            disabled={Boolean(status?.state === "checking" || downloading || restarting)}
+            onClick={() =>
+              void run(
+                available || (status?.state === "error" && status.retry_install)
+                  ? "install_update"
+                  : "check_for_updates",
+              )
+            }
+          >
+            {restarting
+              ? "Restarting…"
+              : downloading
+                ? "Installing…"
+                : available
+                  ? available.installable ? "Update now" : "View release"
+                  : status?.state === "checking" ? "Checking now…" : "Check Now"}
+          </button>
+          <div
+            className={`update-settings-status${status?.state === "up_to_date" ? " update-settings-status-current" : ""}`}
+            role="status"
+          >
+            {heading || "\u00a0"}
+            {detail && <small>{detail}</small>}
+          </div>
+        </div>
         {downloading && (
           <div
             className={`update-settings-progress${progress === null ? " update-settings-progress-indeterminate" : ""}`}
@@ -1160,6 +1163,9 @@ function UpdatePreferences({
       </div>
       {available?.will_close_open_captures && !actionError && (
         <p className="update-settings-warning">{OPEN_CAPTURES_UPDATE_WARNING}</p>
+      )}
+      {status?.state === "error" && !actionError && (
+        <p className="update-settings-error" role="alert">{status.message}</p>
       )}
       {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
       <UpdateDownloadFallback source="preferences" />
@@ -8709,6 +8715,7 @@ type PreferencesSaveStatus = {
 };
 
 const PREFERENCE_SECTIONS = [
+  { id: "general", label: "General" },
   { id: "appearance", label: "Appearance" },
   { id: "capture", label: "Capture" },
   { id: "shortcuts", label: "Shortcuts" },
@@ -9370,7 +9377,6 @@ export function Preferences() {
               highlightedPreference={highlightedPreference}
               recordingDevices={recordingDevices}
               recordingShortcut={recordingShortcut}
-              setRecordingShortcut={setRecordingShortcut}
               setShortcutRecording={setShortcutRecording}
               update={update}
               updateRecording={updateRecording}
@@ -9391,7 +9397,6 @@ function PreferencesSections({
   highlightedPreference,
   recordingDevices,
   recordingShortcut,
-  setRecordingShortcut,
   setShortcutRecording,
   update,
   updateRecording,
@@ -9404,7 +9409,6 @@ function PreferencesSections({
   highlightedPreference: string | null;
   recordingDevices: AudioDevice[];
   recordingShortcut: string | null;
-  setRecordingShortcut: (id: string | null) => void;
   setShortcutRecording: (id: string, recording: boolean) => void;
   update: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   updateRecording: <K extends keyof AppSettings["recording"]>(
@@ -9420,6 +9424,24 @@ function PreferencesSections({
 
   return (
     <>
+      <section className="settings-card" id="general" aria-labelledby="general-heading">
+        <header className="settings-card-header">
+          <h2 id="general-heading">General</h2>
+          <p>Keep Captures ready when you need it.</p>
+        </header>
+        <label className="check-row switch-row">
+          <input
+            type="checkbox"
+            checked={settings.launch_at_login}
+            onChange={(event) => update("launch_at_login", event.target.checked)}
+          />
+          <span>
+            Start Captures on login
+            <small>Start in the background when you sign in to your computer.</small>
+          </span>
+        </label>
+      </section>
+
       <section className="settings-card" id="appearance" aria-labelledby="appearance-heading">
         <header className="settings-card-header">
           <h2 id="appearance-heading">Appearance</h2>
@@ -9734,7 +9756,7 @@ function PreferencesSections({
             label="New Capture"
             value={settings.new_capture_shortcut}
             recording={recordingShortcut === "new-capture-shortcut"}
-            onRecordingChange={(recording) => setRecordingShortcut(recording ? "new-capture-shortcut" : null)}
+            onRecordingChange={(recording) => setShortcutRecording("new-capture-shortcut", recording)}
             onChange={(value) => update("new_capture_shortcut", value)}
           />
           <ShortcutInput
@@ -9986,14 +10008,6 @@ function PreferencesSections({
             Open
           </button>
         </div>
-        <label className="check-row switch-row">
-          <input
-            type="checkbox"
-            checked={settings.launch_at_login}
-            onChange={(event) => update("launch_at_login", event.target.checked)}
-          />
-          <span>Launch Captures when I sign in</span>
-        </label>
       </section>
     </>
   );

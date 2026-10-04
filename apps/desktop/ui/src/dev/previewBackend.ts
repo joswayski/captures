@@ -499,6 +499,7 @@ function updateStatus(): UpdateStatus {
       seconds_remaining: 3,
     };
   }
+  if (state === "idle" || state === "checking") return { ...base, state };
   if (state === "up_to_date") return { ...base, state: "up_to_date" };
   if (state === "error") {
     return {

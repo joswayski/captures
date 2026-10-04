@@ -79,6 +79,7 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 - 30-day capture history, filtered by screenshots, video, or GIF. Drag a capture's thumbnail directly into an editor or any app that accepts its file type, without restoring a mini preview. Dragging copies the saved file when available, otherwise the original retained capture; History stays intact
 - Light, dark, or system appearance across every Captures window
 - Customizable shortcuts and accent colors. Find a setting in Preferences with `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux
+- Capture shortcuts work from Preferences, except while assigning a shortcut. Preferences → General offers **Start Captures on login** on macOS, Windows, and Linux, starting in the background when you sign in
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)
 - After an unexpected quit, Preview may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths. An in-app update restart, normal logoff, or shutdown is not a crash.

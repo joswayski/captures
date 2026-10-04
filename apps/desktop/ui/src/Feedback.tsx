@@ -101,6 +101,20 @@ export function Feedback() {
           </div>
         </header>
 
+        <section className="settings-card feedback-section feedback-meta-card">
+          <h2>Included automatically</h2>
+          <dl className="feedback-meta">
+            <div>
+              <dt>App version</dt>
+              <dd>{context?.app_version ?? "…"}</dd>
+            </div>
+            <div>
+              <dt>System</dt>
+              <dd>{context ? formatOsLabel(context) : "…"}</dd>
+            </div>
+          </dl>
+        </section>
+
         <section className="settings-card feedback-section">
           <div className="feedback-field">
             <span className="field-label" id="feedback-category-label">Category</span>
@@ -162,20 +176,6 @@ export function Feedback() {
               Optional — we may use this if we need to ask a follow-up question.
             </p>
           </div>
-        </section>
-
-        <section className="settings-card feedback-section feedback-meta-card">
-          <h2>Included automatically</h2>
-          <dl className="feedback-meta">
-            <div>
-              <dt>App version</dt>
-              <dd>{context?.app_version ?? "…"}</dd>
-            </div>
-            <div>
-              <dt>System</dt>
-              <dd>{context ? formatOsLabel(context) : "…"}</dd>
-            </div>
-          </dl>
         </section>
 
         <footer className="feedback-actions">
