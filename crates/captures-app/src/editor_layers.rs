@@ -219,7 +219,7 @@ impl ThumbnailCache {
     }
 }
 
-/// Visibility, lock, opacity and blend do not change shipping's preview.
+/// Visibility, lock, opacity, blend and the image name do not change shipping's preview.
 fn thumbnail_key_matches(cached: &Element, current: &Element) -> bool {
     normalized(cached) == normalized(current)
 }
@@ -231,6 +231,9 @@ fn normalized(element: &Element) -> Element {
     base.locked = false;
     base.opacity = 100.;
     "source-over".clone_into(&mut base.blend_mode);
+    if let Element::Image(image) = &mut element {
+        image.name.clear();
+    }
     element
 }
 

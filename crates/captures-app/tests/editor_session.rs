@@ -2762,6 +2762,191 @@ fn failed_import_render_preserves_redo_frame_and_files() {
 }
 
 #[test]
+fn metadata_edits_retain_pixels_and_thumbnails_without_losing_history_or_drafts() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    editor.refresh_layer_thumbnails();
+    let before = editor.snapshot().document.clone();
+    let layer_id = before.elements[0].base().id.clone();
+    let frame = editor.pixels();
+    let thumbnail = editor.layer_thumbnail(&layer_id).unwrap();
+    for edit in [
+        LayerEdit::Lock { locked: false },
+        LayerEdit::Rename {
+            name: "  Renamed screenshot  ".into(),
+        },
+    ] {
+        editor
+            .execute(Request::Layer {
+                id: layer_id.clone(),
+                edit,
+            })
+            .unwrap();
+        editor.refresh_layer_thumbnails();
+        assert!(Arc::ptr_eq(&frame, &editor.pixels()), "no canvas repaint");
+        assert!(Arc::ptr_eq(
+            &thumbnail,
+            &editor.layer_thumbnail(&layer_id).unwrap()
+        ));
+    }
+    let Element::Image(image) = &editor.snapshot().document.elements[0] else {
+        panic!()
+    };
+    assert!(!image.base.locked);
+    assert_eq!(image.name, "Renamed screenshot");
+    assert!(editor.snapshot().unsaved_changes && editor.snapshot().can_undo);
+    let renamed = editor.snapshot().document.clone();
+    let encoded = editor.encode_export(png_export_options()).unwrap();
+    assert_eq!(
+        image::load_from_memory(&encoded).unwrap().to_rgba8(),
+        original
+    );
+    editor.execute(Request::Undo).unwrap();
+    assert!(!editor.snapshot().document.elements[0].base().locked);
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(editor.snapshot().document, &before);
+    assert!(editor.snapshot().can_redo);
+    assert_eq!(editor.pixels().as_ref(), &original);
+    // Failed metadata commands must not consume redo or replace pixels.
+    let frame = editor.pixels();
+    assert!(
+        editor
+            .execute(Request::Layer {
+                id: "missing".into(),
+                edit: LayerEdit::Lock { locked: false },
+            })
+            .is_err()
+    );
+    assert!(editor.snapshot().can_redo);
+    assert!(Arc::ptr_eq(&frame, &editor.pixels()));
+    editor.execute(Request::Redo).unwrap();
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &renamed);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 123 })
+        .unwrap();
+    drop(editor);
+    let mut restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &renamed);
+    assert_eq!(restored.pixels().as_ref(), &original);
+    assert_eq!(
+        restored.encode_export(png_export_options()).unwrap(),
+        encoded
+    );
+    // Live metadata edits still fold into one undo step and publish new names.
+    let frame = restored.pixels();
+    for name in ["First live name", "Second live name"] {
+        restored
+            .execute(Request::Live {
+                key: "image-name".into(),
+                request: Box::new(Request::Layer {
+                    id: layer_id.clone(),
+                    edit: LayerEdit::Rename { name: name.into() },
+                }),
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(&frame, &restored.pixels()));
+        let Element::Image(image) = &restored.snapshot().document.elements[0] else {
+            panic!()
+        };
+        assert_eq!(image.name, name);
+    }
+    restored.execute(Request::Undo).unwrap();
+    assert_eq!(restored.snapshot().document, &renamed);
+    // Visibility is not metadata: it must still repaint, even on a locked image.
+    restored
+        .execute(Request::Layer {
+            id: layer_id.clone(),
+            edit: LayerEdit::Lock { locked: true },
+        })
+        .unwrap();
+    let frame = restored.pixels();
+    restored
+        .execute(Request::Layer {
+            id: layer_id,
+            edit: LayerEdit::Visibility { visible: false },
+        })
+        .unwrap();
+    assert!(!Arc::ptr_eq(&frame, &restored.pixels()));
+    // Hiding the capture reveals new_capture's #f7f7f5 solid background.
+    assert_eq!(
+        restored.pixels().as_ref(),
+        &RgbaImage::from_pixel(7, 3, Rgba([247, 247, 245, 255]))
+    );
+    assert_eq!(frame.as_ref(), &original);
+}
+
+#[test]
+#[ignore = "manual release benchmark"]
+fn benchmark_native_metadata_4k() {
+    use std::{hint::black_box, time::Instant};
+
+    let data = tempfile::tempdir().unwrap();
+    let source = RgbaImage::from_fn(3840, 2160, |x, y| {
+        Rgba([
+            (x * 37 + y * 11) as u8,
+            (x * 3 + y * 29) as u8,
+            (x ^ y) as u8,
+            (x * 17 + y * 13) as u8,
+        ])
+    });
+    let capture = captures_app::persist_screenshot(
+        &data.path().join("history"),
+        &source,
+        CaptureMode::Region,
+    )
+    .unwrap();
+    let mut editor = open(data.path(), &capture.entry.id).unwrap();
+    editor.refresh_layer_thumbnails();
+    let layer_id = editor.snapshot().document.elements[0].base().id.clone();
+    let frame = editor.pixels();
+    for operation in ["lock", "rename", "opacity"] {
+        let mut timings = Vec::new();
+        for trial in 0..6 {
+            let started = Instant::now();
+            for step in 0..3 {
+                let edit = match operation {
+                    "lock" => LayerEdit::Lock {
+                        locked: (trial * 3 + step) % 2 != 0,
+                    },
+                    "rename" => LayerEdit::Rename {
+                        name: format!("Screenshot {trial}-{step}"),
+                    },
+                    _ => LayerEdit::Opacity {
+                        opacity: if (trial * 3 + step) % 2 == 0 {
+                            73.
+                        } else {
+                            100.
+                        },
+                    },
+                };
+                editor
+                    .execute(black_box(Request::Layer {
+                        id: layer_id.clone(),
+                        edit,
+                    }))
+                    .unwrap();
+                editor.refresh_layer_thumbnails();
+                black_box(serde_json::to_vec(&editor.snapshot()).unwrap());
+            }
+            let elapsed = started.elapsed().as_secs_f64() * 1000. / 3.;
+            if trial > 0 {
+                timings.push(elapsed);
+            }
+            if operation != "opacity" {
+                assert_eq!(editor.pixels(), frame, "metadata must preserve pixels");
+            }
+        }
+        let mut sorted = timings.clone();
+        sorted.sort_by(f64::total_cmp);
+        eprintln!(
+            "4k native command {operation}: {:.3} ms/command; trials={timings:?}",
+            sorted[sorted.len() / 2]
+        );
+    }
+}
+
+#[test]
 fn crop_undo_branch_failure_and_retained_frames_have_transactional_semantics() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();

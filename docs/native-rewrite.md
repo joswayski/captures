@@ -35,7 +35,8 @@ canvas height. At 1x, a single-row wgpu bar shrinks from 208 to 152 px; AppKit's
 single-row bar shrinks from 208 to 158 pt. Host regressions cover compact/wrapped
 layouts, both appearances and minimum size. Private-X11 checks exercise the
 wrapped comparison action, units menus, custom exports and exact saved pixels.
-AppKit execution requires macOS CI; physical macOS/Windows, Wayland,
+macOS CI executed 541 AppKit tests with five expected skips and zero failures,
+including the corrected layout expectations. Physical macOS/Windows, Wayland,
 accessibility and mixed-DPI acceptance remain open.
 
 wgpu screenshot-editor close now bounds the visible wait to shipping's 400 ms.
@@ -127,6 +128,32 @@ after. Three fresh processes measured one-time table initialization at
 These remain Linux-orb component timings, excluding decoding, UI, encoding and
 presentation. They are not whole-app or physical-platform acceptance results;
 macOS/Windows, Wayland and the broader performance gates remain open.
+
+Shared editor Lock and Rename commands now retain their already validated
+canvas frame instead of repainting it; image renaming also retains its row
+thumbnail. Command validation, history, live-edit folding, drafts and encoded
+output stay on their existing paths. Only these two commands skip rendering;
+visual edits and Undo/Redo still render normally. A regression first failed on
+the old repainting implementation, then checked frame/thumbnail allocation
+identity, actual names/lock state, undo/redo, errors, saved-draft restoration,
+encoded pixels and repainting after visibility changes.
+Three paired release-binary rounds on the Linux orb (15 three-command trial
+means per version, after one warmup per run) measured a 4K mixed-alpha capture
+on the default solid background, including thumbnail refresh and snapshot JSON:
+
+| Shared native command | Before → frame reuse, ms/command | Difference |
+| --- | --- | --- |
+| Lock | 183.648 → 0.016 | 183.632 ms faster / 99.991% |
+| Rename | 417.267 → 0.025 | 417.242 ms faster / 99.994% |
+| Opacity (repaint control) | 212.623 → 209.766 | 2.857 ms faster / 1.3% |
+
+Lock ranges were 172.0–218.3 versus 0.012–0.028 ms; Rename ranges were
+403.0–452.7 versus 0.021–0.033 ms. Opacity ranges overlap (200.2–226.2 versus
+193.2–263.2 ms), so no opacity improvement is established. These are shared
+command-component timings, excluding setup, request parsing/queueing, draft
+I/O, encoding, host pixel transfer and presentation. Both native hosts use this
+worker; physical macOS/Windows, Wayland, accessibility and mixed-DPI acceptance
+and the broader whole-app performance gates remain open.
 
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
