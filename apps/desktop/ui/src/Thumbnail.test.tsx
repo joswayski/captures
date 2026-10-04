@@ -619,6 +619,59 @@ describe("Thumbnail", () => {
     expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "pointer" });
   });
 
+  it("lets the Windows WebView own cursors through repeated moves, polls and focus handoffs", async () => {
+    const userAgent = vi.spyOn(navigator, "userAgent", "get")
+      .mockReturnValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    try {
+      let target: HTMLElement | null = null;
+      let position = { x: 40, y: 80, inside: true };
+      const invokeDefault = vi.mocked(invoke).getMockImplementation()!;
+      vi.mocked(invoke).mockImplementation((command, args, options) => (
+        command === "get_thumbnail_pointer_position"
+          ? Promise.resolve(position)
+          : invokeDefault(command, args, options)
+      ));
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: vi.fn(() => target),
+      });
+      render(<Thumbnail />);
+      const card = await screen.findByRole("article");
+      const image = within(card).getByRole("img", { name: "Screenshot preview" });
+      const edit = within(card).getByRole("button", { name: "Edit" });
+      // Previous fixtures can reset their native cursor during cleanup after
+      // clearAllMocks. Count only this mounted Windows preview's interactions.
+      vi.mocked(invoke).mockClear();
+      target = image;
+      movePointerPastAppearHoverLock(image, 40, 80);
+      for (let x = 46; x < 60; x += 1) {
+        // Moving between the image and non-button card chrome must keep grab.
+        target = x % 2 === 0 ? image : card;
+        position = { x, y: 80, inside: true };
+        fireEvent.pointerMove(target, { clientX: x, clientY: 80, pointerType: "mouse" });
+        expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "grab");
+      }
+      window.dispatchEvent(new Event("captures-thumbnail-ready"));
+      await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_thumbnail_pointer_position"));
+      target = edit;
+      position = { x: 100, y: 100, inside: true };
+      fireEvent.pointerMove(edit, { clientX: 100, clientY: 100, pointerType: "mouse" });
+      expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "pointer");
+      fireEvent.pointerDown(edit, { button: 0, pointerType: "mouse" });
+      fireEvent.pointerUp(edit, { button: 0, pointerType: "mouse" });
+      window.dispatchEvent(new Event("blur"));
+      expect(document.documentElement).toHaveAttribute("data-thumbnail-platform", "windows");
+      expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
+        command === "set_thumbnail_cursor" || command === "reassert_thumbnail_cursor"
+      ))).toHaveLength(0);
+      target = null;
+      window.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }));
+      expect(document.documentElement).not.toHaveAttribute("data-thumbnail-cursor");
+    } finally {
+      userAgent.mockRestore();
+    }
+  });
+
   it("does not click-through the window from DOM hover over empty preview space", async () => {
     render(<Thumbnail />);
     const stack = (await screen.findByRole("article")).closest(".thumbnail-stack")!;

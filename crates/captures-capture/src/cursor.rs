@@ -5,10 +5,90 @@ use crate::model::{DisplayDescriptor, WindowDescriptor};
 #[derive(Clone, Debug)]
 pub struct CursorImage {
     pub pixels: RgbaImage,
+    /// Legacy Windows cursors use `(background AND mask) XOR pixels` instead
+    /// of alpha blending. This also preserves inverting I-beams and pointers.
+    pub and_mask: Option<image::GrayImage>,
     pub logical_width: f64,
     pub logical_height: f64,
     pub hot_spot_x: f64,
     pub hot_spot_y: f64,
+}
+
+impl CursorImage {
+    /// Composite the native cursor onto RGB or RGBA capture pixels. Scale and
+    /// hotspot use the same coordinate space as the pointer position.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn overlay<I: image::GenericImage>(
+        &self,
+        image: &mut I,
+        position: (i32, i32),
+        scale_x: f64,
+        scale_y: f64,
+    ) where
+        I::Pixel: image::Pixel<Subpixel = u8>,
+    {
+        use image::Pixel;
+
+        let width = (self.logical_width * scale_x).round().max(1.0) as u32;
+        let height = (self.logical_height * scale_y).round().max(1.0) as u32;
+        let pixels = if self.pixels.dimensions() == (width, height) {
+            std::borrow::Cow::Borrowed(&self.pixels)
+        } else {
+            std::borrow::Cow::Owned(image::imageops::resize(
+                &self.pixels,
+                width,
+                height,
+                if self.and_mask.is_some() {
+                    image::imageops::FilterType::Nearest
+                } else {
+                    image::imageops::FilterType::Lanczos3
+                },
+            ))
+        };
+        let mask = self.and_mask.as_ref().map(|mask| {
+            if mask.dimensions() == (width, height) {
+                std::borrow::Cow::Borrowed(mask)
+            } else {
+                std::borrow::Cow::Owned(image::imageops::resize(
+                    mask,
+                    width,
+                    height,
+                    image::imageops::FilterType::Nearest,
+                ))
+            }
+        });
+        let left = i64::from(position.0) - (self.hot_spot_x * scale_x).round() as i64;
+        let top = i64::from(position.1) - (self.hot_spot_y * scale_y).round() as i64;
+        for (x, y, foreground) in pixels.enumerate_pixels() {
+            let (Ok(target_x), Ok(target_y)) = (
+                u32::try_from(left + i64::from(x)),
+                u32::try_from(top + i64::from(y)),
+            ) else {
+                continue;
+            };
+            if target_x >= image.width() || target_y >= image.height() {
+                continue;
+            }
+            let mut background = image.get_pixel(target_x, target_y).to_rgba();
+            if let Some(mask) = &mask {
+                let and = mask.get_pixel(x, y)[0];
+                for channel in 0..3 {
+                    background[channel] = (background[channel] & and) ^ foreground[channel];
+                }
+            } else {
+                let alpha = background[3];
+                background.blend(foreground);
+                // Source-over cannot reduce destination opacity. Float blending
+                // can otherwise round an opaque alpha of 255 down to 254.
+                background[3] = background[3].max(alpha);
+            }
+            image.put_pixel(
+                target_x,
+                target_y,
+                *I::Pixel::from_slice(&background.0[..usize::from(I::Pixel::CHANNEL_COUNT)]),
+            );
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -17,13 +97,19 @@ pub struct PointerCursor {
     pub image: Option<CursorImage>,
 }
 
-/// Snapshot before changing the host's cursor or opening a selector. macOS keeps
-/// the system cursor pixels; Windows/X11 retain the shipping synthetic arrow.
+/// Snapshot before changing the host's cursor or opening a selector. macOS and
+/// Windows keep system cursor pixels; X11 retains the shipping synthetic arrow.
+#[cfg(not(target_os = "windows"))]
 pub fn pointer_cursor() -> Option<PointerCursor> {
     Some(PointerCursor {
         position: pointer_position()?,
         image: native_cursor_image(),
     })
+}
+
+#[cfg(target_os = "windows")]
+pub fn pointer_cursor() -> Option<PointerCursor> {
+    crate::windows_cursor::pointer_cursor()
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -64,6 +150,7 @@ fn native_cursor_image() -> Option<CursorImage> {
     }
     Some(CursorImage {
         pixels: image::load_from_memory(&tiff).ok()?.to_rgba8(),
+        and_mask: None,
         logical_width: size.width,
         logical_height: size.height,
         hot_spot_x: hot_spot.x,
@@ -71,7 +158,7 @@ fn native_cursor_image() -> Option<CursorImage> {
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const fn native_cursor_image() -> Option<CursorImage> {
     None
 }
@@ -245,7 +332,7 @@ fn draw_cursor(
     source_height: u32,
 ) {
     if let Some(cursor) = cursor {
-        draw_native_cursor(image, position, cursor, scale_x, scale_y);
+        cursor.overlay(image, position, scale_x, scale_y);
         return;
     }
 
@@ -253,31 +340,6 @@ fn draw_cursor(
     let (outline, fill) = cursor_colors(cfg!(target_os = "macos"));
     draw_polygon(image, position, &CURSOR_OUTLINE, scale, outline);
     draw_polygon(image, position, &CURSOR_FILL, scale, fill);
-}
-
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn draw_native_cursor(
-    image: &mut RgbaImage,
-    position: (i32, i32),
-    cursor: &CursorImage,
-    scale_x: f64,
-    scale_y: f64,
-) {
-    let width = (cursor.logical_width * scale_x).round().max(1.0) as u32;
-    let height = (cursor.logical_height * scale_y).round().max(1.0) as u32;
-    let pixels = if cursor.pixels.width() == width && cursor.pixels.height() == height {
-        cursor.pixels.clone()
-    } else {
-        image::imageops::resize(
-            &cursor.pixels,
-            width,
-            height,
-            image::imageops::FilterType::Lanczos3,
-        )
-    };
-    let x = position.0 - (cursor.hot_spot_x * scale_x).round() as i32;
-    let y = position.1 - (cursor.hot_spot_y * scale_y).round() as i32;
-    image::imageops::overlay(image, &pixels, i64::from(x), i64::from(y));
 }
 
 const fn cursor_colors(macos: bool) -> ([u8; 3], [u8; 3]) {
@@ -514,6 +576,7 @@ mod tests {
             position: (10, 10),
             image: Some(CursorImage {
                 pixels: image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 128])),
+                and_mask: None,
                 logical_width: 4.0,
                 logical_height: 4.0,
                 hot_spot_x: 1.0,
@@ -527,5 +590,51 @@ mod tests {
         assert_eq!(&image.get_pixel(9, 8).0[..3], &[128, 0, 0]);
         assert_eq!(&image.get_pixel(12, 11).0[..3], &[128, 0, 0]);
         assert_eq!(image.get_pixel(13, 12).0, [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn native_cursor_blending_preserves_opaque_and_transparent_backgrounds() {
+        let cursor = CursorImage {
+            pixels: image::RgbaImage::from_pixel(2, 1, image::Rgba([201, 19, 73, 128])),
+            and_mask: None,
+            logical_width: 2.,
+            logical_height: 1.,
+            hot_spot_x: 0.,
+            hot_spot_y: 0.,
+        };
+        let mut image = image::RgbaImage::from_pixel(2, 1, image::Rgba([23, 61, 107, 255]));
+        image.put_pixel(1, 0, image::Rgba([23, 61, 107, 0]));
+
+        cursor.overlay(&mut image, (0, 0), 1., 1.);
+
+        assert_eq!(image.get_pixel(0, 0).0, [112, 39, 89, 255]);
+        assert_eq!(image.get_pixel(1, 0).0, [201, 19, 73, 128]);
+    }
+
+    #[test]
+    fn native_cursor_size_and_hotspot_follow_buffer_scale_not_monitor_dpi() {
+        let display = display(-200, -50, 100, 80, 2.0);
+        let cursor = PointerCursor {
+            position: (-190, -32),
+            image: Some(CursorImage {
+                pixels: image::RgbaImage::from_pixel(4, 2, image::Rgba([203, 47, 89, 255])),
+                and_mask: None,
+                logical_width: 4.,
+                logical_height: 2.,
+                hot_spot_x: 2.,
+                hot_spot_y: 0.,
+            }),
+        };
+        for (width, height, left, top, cursor_width) in [(100, 80, 8, 18, 4), (50, 40, 4, 9, 2)] {
+            let mut image = image::RgbaImage::new(width, height);
+            overlay_pointer_cursor(&mut image, &display, &cursor, 1.);
+            assert_eq!(image.get_pixel(left, top).0, [203, 47, 89, 255]);
+            assert_eq!(
+                image.get_pixel(left + cursor_width - 1, top).0,
+                [203, 47, 89, 255]
+            );
+            assert_eq!(image.get_pixel(left - 1, top).0, [0; 4]);
+            assert_eq!(image.get_pixel(left + cursor_width, top).0, [0; 4]);
+        }
     }
 }

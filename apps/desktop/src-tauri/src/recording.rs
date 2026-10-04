@@ -381,9 +381,12 @@ pub(crate) async fn prepare_capture_selector_inner(
                     let state = state.clone();
                     std::thread::spawn(move || state.monitors())
                 };
-                // The live system cursor is already visible over this frozen
-                // selector; drawing it into the preview would duplicate it.
-                let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
+                let snapshot_png = storage::encode_overlay_snapshot(
+                    &frame.image,
+                    &frame.descriptor,
+                    cursor.as_ref(),
+                    state.settings().show_cursor_in_screenshots,
+                )?;
                 let displays = selection_displays_from_list(
                     monitors_task
                         .join()
@@ -562,7 +565,12 @@ async fn select_capture_display_inner(
     let (display, snapshot_png, image, targets, cursor) = if freeze_screen {
         let cursor = crate::pointer_cursor();
         let frame = state.backend.capture_display(&requested_display.id)?;
-        let snapshot_png = storage::encode_overlay_snapshot(&frame.image)?;
+        let snapshot_png = storage::encode_overlay_snapshot(
+            &frame.image,
+            &frame.descriptor,
+            cursor.as_ref(),
+            state.settings().show_cursor_in_screenshots,
+        )?;
         let targets = crate::capturable_windows_for_display(
             state.windows(),
             &frame.descriptor,

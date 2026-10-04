@@ -570,7 +570,7 @@ describe("thumbnail stack layout", () => {
       /html:has\(\.thumbnail-card:hover\):not\(:has\(/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:has\(\.thumbnail-card:hover\):not\(:has\([\s\S]*?cursor:\s*grab/,
+      /html:has\(\.thumbnail-card:hover\):not\(:has\([\s\S]*?cursor:\s*var\(--thumbnail-grab-cursor, grab\)/,
     );
     expect(thumbnailStyles).toMatch(
       /html:not\(:has\(\.thumbnail-stack-dragging\)\):not\(:has\(\.thumbnail-card\.thumbnail-file-dragging\)\):has\(\s*:is\(\s*\.thumbnail-stack-toolbar/,
@@ -593,6 +593,12 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control:hover:not\(:disabled\),\s*\n\.thumbnail-stack-control:hover:not\(:disabled\) \*/,
     );
+  });
+
+  it("supplies Chromium hand images only for the Windows WebView", () => {
+    const windows = thumbnailStyles.match(/html\[data-thumbnail-platform="windows"\]\s*\{([^}]*)\}/);
+    expect(windows?.[1]).toMatch(/--thumbnail-grab-cursor:\s*url\([^)]*hand-grab\.png[^)]*\) 13 13, grab/);
+    expect(windows?.[1]).toMatch(/--thumbnail-grabbing-cursor:\s*url\([^)]*hand-grabbing\.png[^)]*\) 13 13, grabbing/);
   });
 
   it("keeps rear mini-preview cards at their normal brightness while dragging", () => {
