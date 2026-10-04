@@ -1,0 +1,66 @@
+name: Choose macOS runner
+
+# Called by workflows with macOS jobs. Those jobs run on the self-hosted Mac
+# (label "josemac", see joswayski/infrastructure ci/mac-runner) only when all
+# of these hold, and on GitHub-hosted macOS otherwise:
+#   - the repository variable SELF_HOSTED_MAC is "on" (the kill switch),
+#   - the run is a push or manual run on main (never a pull request or fork),
+#   - it is the first attempt (re-runs, including the fallback watchdog's,
+#     go to GitHub-hosted runners),
+#   - a "josemac" runner is online, checked with MAC_RUNNER_STATUS_TOKEN
+#     (fine-grained token with read access to this repo's Administration).
+# This step never fails: any error means GitHub-hosted.
+on:
+  workflow_call:
+    outputs:
+      mac:
+        description: "'true' when macOS jobs should run on the self-hosted Mac"
+        value: ${{ jobs.route.outputs.mac }}
+
+permissions: {}
+
+jobs:
+  route:
+    name: Choose macOS runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      mac: ${{ steps.route.outputs.mac }}
+    steps:
+      - id: route
+        env:
+          ENABLED: ${{ vars.SELF_HOSTED_MAC }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          ATTEMPT: ${{ github.run_attempt }}
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.MAC_RUNNER_STATUS_TOKEN }}
+        run: |
+          mac=false
+          if [[ "$ENABLED" != on ]]; then
+            reason="repository variable SELF_HOSTED_MAC is not 'on'"
+          elif [[ "$EVENT" != push && "$EVENT" != workflow_dispatch ]] || [[ "$REF" != refs/heads/main ]]; then
+            reason="only pushes and manual runs on main use the self-hosted Mac"
+          elif (( ATTEMPT > 1 )); then
+            reason="re-runs use GitHub-hosted runners"
+          elif [[ -z "$TOKEN" ]]; then
+            reason="secret MAC_RUNNER_STATUS_TOKEN is not set"
+          else
+            online="$(curl -fsS --max-time 20 \
+              -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/$REPO/actions/runners?per_page=100" \
+              | jq '[.runners[] | select(.status == "online") | select(any(.labels[]; .name == "josemac"))] | length' \
+              2>/dev/null)" || online=""
+            if [[ -z "$online" ]]; then
+              reason="could not read runner status"
+            elif (( online > 0 )); then
+              mac=true
+              reason="$online self-hosted Mac runner(s) online"
+            else
+              reason="no self-hosted Mac runner is online"
+            fi
+          fi
+          echo "mac=$mac" >> "$GITHUB_OUTPUT"
+          where=GitHub-hosted
+          [[ "$mac" == true ]] && where="the self-hosted Mac"
+          echo "macOS jobs run on $where: $reason" | tee -a "$GITHUB_STEP_SUMMARY"
