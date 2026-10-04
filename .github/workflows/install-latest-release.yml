@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# Supersede stale PR runs; manual runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   discover:
     name: Find a published Preview

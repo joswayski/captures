@@ -28,6 +28,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Unit tests, lints and the Wayland drag probe. The release builds below run
+  # in parallel so the Linux GUI smokes no longer wait for the Windows leg.
   workbench:
     strategy:
       fail-fast: false
@@ -57,32 +59,78 @@ jobs:
       - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
       - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
-      - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
       - name: Transfer original files to an independent Wayland client
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y gir1.2-gtk-3.0
           python apps/native/wayland_drag_smoke.py
+
+  windows-release:
+    name: release (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          cache-workspaces: apps/native/wgpu
+      - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
+      - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
       - name: Exercise native Windows windows
-        if: runner.os == 'Windows'
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
       - name: Forward native media between Windows processes
-        if: runner.os == 'Windows'
         run: python apps/native/instance_smoke.py --trace --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke/instance
       - name: Exercise staged Windows Open With arguments
-        if: runner.os == 'Windows'
         run: |
           python apps/native/package.py --platform windows --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-package
           python apps/native/instance_smoke.py --binary native-package/CapturesNative.exe --output native-smoke/open-with --positional
       - uses: actions/upload-artifact@v4
-        if: always() && runner.os == 'Windows'
+        if: always()
         with:
-          name: native-wgpu-evidence-${{ matrix.os }}
+          name: native-wgpu-evidence-windows-2025
           path: native-smoke
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
-          name: native-wgpu-binary-${{ matrix.os }}
+          name: native-wgpu-binary-windows-2025
+          path: |
+            apps/native/wgpu/target/release/captures-wgpu-workbench
+            apps/native/wgpu/target/release/captures-wgpu-workbench.exe
+            apps/native/wgpu/target/release/wayland_clipboard_probe
+          if-no-files-found: error
+
+  linux-release:
+    name: release (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          cache-workspaces: apps/native/wgpu
+      - name: Install Linux windowing and software-rendering test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libasound2-plugins pulseaudio libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
+      - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
+      - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-wgpu-binary-ubuntu-24.04
           path: |
             apps/native/wgpu/target/release/captures-wgpu-workbench
             apps/native/wgpu/target/release/captures-wgpu-workbench.exe
@@ -90,10 +138,12 @@ jobs:
           if-no-files-found: error
 
   linux-smoke:
-    needs: workbench
+    needs: linux-release
     runs-on: ubuntu-24.04
     # Build once, then isolate long-running GUI suites on separate runners.
     # Keep smoke assertions/deadlines unchanged and exercise both appearances.
+    # Each suite is split into two shards of roughly equal duration; every
+    # step runs in exactly one shard, in its original order.
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -101,14 +151,34 @@ jobs:
         include:
           - suite: capture
             appearance: both
+            shard: 1
+          - suite: capture
+            appearance: both
+            shard: 2
           - suite: recording
             appearance: dark
+            shard: 1
+          - suite: recording
+            appearance: dark
+            shard: 2
           - suite: recording
             appearance: light
+            shard: 1
+          - suite: recording
+            appearance: light
+            shard: 2
           - suite: screenshot
             appearance: dark
+            shard: 1
+          - suite: screenshot
+            appearance: dark
+            shard: 2
           - suite: screenshot
             appearance: light
+            shard: 1
+          - suite: screenshot
+            appearance: light
+            shard: 2
     env:
       APPEARANCE: ${{ matrix.appearance }}
     steps:
@@ -125,73 +195,73 @@ jobs:
       - name: Restore executable permissions lost in artifact transfer
         run: chmod +x apps/native/wgpu/target/release/captures-wgpu-workbench apps/native/wgpu/target/release/wayland_clipboard_probe
       - name: Exercise native Wayland image clipboard transport
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: python apps/native/wayland_clipboard_smoke.py --binary apps/native/wgpu/target/release/wayland_clipboard_probe
       - name: Exercise native Linux windows (X11, software Vulkan)
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: xvfb-run -a python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-smoke
       - name: Exercise native first-run gating and queued media on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_onboarding_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-onboarding
       - name: Render and drive the stub-backed update notice on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: python apps/native/x11_update_notice_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-update-notice
       - name: Transfer preview files and recover cancelled drags on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: |
           /usr/bin/python3 apps/native/x11_preview_smoke.py --drag-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-drag
           /usr/bin/python3 apps/native/x11_preview_smoke.py --drag-only --reduced-motion --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-drag-reduced
       - name: Capture real region and window pixels on private X11 (simulated session state)
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         # Distro dbus/gi bindings belong to system Python, not setup-python.
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-capture
       - name: Exercise unified New Capture targets and toolbar on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --controls --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-controls
       - name: Exercise registered target keys inside New Capture on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --controls --target-shortcuts --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-target-shortcuts
       - name: Recapture an open selector and report a busy capture on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --recapture --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recapture
       - name: Show the capture failure dialog and recover from the display shortcut on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_capture_smoke.py --failure-dialog --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-failure-dialog
       - name: Record and decode real MP4 with native controls on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording
       - name: Exercise live microphone levels and decoded mute intervals on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: |
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_recording_smoke.py --restart-only --virtual-microphone --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-microphone-$appearance"
           done
       - name: Exercise default and unavailable explicit microphones at segment reopen
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: |
           for device in default explicit; do
             /usr/bin/python3 apps/native/x11_recording_smoke.py --device-change "$device" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-device-$device"
           done
       - name: Exercise the failed-start HUD, Retry recording and Delete on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --start-failure --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-start-failure
       - name: Capture regions while a native recording continues on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --screenshot-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-screenshot
       - name: Take Screenshot Display from the shortcut and tray beside a native recording on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --display-screenshot-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-display-screenshot
       - name: Open external GIF MP4 WebM and images without replacing sources on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --external-media --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-external-media-$APPEARANCE"
       - name: Exercise recording editor frames, resolution, audio, estimates and exports on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --audio --presets --estimate --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-editor-$APPEARANCE"
       - name: Exercise accepted size deltas on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --estimate-delta --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-size-delta-$APPEARANCE"
       - name: Exercise locked and unlocked recording crops on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 1
         run: |
           if [ "$APPEARANCE" = light ]; then
             /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --crop-aspect --appearance light --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-crop-light
@@ -199,49 +269,49 @@ jobs:
             /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --crop-aspect --presets --appearance dark --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-crop-dark
           fi
       - name: Exercise graphical recording crop and source-frame caching on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --graphical-crop --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-graphical-crop-$APPEARANCE"
       - name: Exercise recording Fit and actual-size previews on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 1
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --preview-scale --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-preview-scale-$APPEARANCE"
       - name: Exercise accepted GIF frame rates and exports on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --gif-frame-rate --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-gif-frame-rate-$APPEARANCE"
       - name: Exercise GIF quality palettes on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --gif-quality --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-gif-quality-$APPEARANCE"
       - name: Exercise GIF maximum width and MP4 sizing on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --gif-width --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-gif-width-$APPEARANCE"
       - name: Exercise accepted file-size limits and export retries on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --maximum-size --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-maximum-size-$APPEARANCE"
       - name: Exercise recording replacement without confirmation and rebase on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --replace-original --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-replace-$APPEARANCE"
       - name: Exercise recording thumbnails, trim handles and exports on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --thumbnails --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-timeline-$APPEARANCE"
       - name: Exercise silent recording playback and teardown on private X11
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --playback --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-playback-$APPEARANCE"
       - name: Exercise opt-in recording sound with an isolated virtual sink
-        if: matrix.suite == 'recording'
+        if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --sound --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-sound-$APPEARANCE"
       - name: Exercise recording-ready save, retry and expiry with a hidden root
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: |
           for appearance in dark light; do
             /usr/bin/python3 apps/native/x11_recording_smoke.py --ready-notice-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-notice-$appearance"
           done
       - name: Exercise native history deletion on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: python apps/native/x11_history_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-history
       - name: Exercise interrupted recording recovery and discard on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: python apps/native/x11_recovery_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recovery
       - name: Exercise screenshot editor pixels, drafts and save recovery on private X11
-        if: matrix.suite == 'screenshot'
+        if: matrix.suite == 'screenshot' && matrix.shard == 1
         run: |
           for appearance in "$APPEARANCE"; do
             /usr/bin/python3 apps/native/x11_editor_smoke.py --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-editor-$appearance"
@@ -251,6 +321,11 @@ jobs:
             /usr/bin/python3 apps/native/x11_editor_smoke.py --trim-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-trim-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --text-draft-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-text-draft-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --text-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-text-$appearance"
+          done
+      - name: Exercise screenshot editor tools, output and shortcuts on private X11
+        if: matrix.suite == 'screenshot' && matrix.shard == 2
+        run: |
+          for appearance in "$APPEARANCE"; do
             /usr/bin/python3 apps/native/x11_editor_smoke.py --text-defaults-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-text-defaults-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --text-input-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-text-input-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --polygon-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-polygons-$appearance"
@@ -268,21 +343,21 @@ jobs:
             /usr/bin/python3 apps/native/x11_editor_smoke.py --combine-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-combine-$appearance"
           done
       - name: Exercise real native mini previews on private X11
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-preview --stack
       - name: Exercise native desktop motion preference refresh
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-motion --system-motion-only
       - name: Exercise resident tray, shortcut editing and global shortcuts with a real SNI host
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-lifecycle --lifecycle --shortcut-editing
       - name: Exercise explicit native login registration and hidden launch recovery
-        if: matrix.suite == 'capture'
+        if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-login --lifecycle --login-item-only
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-wgpu-evidence-ubuntu-24.04-${{ matrix.suite }}-${{ matrix.appearance }}
+          name: native-wgpu-evidence-ubuntu-24.04-${{ matrix.suite }}-${{ matrix.appearance }}-${{ matrix.shard }}
           path: |
             native-smoke
             native-x11-*
