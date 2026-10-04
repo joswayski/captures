@@ -116,6 +116,14 @@ exec /usr/bin/ffmpeg "$@"
                     window = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid),
                                  "--name", "^Capture History$").decode().splitlines()[0]
                     time.sleep(1)
+                    # Startup adds its local session marker. First assert capture
+                    # files stayed intact, then include diagnostics in subsequent
+                    # snapshots so recovery must preserve their bytes as well.
+                    started_history = digest_tree(history)
+                    assert {path: digest for path, digest in started_history.items()
+                            if not path.startswith(".crash-diagnostics/")} == original_history
+                    assert (history / ".crash-diagnostics/current-session").is_file()
+                    original_history = started_history
 
                     def click(x, y):
                         run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
