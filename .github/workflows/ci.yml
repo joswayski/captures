@@ -11,6 +11,7 @@ jobs:
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +26,7 @@ jobs:
   accounts:
     name: Account database and API image
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17
@@ -50,6 +52,7 @@ jobs:
   rust:
     name: Rust checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +116,7 @@ jobs:
   macos-app:
     name: macOS app bundle
     runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -150,6 +154,7 @@ jobs:
   cross-platform-app:
     name: Desktop app (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
