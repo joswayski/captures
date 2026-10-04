@@ -3,6 +3,71 @@ import XCTest
 @testable import CapturesNative
 
 final class HistoryClearTests: XCTestCase {
+    func testHistoryThumbnailClickWaitsForReleaseAndDragPreparationIsPressScoped() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let thumbnail = HistoryThumbnailView(tokens: tokens)
+        thumbnail.frame = NSRect(x: 0, y: 0, width: 200, height: 120)
+        thumbnail.image = NSImage(size: NSSize(width: 20, height: 20))
+        thumbnail.configureInteraction(artifactID: "first", openable: true, draggable: true)
+        var opened = 0
+        var preparations = 0
+        var prepared: ((Result<String, Error>) -> Void)?
+        thumbnail.onOpen = { opened += 1 }
+        thumbnail.onPrepareDrag = { preparations += 1; prepared = $0 }
+
+        thumbnail.mouseDown(with: try mouseEvent(.leftMouseDown, at: NSPoint(x: 10, y: 10)))
+        XCTAssertEqual(opened, 0, "pressing a draggable thumbnail must not open the editor")
+        XCTAssertEqual(preparations, 1, "full-resolution media is prepared only after a press")
+        thumbnail.mouseUp(with: try mouseEvent(.leftMouseUp, at: NSPoint(x: 10, y: 10)))
+        XCTAssertEqual(opened, 1, "an undragged click opens on release")
+
+        var staleErrorCount = 0
+        thumbnail.onDragError = { _ in staleErrorCount += 1 }
+        prepared?(.failure(AppBridgeError.invalidResponse))
+        XCTAssertEqual(staleErrorCount, 0, "preparation finishing after release is ignored")
+
+        thumbnail.mouseDown(with: try mouseEvent(.leftMouseDown, at: NSPoint(x: 10, y: 10)))
+        let removedCardCompletion = prepared
+        thumbnail.configureInteraction(artifactID: "replacement", openable: true, draggable: true)
+        removedCardCompletion?(.failure(AppBridgeError.invalidResponse))
+        XCTAssertEqual(staleErrorCount, 0, "a recycled/removed card rejects its old callback")
+
+        thumbnail.mouseDown(with: try mouseEvent(.leftMouseDown, at: NSPoint(x: 10, y: 10)))
+        thumbnail.mouseDragged(with: try mouseEvent(.leftMouseDragged, at: NSPoint(x: 15, y: 10)))
+        thumbnail.mouseUp(with: try mouseEvent(.leftMouseUp, at: NSPoint(x: 15, y: 10)))
+        XCTAssertEqual(opened, 1, "a drag awaiting preparation must never become an editor click")
+        prepared?(.success("/tmp/late.png"))
+
+        thumbnail.mouseDown(with: try mouseEvent(.leftMouseDown, at: NSPoint(x: 10, y: 10)))
+        thumbnail.viewDidMoveToWindow() // A virtualized card detached from its window.
+        prepared?(.failure(AppBridgeError.invalidResponse))
+        XCTAssertEqual(staleErrorCount, 0, "a detached card rejects pending preparation")
+    }
+
+    func testHistoryThumbnailDragUsesCopyOnlyFileURLAndHonorsMissingBusyGates() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let thumbnail = HistoryThumbnailView(tokens: tokens)
+        thumbnail.image = NSImage(size: NSSize(width: 20, height: 20))
+        XCTAssertEqual(thumbnail.sourceOperationMask(for: .outsideApplication), .copy)
+        let path = "/tmp/history recording.gif"
+        let item = HistoryThumbnailView.draggingItem(path: path, image: thumbnail.image!,
+                                                     frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+        let writer = try XCTUnwrap(item.item as? NSURL)
+        XCTAssertTrue(writer.isFileURL)
+        XCTAssertEqual(writer.path, path)
+
+        var preparations = 0
+        thumbnail.onPrepareDrag = { preparations += 1; $0(.success(path)) }
+        thumbnail.configureInteraction(artifactID: "missing", openable: false, draggable: false)
+        thumbnail.mouseDown(with: try mouseEvent(.leftMouseDown, at: .zero))
+        thumbnail.mouseUp(with: try mouseEvent(.leftMouseUp, at: .zero))
+        thumbnail.configureInteraction(artifactID: "busy", openable: false, draggable: false)
+        thumbnail.mouseDown(with: try mouseEvent(.leftMouseDown, at: .zero))
+        XCTAssertEqual(preparations, 0, "missing and busy cards never prepare a drag")
+    }
+
     func testSharedHistoryPresentationMatchesShippingCopy() throws {
         let copy = try HistoryCopy(transport: SettingsBridge())
         XCTAssertEqual(copy.eyebrow, "On this device")
@@ -567,6 +632,12 @@ final class HistoryClearTests: XCTestCase {
         XCTAssertTrue(condition(), "native history action did not settle")
         guard condition() else { throw AppBridgeError.invalidResponse }
     }
+}
+
+private func mouseEvent(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+    try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                                    windowNumber: 0, context: nil, eventNumber: 0,
+                                    clickCount: 1, pressure: 1))
 }
 
 private final class EmptyRecoveryWorker: RecordingRecoveryWorking {

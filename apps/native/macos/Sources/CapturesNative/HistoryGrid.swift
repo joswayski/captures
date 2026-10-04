@@ -337,15 +337,25 @@ struct HistoryGridItem {
 
 /// The thumbnail: `object-fit: contain` inside the card's sunken image area,
 /// clipped to the card's top corners. Clicking opens the capture's editor.
-final class HistoryThumbnailView: NSView {
+final class HistoryThumbnailView: NSView, NSDraggingSource {
     override var isFlipped: Bool { true }
     var tokens: Tokens
     var image: NSImage? { didSet { needsDisplay = true } }
     var missing = false { didSet { needsDisplay = true } }
     var openable = false
+    var draggable = false
     var onOpen: () -> Void = {}
+    var onPrepareDrag: (@escaping (Result<String, Error>) -> Void) -> Void = { _ in }
+    var onDragError: (Error) -> Void = { _ in }
     private var hovered = false
     private var tracking: NSTrackingArea?
+    private var press: (point: NSPoint, artifactID: String, generation: UInt64)?
+    private var preparedDragPath: String?
+    private var dragEvent: NSEvent?
+    private var dragIntent = false
+    private var dragStarted = false
+    private var generation: UInt64 = 0
+    private(set) var artifactID = ""
 
     init(tokens: Tokens) {
         self.tokens = tokens
@@ -364,9 +374,85 @@ final class HistoryThumbnailView: NSView {
     }
     override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
     override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    func configureInteraction(artifactID: String, openable: Bool, draggable: Bool) {
+        if self.artifactID != artifactID || self.openable != openable || self.draggable != draggable {
+            cancelPress()
+        }
+        self.artifactID = artifactID
+        self.openable = openable
+        self.draggable = draggable
+    }
+
     override func mouseDown(with event: NSEvent) {
         if let card = superview as? HistoryCardView { card.requestSelection() }
-        if openable { onOpen() }
+        generation &+= 1
+        let current = generation
+        press = (event.locationInWindow, artifactID, current)
+        preparedDragPath = nil; dragIntent = false; dragStarted = false
+        dragEvent = nil
+        guard draggable else { return }
+        onPrepareDrag { [weak self] result in
+            guard let self, let press = self.press, press.generation == current,
+                  press.artifactID == self.artifactID, self.draggable else { return }
+            switch result {
+            case .success(let path):
+                self.preparedDragPath = path
+                self.startPreparedDrag()
+            case .failure(let error): self.onDragError(error)
+            }
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let press else { return }
+        if hypot(event.locationInWindow.x - press.point.x, event.locationInWindow.y - press.point.y) >= 4 {
+            dragIntent = true
+        }
+        dragEvent = event
+        startPreparedDrag()
+    }
+
+    private func startPreparedDrag() {
+        guard press != nil, dragIntent, !dragStarted, draggable, window != nil,
+              NSEvent.pressedMouseButtons & 1 != 0,
+              !isHiddenOrHasHiddenAncestor, let event = dragEvent, let path = preparedDragPath, let image,
+              image.size.width > 0, image.size.height > 0 else { return }
+        dragStarted = true
+        let item = Self.draggingItem(path: path, image: image, frame: bounds)
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { cancelPress() }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let shouldOpen = press != nil && !dragIntent && !dragStarted && openable
+        cancelPress()
+        if shouldOpen { onOpen() }
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        sourceOperationMask(for: context)
+    }
+
+    func sourceOperationMask(for context: NSDraggingContext) -> NSDragOperation { .copy }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) { cancelPress() }
+
+    static func draggingItem(path: String, image: NSImage, frame: NSRect) -> NSDraggingItem {
+        let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
+        item.setDraggingFrame(frame, contents: image)
+        return item
+    }
+
+    private func cancelPress() {
+        generation &+= 1
+        press = nil; preparedDragPath = nil; dragIntent = false; dragStarted = false
+        dragEvent = nil
     }
     override func accessibilityPerformPress() -> Bool {
         guard openable else { return false }
@@ -431,6 +517,8 @@ final class HistoryCardView: NSView {
     var enabled = true
     var onSelect: () -> Void = {}
     var onOpen: () -> Void = {}
+    var onPrepareDrag: (@escaping (Result<String, Error>) -> Void) -> Void = { _ in }
+    var onDragError: (Error) -> Void = { _ in }
     var onAction: (HistoryCardAction) -> Void = { _ in }
     var onDelete: () -> Void = {}
     private var hovered = false
@@ -447,6 +535,8 @@ final class HistoryCardView: NSView {
         wantsLayer = true
         addSubview(thumbnail)
         thumbnail.onOpen = { [weak self] in self?.onOpen() }
+        thumbnail.onPrepareDrag = { [weak self] completion in self?.onPrepareDrag(completion) }
+        thumbnail.onDragError = { [weak self] error in self?.onDragError(error) }
         for (label, size, color) in [(dateLabel, "text-md", "text"), (detailsLabel, "text-sm", "text-subtle"),
                                      (warningLabel, "text-sm", "caution-text")] {
             label.font = .systemFont(ofSize: tokens.number(size), weight: label === dateLabel ? .medium : .regular)
@@ -498,7 +588,9 @@ final class HistoryCardView: NSView {
         let idle = enabled && item.busy == nil
         thumbnail.image = item.image
         thumbnail.missing = item.card?.missing == true
-        thumbnail.openable = idle && item.card?.openLabel != nil
+        thumbnail.configureInteraction(artifactID: item.id,
+                                       openable: idle && item.card?.openLabel != nil,
+                                       draggable: idle && item.card?.missing != true && item.image != nil)
         thumbnail.setAccessibilityLabel(item.card?.openLabel ?? item.card?.imageLabel)
         thumbnail.setAccessibilityEnabled(thumbnail.openable)
         missingLabel.stringValue = copy.missing
@@ -731,6 +823,8 @@ final class HistoryGridView: NSView {
     var onAction: (Int, HistoryCardAction) -> Void = { _, _ in }
     var onDelete: (Int) -> Void = { _ in }
     var onNeedsThumbnail: (Int) -> Void = { _ in }
+    var onPrepareDrag: (Int, @escaping (Result<String, Error>) -> Void) -> Void = { _, _ in }
+    var onDragError: (Int, Error) -> Void = { _, _ in }
     /// Escape: back out of an armed Delete / Delete all.
     var onCancel: () -> Void = {}
     private var layoutCache: (width: CGFloat, layout: HistoryGridLayout)?
@@ -848,6 +942,14 @@ final class HistoryGridView: NSView {
             view.onOpen = { [weak self] in
                 guard let self, let row = self.row(for: id) else { return }
                 self.onOpen(row)
+            }
+            view.onPrepareDrag = { [weak self] completion in
+                guard let self, let row = self.row(for: id) else { return }
+                self.onPrepareDrag(row, completion)
+            }
+            view.onDragError = { [weak self] error in
+                guard let self, let row = self.row(for: id) else { return }
+                self.onDragError(row, error)
             }
             view.onAction = { [weak self] action in
                 guard let self, let row = self.row(for: id) else { return }

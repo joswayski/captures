@@ -76,7 +76,7 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 - Default screenshot save format PNG, JPEG, or WebP (Capture History stays lossless PNG until you save); export with Tiny through Highest quality presets and an in-editor before/after comparison while Export settings are open. Hide the comparison or close Export settings to edit without the slider; save quality stays Compress or Maximum until you change it
 - Mini previews for quick copy, save, and drag into other apps. Minimize the stack into a corner pile when it covers the desktop; click the pile to expand it, drag the pile to move it out of the way, and a new capture shows the pile again if capture hid it. Choose a default screen corner in Preferences (bottom left unless you change it). Near the top of the screen the pile fans and opens downward, with Show less on that edge; near the bottom it fans and opens up. On the right, Show less sits on the right of the stack so it stays on the screen edge. With two or more expanded previews, Clear all dismisses the stack; saved files and Capture History stay
 - Screenshots during an active recording
-- 30-day capture history, filtered by screenshots, video, or GIF
+- 30-day capture history, filtered by screenshots, video, or GIF. Drag a capture's thumbnail directly into an editor or any app that accepts its file type, without restoring a mini preview. Dragging copies the saved file when available, otherwise the original retained capture; History stays intact
 - Light, dark, or system appearance across every Captures window
 - Customizable shortcuts and accent colors. Find a setting in Preferences with `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
@@ -242,6 +242,10 @@ motion is enabled. Unsaved captures use retained temporary files cleaned on the
 next startup; saved exports are never removed by drag cleanup. X11 transfers and
 the isolated Wayland protocol are tested on disposable desktops. Physical macOS,
 Windows OLE, mixed-DPI and full Wayland capture-host acceptance remain open.
+Both native History grids also offer direct screenshot, GIF and video file drags
+through those same COPY adapters, without Restore or preview dismissal. Missing
+recordings cannot be dragged. AppKit and Windows/Wayland History-drag presentation
+and physical file-transfer acceptance remain unverified.
 The pile includes 3D tilt, depth blur, shadows and staggered fan motion.
 Cross-display movement, automatic top/bottom anchor changes, backdrop blur and
 remaining control-transition details still need parity work and platform acceptance.

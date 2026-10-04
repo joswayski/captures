@@ -743,6 +743,8 @@ impl ActiveEventLoop {
             source: drag,
             source_window: source,
             uri: super::outbound_drag::uri_list(&path),
+            path,
+            destination: None,
             action: DndAction::empty(),
             dropped: false,
             over_own_window: false,

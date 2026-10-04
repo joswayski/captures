@@ -1477,21 +1477,53 @@ export function HistoryCard({
   entry: ArtifactSummary;
   onDeleted: (artifactId: string) => void;
 }) {
-  const [busy, setBusy] = useState<"restoring" | "editing" | "opening" | "revealing" | "saving" | "deleting" | null>(null);
+  const [busy, setBusy] = useState<"dragging" | "restoring" | "editing" | "opening" | "revealing" | "saving" | "deleting" | null>(null);
   const [restored, setRestored] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState("");
+  const fileDragging = useRef(false);
+  const suppressDragClick = useRef(false);
+  const active = useRef(true);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordingPermanentlySaved = entry.kind !== "screenshot"
     && Boolean(entry.saved_path)
     && !entry.missing;
 
-  useEffect(() => () => {
-    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
-    if (deleteTimer.current) clearTimeout(deleteTimer.current);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+      if (deleteTimer.current) clearTimeout(deleteTimer.current);
+    };
   }, []);
+
+  const beginFileDrag = async (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    if (busy || fileDragging.current || (entry.kind !== "screenshot" && entry.missing)) return;
+    fileDragging.current = true;
+    suppressDragClick.current = true;
+    setBusy("dragging");
+    setError("");
+    const finish = () => {
+      fileDragging.current = false;
+      if (active.current) setBusy(null);
+    };
+    try {
+      const payload = await invoke<ArtifactDragPayload>("prepare_artifact_drag", {
+        artifactId: entry.id,
+      });
+      if (!active.current) { finish(); return; }
+      // History is retained for every outcome. Only mini-preview drags apply
+      // their source-card dismissal or self-drop feedback.
+      await startDrag({ item: [payload.path], icon: payload.icon_path, mode: "copy" }, finish);
+    } catch (error) {
+      finish();
+      if (active.current) setError(`Couldn’t drag capture: ${String(error)}`);
+    }
+  };
 
   const restore = async () => {
     if (busy || entry.kind !== "screenshot") return;
@@ -1616,7 +1648,16 @@ export function HistoryCard({
           className="history-image-open"
           disabled={previewDisabled}
           aria-label={previewLabel}
-          onClick={() => void openCapture()}
+          title={previewDisabled ? undefined : "Drag this capture into an editor or another app"}
+          draggable={!previewDisabled}
+          onPointerDown={() => { suppressDragClick.current = false; }}
+          onDragStart={(event) => void beginFileDrag(event)}
+          onClick={(event) => {
+            // Cancelling the browser drag in favor of the OS can still deliver
+            // a release-click, even after a failed/cancelled native drag.
+            if (event.detail > 0 && suppressDragClick.current) return;
+            void openCapture();
+          }}
         >
           <img
             src={entry.kind === "screenshot" ? entry.preview_url : entry.poster_url}

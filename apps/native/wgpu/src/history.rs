@@ -35,6 +35,8 @@ pub enum Event {
     Select(usize),
     /// The thumbnail's open action (shipping: open in the editor).
     Open(usize),
+    /// A thresholded primary-button gesture on the thumbnail.
+    DragFile(usize),
     Action(usize, CardAction),
     Delete(usize),
     /// A visible card has no thumbnail request yet.
@@ -514,6 +516,12 @@ fn card(
     let id = Id::unique(("history-card", item.id));
     let card = item.card;
     let idle = enabled && item.busy.is_none();
+    let gap = t.number("s-3");
+    let height = t.number("h-md");
+    let trash_rect = Rect::from_min_size(
+        Pos2::new(rect.right() - gap - height, rect.top() + gap),
+        Vec2::splat(height),
+    );
     // Selection stays available while actions are busy, like keyboard arrows.
     let body = ui.interact(rect, id, Sense::click());
     body.widget_info(|| {
@@ -552,11 +560,12 @@ fn card(
     };
     painter.rect_filled(image_rect, top, t.color("surface-sunken"));
     let can_open = idle && card.open_label.is_some();
+    let can_drag = can_open && !card.missing;
     let open = ui.interact(
         image_rect,
         id.with("open"),
         if can_open {
-            Sense::click()
+            Sense::click_and_drag()
         } else {
             Sense::hover()
         },
@@ -659,8 +668,6 @@ fn card(
         y += 16. + t.number("s-2");
         line(warning, y, t.number("text-sm"), t.color("caution-text"));
     }
-    let gap = t.number("s-3");
-    let height = t.number("h-md");
     let width = (inner - gap) / 2.;
     // Stretched cards in a grown row keep their actions in place.
     let actions_top = rect.top() + shared::CARD_ACTIONS_TOP as f32;
@@ -721,10 +728,6 @@ fn card(
         painter.galley(box_rect.min + padding, text, t.color("danger-text"));
     }
 
-    let trash_rect = Rect::from_min_size(
-        Pos2::new(rect.right() - gap - height, rect.top() + gap),
-        Vec2::splat(height),
-    );
     let trash = button(
         ui,
         t,
@@ -767,7 +770,12 @@ fn card(
     };
     painter.rect_stroke(rect, r, stroke, StrokeKind::Inside);
 
-    if open.clicked() {
+    let started_outside_trash = ui
+        .input(|input| input.pointer.press_origin())
+        .is_some_and(|origin| !trash_rect.contains(origin));
+    if can_drag && started_outside_trash && open.drag_started() {
+        events.push(Event::DragFile(index));
+    } else if open.clicked() {
         events.push(Event::Open(index));
     } else if body.clicked() {
         events.push(Event::Select(index));
@@ -1022,6 +1030,135 @@ fn glyph(painter: &egui::Painter, glyph: Glyph, rect: Rect, stroke: Stroke) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn thumbnail_gesture(
+        enabled: bool,
+        missing: bool,
+        busy: bool,
+        start: Pos2,
+        end: Pos2,
+    ) -> (bool, bool) {
+        let ctx = egui::Context::default();
+        crate::ui_fonts::install(&ctx);
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        tokens.apply(&ctx, true);
+        let area = Rect::from_min_size(Pos2::ZERO, Vec2::new(300., 400.));
+        let thumbnail = Thumbnail::Ready(ctx.load_texture(
+            "gesture-image",
+            egui::ColorImage::filled([20, 10], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        ));
+        let model = shared::Card {
+            kind_label: "Screenshot",
+            date: "Today".into(),
+            details: "20 × 10".into(),
+            warning: None,
+            missing,
+            image_label: "Screenshot",
+            open_label: (!missing).then_some("Open screenshot in editor"),
+            delete_label: "Delete",
+            delete_confirm_label: "Confirm delete",
+            delete_confirm_title: "Delete forever",
+            delete_requires_confirmation: true,
+            actions: vec![CardAction::Edit, CardAction::Restore],
+            menu: vec![],
+        };
+        let item = Item {
+            id: "gesture",
+            card: &model,
+            thumbnail: Some(&thumbnail),
+            selected: false,
+            confirming_delete: false,
+            busy: busy.then_some(CardAction::Edit),
+            done: None,
+            error: None,
+        };
+        let mut clicked = false;
+        let mut dragged = false;
+        let mut frame = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(area),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    // Render the production card in its scroll container;
+                    // overlapping selection/Trash and scrolling own input too.
+                    let output = grid(ui, &tokens, std::slice::from_ref(&item), enabled, None);
+                    clicked |= output.events.contains(&Event::Open(0));
+                    dragged |= output.events.contains(&Event::DragFile(0));
+                },
+            );
+            output.textures_delta.clear();
+        };
+        // Register the interaction before the synthetic press, as a native
+        // pointer event arrives against the shapes from the preceding frame.
+        frame(Vec::new());
+        frame(vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        (clicked, dragged)
+    }
+
+    #[test]
+    fn thumbnail_click_and_thresholded_drag_are_distinct() {
+        assert_eq!(
+            thumbnail_gesture(true, false, false, Pos2::new(20., 20.), Pos2::new(20., 20.)),
+            (true, false)
+        );
+        assert_eq!(
+            thumbnail_gesture(true, false, false, Pos2::new(20., 20.), Pos2::new(22., 20.)),
+            (true, false)
+        );
+        assert_eq!(
+            thumbnail_gesture(true, false, false, Pos2::new(20., 20.), Pos2::new(50., 20.)),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn thumbnail_drag_respects_disabled_missing_busy_and_trash_boundaries() {
+        let start = Pos2::new(20., 20.);
+        let end = Pos2::new(50., 50.);
+        // Disabled and busy cards have no open interaction; missing cards can
+        // still preserve their click behavior but cannot export a file.
+        assert_eq!(
+            thumbnail_gesture(false, false, false, start, end),
+            (false, false)
+        );
+        assert_eq!(
+            thumbnail_gesture(true, false, true, start, end),
+            (false, false)
+        );
+        assert_eq!(
+            thumbnail_gesture(true, true, false, start, end),
+            (false, false)
+        );
+        assert_eq!(
+            thumbnail_gesture(
+                true,
+                false,
+                false,
+                Pos2::new(280., 15.),
+                Pos2::new(40., 50.)
+            ),
+            (false, false)
+        );
+    }
 
     #[test]
     fn header_keeps_delete_all_clear_of_the_heading_down_to_the_minimum_window() {

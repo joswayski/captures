@@ -673,6 +673,8 @@ final class LiveCaptureController: NSObject {
         grid.onAction = { [weak self] row, action in self?.performCard(row: row, action: action) }
         grid.onDelete = { [weak self] row in self?.deleteCard(row: row) }
         grid.onNeedsThumbnail = { [weak self] row in self?.loadThumbnail(row: row) }
+        grid.onPrepareDrag = { [weak self] row, completion in self?.prepareHistoryDrag(row: row, completion: completion) }
+        grid.onDragError = { [weak self] row, error in self?.showHistoryDragError(row: row, error: error) }
         grid.onCancel = { [weak self] in self?.cancelHistoryConfirmations() }
         root.addSubview(historyScroll)
         emptyState = HistoryEmptyView(tokens: tokens)
@@ -1302,6 +1304,40 @@ final class LiveCaptureController: NSObject {
         case .showInFolder:
             reveal(artifact)
         }
+    }
+
+    /// Prepare only the pressed History card's transferable media. The Rust
+    /// operation returns saved media when available, otherwise a retained
+    /// screenshot/GIF/video file; it never exports a recording poster.
+    private func prepareHistoryDrag(row: Int, completion: @escaping (Result<String, Error>) -> Void) {
+        guard historyRows.indices.contains(row), !historyBusy, cardBusy == nil, !historyRoot.isEmpty else {
+            completion(.failure(AppBridgeError.invalidResponse)); return
+        }
+        let artifact = artifacts[historyRows[row]]
+        guard cards[artifact.id]?.missing != true else {
+            completion(.failure(AppBridgeError.invalidResponse)); return
+        }
+        let id = artifact.id, root = historyRoot
+        Self.queue.async { [weak self, transport] in
+            let result = Result { () throws -> String in
+                let response = try transport.request(["operation": "prepare_preview_drag", "root": root, "id": id])
+                guard response["id"] as? String == id, let path = response["path"] as? String, !path.isEmpty
+                else { throw AppBridgeError.invalidResponse }
+                return path
+            }
+            DispatchQueue.main.async {
+                guard let self, self.historyRoot == root,
+                      self.artifacts.contains(where: { $0.id == id }) else { return }
+                completion(result)
+            }
+        }
+    }
+
+    private func showHistoryDragError(row: Int, error: Error) {
+        guard historyRows.indices.contains(row) else { return }
+        let id = artifacts[historyRows[row]].id
+        cardErrors[id] = error.localizedDescription
+        updateActions()
     }
 
     /// Shipping History Restore: reopen a screenshot through the mini-preview

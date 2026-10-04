@@ -20,7 +20,10 @@ Escape, own-window drops and a five-second missing-Finished deadline. Wayland
 uses SCTK's data device/source/offer dispatch and held-button serial, retaining
 the drop destination before leave. Its one-shot five-second post-drop timer
 recovers missing completion; normal completion removes the timer. Neither adds
-general Wayland file import.
+general Wayland file import. Same-app source offers now deliver
+`HoveredFile`/`DroppedFile` to the destination window as well as acknowledging
+COPY, so editor receivers can import History or mini-preview files. Those files
+come from this source's retained path, not from an unrelated client offer.
 
 Patch surface: `src/platform/{x11,wayland}.rs`, `platform_impl/linux/mod.rs`,
 the Linux backend module/event-loop initialization, X11 atoms/event processor,
@@ -40,7 +43,10 @@ not part of the published archive.
 3. Run private wgpu fmt/tests/Clippy, X11 preview `--drag-only` in normal and
    reduced-motion modes, and `apps/native/wayland_drag_smoke.py` (GTK receiver).
    Verify cancellation, repeated use, self-drop, Unicode URI bytes and pointer
-   recovery. Run native macOS/Windows CI and physical host acceptance separately.
+   recovery. Run `x11_history_smoke.py` for History-to-editor layer imports and
+   source retention; the Wayland probe checks delivery to a different window in
+   the same event loop. Run native macOS/Windows CI and physical host acceptance
+   separately.
 
 Headless Sway tests include a receiver that never finishes and one that exits
 after receiving bytes. These tests do not establish physical compositor parity.
