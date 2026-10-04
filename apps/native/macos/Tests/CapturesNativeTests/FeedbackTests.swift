@@ -107,9 +107,19 @@ final class FeedbackTests: XCTestCase {
         XCTAssertEqual(form.contact.stringValue, "person@example.test")
         XCTAssertTrue(transport.drafts.isEmpty, "review and copy are local until explicit Send")
 
-        form.message.string = String(repeating: "x", count: 7_990)
-        XCTAssertFalse(form.appendToMessage("too long"))
-        XCTAssertEqual(form.message.string.unicodeScalars.count, 7_990)
+        let original = String(repeating: "🦀", count: 7_997)
+        form.message.string = original
+        // 7,997 + two newlines + two scalars is 8,001, even though the
+        // combining sequence is one grapheme. Rejection must preserve the draft.
+        XCTAssertFalse(form.appendToMessage("e\u{301}"))
+        XCTAssertEqual(form.message.string, original)
+        // One precomposed scalar instead fits exactly at the 8,000-scalar limit.
+        XCTAssertTrue(form.appendToMessage("é"))
+        XCTAssertEqual(form.message.string, original + "\n\né")
+        XCTAssertEqual(form.message.string.unicodeScalars.count, 8_000)
+        XCTAssertFalse(form.appendToMessage("x"))
+        XCTAssertEqual(form.message.string, original + "\n\né")
+        XCTAssertTrue(transport.drafts.isEmpty)
 
         form.message.string = "Sending draft"; form.updateControls(); form.submit()
         XCTAssertTrue(form.sending)
