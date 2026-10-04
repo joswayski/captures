@@ -2987,8 +2987,18 @@ fn show_filename(
                 });
             }
             let directory = view.directory.display().to_string();
+            let saving_to = ui.painter().layout_no_wrap(
+                "Saving to".into(),
+                egui::FontId::proportional(tokens.number("text-2xs")),
+                tokens.color("text-faint"),
+            );
+            // Truncate the path only after reserving the heading that follows
+            // it in this right-to-left row, including at the compact breakpoint.
+            let path_width =
+                (ui.available_width() - saving_to.size().x - ui.spacing().item_spacing.x).max(0.);
             let location = ui
-                .add(
+                .add_sized(
+                    [path_width, saving_to.size().y],
                     egui::Label::new(
                         text(tokens, directory.clone(), "text-2xs", "text-subtle").monospace(),
                     )
@@ -2996,7 +3006,7 @@ fn show_filename(
                 )
                 .on_hover_text(directory);
             probe(ui, "Save location", location.rect);
-            ui.label(text(tokens, "Saving to", "text-2xs", "text-faint"));
+            ui.label(saving_to);
         });
     });
     let height = tokens.number("h-md");
@@ -4647,6 +4657,48 @@ mod tests {
                 );
             }
             assert!(jobs.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn save_folder_heading_reserves_labels_for_long_paths_across_footer_breakpoint() {
+        let tokens = crate::tokens::load().into_values().next().unwrap();
+        for width in [760., 859., 860., 960., 1440.] {
+            for directory in [
+                "/Exports".into(),
+                "/Native exports/a long folder/".repeat(12),
+            ] {
+                let ctx = egui::Context::default();
+                crate::ui_fonts::install(&ctx);
+                tokens.apply(&ctx, false);
+                let mut view = opened();
+                view.directory = directory.into();
+                let size = egui::vec2(width, 580.);
+                probe_frame(&ctx, &tokens, &mut view, size, vec![]);
+                let (output, controls) = probe_frame(&ctx, &tokens, &mut view, size, vec![]);
+                let mut rects = vec![probed(&controls, "Save location")];
+                for label in ["Filename", "Saving to", "Change…"] {
+                    let rect = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("{width}: missing {label}"));
+                    assert!(
+                        rect.left() >= 0. && rect.right() <= width,
+                        "{label}: {rect:?}"
+                    );
+                    assert!(
+                        rects.iter().all(|other| !other.intersects(rect)),
+                        "{width}: {label} overlaps another heading element: {rect:?}, {rects:?}"
+                    );
+                    rects.push(rect);
+                }
+            }
         }
     }
 
