@@ -205,7 +205,7 @@ mod win32 {
     mod tests {
         use super::*;
         use windows_sys::Win32::{
-            Graphics::Gdi::{CreateDIBSection, SelectObject},
+            Graphics::Gdi::{CreateDIBSection, GdiFlush, SelectObject},
             UI::WindowsAndMessaging::{
                 DI_NORMAL, DrawIconEx, IDC_ARROW, IDC_HAND, IDC_IBEAM, LoadCursorW,
             },
@@ -247,9 +247,10 @@ mod win32 {
                         ..Default::default()
                     };
                     // SAFETY: the DIB is width*height*4 bytes, and GDI writes
-                    // synchronously while selected. Deselect it before reading
-                    // with GetDIBits and release the bitmap/DC on every result.
-                    let (drawn, actual) = unsafe {
+                    // while selected. Flush before accessing its bytes directly,
+                    // independently of the bitmap decoder under test. Deselect
+                    // and release the bitmap/DC before assertions can panic.
+                    let (drawn, flushed, actual) = unsafe {
                         let dc = CreateCompatibleDC(null_mut());
                         assert!(!dc.is_null());
                         let mut bits = null_mut();
@@ -270,19 +271,39 @@ mod win32 {
                         }
                         let previous = SelectObject(dc, bitmap);
                         let drawn = DrawIconEx(dc, 5, 5, handle, 0, 0, 0, null_mut(), DI_NORMAL);
+                        let flushed = GdiFlush();
+                        let actual = image::RgbaImage::from_fn(width, height, |x, y| {
+                            let offset = (y as usize * width as usize + x as usize) * 4;
+                            image::Rgba([
+                                buffer[offset + 2],
+                                buffer[offset + 1],
+                                buffer[offset],
+                                buffer[offset + 3],
+                            ])
+                        });
                         SelectObject(dc, previous);
-                        let actual = read_bitmap(bitmap);
                         DeleteObject(bitmap);
                         DeleteDC(dc);
-                        (drawn, actual)
+                        (drawn, flushed, actual)
                     };
                     assert_ne!(drawn, 0);
-                    let actual = actual.expect("drawn Windows cursor");
-                    for (expected, actual) in expected.pixels().zip(actual.pixels()) {
+                    assert_ne!(flushed, 0);
+                    for ((x, y, expected), actual) in
+                        expected.enumerate_pixels().zip(actual.pixels())
+                    {
                         // GDI does not preserve destination alpha. Allow one
                         // RGB level for premultiplied vs straight-alpha rounding.
                         for channel in 0..3 {
-                            assert!(expected[channel].abs_diff(actual[channel]) <= 1);
+                            assert!(
+                                expected[channel].abs_diff(actual[channel]) <= 1,
+                                "cursor {}, background {background:?}, pixel ({x}, {y}): \
+                                 composited {:?}, Windows {:?}, size {:?}, mask {}",
+                                id as usize,
+                                expected.0,
+                                actual.0,
+                                cursor.pixels.dimensions(),
+                                cursor.and_mask.is_some(),
+                            );
                         }
                     }
                 }
