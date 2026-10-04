@@ -1482,7 +1482,7 @@ export function HistoryCard({
   const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState("");
-  const fileDragging = useRef(false);
+  const fileDragging = useRef<(() => void) | null>(null);
   const suppressDragClick = useRef(false);
   const active = useRef(true);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1495,6 +1495,7 @@ export function HistoryCard({
     active.current = true;
     return () => {
       active.current = false;
+      fileDragging.current?.();
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
       if (deleteTimer.current) clearTimeout(deleteTimer.current);
     };
@@ -1503,23 +1504,44 @@ export function HistoryCard({
   const beginFileDrag = async (event: React.DragEvent<HTMLButtonElement>) => {
     event.preventDefault();
     if (busy || fileDragging.current || (entry.kind !== "screenshot" && entry.missing)) return;
-    fileDragging.current = true;
     suppressDragClick.current = true;
     setBusy("dragging");
     setError("");
+    const stopPreparing = () => {
+      window.removeEventListener("pointerup", finish, true);
+      window.removeEventListener("mouseup", finish, true);
+      window.removeEventListener("pointercancel", finish, true);
+      window.removeEventListener("blur", finish);
+      window.removeEventListener("keydown", cancelOnEscape, true);
+    };
     const finish = () => {
-      fileDragging.current = false;
+      stopPreparing();
+      if (fileDragging.current !== finish) return;
+      fileDragging.current = null;
       if (active.current) setBusy(null);
     };
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") finish();
+    };
+    // The finish function identifies this gesture. A cancelled request must
+    // neither start a late native drag nor finish a newer gesture's state.
+    fileDragging.current = finish;
+    window.addEventListener("pointerup", finish, true);
+    window.addEventListener("mouseup", finish, true);
+    window.addEventListener("pointercancel", finish, true);
+    window.addEventListener("blur", finish);
+    window.addEventListener("keydown", cancelOnEscape, true);
     try {
       const payload = await invoke<ArtifactDragPayload>("prepare_artifact_drag", {
         artifactId: entry.id,
       });
-      if (!active.current) { finish(); return; }
+      if (!active.current || fileDragging.current !== finish) return;
+      stopPreparing(); // Native transport owns release/cancel after handoff.
       // History is retained for every outcome. Only mini-preview drags apply
       // their source-card dismissal or self-drop feedback.
       await startDrag({ item: [payload.path], icon: payload.icon_path, mode: "copy" }, finish);
     } catch (error) {
+      if (fileDragging.current !== finish) return;
       finish();
       if (active.current) setError(`Couldn’t drag capture: ${String(error)}`);
     }
