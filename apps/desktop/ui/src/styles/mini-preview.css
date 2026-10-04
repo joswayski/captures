@@ -8,6 +8,14 @@
  * all mirrored values in sync.
  */
 
+/* WebView2 does not ship Chromium's grab/grabbing resources reliably. Bundle
+ * those same hands as same-origin files (not data URLs) for Windows and let
+ * CSS alone own the WebView cursor. */
+html[data-thumbnail-platform="windows"] {
+  --thumbnail-grab-cursor: url("../assets/cursors/hand-grab.png?no-inline") 13 13, grab;
+  --thumbnail-grabbing-cursor: url("../assets/cursors/hand-grabbing.png?no-inline") 13 13, grabbing;
+}
+
 html[data-preview-harness-view="thumbnail"] #root {
   position: fixed;
   inset: 0 auto 0 0;
@@ -166,7 +174,7 @@ body:has(.thumbnail-stack),
       )
     );
   cursor: -webkit-grab;
-  cursor: grab;
+  cursor: var(--thumbnail-grab-cursor, grab);
   transition:
     flex-basis 0.26s ease,
     height 0.26s ease,
@@ -221,13 +229,13 @@ body:has(.thumbnail-stack),
 
 .thumbnail-card.thumbnail-file-dragging {
   cursor: -webkit-grabbing;
-  cursor: grabbing;
+  cursor: var(--thumbnail-grabbing-cursor, grabbing);
 }
 
 .thumbnail-card.thumbnail-file-dragging,
 .thumbnail-card.thumbnail-file-dragging * {
   cursor: -webkit-grabbing !important;
-  cursor: grabbing !important;
+  cursor: var(--thumbnail-grabbing-cursor, grabbing) !important;
 }
 
 /*
@@ -384,7 +392,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-card.thumbnail-drop-rejected:hov
   border-radius: 0;
   background: transparent;
   cursor: -webkit-grab;
-  cursor: grab;
+  cursor: var(--thumbnail-grab-cursor, grab);
   pointer-events: auto;
   /* Resting filter so hover interpolates instead of creating a compositor layer. */
   filter: blur(0) brightness(1);
@@ -1059,7 +1067,7 @@ html:not(.thumbnail-native-tracking) .thumbnail-main-actions button:hover,
 html.thumbnail-native-tracking[data-thumbnail-cursor="grab"],
 html.thumbnail-native-tracking[data-thumbnail-cursor="grab"] * {
   cursor: -webkit-grab !important;
-  cursor: grab !important;
+  cursor: var(--thumbnail-grab-cursor, grab) !important;
 }
 
 html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"],
@@ -1074,7 +1082,7 @@ html.thumbnail-native-tracking[data-thumbnail-cursor="pointer"] * {
  */
 html.thumbnail-native-tracking .thumbnail-card[data-thumbnail-native-active="true"] img {
   cursor: -webkit-grab !important;
-  cursor: grab !important;
+  cursor: var(--thumbnail-grab-cursor, grab) !important;
 }
 
 html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card,
@@ -1085,7 +1093,7 @@ html.thumbnail-native-tracking .thumbnail-stack-minimized .thumbnail-card img {
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging,
 html.thumbnail-native-tracking .thumbnail-card.thumbnail-file-dragging * {
   cursor: -webkit-grabbing !important;
-  cursor: grabbing !important;
+  cursor: var(--thumbnail-grabbing-cursor, grabbing) !important;
 }
 
 /*
@@ -1108,7 +1116,7 @@ html.thumbnail-native-tracking .thumbnail-stack-dragging .thumbnail-collapsed-hi
 .thumbnail-stack-dragging .thumbnail-collapsed-hit-target,
 .thumbnail-stack-dragging .thumbnail-collapsed-hit-target * {
   cursor: -webkit-grabbing !important;
-  cursor: grabbing !important;
+  cursor: var(--thumbnail-grabbing-cursor, grabbing) !important;
 }
 
 /*
@@ -1140,7 +1148,7 @@ html:has(.thumbnail-card:hover):not(:has(
   )[data-native-pointer-hover="true"]
 )) {
   cursor: -webkit-grab;
-  cursor: grab;
+  cursor: var(--thumbnail-grab-cursor, grab);
 }
 
 html:not(.thumbnail-native-tracking):not(:has(.thumbnail-stack-dragging)):not(:has(.thumbnail-card.thumbnail-file-dragging)):has(
@@ -1195,13 +1203,13 @@ html:has(.thumbnail-stack-dragging) *,
 html:has(.thumbnail-card.thumbnail-file-dragging),
 html:has(.thumbnail-card.thumbnail-file-dragging) * {
   cursor: -webkit-grabbing !important;
-  cursor: grabbing !important;
+  cursor: var(--thumbnail-grabbing-cursor, grabbing) !important;
 }
 
 .thumbnail-card:hover,
 .thumbnail-card:hover img {
   cursor: -webkit-grab;
-  cursor: grab;
+  cursor: var(--thumbnail-grab-cursor, grab);
 }
 
 .thumbnail-card:hover :is(button, .icon-button, .thumbnail-editor-control):not(:disabled),

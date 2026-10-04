@@ -69,6 +69,17 @@ impl PointerSource {
             })
         }
     }
+
+    pub fn cursor_image(&self) -> Option<captures_capture::CursorImage> {
+        #[cfg(target_os = "windows")]
+        {
+            captures_capture::pointer_cursor()?.image
+        }
+        #[cfg(target_os = "linux")]
+        {
+            None
+        }
+    }
 }
 
 pub fn pointer_features_available() -> bool {

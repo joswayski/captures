@@ -522,9 +522,18 @@ fn encode_frame(
     pointer: Option<&PointerSource>,
     now: Instant,
 ) -> XcapRecordingResult<()> {
-    let patch = overlay
-        .as_mut()
-        .map(|overlay| overlay.draw(rgb, pointer.and_then(PointerSource::sample), now));
+    let patch = overlay.as_mut().map(|overlay| {
+        let cursor = overlay
+            .shows_cursor()
+            .then(|| pointer.and_then(PointerSource::cursor_image))
+            .flatten();
+        overlay.draw(
+            rgb,
+            pointer.and_then(PointerSource::sample),
+            cursor.as_ref(),
+            now,
+        )
+    });
     let encoded = writer.encode_rgb(rgb, elapsed_ms);
     if let Some(patch) = patch {
         patch.restore(rgb);
