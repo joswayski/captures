@@ -1573,6 +1573,13 @@ impl EditorSession {
             request => (request, None),
         };
         let is_paste = matches!(&request, Request::PasteLayer { .. });
+        let metadata_only = matches!(
+            &request,
+            Request::Layer {
+                edit: LayerEdit::Lock { .. } | LayerEdit::Rename { .. },
+                ..
+            }
+        );
         let mut next = self.history.clone();
         match request {
             Request::Snapshot
@@ -1727,11 +1734,21 @@ impl EditorSession {
                 return Err(format!("The editor does not own image asset {source}."));
             }
         }
-        let pixels = render_frame(next.current(), &self.assets, self.fonts.as_mut())?;
+        // Lock and Rename change only metadata on an already validated frame.
+        // Keep command validation, history and persistence on their normal path.
+        let pixels = if metadata_only {
+            self.pixels.clone()
+        } else {
+            Arc::new(render_frame(
+                next.current(),
+                &self.assets,
+                self.fonts.as_mut(),
+            )?)
+        };
         // Rendering/validation failure leaves both the undo stacks and frame
         // unchanged. Hosts never receive a half-applied edit.
         self.history = next;
-        self.pixels = Arc::new(pixels);
+        self.pixels = pixels;
         self.live = live_key.map(|key| (key, self.history.current().clone()));
         if is_paste {
             self.layer_paste_count += 1;

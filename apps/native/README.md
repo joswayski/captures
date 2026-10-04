@@ -570,6 +570,22 @@ demultiplication. Measure its one-time initialization alone in a fresh process
 cargo test -p captures-image --release --locked benchmark_demultiply_cache_initialization -- --ignored --nocapture
 ```
 
+The shared editor worker reuses its existing canvas frame for layer Lock and
+Rename commands. Rename also keeps the layer thumbnail; labels, lock state,
+history and drafts still update. Visual edits and Undo/Redo retain their normal
+render path. Measure command execution, thumbnail refresh and snapshot JSON with:
+
+```sh
+cargo test -p captures-app --test editor_session --release --locked benchmark_native_metadata_4k -- --ignored --nocapture
+```
+
+This uses a 3840×2160 mixed-alpha source on the default solid canvas background,
+checks unchanged pixels for metadata edits, discards one warmup and reports five
+three-command trial means. Opacity is a repainting control. Compare old/new
+binaries in alternating order on the same idle host. Timings exclude fixture
+setup, request parsing/queueing, draft I/O, encoding, host pixel transfer and
+presentation; they are not input-to-screen or physical-platform acceptance.
+
 For visual review, capture the specific workbench window using macOS Screenshot
 (not your whole desktop), in light/dark, history empty/populated, HUD running/paused,
 and preview before/during/after deletion. Test both 1× and 2× screens, keyboard
