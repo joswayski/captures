@@ -345,6 +345,44 @@ re-hides the root after eframe's automatic first paint and verifies visibility a
 the quit deadline. A transient startup map remains possible. Resolving this is a
 renderer gate.
 
+### Wayland screenshot acquisition diagnostic
+
+`captures_capture::portal_screenshot` acquires a still through the public
+Screenshot portal without X11 monitor enumeration or direct compositor fallback.
+It subscribes before requesting, verifies the response's handle and unique portal
+owner, returns cancellation without capturing again, and sends Request.Close on
+local cancellation or timeout. It reads only a local file URI and never deletes
+or changes the portal-owned image. Run it on a worker, after unmapping any windows
+that must be excluded. Screenshot and owner lookup use at most five seconds or
+the remaining deadline; subscription uses five seconds, Close one second. Timeout
+and cancellation checks cannot interrupt bus connection setup or image decoding.
+
+The diagnostic creates no Captures window. It does not prove own-window exclusion
+in the resident host. Portal consent, image extent and cursor inclusion are
+backend-controlled; there is no named-display mapping or assumed desktop origin.
+In xdg-desktop-portal 1.16, version-1 Screenshot backends bypass its permission
+store check. The orb's wlr 0.7 backend is version 1 and returned success even with
+the disposable permission set to “no”; this is not a client fallback or proof of
+consent enforcement. The smoke reports the backend version/policy it exercised.
+Live Wayland capture, window targeting, selectors, preview placement, global
+shortcut registration, hidden startup and recording remain gated.
+
+```sh
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_screenshot_probe
+/usr/bin/python3 apps/native/wayland_screenshot_smoke.py \
+  --binary apps/native/wgpu/target/debug/wayland_screenshot_probe
+```
+
+The smoke needs Sway, swaybg, grim, PipeWire, xdg-desktop-portal and its GTK/wlr
+backends, system Python dbus/gi, ImageMagick, sudo and util-linux. It creates a
+private mount namespace, D-Bus, compositor, runtime and permission store; consent
+is pre-granted only in disposable data. The private `/tmp` also contains older
+wlr backends' fixed screenshot path. It checks early and alternate-handle
+responses, wrong sender/path signals, cancellation, timeout, failed method replies,
+URI rejection, exact RGBA and source retention. The real frontend → wlr backend →
+headless Sway test compares every pixel of an asymmetric 310×170 desktop against
+independent expectations. This is not physical GNOME/KDE or native-host acceptance.
+
 **Transparent Vulkan windows failed under the orb's Xvfb/Mesa llvmpipe setup.**
 The countdown's GPU readback was correct, but the compositor displayed no content.
 `WGPU_BACKEND=gl` rendered the live overlay correctly with picom; this is a test

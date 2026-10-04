@@ -7,6 +7,8 @@ mod geometry;
 #[cfg(target_os = "macos")]
 mod macos;
 mod model;
+#[cfg(target_os = "linux")]
+mod portal;
 mod window;
 #[cfg(any(target_os = "windows", test))]
 #[allow(unsafe_code)]
@@ -20,6 +22,8 @@ pub use cursor::{
 pub use error::{CaptureError, CaptureResult};
 pub use geometry::{LogicalRect, PhysicalRect};
 pub use model::{CaptureMode, DisplayDescriptor, DisplayFrame, WindowDescriptor};
+#[cfg(target_os = "linux")]
+pub use portal::portal_screenshot;
 #[cfg(target_os = "macos")]
 pub use window::macos_window_is_capture_overlay;
 pub use window::{

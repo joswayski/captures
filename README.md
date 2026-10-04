@@ -187,8 +187,9 @@ PNG capture, local screenshot history, copy, export, and deletion to
 shared Rust engines. Its History uses the shipping card grid, header, filters,
 Restore to a floating preview and empty states; Delete all asks for a second click, removes all capture types
 regardless of the selected filter, and keeps exported files and recovery drafts.
-It uses separate development data; Wayland capture is gated
-until the candidate can hide its window reliably. Like the shipping app, the
+It uses separate development data. A Wayland screenshot acquisition diagnostic
+uses the desktop portal without X11; native UI capture remains gated until the
+candidate can hide its own windows reliably. Like the shipping app, the
 native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic

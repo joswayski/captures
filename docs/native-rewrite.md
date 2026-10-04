@@ -17,6 +17,23 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+The Linux screenshot portal acquisition slice now runs without X11 enumeration,
+subscribes before requesting, verifies response handle/owner, closes cancelled or
+timed-out requests, and never falls back to direct capture after cancellation.
+Portal-owned files are read without modification/deletion. A no-window diagnostic
+passes private D-Bus adversarial-response cases and the real frontend → wlr →
+headless Sway path with all 52,700 independently expected pixels matching.
+This is acquisition groundwork, not connected native Wayland UI support: the
+portal has no own-window exclusion API, and host unmapping, display geometry,
+selectors, shortcuts, preview placement and recording remain open.
+
+| Platform | This slice's implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing path unchanged; portal API/probe explicitly Linux-gated; no physical-host verification |
+| Windows | Existing path unchanged; probe reports unsupported; no physical-host verification |
+| X11 | Existing path unchanged; new diagnostic rejects DISPLAY rather than falling back |
+| Wayland | Portal-only still acquisition tested on disposable headless Sway; native-host and physical GNOME/KDE acceptance unverified, live capture still gated |
+
 Both screenshot-editor hosts now expose only shipping's Tiny, Smaller, Balanced,
 High and Highest compression presets (55/70/85/92/98), with no numeric quality
 field. Save stays enabled during Copy; repeated clicks request one Save after

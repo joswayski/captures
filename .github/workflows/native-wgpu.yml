@@ -59,6 +59,12 @@ jobs:
       - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
       - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Acquire exact Wayland pixels through the desktop screenshot portal
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y swaybg pipewire xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-wlr grim
+          cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_screenshot_probe
+          /usr/bin/python3 apps/native/wayland_screenshot_smoke.py --binary apps/native/wgpu/target/debug/wayland_screenshot_probe
       - name: Transfer original files to an independent Wayland client
         if: runner.os == 'Linux'
         run: |
