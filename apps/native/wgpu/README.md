@@ -22,7 +22,7 @@ New Capture…, Screenshot Region/Window/Display, Record Region/Window/Display,
 Capture History…, Open Save Location, Preferences, Send Feedback…, a disabled
 Check for Updates… and Quit Captures. Its persisted
 display, region, window, recording and New Capture shortcuts work globally except while
-capture is unavailable or a focused Preferences window is editing them. All seven
+capture is unavailable or a focused Preferences shortcut recorder is active. All seven
 shortcut rows can be edited from Preferences with
 physical-key recording, modifier previews, Escape/blur cancellation, and inline invalid
 chord errors. Recording keys open Record on the requested target without starting a take.
@@ -115,10 +115,12 @@ feedback window (its own 640×700 viewport, not a Preferences pane) with copy,
 category cards, placeholders and limits from `captures_app::feedback`. It uses the
 shared Rust client on a separate worker. Only explicit Send in `--live` can
 contact captur.es; fixture mode keeps submission disabled. The form previews the
-included app/system context, retains drafts on errors and when the window is
+included app/system context below its header before editable fields, retains drafts on errors and when the window is
 closed and reopened, and prevents duplicate sends while pending.
-Captures, files, and diagnostics are never attached. Login and updating remain
-visibly unavailable.
+Captures, files, and diagnostics are never attached. General offers opt-in
+development login startup on X11/Windows; Wayland hidden startup remains gated.
+Updates retains native build identity and a disabled check action; signed native
+updates remain unavailable.
 
 Feedback input/retry verification uses a rejecting loopback proxy, never the
 production service: `python apps/native/x11_feedback_smoke.py --binary

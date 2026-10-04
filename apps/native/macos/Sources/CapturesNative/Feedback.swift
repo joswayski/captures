@@ -280,7 +280,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
     // MARK: Structure
 
     private func build() {
-        for view in [eyebrow, heading, intro, formCard, metaCard, statusBox] as [NSView] { document.addSubview(view) }
+        for view in [eyebrow, heading, intro, metaCard, formCard, statusBox] as [NSView] { document.addSubview(view) }
         formCard.addSubview(categoryLabel)
         categoryGroup.setAccessibilityElement(true)
         categoryGroup.setAccessibilityRole(.radioGroup)
@@ -456,8 +456,24 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         intro.frame = NSRect(x: x, y: y, width: introWidth, height: height(intro, width: introWidth))
         y = intro.frame.maxY + s("s-6")
 
-        // Form card: Category, Message, Contact separated by subtle rules.
         let pad = s("s-6"), inner = shell - pad * 2
+        // "Included automatically" comes before every editable field.
+        var my = pad
+        metaTitle.frame = NSRect(x: pad, y: my, width: inner, height: height(metaTitle, width: inner))
+        my = metaTitle.frame.maxY + s("s-4")
+        rules[2].frame = NSRect(x: pad, y: my, width: inner, height: 1)
+        my += 1 + s("s-5")
+        let valueX = pad + 112 + s("s-4"), valueWidth = max(1, shell - pad - valueX)
+        for (label, value) in [(versionLabel, versionValue), (systemLabel, systemValue)] {
+            let rowHeight = max(height(label, width: 112), height(value, width: valueWidth))
+            label.frame = NSRect(x: pad, y: my, width: 112, height: rowHeight)
+            value.frame = NSRect(x: valueX, y: my, width: valueWidth, height: rowHeight)
+            my += rowHeight + s("s-3")
+        }
+        metaCard.frame = NSRect(x: x, y: y, width: shell, height: my - s("s-3") + pad)
+        y = metaCard.frame.maxY + s("s-6")
+
+        // Form card: Category, Message, Contact separated by subtle rules.
         var cy = pad
         categoryLabel.frame = NSRect(x: pad, y: cy, width: inner, height: height(categoryLabel, width: inner))
         cy = categoryLabel.frame.maxY + s("s-3")
@@ -505,22 +521,6 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         cy = contactHelp.frame.maxY + pad
         formCard.frame = NSRect(x: x, y: y, width: shell, height: cy)
         y = formCard.frame.maxY + s("s-6")
-
-        // "Included automatically": a 112 pt label column and monospace values.
-        var my = pad
-        metaTitle.frame = NSRect(x: pad, y: my, width: inner, height: height(metaTitle, width: inner))
-        my = metaTitle.frame.maxY + s("s-4")
-        rules[2].frame = NSRect(x: pad, y: my, width: inner, height: 1)
-        my += 1 + s("s-5")
-        let valueX = pad + 112 + s("s-4"), valueWidth = max(1, shell - pad - valueX)
-        for (label, value) in [(versionLabel, versionValue), (systemLabel, systemValue)] {
-            let rowHeight = max(height(label, width: 112), height(value, width: valueWidth))
-            label.frame = NSRect(x: pad, y: my, width: 112, height: rowHeight)
-            value.frame = NSRect(x: valueX, y: my, width: valueWidth, height: rowHeight)
-            my += rowHeight + s("s-3")
-        }
-        metaCard.frame = NSRect(x: x, y: y, width: shell, height: my - s("s-3") + pad)
-        y = metaCard.frame.maxY + s("s-6")
 
         // `.feedback-actions`: Send on the right, the status filling the rest.
         let buttonWidth = sendButton.fittingWidth(), buttonHeight = s("h-lg")

@@ -612,7 +612,9 @@ func captureShortcutsEnabled(captureBusy: Bool, selectorGeneration: UInt64? = ni
     !captureBusy || selectorGeneration != nil || recordingControlsHidden || captureRoutes
 }
 
-func captureShortcutsSuspended(preferencesFocused: Bool) -> Bool { preferencesFocused }
+func captureShortcutsSuspended(preferencesFocused: Bool, recordingShortcut: Bool) -> Bool {
+    preferencesFocused && recordingShortcut
+}
 
 func preferencesWindowFocused(visible: Bool, key: Bool, attachedSheetKey: Bool) -> Bool {
     visible && (key || attachedSheetKey)
@@ -1608,6 +1610,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     placement: placement, includeInCaptures: include))
             }, settingsPersisted: { [weak self] settings in
                 self?.updateCaptureShortcuts(settings: settings)
+            }, shortcutRecordingChanged: { [weak self] _ in
+                self?.updateShortcutState()
             }, showHistory: { [weak self] in self?.showHistory() },
                liveCaptureAvailable: options.live,
                showFeedback: { [weak self] in self?.showFeedback() },
@@ -1825,9 +1829,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func updateShortcutState() {
         guard let captureShortcuts else { return }
-        let suspended = captureShortcutsSuspended(preferencesFocused: preferencesFocused)
         do {
-            try captureShortcuts.setSuspended(suspended)
+            try captureShortcuts.setSuspended(shortcutsSuspended)
             try captureShortcuts.setSelectorGeneration(shortcutSelectorGeneration)
         } catch {
             reportShortcutError(error)
@@ -1848,7 +1851,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func drainCaptureShortcuts() {
-        guard onboardingReady, !terminating, !preferencesFocused,
+        guard onboardingReady, !terminating, !shortcutsSuspended,
               captureShortcutsEnabled(captureBusy: captureBusy,
                   selectorGeneration: shortcutSelectorGeneration,
                   recordingControlsHidden: liveController?.recordingControlsHidden == true,
@@ -2072,6 +2075,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             NSApp.activate(ignoringOtherApps: true)
         }
         alert.beginSheetModal(for: host)
+    }
+
+    private var shortcutsSuspended: Bool {
+        captureShortcutsSuspended(preferencesFocused: preferencesFocused,
+            recordingShortcut: preferencesController?.isRecordingShortcut == true)
     }
 
     private var preferencesFocused: Bool {

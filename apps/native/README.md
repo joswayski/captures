@@ -33,16 +33,20 @@ Preferences records all seven stored shortcut fields using the shared Rust
 key/modifier, display, cancellation and validation policy. Escape (including
 modified Escape), focus loss or leaving the recorder cancels without saving.
 Modifier-only input previews the chord; invalid keys show an inline error.
-Focused Preferences releases all seven capture OS registrations so a recorder
-can receive an existing global chord. Edits remain unregistered until Preferences
-loses focus; registration failures are reported rather than treated as success.
+Only an active focused recorder releases all seven capture OS registrations so
+it can receive an existing global chord. Completion, Escape, blur, hiding or
+replacing its controls restores the latest saved bindings. Focused Preferences
+otherwise permits screenshot, recording and New Capture shortcuts; a consumed
+recorded press does not arm a capture on its later release. Registration failures
+are reported rather than treated as success.
 New Capture and all six screenshot/recording target actions are connected in live mode.
 Fixture Preferences never registers global keys. The shipping TypeScript policy
 supplies 390 recording and 195 platform-display differential test vectors.
 
 On X11, `x11_preview_smoke.py --lifecycle --shortcut-editing` exercises all seven
 storage paths with native input, registered-key delivery, invalid/cancel/blur,
-duplicate rejection, restart persistence and saved Region/New Capture chords.
+duplicate rejection, held-key completion, focused-Preferences screenshot/recording/
+New Capture launches, restart persistence and saved Region/New Capture chords.
 The existing `CAPTURES_NATIVE_LAYOUT_PROBE` waits for settled navigation and
 recorder focus before sending each chord once; it reports named rectangles and
 focus, never typed keys or binding values. wgpu invalidates cached Preferences
@@ -69,7 +73,7 @@ host can open the replacement engine.
 Both hosts connect Video-only Record controls and region/window/display recording
 shortcuts. From idle the keys open Record on that target; in an open selector,
 screenshot and recording keys switch mode/target in place. Busy recording phases
-and focused Preferences suppress capture shortcuts. Hidden recording controls are the exception:
+and active shortcut recorders suppress capture shortcuts. Hidden recording controls are the exception:
 only New Capture is routed, and it restores the same generation without launching another capture.
 The HUD Screenshot action opens the existing region selector under a temporary child
 generation while the accepted recording keeps running or paused. Escape cancels only
@@ -147,9 +151,18 @@ macOS Dock reopen shows an existing visible window or Preferences.
 The shared Rust dispatcher queues release-triggered screenshot actions and
 temporary Escape cancellation without competing process-wide handlers. Native
 event loops drain actions on their UI thread. Active capture/preparation and
-focused Preferences suppress screenshot shortcuts; hidden or unfocused
-Preferences does not. Invalid/colliding shortcuts report errors. This does not
-implement recording actions, launch at login, or complete lifecycle parity.
+active Preferences recorders suppress screenshot shortcuts; Preferences alone
+does not. Invalid/colliding shortcuts report errors. This does not complete
+physical platform/input or lifecycle parity.
+
+General is the first Preferences card and owns the opt-in **Start Captures on
+login** control. Existing per-profile development login entries remain separate
+from the shipping app; Wayland hidden startup remains gated. Updates keep the
+actual crate version and **Native development** identity on the left, with a
+160-point disabled Check Now action and unavailable status on the right at both
+normal and compact widths. There is no native check or last-checked timestamp.
+Feedback places Included automatically app/system details directly below its
+header, before Category, Message and Contact; submission and consent are unchanged.
 
 Like shipping, the live shortcut owner unbinds overlapping system screenshot keys
 when it starts and whenever a binding changes, with no prompt and no automatic

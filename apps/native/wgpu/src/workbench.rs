@@ -193,6 +193,15 @@ impl Workbench {
             options.theme_override.then(|| options.theme.clone()),
             shortcut_input,
         );
+        let recorder_shortcuts = shortcuts.clone();
+        preferences_state.set_shortcut_recording_changed(move |recording| {
+            if let Some(shortcuts) = recorder_shortcuts.0.borrow_mut().as_mut()
+                && let Err(error) = shortcuts.set_suspended(recording)
+            {
+                // The next root pass retries and presents the registration error.
+                emit("shortcut-error", json!({"detail": error.to_string()}));
+            }
+        });
         if options.live && options.screenshot.is_none() {
             preferences_state.refresh_motion_preference();
             preferences_state.watch_motion_preference(&cc.egui_ctx);
@@ -1555,8 +1564,11 @@ impl eframe::App for Workbench {
             live.show_recording_controls(ctx);
         }
         self.workspace_was_focused = workspace_focused;
-        let shortcuts_suspended =
-            shortcuts_should_be_suspended(self.preferences.presented(), self.preferences.focused());
+        let shortcuts_suspended = shortcuts_should_be_suspended(
+            self.preferences.presented(),
+            self.preferences.focused(),
+            self.preferences_state.is_recording_shortcut(),
+        );
         self.sync_shortcut_suspension(shortcuts_suspended);
         self.sync_shortcut_routing();
         let shortcut_action = self
@@ -1799,6 +1811,7 @@ impl eframe::App for Workbench {
             let shortcuts_suspended = shortcuts_should_be_suspended(
                 self.preferences.presented(),
                 self.preferences.focused(),
+                self.preferences_state.is_recording_shortcut(),
             );
             self.sync_shortcut_suspension(shortcuts_suspended);
             // Child viewport actions can leave selector scope after logic() ran.
@@ -2292,8 +2305,12 @@ fn wake_shortcut_host(ctx: &egui::Context) {
     ctx.request_repaint_of(egui::ViewportId::ROOT);
 }
 
-fn shortcuts_should_be_suspended(preferences_presented: bool, preferences_focused: bool) -> bool {
-    preferences_presented && preferences_focused
+fn shortcuts_should_be_suspended(
+    preferences_presented: bool,
+    preferences_focused: bool,
+    recording_shortcut: bool,
+) -> bool {
+    preferences_presented && preferences_focused && recording_shortcut
 }
 
 /// Shortcuts stay enabled while a running recording can take a screenshot;
@@ -2425,11 +2442,16 @@ mod tests {
     }
 
     #[test]
-    fn shortcuts_suspend_focused_preferences_but_not_hidden_or_unfocused_preferences() {
-        assert!(shortcuts_should_be_suspended(true, true));
-        assert!(!shortcuts_should_be_suspended(true, false));
-        assert!(!shortcuts_should_be_suspended(false, true));
-        assert!(!shortcuts_should_be_suspended(false, false));
+    fn shortcuts_suspend_only_an_active_focused_recorder() {
+        for presented in [false, true] {
+            for focused in [false, true] {
+                assert!(!shortcuts_should_be_suspended(presented, focused, false));
+            }
+        }
+        assert!(shortcuts_should_be_suspended(true, true, true));
+        assert!(!shortcuts_should_be_suspended(true, false, true));
+        assert!(!shortcuts_should_be_suspended(false, true, true));
+        assert!(!shortcuts_should_be_suspended(false, false, true));
     }
 
     #[test]

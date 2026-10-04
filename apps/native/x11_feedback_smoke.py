@@ -81,7 +81,7 @@ def main():
                     preferences = run("xdotool", "search", "--all", "--sync", "--onlyvisible", "--pid", str(app.pid),
                                       "--name", "^Captures Preferences$").decode().splitlines()[0]
                     time.sleep(1)
-                    layout = {"offset": 0, "controls": {}}
+                    layout = {"offset": 0, "controls": {}, "preferences": {}}
 
                     def controls():
                         # The form reports named rectangles (window points) as
@@ -96,6 +96,8 @@ def main():
                                     continue
                                 if event.get("event") == "feedback-layout":
                                     layout["controls"] = event["detail"]["controls"]
+                                elif event.get("event") == "preferences-shortcuts-layout":
+                                    layout["preferences"] = event["detail"]
                         return layout["controls"]
 
                     def click(window, x, y):
@@ -106,9 +108,18 @@ def main():
 
                     def open_feedback():
                         # Preferences window > About > Send feedback "Open".
-                        click(preferences, 90, 285)
-                        time.sleep(.5)
-                        click(preferences, 810, 476)
+                        click(preferences, 90, 323)
+                        deadline = time.monotonic() + 10
+                        while True:
+                            controls()
+                            prefs = layout["preferences"]
+                            rect = prefs.get("controls", {}).get("Send feedback")
+                            page = prefs.get("page")
+                            if rect and page and page[1] <= rect[1] and rect[3] <= page[3]:
+                                break
+                            assert time.monotonic() < deadline, "About feedback control visible"
+                            time.sleep(.1)
+                        click(preferences, round((rect[0] + rect[2]) / 2), round((rect[1] + rect[3]) / 2))
                         window = run("xdotool", "search", "--sync", "--onlyvisible", "--name", "^Send Feedback$").decode().splitlines()[-1]
                         # Shipping's 640×700 window; keep it fully on the 900 px screen.
                         run("xdotool", "windowmove", "--sync", window, "0", "0")
@@ -139,6 +150,9 @@ def main():
                         run("import", "-window", window, str(output / f"feedback-{appearance}-{name}.png"))
 
                     window = open_feedback()
+                    rects = controls()
+                    assert rects["Header"][3] < rects["Details"][1], "details overlap header"
+                    assert rects["Details"][3] < rects["Category.Bug"][1], "details must precede editable fields"
                     screenshot(window, "empty")
                     press(window, "Send")  # Empty Send is disabled.
                     assert requests.empty(), "opening/empty Send performed a network request"
@@ -165,7 +179,9 @@ def main():
                     assert "Status" in controls(), "offline failure has no status"
                     screenshot(window, "error")
                     press(window, "Message")
-                    run("xdotool", "key", "ctrl+a", "ctrl+c")
+                    # Each key needs a painted frame; Copy must observe the
+                    # selection made by Select All, not the preceding cursor.
+                    run("xdotool", "key", "ctrl+a", "sleep", ".2", "key", "ctrl+c", "sleep", ".2")
                     assert run("xclip", "-selection", "clipboard", "-o").decode() == message, "error/close lost the draft"
                     press(window, "Send")  # Failure can retry immediately.
                     assert requests.get(timeout=5) == "CONNECT captur.es:443 HTTP/1.1"
