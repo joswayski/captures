@@ -562,6 +562,14 @@ warmup, then reports five alternating-order trials of three renders each. Retain
 the raw trials, compiler and source/binary identity; repeat on the same idle host.
 This fixture excludes decoding, UI, encoding, presentation and process footprint.
 
+The compositor retains a 64 KiB channel lookup built from tiny-skia's exact
+demultiplication. Measure its one-time initialization alone in a fresh process
+(the normal render benchmark warms it before timing):
+
+```sh
+cargo test -p captures-image --release --locked benchmark_demultiply_cache_initialization -- --ignored --nocapture
+```
+
 For visual review, capture the specific workbench window using macOS Screenshot
 (not your whole desktop), in light/dark, history empty/populated, HUD running/paused,
 and preview before/during/after deletion. Test both 1× and 2× screens, keyboard
