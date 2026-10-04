@@ -153,6 +153,9 @@ impl PointerOverlay {
         }
     }
 
+    // Only the Windows/Linux recorder (segment.rs) reads this; macOS builds
+    // overlay.rs for tests alone.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub fn shows_cursor(&self) -> bool {
         self.show_cursor
     }
