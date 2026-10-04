@@ -629,6 +629,7 @@ mod tests {
         assert_eq!(
             titles,
             [
+                "General",
                 "Appearance",
                 "Capture",
                 "Shortcuts",
