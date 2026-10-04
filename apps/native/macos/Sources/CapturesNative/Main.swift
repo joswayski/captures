@@ -91,15 +91,19 @@ struct Options {
                 return
             }
             var nativeInstance: NativeInstance?
+            var crashDiagnostics: CrashDiagnostics?
             if options.live {
                 let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
                 guard result.primary else { return }
                 nativeInstance = result.owner
+                do { crashDiagnostics = try CrashDiagnostics.start(historyRoot: options.historyRoot) }
+                catch { reportDiagnosticsFailure(error) }
             }
             defer { nativeInstance?.close() }
             let application = NSApplication.shared
             application.setActivationPolicy(options.scene == "idle" ? .accessory : .regular)
-            let delegate = Workbench(options: options, nativeInstance: nativeInstance)
+            let delegate = Workbench(options: options, nativeInstance: nativeInstance,
+                                     crashDiagnostics: crashDiagnostics)
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch Options.Usage.invalid {
@@ -116,6 +120,7 @@ struct Options {
         application.setActivationPolicy(.regular)
         var workbench: Workbench?
         var nativeInstance: NativeInstance?
+        var crashDiagnostics: CrashDiagnostics?
         defer { nativeInstance?.close() }
         // LaunchServices delivers cold-open Apple events before didFinishLaunching.
         // Collect those before election so a secondary does not exit and lose them.
@@ -123,7 +128,10 @@ struct Options {
             let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
             guard result.primary else { return false }
             nativeInstance = result.owner
-            let delegate = Workbench(options: options, nativeInstance: nativeInstance)
+            do { crashDiagnostics = try CrashDiagnostics.start(historyRoot: options.historyRoot) }
+            catch { reportDiagnosticsFailure(error) }
+            let delegate = Workbench(options: options, nativeInstance: nativeInstance,
+                                     crashDiagnostics: crashDiagnostics)
             workbench = delegate
             application.delegate = delegate
             delegate.applicationDidFinishLaunching(notification)
@@ -132,5 +140,10 @@ struct Options {
         application.delegate = launch
         withExtendedLifetime(launch) { application.run() }
         withExtendedLifetime(workbench) {}
+    }
+
+    private static func reportDiagnosticsFailure(_ error: Error) {
+        // Backend errors are intentionally not printed: they can contain profile paths.
+        FileHandle.standardError.write(Data("Captures diagnostics could not start; capture remains available.\n".utf8))
     }
 }

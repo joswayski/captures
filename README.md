@@ -494,8 +494,14 @@ not this external-open path.
 Native Preferences (and the tray/menu bar Send Feedback…) opens an optional
 feedback form in its own window, matching the shipping layout. Sending shares only
 the message, optional contact, category, and displayed app/system details with
-captur.es; it never attaches captures, files, or diagnostics. Fixture mode cannot
-send feedback, and failed requests preserve the draft for retry.
+captur.es; it never attaches captures or files. Live native profiles retain a local,
+bounded, home-path-redacted Rust panic or unclean-session notice for review.
+Copy stays local; adding the summary to the editable message is explicit, and
+nothing sends until **Send**. A forced stop alone is not a confirmed crash.
+Normal Quit/restart and supported OS termination paths clean the current marker;
+OS exception-report discovery and physical shutdown acceptance remain open.
+Fixture mode cannot collect diagnostics or send feedback, and failed requests
+preserve the draft for retry.
 Shared Rust now defines the screenshot editor's layered document, crop/translation/
 orientation geometry, canvas sizing and bounded snapshot history, checked against
 the shipping TypeScript behavior. A shared renderer now flattens real image layers

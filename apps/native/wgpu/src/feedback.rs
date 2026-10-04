@@ -62,6 +62,9 @@ pub struct Feedback {
     last_probes: Option<ProbeRects>,
     /// Collect probes without the environment variable (unit tests).
     probing: bool,
+    diagnostics: Option<Arc<captures_app::crash::Session>>,
+    review: Option<captures_app::crash::Review>,
+    diagnostic_error: Option<String>,
 }
 
 impl Feedback {
@@ -100,6 +103,22 @@ impl Feedback {
     fn can_submit(&self, live: bool) -> bool {
         live && self.context.is_some()
             && copy::can_submit(&self.message, &self.contact, self.pending.is_some())
+    }
+
+    fn append_to_message(&mut self, text: &str) -> bool {
+        if self.pending.is_some() {
+            return false;
+        }
+        let separator = if self.message.is_empty() { "" } else { "\n\n" };
+        if self.message.chars().count() + separator.len() + text.chars().count()
+            > copy::MESSAGE_LIMIT
+        {
+            return false;
+        }
+        self.message.push_str(separator);
+        self.message.push_str(text);
+        self.result = None;
+        true
     }
 
     fn submit(&mut self, ctx: &egui::Context, live: bool) {
@@ -240,6 +259,57 @@ impl Feedback {
         });
         self.probe("Details", details);
         ui.add_space(t.number("s-6"));
+        if let Some(review) = self.review.clone() {
+            card(ui, t, |ui| {
+                ui.label(
+                    RichText::new(review.title)
+                        .size(t.number("text-md"))
+                        .color(t.color("text")),
+                );
+                ui.add_space(t.number("s-3"));
+                help_text(ui, t, review.explanation, f32::INFINITY);
+                ui.add_space(t.number("s-4"));
+                egui::ScrollArea::vertical()
+                    .id_salt("crash-summary")
+                    .max_height(128.)
+                    .show(ui, |ui| {
+                        let response = ui.add(
+                            egui::Label::new(
+                                RichText::new(&review.summary)
+                                    .monospace()
+                                    .color(t.color("text")),
+                            )
+                            .wrap()
+                            .selectable(true),
+                        );
+                        self.probe("Diagnostic summary", response.rect);
+                    });
+                ui.add_space(t.number("s-4"));
+                ui.horizontal_wrapped(|ui| {
+                    let copy = widgets::button(ui, t, "Copy summary", false);
+                    self.probe("Copy summary", copy.rect);
+                    if copy.clicked() { ui.ctx().copy_text(review.summary.clone()); }
+                    let add = widgets::button(ui, t, "Add to message", false);
+                    self.probe("Add to message", add.rect);
+                    if add.clicked() {
+                        self.diagnostic_error = (!self.append_to_message(&review.summary)).then(|| "Wait for the current send to finish, or shorten the message below 8,000 characters.".into());
+                    }
+                    let dismiss = widgets::button(ui, t, "Dismiss diagnostics", false);
+                    self.probe("Dismiss diagnostics", dismiss.rect);
+                    if dismiss.clicked() && let Some(session) = &self.diagnostics {
+                        match session.dismiss() {
+                            Ok(()) => { self.review = None; self.diagnostic_error = None; },
+                            Err(error) => self.diagnostic_error = Some(error),
+                        }
+                    }
+                });
+                if let Some(error) = &self.diagnostic_error {
+                    ui.add_space(t.number("s-3"));
+                    ui.label(RichText::new(error).color(t.color("danger-text")));
+                }
+            });
+            ui.add_space(t.number("s-6"));
+        }
         let sending = self.pending.is_some();
         card(ui, t, |ui| {
             ui.add_enabled_ui(!sending, |ui| {
@@ -516,6 +586,12 @@ impl FeedbackWindow {
 
     pub fn open(&self, ctx: &egui::Context) {
         self.lock().open(ctx);
+    }
+
+    pub fn set_diagnostics(&self, session: Arc<captures_app::crash::Session>) {
+        let mut form = self.lock();
+        form.review = session.preview();
+        form.diagnostics = Some(session);
     }
 
     #[cfg(test)]
@@ -820,6 +896,44 @@ mod tests {
         form.message.pop();
         form.contact.push('x');
         assert!(!form.can_submit(true));
+    }
+
+    #[test]
+    fn diagnostics_are_visible_opt_in_text_and_preserve_draft_limits_and_busy_send() {
+        let ctx = egui::Context::default();
+        let mut form = Feedback {
+            message: "My own description".into(),
+            contact: "my contact".into(),
+            category: 2,
+            context: Some(captures_feedback::native::context()),
+            review: captures_app::crash::Review::from_preview(
+                captures_feedback::crash_diagnostics::DiagnosticPreview {
+                    previous_session_started_at: None,
+                    unclean_exit: true,
+                    rust_panic: Some("Redacted panic".into()),
+                    os_report: None,
+                },
+            ),
+            ..Default::default()
+        };
+        // Merely retaining review evidence adds no hidden transport fields.
+        form.submit_with(&ctx, true, |draft| {
+            assert_eq!(draft.message, "My own description");
+            assert_eq!(draft.contact.as_deref(), Some("my contact"));
+            assert_eq!(draft.category, "other");
+            Err("offline fixture".into())
+        });
+        assert!(!form.append_to_message("not while sending"));
+        drain(&mut form);
+        assert!(form.append_to_message("Visible summary 🦀"));
+        assert_eq!(form.message, "My own description\n\nVisible summary 🦀");
+        assert_eq!(form.contact, "my contact");
+        form.message = "🦀".repeat(copy::MESSAGE_LIMIT - 3);
+        assert!(form.append_to_message("é"));
+        assert_eq!(form.message.chars().count(), copy::MESSAGE_LIMIT);
+        let full = form.message.clone();
+        assert!(!form.append_to_message("x"));
+        assert_eq!(form.message, full);
     }
 
     fn render(

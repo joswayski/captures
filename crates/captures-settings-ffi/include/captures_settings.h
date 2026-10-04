@@ -17,6 +17,18 @@
  * Never call context/submit on the UI thread or serialize behind capture/recording work. */
 char *captures_feedback_request_v1(const char *request_json);
 
+/* Main-thread-only local crash lifecycle; never sends feedback. Call start
+ * {history_root:string|null} exactly once, only after live primary election,
+ * before UI/capture initialization. start/preview return {preview:null|{title,
+ * explanation,summary,unclean_exit,has_exception_evidence}}. dismiss removes
+ * prior evidence only. clean_exit disarms OS callbacks and cleans current
+ * markers AFTER accepted work drains, BEFORE releasing instance ownership.
+ * resume rearms the same session only after failed restart reacquires election.
+ * Forwarded secondaries and fixtures must not call start. Summary is local,
+ * bounded and home-path redacted; sharing requires visible editable draft text
+ * and explicit Feedback Send. Envelopes/free rules match the feedback ABI. */
+char *captures_crash_request_v1(const char *request_json);
+
 /* Pure, allocation-returning update notice helpers; safe on the UI thread.
  * No network, download or install happens here (no signed updater yet).
  * present {status: UpdateStatus|null, view?: {show_changelog, action_error,

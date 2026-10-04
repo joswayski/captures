@@ -95,6 +95,28 @@ final class FeedbackTests: XCTestCase {
         XCTAssertEqual(form.status.stringValue, "Unavailable")
     }
 
+    func testDiagnosticsAppendPreservesDraftAndContactAndNeverSendsImplicitly() throws {
+        _ = NSApplication.shared
+        let transport = Transport()
+        let form = makeForm(try XCTUnwrap(Tokens.variants["dark-mustard"]), live: true, transport: transport)
+        defer { form.dismiss() }
+        form.message.string = "Existing draft"
+        form.contact.stringValue = "person@example.test"
+        XCTAssertTrue(form.appendToMessage("Visible diagnostics"))
+        XCTAssertEqual(form.message.string, "Existing draft\n\nVisible diagnostics")
+        XCTAssertEqual(form.contact.stringValue, "person@example.test")
+        XCTAssertTrue(transport.drafts.isEmpty, "review and copy are local until explicit Send")
+
+        form.message.string = String(repeating: "x", count: 7_990)
+        XCTAssertFalse(form.appendToMessage("too long"))
+        XCTAssertEqual(form.message.string.unicodeScalars.count, 7_990)
+
+        form.message.string = "Sending draft"; form.updateControls(); form.submit()
+        XCTAssertTrue(form.sending)
+        XCTAssertFalse(form.appendToMessage("must wait"))
+        XCTAssertEqual(form.message.string, "Sending draft")
+    }
+
     func testShippingCopyPlaceholdersAndLoadingDetails() throws {
         _ = NSApplication.shared
         let transport = Transport()

@@ -607,6 +607,10 @@ impl Preferences {
         self.feedback.open(ctx);
     }
 
+    pub fn set_diagnostics(&mut self, session: std::sync::Arc<captures_app::crash::Session>) {
+        self.feedback.set_diagnostics(session);
+    }
+
     /// Register the feedback window (while open) on every root pass.
     pub fn feedback_viewport(&mut self, ctx: &egui::Context, t: &Tokens, live: bool) {
         self.feedback.show(ctx, t, live);
