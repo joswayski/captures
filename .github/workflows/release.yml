@@ -24,6 +24,7 @@ jobs:
   queue:
     name: Select the next Preview batch
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -95,6 +96,7 @@ jobs:
     needs: queue
     if: needs.queue.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       app_version: ${{ steps.version.outputs.app_version }}
       display_version: ${{ steps.version.outputs.display_version }}
@@ -117,6 +119,7 @@ jobs:
     needs: queue
     if: needs.queue.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -135,6 +138,7 @@ jobs:
     needs: queue
     if: needs.queue.outputs.should_release == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -181,6 +185,7 @@ jobs:
     name: Stage Preview
     needs: [queue, version, frontend, rust]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     outputs:
@@ -320,6 +325,7 @@ jobs:
     needs: prepare
     environment: release
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: write
     strategy:
@@ -554,6 +560,7 @@ jobs:
     name: Validate staged release
     needs: [prepare, package]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -597,6 +604,7 @@ jobs:
     name: Publish Preview
     needs: [prepare, validate_draft]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -633,6 +641,7 @@ jobs:
     name: Update latest Preview
     needs: publish
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -840,6 +849,7 @@ jobs:
     if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result != 'success' }}
     needs: [prepare, package, validate_draft, publish]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

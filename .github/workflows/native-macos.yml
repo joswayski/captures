@@ -30,6 +30,7 @@ jobs:
   build-and-test:
     # Recording's apple-metal bridge needs the macOS 26 SDK, like the desktop CI.
     runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -136,6 +137,7 @@ jobs:
   development-package:
     needs: build-and-test
     runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
