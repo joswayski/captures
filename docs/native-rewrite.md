@@ -189,6 +189,39 @@ hosts use this shared compositor; physical macOS/Windows, Wayland and whole-app
 performance acceptance remain open. This does not change the renderer choice or
 the shipping Tauri application.
 
+For a document containing only one fully opaque, full-canvas identity image,
+the compositor now copies its exact pixels into the owned output without
+allocating or painting a second raster plane. It avoids a 31.6 MiB allocation
+at 3840×2160 and skips backdrop-table setup. The existing identity guards still
+exclude scaling, translation, rotation, reduced opacity, shadows and non-normal
+blends; any additional layer or non-opaque image pixel keeps the raster path.
+Cropping and validation keep their existing order. Regressions check exact
+legacy pixels, shared source/asset immutability, later layers and a final image
+pixel with alpha 254 or 0, so checking only the first pixel would fail.
+The copy is bounded to declared dimensions; a regression first caught the
+whole-buffer copy panicking on valid oversized `ImageBuffer` storage, then
+verified the declared pixels and unchanged trailing source bytes.
+Three alternating old/new release-binary rounds on the Linux orb, pooling 15
+three-render trial means per version, measured the owned 4K path:
+
+| 4K canvas fixture | Before → opaque image copy, ms/render | Difference |
+| --- | --- | --- |
+| Empty | 18.795 → 20.661 | 1.866 ms slower / 9.9% |
+| Three vector layers | 16.686 → 18.340 | 1.654 ms slower / 9.9% |
+| Mixed-alpha bitmap | 54.245 → 54.412 | 0.167 ms slower / 0.3% |
+| Fully opaque bitmap | 28.325 → 16.207 | 12.118 ms faster / 42.8% |
+
+The opaque ranges do not overlap (26.905–33.811 versus 15.479–17.568 ms).
+All controls' ranges overlap; their median slowdowns are disclosed, without a
+demonstrated cause. A separate worst-case phase with alpha 254 only at the final
+pixel measured 5.695 ms for the additional eligibility scan (5.593–5.915 ms);
+that scan is followed by the unchanged raster path. This is the cost paid by a
+nearly opaque image that is ineligible. Full-render trials include allocation,
+fill and the scan, but exclude decoding, UI, encoding, presentation, physical
+footprint and energy. Shared implementation covers AppKit/macOS and
+wgpu/Windows/X11/gated Wayland; physical-platform and whole-app acceptance remain
+open. Neither renderer choice nor the shipping Tauri application changes.
+
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
 History and the existing native Retry action. AppKit rebalances on resize;
