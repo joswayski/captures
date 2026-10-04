@@ -134,7 +134,8 @@ class DevelopmentPackageTests(unittest.TestCase):
 
     def test_archives_keep_exact_staged_bytes_modes_and_build_identity_without_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            # Windows TEMP can use an 8.3 alias; staging returns canonical paths.
+            root = Path(directory).resolve()
             binary = root / "binary"
             binary.write_bytes(b"before signing")
             resources = root / "resources.bundle"
