@@ -21,6 +21,10 @@ permissions:
   contents: read
 
 jobs:
+  route:
+    uses: ./.github/workflows/mac-route.yml
+    secrets: inherit
+
   queue:
     name: Select the next Preview batch
     runs-on: ubuntu-24.04
@@ -135,9 +139,9 @@ jobs:
 
   rust:
     name: Rust checks (${{ matrix.os }})
-    needs: queue
+    needs: [queue, route]
     if: needs.queue.outputs.should_release == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ needs.route.outputs.mac == 'true' && matrix.os == 'macos-26' && fromJSON('["self-hosted","josemac"]') || matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false

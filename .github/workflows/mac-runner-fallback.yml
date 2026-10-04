@@ -1,0 +1,56 @@
+name: Self-hosted Mac fallback
+
+# If a job has waited more than an hour for the self-hosted Mac (asleep, closed,
+# or busy), cancel its run and re-run it. Re-runs always go to GitHub-hosted
+# macOS (see mac-route.yml). A run that a newer run of the same workflow on the
+# same branch already supersedes is only cancelled, so the re-run can never
+# displace newer work in a concurrency group.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: mac-runner-fallback
+  cancel-in-progress: false
+
+jobs:
+  fallback:
+    name: Move stuck self-hosted Mac jobs to GitHub-hosted runners
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MAX_WAIT_MINUTES: '60'
+        run: |
+          set -euo pipefail
+          export CUTOFF=$(( $(date +%s) - MAX_WAIT_MINUTES * 60 ))
+          for status in queued in_progress; do
+            gh api "repos/$REPO/actions/runs?status=$status&per_page=100" \
+              --jq '.workflow_runs[] | select(.run_attempt == 1) | "\(.id) \(.workflow_id) \(.head_branch)"'
+          done | sort -u | while read -r run workflow branch; do
+            stuck="$(gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" --jq '
+              [.jobs[] | select(.status == "queued")
+                       | select(.labels | index("josemac"))
+                       | select((.created_at | fromdateiso8601) < ($ENV.CUTOFF | tonumber))] | length')"
+            (( stuck > 0 )) || continue
+            echo "Run $run has $stuck job(s) waiting over ${MAX_WAIT_MINUTES}m for the self-hosted Mac; cancelling."
+            gh api -X POST "repos/$REPO/actions/runs/$run/cancel" >/dev/null || continue
+            for _ in $(seq 36); do
+              [[ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status)" == completed ]] && break
+              sleep 5
+            done
+            latest="$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$branch&per_page=1" --jq '.workflow_runs[0].id')"
+            if [[ "$latest" != "$run" ]]; then
+              echo "Run $run is superseded by run $latest; not re-running."
+              continue
+            fi
+            gh api -X POST "repos/$REPO/actions/runs/$run/rerun" >/dev/null \
+              && echo "Re-running run $run on GitHub-hosted runners." \
+              || echo "::warning::Could not re-run run $run"
+          done
