@@ -674,7 +674,12 @@ final class MiniPreviewTests: XCTestCase {
         actions.trash(captured)
         XCTAssertEqual(controller.presentedArtifactIDs, [],
                        "shipping dissolves the card before its Trash request")
-        XCTAssertEqual(transport.requestCount, 0, "Trash waits for the dust")
+        if NativeMotion.reduceMotion {
+            XCTAssertFalse(controller.isTransitioning, "Reduce Motion removes the card without a dust delay")
+        } else {
+            XCTAssertTrue(controller.isTransitioning, "the dust holds the card's slot")
+            XCTAssertEqual(transport.requestCount, 0, "Trash waits for the dust")
+        }
         XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
         actions.save(captured)
         XCTAssertEqual(transport.saveCount, 0, "Save and Trash share the artifact busy guard")
