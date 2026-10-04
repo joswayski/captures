@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -5,10 +6,12 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import package
 
@@ -53,6 +56,8 @@ class DevelopmentPackageTests(unittest.TestCase):
                 launcher, executable = package.stage(platform, binary, output, resources)
                 self.assertEqual(executable.read_bytes(), binary.read_bytes())
                 self.assertTrue(launcher.exists())
+                self.assertEqual((output / "TESTING.md").read_bytes(),
+                                 (package.ROOT / "apps/native/TESTING.md").read_bytes())
                 with self.assertRaises(FileExistsError):
                     package.stage(platform, binary, output, resources)
                 if platform == "macos":
@@ -75,6 +80,7 @@ class DevelopmentPackageTests(unittest.TestCase):
                 "apps/desktop/src-tauri/openh264/NOTICE.md": b"OpenH264 notice",
                 "apps/desktop/src-tauri/Info.plist": plistlib.dumps({}),
                 "apps/desktop/src-tauri/icons/icon.icns": b"icon",
+                "apps/native/TESTING.md": b"development testing guide",
                 "LICENSE": b"Captures license",
                 "TRADEMARKS.md": b"Captures trademarks",
             }
@@ -125,6 +131,107 @@ class DevelopmentPackageTests(unittest.TestCase):
                         package.stage("linux", binary, output, media_target="x86_64-unknown-linux-gnu")
                     self.assertFalse(output.exists(), "missing tool/source must fail before staging")
                     path.write_bytes(data)
+
+    def test_archives_keep_exact_staged_bytes_modes_and_build_identity_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            # Windows TEMP can use an 8.3 alias; staging returns canonical paths.
+            root = Path(directory).resolve()
+            binary = root / "binary"
+            binary.write_bytes(b"before signing")
+            resources = root / "resources.bundle"
+            resources.mkdir()
+            (resources / "tokens.json").write_text("{}")
+            for platform in ("macos", "windows", "linux"):
+                output = root / f"native é {platform}"
+                _, executable = package.stage(platform, binary, output, resources)
+                executable.write_bytes(b"after signing")
+                destination = root / (platform + (".tar.gz" if platform == "linux" else ".zip"))
+                with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_SHA": "a" * 40}):
+                    package.archive(platform, output, executable, destination)
+                relative = executable.relative_to(root).as_posix()
+                if platform == "linux":
+                    with tarfile.open(destination) as bundle:
+                        self.assertEqual(bundle.extractfile(relative).read(), b"after signing")
+                        if os.name != "nt":
+                            self.assertEqual(bundle.getmember(relative).mode & 0o111, 0o111)
+                        self.assertNotIn(f"{output.name}/{package.IDENTITY}.desktop", bundle.getnames())
+                        info = json.load(bundle.extractfile(f"{output.name}/BUILD_INFO.json"))
+                        self.assertEqual(bundle.extractfile(f"{output.name}/TESTING.md").read(),
+                                         (package.ROOT / "apps/native/TESTING.md").read_bytes())
+                else:
+                    with zipfile.ZipFile(destination) as bundle:
+                        self.assertEqual(bundle.read(relative), b"after signing")
+                        if os.name != "nt":
+                            self.assertEqual((bundle.getinfo(relative).external_attr >> 16) & 0o111, 0o111)
+                        info = json.loads(bundle.read(f"{output.name}/BUILD_INFO.json"))
+                        self.assertIn(f"{output.name}/TESTING.md", bundle.namelist())
+                        if platform == "macos":
+                            self.assertIn(f"{output.name}/{package.NAME}.app/Contents/Resources/"
+                                          "CapturesNative_CapturesNative.bundle/tokens.json", bundle.namelist())
+                        if platform == "windows":
+                            self.assertNotIn(f"{output.name}/register-open-with.reg", bundle.namelist())
+                            self.assertNotIn(f"{output.name}/unregister-open-with.reg", bundle.namelist())
+                self.assertEqual(info["binary_sha256"], hashlib.sha256(b"after signing").hexdigest())
+                self.assertEqual(info["binary"], executable.relative_to(output).as_posix())
+                self.assertEqual(info["platform"], platform)
+                self.assertEqual(info["source_commit"], "a" * 40)
+                self.assertTrue(info["development"])
+                original_archive = destination.read_bytes()
+                original_info = (output / "BUILD_INFO.json").read_bytes()
+                executable.write_bytes(b"must not overwrite archive")
+                with self.assertRaises(FileExistsError):
+                    package.archive(platform, output, executable, destination)
+                self.assertEqual(destination.read_bytes(), original_archive)
+                self.assertEqual((output / "BUILD_INFO.json").read_bytes(), original_info)
+
+    def test_archive_rejects_recursive_or_external_inputs_and_does_not_invent_local_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "binary"
+            binary.write_bytes(b"local executable")
+            output = root / "package"
+            _, executable = package.stage("linux", binary, output)
+            with self.assertRaises(ValueError):
+                package.archive("linux", output, executable, output / "recursive.tar.gz")
+            with self.assertRaises(ValueError):
+                package.archive("linux", output, binary, root / "wrong.tar.gz")
+            self.assertFalse((output / "BUILD_INFO.json").exists())
+            with patch.dict(os.environ, {"GITHUB_ACTIONS": "false", "GITHUB_SHA": "not this build"}):
+                package.archive("linux", output, executable, root / "local.tar.gz")
+            self.assertIsNone(json.loads((output / "BUILD_INFO.json").read_text())["source_commit"])
+
+    def test_cli_signs_and_verifies_before_archiving_the_final_binary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "binary"
+            binary.write_bytes(b"unsigned")
+            resources = root / "resources.bundle"
+            resources.mkdir()
+            output = root / "package"
+            destination = root / "macos.zip"
+            executable = output / f"{package.NAME}.app/Contents/MacOS/CapturesNative"
+
+            def sign(command, check):
+                self.assertTrue(check)
+                if "--sign" in command:
+                    self.assertIn("-", command)
+                    executable.write_bytes(b"signed fixture")
+                else:
+                    self.assertIn("--verify", command)
+                    self.assertIn("--strict", command)
+
+            args = ["package.py", "--platform", "macos", "--binary", str(binary),
+                    "--resources", str(resources), "--output", str(output),
+                    "--adhoc-sign", "--archive", str(destination)]
+            with patch.object(sys, "argv", args), patch.object(sys, "platform", "darwin"), \
+                    patch.object(package.subprocess, "run", side_effect=sign) as signer:
+                package.main()
+            self.assertEqual(signer.call_count, 2)
+            info = json.loads((output / "BUILD_INFO.json").read_text())
+            self.assertEqual(info["binary_sha256"], hashlib.sha256(b"signed fixture").hexdigest())
+            with zipfile.ZipFile(destination) as bundle:
+                self.assertEqual(bundle.read(f"{output.name}/{package.NAME}.app/Contents/MacOS/CapturesNative"),
+                                 b"signed fixture")
 
     @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("gio"),
                          "requires Linux GIO desktop-entry launch support")
