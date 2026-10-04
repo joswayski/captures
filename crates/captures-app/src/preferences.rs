@@ -2,9 +2,8 @@
 //! shared by the AppKit and wgpu hosts so both match `Preferences` in the
 //! Tauri UI (`App.tsx`, `lib/preferencesFind.ts`, `lib/shortcut.ts`).
 //!
-//! Native-only differences are explicit here rather than in each host: the
-//! system screenshot-key takeover, signed updates and the development login
-//! item are not connected in native builds, so their copy says so.
+//! Native-only differences are explicit here rather than in each host: signed
+//! updates remain unavailable, and login items use a separate development identity.
 
 use crate::shortcuts::ShortcutPlatform;
 
@@ -16,7 +15,12 @@ pub struct Section {
     pub description: &'static str,
 }
 
-pub const SECTIONS: [Section; 7] = [
+pub const SECTIONS: [Section; 8] = [
+    Section {
+        id: "general",
+        title: "General",
+        description: "Startup and app behavior for this native development profile.",
+    },
     Section {
         id: "appearance",
         title: "Appearance",
@@ -45,7 +49,7 @@ pub const SECTIONS: [Section; 7] = [
     Section {
         id: "updates",
         title: "Updates",
-        description: "Preview builds check for a new version automatically. Update now installs it in place.",
+        description: "Signed Preview updates are not available to native development builds yet.",
     },
     Section {
         id: "about",
@@ -553,8 +557,12 @@ pub fn open_keyboard_settings(platform: ShortcutPlatform) -> Result<(), String> 
     Err("Couldn’t open Keyboard settings.".into())
 }
 
-/// Updates card utility row. Signed updates are not connected natively.
-pub const UPDATES_TITLE: &str = "Updates aren’t connected in this build";
+/// Stable build identity; status belongs beside the disabled action, not here.
+pub const UPDATES_VERSION: &str = concat!("Version ", env!("CARGO_PKG_VERSION"));
+pub const UPDATES_CHANNEL: &str = "Native development";
+pub const UPDATES_ACTION_WIDTH: f32 = 160.;
+/// Signed updates are not connected natively. No check or timestamp is fabricated.
+pub const UPDATES_TITLE: &str = "Updates unavailable";
 pub const UPDATES_DETAIL: &str =
     "Signed Preview updates are not available to native development builds yet.";
 pub const UPDATES_ACTION: &str = "Check Now";
@@ -563,9 +571,8 @@ pub const FEEDBACK_TITLE: &str = "Send feedback";
 pub const FEEDBACK_DETAIL: &str = "Report a bug or share an idea.";
 pub const FEEDBACK_ACTION: &str = "Open";
 
-pub const LOGIN_ITEM_TITLE: &str = "Launch native Captures at login";
-pub const LOGIN_ITEM_DETAIL: &str =
-    "Start this native development profile hidden when you sign in.";
+pub const LOGIN_ITEM_TITLE: &str = "Start Captures on login";
+pub const LOGIN_ITEM_DETAIL: &str = "Start in the background when you sign in to your computer.";
 pub const LOGIN_ITEM_CHECKING: &str = "Checking…";
 pub const LOGIN_ITEM_RETRY: &str = "Retry";
 
@@ -698,6 +705,31 @@ mod tests {
         assert_eq!(visible_section(&tops, 320., false), 1);
         assert_eq!(visible_section(&tops, 320., true), 2);
         assert_eq!(visible_section(&[], 0., true), 0);
+    }
+
+    #[test]
+    fn general_starts_the_page_and_native_update_identity_is_honest() {
+        assert_eq!(
+            SECTIONS.map(|section| section.id),
+            [
+                "general",
+                "appearance",
+                "capture",
+                "shortcuts",
+                "recording",
+                "gif",
+                "updates",
+                "about",
+            ]
+        );
+        assert_eq!(LOGIN_ITEM_TITLE, "Start Captures on login");
+        assert_eq!(
+            LOGIN_ITEM_DETAIL,
+            "Start in the background when you sign in to your computer."
+        );
+        assert!(UPDATES_VERSION.starts_with("Version "));
+        assert_eq!(UPDATES_CHANNEL, "Native development");
+        assert_eq!(UPDATES_TITLE, "Updates unavailable");
     }
 
     #[test]

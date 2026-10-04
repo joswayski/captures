@@ -376,6 +376,23 @@ show the login item as
 unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
 Windows, Wayland and screen-reader acceptance remain open.
 
+The coordinated Preferences/Feedback follow-up tracks shipping PR #926. General
+is first and contains **Start Captures on login**, with the shipping background
+sign-in description and a separate native development-profile identity. Existing
+macOS/Windows/X11 registration remains opt-in and OS-authoritative; Wayland hidden
+startup stays gated. Native Updates keeps the actual crate version and **Native
+development** on the left, a fixed 160-point disabled action and **Updates
+unavailable** beneath it on the right, including compact windows. It does not
+simulate checks, results or last-checked times. Feedback shows Included
+automatically immediately below its header, before Category/Message/Contact.
+Capture shortcuts work with Preferences focused unless a recorder is active;
+synchronous start/end callbacks release/restore grabs for all seven rows, including
+New Capture. Host tests cover recorder transitions and update/feedback geometry;
+private-X11 smokes cover held-key completion and focused capture/recording launch,
+explicit login entries and hidden relaunch, and offline Feedback in light/dark.
+macOS relies on CI controller/layout tests; physical macOS/Windows input/sign-in,
+live Wayland hosts, mixed DPI and accessibility remain open. No parity gate closes.
+
 Accessibility and keyboard parity for setup, overlays and the main windows:
 wgpu now names the direct overlays like AppKit (AccessKit groups "Capture region
 selector" and "Capture window selector"; the window group's value is the hovered
@@ -1822,7 +1839,7 @@ Native AppKit and wgpu Preferences now connect explicit, optional feedback throu
 window (About → Open or tray Send Feedback…) with `Feedback.tsx`'s layout, copy,
 category cards, placeholders and limits shared through `captures_app::feedback`
 (AppKit reads them through the feedback bridge's `copy` operation). The form
-displays its app/system context before Send, permits
+displays its app/system context directly below the header before editable fields, permits
 an optional contact, blocks duplicate submissions, and retains drafts after errors
 or closing/reopening. Submission runs separately from capture/settings workers;
 fixtures cannot send. No captures, files, or crash diagnostics are attached and
@@ -2223,8 +2240,9 @@ Rust owns modifier/key policy, cancellation, display tokens and persisted-field
 validation, checked against 585 shipping TypeScript recording/display vectors.
 AppKit intercepts focused recorder events before menu equivalents; wgpu observes
 root winit physical keys before egui loses PrintScreen, keypad or Super identity.
-Focused Preferences temporarily releases screenshot OS grabs, retaining desired
-bindings and restoring the latest saved mapping on blur. Registration failures
+Only an active focused recorder temporarily releases OS grabs, retaining desired
+bindings and restoring the latest saved mapping on completion, cancellation or blur.
+Preferences focus alone does not suppress capture. Registration failures
 leave capture routing suspended and report an error. The recording bindings, then
 storage-only, now open the capture menu in Record mode (see the recording shortcut
 notes). The private-X11 `--lifecycle --shortcut-editing`
@@ -2238,7 +2256,7 @@ dispatcher and both hosts. Idle recording keys open the existing selector in
 Record mode at the requested target. Within the selector, screenshot/recording
 keys switch mode and target without replacing the flow, discarding the settled
 region, or starting capture. Preparation, countdown and active recording remain
-blocked; focused Preferences releases all seven OS grabs. This does not add
+blocked; an active focused recorder releases all seven OS grabs. This does not add
 recording control keys or close physical platform/input acceptance gates.
 
 The native recording Restart slice replaces the current running or paused take

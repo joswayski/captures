@@ -184,7 +184,7 @@ before draining host workers and releases the election lock last.
 
 ### Native development login items
 
-In a live native profile, Preferences → About → **Launch native Captures at login**
+In a live native profile, Preferences → General → **Start Captures on login**
 queries and explicitly changes a per-user, per-History-root entry. A saved
 `launch_at_login` value does not enable it; fixture launches never register.
 The entry runs the current executable with `--live --scene idle`, the canonical

@@ -131,19 +131,47 @@ final class LoginItemTests: XCTestCase {
         withExtendedLifetime(controller) {}
     }
 
+    func testGeneralLoginAndUpdatesKeepTheirColumnsAtNormalAndMinimumWidths() throws {
+        for width in [CGFloat(1000), CGFloat(560)] {
+            let (root, controller) = try preferencesFixture(service: FakeLoginItemService([.success(false)]),
+                width: width)
+            waitForTitle("Off", in: root)
+            let general = try XCTUnwrap(find(root, identifier: "preferences-card.general"))
+            let appearance = try XCTUnwrap(find(root, identifier: "preferences-card.appearance"))
+            let login = try XCTUnwrap(find(root, identifier: "login-item"))
+            XCTAssertTrue(login.isDescendant(of: general))
+            XCTAssertLessThan(general.frame.maxY, appearance.frame.minY)
+            let updates = try XCTUnwrap(find(root, identifier: "preferences-card.updates"))
+            let check = try XCTUnwrap(find(updates, identifier: "updates.check") as? NSButton)
+            let status = try XCTUnwrap(find(updates, identifier: "updates.status") as? NSTextField)
+            let version = try XCTUnwrap(views(updates, NSTextField.self).first {
+                $0.stringValue == PreferencesPolicy.text("updates.version")
+            })
+            XCTAssertFalse(check.isEnabled)
+            XCTAssertEqual(check.frame.width, 160)
+            XCTAssertEqual(status.stringValue, "Updates unavailable")
+            XCTAssertLessThan(version.frame.maxX, check.frame.minX)
+            XCTAssertLessThan(version.frame.minY, check.frame.maxY)
+            XCTAssertEqual(check.frame.minX, status.frame.minX)
+            XCTAssertGreaterThan(status.frame.minY, check.frame.maxY)
+            XCTAssertTrue(updates.bounds.contains(check.frame))
+            withExtendedLifetime(controller) {}
+        }
+    }
+
     func testRenderedPreferencesLoginItemControlLightAndDark() throws {
         guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] else { return }
         for appearance in ["light", "dark"] {
             let service = FakeLoginItemService([.success(true)])
             let (root, controller) = try preferencesFixture(service: service, appearance: appearance)
             waitForTitle("On", in: root)
-            let card = try XCTUnwrap(find(root, identifier: "preferences-card.about"))
+            let card = try XCTUnwrap(find(root, identifier: "preferences-card.general"))
             card.layoutSubtreeIfNeeded()
             let bitmap = try XCTUnwrap(card.bitmapImageRepForCachingDisplay(in: card.bounds))
             card.cacheDisplay(in: card.bounds, to: bitmap)
             let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
             let url = URL(fileURLWithPath: directory)
-                .appendingPathComponent("preferences-about-login-item-\(appearance).png")
+                .appendingPathComponent("preferences-general-login-item-\(appearance).png")
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
             try data.write(to: url)
@@ -165,7 +193,7 @@ final class LoginItemTests: XCTestCase {
             XCTAssertTrue(text.contains(title), title)
         }
         XCTAssertFalse(text.contains("GIF quality"), "the stub GIF card is replaced")
-        XCTAssertEqual(controller.activeSection, "appearance")
+        XCTAssertEqual(controller.activeSection, "general")
         let scroll = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first)
         let document = try XCTUnwrap(scroll.documentView)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: document.frame.height - scroll.contentSize.height))
@@ -238,7 +266,7 @@ final class LoginItemTests: XCTestCase {
             let (root, controller) = try preferencesFixture(service: FakeLoginItemService([.success(false)]),
                 appearance: appearance)
             waitForTitle("Off", in: root)
-            for id in ["appearance", "capture", "shortcuts", "recording", "about"] {
+            for id in ["general", "appearance", "capture", "shortcuts", "recording", "updates", "about"] {
                 let card = try XCTUnwrap(find(root, identifier: "preferences-card.\(id)"))
                 card.layoutSubtreeIfNeeded()
                 let bitmap = try XCTUnwrap(card.bitmapImageRepForCachingDisplay(in: card.bounds))
@@ -255,10 +283,11 @@ final class LoginItemTests: XCTestCase {
     }
 
     private func preferencesFixture(service: LoginItemServicing?, appearance: String = "dark",
+                                    width: CGFloat = 1000,
                                     appearanceChanged: @escaping (String) -> Void = { _ in }) throws
         -> (Surface, PreferencesController) {
         _ = NSApplication.shared
-        let root = Surface(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
+        let root = Surface(frame: NSRect(x: 0, y: 0, width: width, height: 600))
         let tokens = Tokens.variants["\(appearance)-mustard"]!
         let store = try SettingsStore(path: "/fixture/settings.json",
             transport: LoginSettingsTransport(), debounceInterval: 0)

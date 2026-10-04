@@ -59,6 +59,39 @@ final class ShortcutEditingTests: XCTestCase {
         super.tearDown()
     }
 
+    func testEveryRecorderSynchronouslyNotifiesStartAndRestoresOnEnd() throws {
+        var changes: [Bool] = []
+        let (controller, window) = try fixture(transport: ShortcutSettingsTransport(),
+            recordingChanged: { changes.append($0) }) { code, _, _, _, _ in
+                if code == "Escape" { return ["kind": "cancel"] }
+                return ["kind": "complete", "keys": ["Ctrl", "Q"], "shortcut": "Control+KeyQ"]
+            }
+        for identifier in ["new_capture_shortcut", "region_shortcut", "window_shortcut",
+                           "display_shortcut", "recording.video_shortcut", "recording.window_shortcut",
+                           "recording.display_shortcut"] {
+            let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: identifier))
+            recorder.performClick(nil)
+            XCTAssertTrue(controller.isRecordingShortcut)
+            XCTAssertEqual(changes.last, true, identifier)
+            controller.handleShortcutInput(code: "Escape", control: true, shift: false, alt: false, meta: false)
+            XCTAssertFalse(controller.isRecordingShortcut)
+            XCTAssertEqual(changes.suffix(2), [true, false], identifier)
+        }
+        let recorder = try XCTUnwrap(controller.shortcutRecorder(identifier: "new_capture_shortcut"))
+        recorder.performClick(nil)
+        controller.handleShortcutInput(code: "KeyQ", control: true, shift: false, alt: false, meta: false)
+        XCTAssertFalse(controller.isRecordingShortcut)
+        XCTAssertEqual(changes.suffix(2), [true, false])
+        controller.shortcutRecorder(identifier: "new_capture_shortcut")?.performClick(nil)
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        XCTAssertFalse(controller.isRecordingShortcut)
+        XCTAssertEqual(changes.suffix(2), [true, false])
+        controller.shortcutRecorder(identifier: "new_capture_shortcut")?.performClick(nil)
+        controller.restyle()
+        XCTAssertFalse(controller.isRecordingShortcut, "replacing controls releases their recorder")
+        XCTAssertEqual(changes.suffix(2), [true, false])
+    }
+
     func testAllRowsRenderAndValidChordPersistsAtCorrectBoundary() throws {
         let transport = ShortcutSettingsTransport()
         let (controller, window) = try fixture(transport: transport) { code, control, shift, alt, meta in
@@ -313,6 +346,7 @@ final class ShortcutEditingTests: XCTestCase {
     }
 
     private func fixture(transport: ShortcutSettingsTransport, appearance: String = "dark",
+                         recordingChanged: @escaping (Bool) -> Void = { _ in },
                          policy: PreferencesController.ShortcutPolicy? = nil)
         throws -> (PreferencesController, NSWindow) {
         _ = NSApplication.shared
@@ -328,11 +362,13 @@ final class ShortcutEditingTests: XCTestCase {
         let controller: PreferencesController
         if let policy {
             controller = PreferencesController(root: root, store: store, tokens: { tokens },
-                appearanceChanged: { _, _, _ in }, shortcutPolicy: policy,
+                appearanceChanged: { _, _, _ in }, shortcutRecordingChanged: recordingChanged,
+                shortcutPolicy: policy,
                 showHistory: {}, liveCaptureAvailable: true)
         } else {
             controller = PreferencesController(root: root, store: store, tokens: { tokens },
-                appearanceChanged: { _, _, _ in }, showHistory: {}, liveCaptureAvailable: true)
+                appearanceChanged: { _, _, _ in }, shortcutRecordingChanged: recordingChanged,
+                showHistory: {}, liveCaptureAvailable: true)
         }
         try waitUntil { controller.shortcutRecorder(identifier: "region_shortcut") != nil }
         window.makeKeyAndOrderFront(nil)

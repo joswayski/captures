@@ -232,10 +232,14 @@ final class StatusItemTests: XCTestCase {
             "only New Capture is routed while hidden controls need restoration")
         XCTAssertTrue(captureShortcutsEnabled(captureBusy: true, selectorGeneration: 42),
             "the exact active selector scope keeps target shortcuts enabled")
-        XCTAssertFalse(captureShortcutsSuspended(preferencesFocused: false),
-            "hidden or unfocused Preferences must restore registered shortcuts")
-        XCTAssertTrue(captureShortcutsSuspended(preferencesFocused: true),
-            "focused Preferences releases OS grabs before recorder input")
+        for focused in [false, true] {
+            XCTAssertFalse(captureShortcutsSuspended(preferencesFocused: focused, recordingShortcut: false),
+                "Preferences alone never suppresses capture shortcuts")
+        }
+        XCTAssertFalse(captureShortcutsSuspended(preferencesFocused: false, recordingShortcut: true),
+            "blur restores registered shortcuts")
+        XCTAssertTrue(captureShortcutsSuspended(preferencesFocused: true, recordingShortcut: true),
+            "only an active focused recorder releases OS grabs")
         XCTAssertTrue(preferencesWindowFocused(visible: true, key: true, attachedSheetKey: false))
         XCTAssertTrue(preferencesWindowFocused(visible: true, key: false, attachedSheetKey: true))
         XCTAssertFalse(preferencesWindowFocused(visible: true, key: false, attachedSheetKey: false),
