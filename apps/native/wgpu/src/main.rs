@@ -418,6 +418,21 @@ fn main() -> eframe::Result {
     } else {
         None
     };
+    // Forwarded secondaries returned above; fixture scenes never touch markers.
+    let crash = instance.as_ref().and_then(|_| {
+        match captures_app::crash::Session::start(
+            &options
+                .history_root
+                .clone()
+                .unwrap_or_else(captures_app::default_history_root),
+        ) {
+            Ok(session) => Some(std::sync::Arc::new(session)),
+            Err(error) => {
+                eprintln!("{error} Capture remains available.");
+                None
+            }
+        }
+    });
     let floating = options.floating;
     let idle = options.scene == Scene::Idle;
     let size = if options.live {
@@ -504,6 +519,7 @@ fn main() -> eframe::Result {
                 workbench_shortcuts,
                 workbench_paste_input,
                 instance,
+                crash,
             )))
         }),
         &event_loop,

@@ -148,6 +148,40 @@ Timed and framebuffer-screenshot completion also explicitly quit, not hide.
 Captures launched from a hidden root leave it hidden on success or cancellation.
 macOS Dock reopen shows an existing visible window or Preferences.
 
+### Local crash review
+
+Only a live primary starts local diagnostics, under the History profile's
+`.crash-diagnostics` directory (excluded from History pruning). Retained markers
+and bounded, home-path-redacted Rust panics are available in local review before
+any sharing. Copy is local; Add to message/Feedback appends visible editable text;
+only explicit Send uses the existing feedback channel. Fixtures/secondaries do
+not collect evidence or start uploads. Dismiss removes prior evidence, not the
+current session. Hidden login startup does not raise a diagnostic window.
+
+Normal accepted Quit cleans after draining and before releasing instance election.
+AppKit restart disarms before handoff and rearms only after failed spawn wins
+election again. Unix TERM/HUP/INT and Windows session-end messages classify normal
+OS stops; KILL or an unclean marker alone is not proof of a crash. OS exception
+report discovery and physical-platform shutdown/restart acceptance stay open.
+
+```sh
+cargo test -p captures-app --test crash_lifecycle --locked
+cargo test -p captures-feedback -p captures-settings-ffi crash --locked
+cargo test -p captures-session shutdown --locked
+node apps/native/prepare.mjs --output apps/native/wgpu/resources
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked
+/usr/bin/python3 apps/native/x11_crash_smoke.py \
+  --binary "$(pwd)/apps/native/wgpu/target/debug/captures-wgpu-workbench" \
+  --output /tmp/captures-native-crash-review
+```
+
+The output directory must not exist. The X11 smoke seeds retained panic text,
+exercises light/dark/default/minimum UI and real input, verifies exact local
+clipboard/message text and marker ownership, and uses a non-forwarding loopback
+proxy to assert no review action attempts networking. Isolated Rust subprocess
+tests exercise real panic and signal handlers. These are orb/software-GL checks,
+not physical macOS/Windows/Wayland acceptance; AppKit XCTests require macOS CI.
+
 The shared Rust dispatcher queues release-triggered screenshot actions and
 temporary Escape cancellation without competing process-wide handlers. Native
 event loops drain actions on their UI thread. Active capture/preparation and

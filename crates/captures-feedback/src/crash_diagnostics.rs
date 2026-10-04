@@ -1,6 +1,6 @@
 //! Local-only crash evidence used to build a user-reviewable feedback draft.
 //!
-//! This module stores only session timestamps and a bounded, redacted Rust panic.
+//! Stores session timestamps/ownership identifiers and a bounded, redacted panic.
 //! OS reports remain platform-owned: callers supply a candidate path or text and
 //! an exact executable identity. No directories, captures, environment dumps,
 //! permissions, signals, termination, UI, or network requests are handled here.
@@ -9,6 +9,10 @@ use std::{
     fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -51,14 +55,18 @@ impl DiagnosticPreview {
 pub struct CrashSession {
     directory: PathBuf,
     running_marker: String,
+    panic_enabled: Arc<Mutex<bool>>,
 }
 
 impl CrashSession {
     /// Preserves a prior running marker, then starts a new session. This does
     /// not inspect OS report directories or send feedback.
     pub fn start(profile_path: impl AsRef<Path>) -> io::Result<Self> {
-        let directory = profile_path.as_ref().join("crash-diagnostics");
+        // Profile identity is the canonical History root. Its loader excludes
+        // dot directories; ordinary children are owned/pruned as capture entries.
+        let directory = profile_path.as_ref().join(".crash-diagnostics");
         fs::create_dir_all(&directory)?;
+        let directory = directory.canonicalize()?;
         let current = directory.join(CURRENT);
         if let Ok(value) = fs::read_to_string(&current)
             && parse_marker(&value).is_some()
@@ -74,6 +82,7 @@ impl CrashSession {
         Ok(Self {
             directory,
             running_marker,
+            panic_enabled: Arc::new(Mutex::new(true)),
         })
     }
 
@@ -100,8 +109,17 @@ impl CrashSession {
         remove_if_exists(&self.directory.join(PREVIOUS_PANIC))
     }
 
-    /// Call from every normal application/OS shutdown path.
+    /// Call while still holding the profile's instance lock, after accepted
+    /// work drains. Late cleanup by an old host cannot erase its replacement.
     pub fn mark_clean_exit(&self) -> io::Result<()> {
+        let mut enabled = self
+            .panic_enabled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *enabled = false;
+        if !self.owns_marker()? {
+            return Ok(());
+        }
         remove_if_exists(&self.directory.join(CURRENT))?;
         remove_if_exists(&self.directory.join(PANIC))
     }
@@ -110,7 +128,27 @@ impl CrashSession {
     /// after cleanup. Unlike `start`, this never rotates retained evidence or
     /// installs another panic hook, and preserves the session's original time.
     pub fn resume_after_cancelled_exit(&self) -> io::Result<()> {
-        fs::write(self.directory.join(CURRENT), &self.running_marker)
+        let mut enabled = self
+            .panic_enabled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self.directory.join(CURRENT).exists() && !self.owns_marker()? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "another session owns diagnostics",
+            ));
+        }
+        fs::write(self.directory.join(CURRENT), &self.running_marker)?;
+        *enabled = true;
+        Ok(())
+    }
+
+    fn owns_marker(&self) -> io::Result<bool> {
+        match fs::read_to_string(self.directory.join(CURRENT)) {
+            Ok(marker) => Ok(marker == self.running_marker),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Precompute these paths for platform-owned async-signal-safe shutdown
@@ -128,8 +166,15 @@ impl CrashSession {
     /// As above, additionally redacting caller-known custom home directories.
     pub fn install_panic_hook_with_homes(&self, homes: Vec<PathBuf>) {
         let path = self.directory.join(PANIC);
+        let enabled = self.panic_enabled.clone();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
+            let writing = enabled.lock().unwrap_or_else(|error| error.into_inner());
+            if !*writing {
+                drop(writing);
+                previous(info);
+                return;
+            }
             let thread = std::thread::current();
             let thread = thread.name().unwrap_or("unknown");
             let location = info
@@ -142,6 +187,7 @@ impl CrashSession {
                 truncate_lines(trace.trim(), MAX_BACKTRACE_LINES)
             );
             let _ = fs::write(&path, sanitize_with_homes(&body, &homes));
+            drop(writing);
             previous(info);
         }));
     }
@@ -465,12 +511,16 @@ fn truncate_lines(value: &str, limit: usize) -> String {
     value.lines().take(limit).collect::<Vec<_>>().join("\n")
 }
 fn marker_now() -> String {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     format!(
-        "{MARKER}\n{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
+        "{MARKER}\n{}\n{}:{}:{}",
+        now.as_millis(),
+        std::process::id(),
+        now.as_nanos(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
 }
 fn parse_marker(value: &str) -> Option<SystemTime> {
@@ -515,6 +565,20 @@ mod tests {
                 .unclean_exit
         );
         drop(first);
+    }
+
+    #[test]
+    fn relative_profile_precomputes_absolute_cleanup_paths() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = tempfile::tempdir_in(&cwd).unwrap();
+        let relative = root.path().strip_prefix(&cwd).unwrap();
+        assert!(!relative.is_absolute());
+        let session = CrashSession::start(relative).unwrap();
+        let paths = session.clean_exit_paths();
+        assert!(paths.iter().all(|path| path.is_absolute()));
+        assert!(paths[0].is_file());
+        session.mark_clean_exit().unwrap();
+        assert!(!paths[0].exists());
     }
 
     #[test]
@@ -585,6 +649,29 @@ mod tests {
         let after_abnormal_exit = CrashSession::start(root.path()).unwrap().preview();
         assert!(after_abnormal_exit.unclean_exit);
         assert!(!after_abnormal_exit.has_exception_evidence());
+    }
+
+    #[test]
+    fn late_old_host_cleanup_and_resume_cannot_mutate_replacement_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let old = CrashSession::start(root.path()).unwrap();
+        old.mark_clean_exit().unwrap();
+        let replacement = CrashSession::start(root.path()).unwrap();
+        fs::write(replacement.directory.join(PANIC), "replacement panic").unwrap();
+        old.mark_clean_exit().unwrap();
+        assert_eq!(
+            fs::read_to_string(replacement.directory.join(CURRENT)).unwrap(),
+            replacement.running_marker
+        );
+        assert_eq!(
+            fs::read_to_string(replacement.directory.join(PANIC)).unwrap(),
+            "replacement panic"
+        );
+        assert_eq!(
+            old.resume_after_cancelled_exit().unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        replacement.mark_clean_exit().unwrap();
     }
 
     #[test]

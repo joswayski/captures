@@ -355,6 +355,18 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         window.orderOut(nil)
     }
 
+    /// Adds only visible text to the editable draft. Diagnostics are never a
+    /// hidden submit field.
+    @discardableResult func appendToMessage(_ text: String) -> Bool {
+        guard !sending else { return false }
+        let separator = message.string.isEmpty ? "" : "\n\n"
+        let combined = message.string + separator + text
+        guard combined.unicodeScalars.count <= messageLimit else { return false }
+        message.string = combined
+        failure = nil; sent = false; updateControls()
+        return true
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool { dismiss(); return false }
 
     func restyle(_ tokens: Tokens) {

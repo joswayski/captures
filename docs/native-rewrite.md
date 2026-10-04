@@ -1843,11 +1843,52 @@ displays its app/system context directly below the header before editable fields
 an optional contact, blocks duplicate submissions, and retains drafts after errors
 or closing/reopening. Submission runs separately from capture/settings workers;
 fixtures cannot send. No captures, files, or crash diagnostics are attached and
-no startup network request is introduced. This advances the manual feedback slice,
+no startup network request is introduced. The local-diagnostics slice below may
+explicitly add a visible summary to the editable message, never a hidden attachment.
+This advances the manual feedback slice,
 not automatic crash reporting or full accessibility/physical-platform acceptance.
 The window layout is verified on private X11/software GL (`x11_feedback_smoke.py`,
 dark and light); the AppKit window relies on CI XCTests, and Windows and Wayland
 remain unverified.
+
+### Local native crash lifecycle and review
+
+Live primary processes now start `captures_app::crash::Session` before native
+renderer/capture initialization. Forwarded secondaries and fixture scenes do not
+touch diagnostics. The canonical History profile owns `.crash-diagnostics`, which
+History's retention scanner excludes. A normal accepted Quit drains existing work,
+disarms OS callbacks and cleans its current marker before releasing election.
+Rejected editor Quit leaves the marker armed. AppKit permission restart cleans
+while still owning election; failed spawn rearms only after winning election again.
+Marker identity and synchronized panic writes prevent late old-host cleanup or
+panic handling from changing the replacement's evidence.
+
+Unix SIGTERM/SIGHUP/SIGINT clean only current markers and preserve the prior signal
+disposition; SIGKILL/exception signals are not normal exits. Windows handles
+query/confirmed/cancelled logoff/shutdown, restoring the same marker on cancellation.
+Retained evidence is never deleted by current-session cleanup or OS callbacks.
+
+An interactive launch offers retained evidence locally (after setup in wgpu);
+hidden login launches do not raise it, and Send Feedback can revisit it. A marker
+alone is an **unclean exit, not a confirmed crash**. Rust panic summaries remain
+bounded and home-path redacted. Copy is local. Add to Feedback/message appends
+visible editable text, preserving draft/contact and respecting busy/8,000-character
+limits; only explicit Send shares it with the already displayed app/system context.
+Dismiss removes prior evidence only; Later/closing retains it. No telemetry or
+startup upload is added. OS report discovery is **not implemented** in this slice.
+
+| Platform | Implementation / verification |
+| --- | --- |
+| macOS | AppKit startup/review/Quit/restart and Unix shutdown implemented; transport-driven XCTest added, not executed in the Linux orb; physical logoff/restart unverified |
+| Windows | Shared wgpu review and Windows shutdown watcher implemented; classifier/cancellation/ownership unit tests run on Linux, actual Windows compilation/session-end delivery unverified locally |
+| Linux X11 | Verified on private X11/software GL: both appearances/default and minimum size, redaction, secondary ownership, copy/add without network, retained evidence, dismiss, accepted Quit and SIGTERM; Rust subprocess panic/TERM/HUP/INT/KILL and disarmed replacement tests pass |
+| Linux Wayland | Shared review/session/Unix shutdown implemented, live-host review/input/shutdown unverified; existing capture and hidden-startup gates remain |
+
+`apps/native/x11_crash_smoke.py` seeds retained panic text, rather than inducing an
+actual host panic. Isolated Rust subprocess tests exercise the installed panic and
+signal handlers. These checks do not close lifecycle/privacy physical-platform
+acceptance or establish installed-data migration, OS exception collection or a
+renderer choice. Reproduction commands are in `apps/native/README.md`.
 
 No renderer is selected for these platforms yet. The same fixture scenes, token
 resources, resource budgets, visual checkpoints and input scripts are mandatory.

@@ -667,6 +667,7 @@ name = "captures-app"
 version = "0.1.0"
 dependencies = [
  "captures-capture",
+ "captures-feedback",
  "captures-history",
  "captures-image",
  "captures-media",
@@ -897,6 +898,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "dbus",
  "interprocess",
+ "libc",
  "rustix 1.1.4",
  "serde",
  "serde_json",

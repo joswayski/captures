@@ -117,6 +117,8 @@ pub struct Workbench {
     action_error: Option<String>,
     quitting: bool,
     update_notice: crate::update_notice::FixtureHost,
+    crash: Option<Arc<captures_app::crash::Session>>,
+    crash_review_pending: bool,
     // Keep election alive until every other host field has been destroyed.
     instance: Option<captures_app::instance::Instance>,
 }
@@ -129,6 +131,7 @@ impl Workbench {
         shortcuts: ShortcutOwner,
         paste_input: crate::clipboard_input::PasteInput,
         instance: Option<captures_app::instance::Instance>,
+        crash: Option<Arc<captures_app::crash::Session>>,
     ) -> Self {
         crate::ui_fonts::install(&cc.egui_ctx);
         crate::primitives::install_focus_ring(&cc.egui_ctx);
@@ -193,6 +196,13 @@ impl Workbench {
             options.theme_override.then(|| options.theme.clone()),
             shortcut_input,
         );
+        let crash_review_pending = crash
+            .as_ref()
+            .is_some_and(|session| session.preview().is_some())
+            && options.scene != Scene::Idle;
+        if let Some(session) = &crash {
+            preferences_state.set_diagnostics(session.clone());
+        }
         let recorder_shortcuts = shortcuts.clone();
         preferences_state.set_shortcut_recording_changed(move |recording| {
             if let Some(shortcuts) = recorder_shortcuts.0.borrow_mut().as_mut()
@@ -323,6 +333,8 @@ impl Workbench {
             action_error: None,
             quitting: false,
             update_notice,
+            crash,
+            crash_review_pending,
         };
         this.schedule(&cc.egui_ctx);
         this
@@ -717,6 +729,11 @@ impl Workbench {
         }
         self.shortcuts.0.borrow_mut().take();
         self.tray.take();
+        if let Some(session) = &self.crash
+            && let Err(error) = session.clean_exit()
+        {
+            eprintln!("{error}");
+        }
         self.instance.take();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -1459,6 +1476,12 @@ impl eframe::App for Workbench {
         {
             self.decide_launch(ctx, onboarding_complete);
         }
+        if onboarding_complete
+            && self.launch_decided
+            && std::mem::take(&mut self.crash_review_pending)
+        {
+            self.preferences_state.open_feedback(ctx);
+        }
         if self.options.live
             && !self.onboarding_presented
             && !self.preferences_state.onboarding_pending()
@@ -1688,6 +1711,10 @@ impl eframe::App for Workbench {
             // hidden until the launch decision asks for it.
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
+        let t = self.tokens(&ctx);
+        ui.set_style(ctx.style_of(ctx.theme()));
+        self.preferences_state
+            .feedback_viewport(&ctx, &t, self.live.is_some());
         if self.options.scene == Scene::Idle
             && (!self.options.live || (self.frames == 0 && !self.onboarding_presented))
         {
@@ -1706,10 +1733,6 @@ impl eframe::App for Workbench {
             self.frames += 1;
             return;
         }
-        let t = self.tokens(&ctx);
-        ui.set_style(ctx.style_of(ctx.theme()));
-        self.preferences_state
-            .feedback_viewport(&ctx, &t, self.live.is_some());
         if self.live.is_some() && !self.preferences_state.onboarding_complete() {
             egui::CentralPanel::default().show(ui, |ui| {
                 // Until settings load the root keeps its History title and

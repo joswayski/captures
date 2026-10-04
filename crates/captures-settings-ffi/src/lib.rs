@@ -1,5 +1,6 @@
 mod capture_menu;
 mod controls;
+mod crash;
 mod editor;
 mod editor_chrome;
 mod editor_export;

@@ -875,6 +875,7 @@ func performTermination(flushPreferences: () -> Void, cancelCapture: () -> Void,
 final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let options: Options
     private var nativeInstance: NativeInstance?
+    private let crashDiagnostics: CrashDiagnostics?
     private var instanceWakeObserver: NSObjectProtocol?
     private var window: NSWindow!
     private var content: Surface!
@@ -933,9 +934,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         return theme == "custom" ? base.applyingCustomTheme(customTheme, light: mode == "light") : base
     }
 
-    init(options: Options, nativeInstance: NativeInstance? = nil) {
+    init(options: Options, nativeInstance: NativeInstance? = nil, crashDiagnostics: CrashDiagnostics? = nil) {
         self.options = options
         self.nativeInstance = nativeInstance
+        self.crashDiagnostics = crashDiagnostics
         pendingOpenImages = options.openMedia
         scene = startupDecision(options: options).scene
         appearance = options.appearance
@@ -1022,6 +1024,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         // Also drain once after the workspace is ready. A worker wake posted
         // before the observer existed therefore cannot strand startup traffic.
         drainInstanceRequests()
+        // Diagnostics exist only for an elected live primary. Offer retained
+        // evidence after the workspace is initialized, never in fixtures or a
+        // forwarded secondary.
+        if options.live, options.scene != "idle", crashDiagnostics?.preview != nil {
+            DispatchQueue.main.async { [weak self] in self?.showFeedback() }
+        }
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
@@ -1113,6 +1121,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     try? FileManager.default.removeItem(at: directory)
                 }
             })
+        do { try crashDiagnostics?.markClean() }
+        catch { presentHostError(title: "Diagnostics Couldn’t Close", message: "Capture data is safe, but the previous-session marker could not be updated.") }
         if let instanceWakeObserver {
             NotificationCenter.default.removeObserver(instanceWakeObserver)
             self.instanceWakeObserver = nil
@@ -1406,6 +1416,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func relaunch(failed: @escaping (String) -> Void) {
         preferencesController?.flush()
         LiveCaptureController.flush()
+        do { try crashDiagnostics?.markClean() }
+        catch {
+            failed("Captures could not safely prepare diagnostics for restart.")
+            return
+        }
         nativeInstance?.stopAccepting()
         drainInstanceRequests()
         nativeInstance?.close()
@@ -1429,6 +1444,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     // a second live host after losing the election.
                     requestApplicationTermination()
                     return
+                }
+                do { try crashDiagnostics?.resume() }
+                catch {
+                    presentHostError(title: "Diagnostics Unavailable",
+                        message: "Captures restored its application lock, but could not rearm previous-session diagnostics.")
                 }
                 failed(restartError)
             } catch {
@@ -2012,6 +2032,23 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             feedbackController = FeedbackController(tokens: tokens, live: options.live)
         }
         feedbackController?.restyle(tokens)
+        if let preview = crashDiagnostics?.preview {
+            switch CrashReview.present(preview, tokens: tokens) {
+            case .copy:
+                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(preview.summary, forType: .string)
+                return
+            case .addToFeedback:
+                guard feedbackController?.appendToMessage(preview.summary) == true else {
+                    presentHostError(title: "Couldn’t Add Diagnostics",
+                        message: "Wait for the current send to finish, or shorten the feedback draft below 8,000 characters.")
+                    return
+                }
+            case .dismiss:
+                do { try crashDiagnostics?.dismiss() }
+                catch { presentHostError(title: "Couldn’t Dismiss Diagnostics", message: "The previous-session evidence was retained.") }
+            case .later: break
+            }
+        }
         // Shipping opens feedback in its own window, not over Preferences.
         feedbackController?.present()
     }

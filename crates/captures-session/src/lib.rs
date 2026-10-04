@@ -9,6 +9,7 @@ mod macos;
 mod motion;
 #[cfg(any(target_os = "windows", test))]
 mod shell_ui;
+mod shutdown;
 #[cfg(target_os = "windows")]
 mod win_shift_s;
 #[cfg(target_os = "windows")]
@@ -20,6 +21,7 @@ mod work_area;
 pub use work_area::windows_monitor_work_area;
 
 pub use motion::{prefers_reduced_motion, watch_reduced_motion};
+pub use shutdown::ShutdownMonitor;
 
 /// Returns whether the process belongs to an active, unlocked desktop session.
 pub fn capture_session_available() -> bool {
