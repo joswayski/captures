@@ -155,6 +155,40 @@ I/O, encoding, host pixel transfer and presentation. Both native hosts use this
 worker; physical macOS/Windows, Wayland, accessibility and mixed-DPI acceptance
 and the broader whole-app performance gates remain open.
 
+The normal compositor now caches composition over the first source pixel for
+renders larger than 65,536 pixels. Native canvas fills and thumbnail backgrounds
+usually repeat that pixel. The 256 KiB table is local to one render, is released
+afterward and evaluates the existing demultiply and `image::Pixel::blend`
+operations in their original order. Other source pixels keep the normal path;
+transparent foreground pixels preserve hidden RGB, opaque foreground pixels
+replace the source, and non-normal blend modes do not use this table. Smaller
+renders allocate no backdrop table. Exhaustive valid channel/alpha regressions
+use the dependency methods independently; overlay comparisons cover both sides
+of the size threshold, mixed backgrounds and all foreground alpha bytes.
+The initial 4K phase profile measured about 25 ms in bitmap premultiplication
+and 142 ms in normal composition, identifying composition as the next target.
+Three alternating old/new release-binary rounds on the same Linux orb, each with
+one discarded warmup and five three-render trial means, measured:
+
+| 4K canvas fixture | Before → backdrop cache, ms/render | Difference |
+| --- | --- | --- |
+| Empty | 18.603 → 18.002 | 0.602 ms faster / 3.2% |
+| Three vector layers | 19.620 → 17.068 | 2.552 ms faster / 13.0% |
+| Full-size mixed-alpha bitmap | 175.251 → 56.882 | 118.369 ms faster / 67.5% |
+
+These medians pool 15 trial means per version. Empty/vector ranges overlap, so
+no improvement is established for them; empty renders do not use the new table.
+Bitmap ranges do not overlap: 173.902–190.111 versus 52.443–72.272 ms.
+An additional alternating-order phase control with almost no matching source
+pixels measured 145.622 → 147.491 ms, a 1.869 ms / 1.3% slowdown, with overlapping
+ranges (143.933–147.174 versus 145.066–152.029 ms). Table construction alone
+measured 0.528 ms. This control excludes image preparation; full-render trials
+include canvas allocation/fill, table construction and painting. Neither includes
+decoding, UI, encoding, presentation, process footprint or energy. Both native
+hosts use this shared compositor; physical macOS/Windows, Wayland and whole-app
+performance acceptance remain open. This does not change the renderer choice or
+the shipping Tauri application.
+
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
 History and the existing native Retry action. AppKit rebalances on resize;

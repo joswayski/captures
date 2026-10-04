@@ -1320,6 +1320,66 @@ fn demultiply_cached(
     ])
 }
 
+// Native canvases and thumbnails usually start with one solid/transparent
+// background. Cache both separately rounded operations for that exact pixel,
+// without changing Pixel::blend's float math or transparent/opaque shortcuts.
+// The finite table is 256 KiB and lives for this composition only.
+struct BackdropCompositor {
+    background: Rgba<u8>,
+    channels: Vec<Rgba<u8>>,
+}
+
+impl BackdropCompositor {
+    fn new(background: Rgba<u8>, demultiply: &[u8; 256 * 256]) -> Self {
+        let mut channels = vec![Rgba([0; 4]); 256 * 256];
+        for alpha in 1..=254u8 {
+            let row = usize::from(alpha) << 8;
+            for channel in 0..=alpha {
+                let straight = demultiply[row | usize::from(channel)];
+                let mut output = background;
+                output.blend(&Rgba([straight, straight, straight, alpha]));
+                channels[row | usize::from(channel)] = output;
+            }
+        }
+        Self {
+            background,
+            channels,
+        }
+    }
+
+    // Called only for partial-alpha pixels over the cached background.
+    fn pixel(&self, rendered: tiny_skia::PremultipliedColorU8) -> Rgba<u8> {
+        let row = usize::from(rendered.alpha()) << 8;
+        let red = self.channels[row | usize::from(rendered.red())];
+        let green = self.channels[row | usize::from(rendered.green())];
+        let blue = self.channels[row | usize::from(rendered.blue())];
+        Rgba([red[0], green[1], blue[2], red[3]])
+    }
+}
+
+fn composite_normal(output: &mut RgbaImage, canvas: &Pixmap) {
+    let channels = &*DEMULTIPLY_CHANNELS;
+    // Building the byte-domain table cannot pay off below its own domain size.
+    // Smaller renders retain the existing path without allocating this table.
+    let backdrop = (canvas.pixels().len() > 256 * 256)
+        .then(|| BackdropCompositor::new(*output.get_pixel(0, 0), channels));
+    for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
+        match rendered.alpha() {
+            0 => {}
+            255 => *source = Rgba([rendered.red(), rendered.green(), rendered.blue(), 255]),
+            _ => {
+                if let Some(backdrop) = &backdrop
+                    && *source == backdrop.background
+                {
+                    *source = backdrop.pixel(*rendered);
+                } else {
+                    source.blend(&demultiply_cached(*rendered, channels));
+                }
+            }
+        }
+    }
+}
+
 fn render_validated(
     mut output: RgbaImage,
     crop: Option<PixelRect>,
@@ -1388,11 +1448,7 @@ fn render_validated(
             // materializing a second full-size RgbaImage. Pixel::blend is a
             // no-op for transparent foreground pixels, so avoid demultiplying
             // and visiting the output for the common untouched case.
-            for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
-                if rendered.alpha() != 0 {
-                    source.blend(&demultiply_cached(*rendered, channels));
-                }
-            }
+            composite_normal(&mut output, &canvas);
         }
     }
     if let Some(crop) = crop {
@@ -1529,6 +1585,92 @@ mod tests {
                     ],
                     "premultiplied [{red}, {green}, {blue}, {alpha}]"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn backdrop_cache_matches_dependency_rounding_for_every_valid_channel_alpha_pair() {
+        for background in [
+            Rgba([19, 73, 211, 0]), // Hidden RGB must not leak into the result.
+            Rgba([19, 73, 211, 1]),
+            Rgba([19, 73, 211, 127]),
+            Rgba([19, 73, 211, 254]),
+            Rgba([19, 73, 211, 255]),
+            Rgba([255; 4]),
+            Rgba([0, 0, 0, 255]),
+        ] {
+            let compositor = BackdropCompositor::new(background, &DEMULTIPLY_CHANNELS);
+            for alpha in 1..=254u8 {
+                for red in 0..=alpha {
+                    let green = alpha - red;
+                    let blue = (u16::from(red) * 53 % (u16::from(alpha) + 1)) as u8;
+                    let pixel = tiny_skia::PremultipliedColorU8::from_rgba(red, green, blue, alpha)
+                        .unwrap();
+                    // Independently use both dependency methods, not the cached
+                    // demultiplication or any compositor-derived expectation.
+                    let straight = pixel.demultiply();
+                    let mut expected = background;
+                    expected.blend(&Rgba([
+                        straight.red(),
+                        straight.green(),
+                        straight.blue(),
+                        straight.alpha(),
+                    ]));
+                    assert_eq!(
+                        compositor.pixel(pixel),
+                        expected,
+                        "background {background:?}, foreground {pixel:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn backdrop_composition_matches_overlay_across_threshold_and_mixed_backgrounds() {
+        for (width, height) in [(255, 257), (256, 256), (257, 256)] {
+            for background in [
+                Rgba([19, 73, 211, 0]),
+                Rgba([17, 59, 131, 127]),
+                Rgba([255; 4]),
+            ] {
+                for mixed in [false, true] {
+                    let source = RgbaImage::from_fn(width, height, |x, y| {
+                        if mixed && (x + y) % 3 == 1 {
+                            Rgba([
+                                (x * 37 + y * 11) as u8,
+                                (x * 3 + y * 29) as u8,
+                                (x ^ y) as u8,
+                                x as u8,
+                            ])
+                        } else {
+                            background
+                        }
+                    });
+                    let mut canvas = Pixmap::new(width, height).unwrap();
+                    for (index, pixel) in canvas.pixels_mut().iter_mut().enumerate() {
+                        let alpha = index as u8;
+                        let red = (index / 256 % (usize::from(alpha) + 1)) as u8;
+                        let green = alpha - red;
+                        let blue = (u16::from(red) * 53 % (u16::from(alpha) + 1)) as u8;
+                        *pixel =
+                            tiny_skia::PremultipliedColorU8::from_rgba(red, green, blue, alpha)
+                                .unwrap();
+                    }
+                    let overlay = RgbaImage::from_fn(width, height, |x, y| {
+                        let color = canvas.pixel(x, y).unwrap().demultiply();
+                        Rgba([color.red(), color.green(), color.blue(), color.alpha()])
+                    });
+                    let mut expected = source.clone();
+                    image::imageops::overlay(&mut expected, &overlay, 0, 0);
+                    let mut output = source;
+                    composite_normal(&mut output, &canvas);
+                    assert_eq!(
+                        output, expected,
+                        "{width}x{height}, background {background:?}, mixed {mixed}"
+                    );
+                }
             }
         }
     }
@@ -1790,6 +1932,89 @@ mod tests {
             started.elapsed().as_secs_f64() * 1000.,
             std::mem::size_of_val(&*DEMULTIPLY_CHANNELS)
         );
+    }
+
+    #[test]
+    #[ignore = "manual release component profile; not end-to-end latency"]
+    fn benchmark_native_compositing_phases_4k() {
+        let (width, height) = (3840, 2160);
+        let pixels = normal_document(width, height, false).source;
+        LazyLock::force(&DEMULTIPLY_CHANNELS);
+        let mut timings: [Vec<f64>; 7] = Default::default();
+        for trial in 0..6 {
+            let started = Instant::now();
+            let canvas = image_pixmap(black_box(&pixels)).unwrap();
+            let premultiply_ms = started.elapsed().as_secs_f64() * 1000.;
+            if trial > 0 {
+                timings[0].push(premultiply_ms);
+            }
+            for (index, background) in [
+                Rgba([17, 23, 91, 0]),
+                Rgba([17, 23, 91, 127]),
+                Rgba([17, 23, 91, 255]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                // Preparation/fill is excluded from this phase profile only;
+                // benchmark_native_canvas_4k includes it in each full render.
+                let mut output = RgbaImage::from_pixel(width, height, background);
+                let started = Instant::now();
+                composite_normal(&mut output, &canvas);
+                black_box(output);
+                if trial > 0 {
+                    timings[index + 1].push(started.elapsed().as_secs_f64() * 1000.);
+                }
+            }
+            // Worst case: almost no source pixels match the cached background.
+            // Alternate reference/cached order and independently compare bytes.
+            let mut outputs = Vec::new();
+            for implementation in [trial % 2, (trial + 1) % 2] {
+                let mut output = (*pixels).clone();
+                let started = Instant::now();
+                if implementation == 0 {
+                    for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
+                        if rendered.alpha() != 0 {
+                            source.blend(&demultiply_cached(*rendered, &DEMULTIPLY_CHANNELS));
+                        }
+                    }
+                } else {
+                    composite_normal(&mut output, &canvas);
+                }
+                if trial > 0 {
+                    timings[4 + implementation].push(started.elapsed().as_secs_f64() * 1000.);
+                }
+                outputs.push(output);
+            }
+            assert_eq!(outputs[0], outputs[1]);
+            let started = Instant::now();
+            black_box(BackdropCompositor::new(
+                Rgba([17, 23, 91, 127]),
+                &DEMULTIPLY_CHANNELS,
+            ));
+            if trial > 0 {
+                timings[6].push(started.elapsed().as_secs_f64() * 1000.);
+            }
+        }
+        for (name, timings) in [
+            "premultiply",
+            "transparent",
+            "partial",
+            "opaque",
+            "mixed-reference",
+            "mixed-cached",
+            "table-build",
+        ]
+        .into_iter()
+        .zip(timings)
+        {
+            let mut sorted = timings.clone();
+            sorted.sort_by(f64::total_cmp);
+            eprintln!(
+                "4k composite phase {name}: {:.3} ms; trials={timings:?}",
+                sorted[sorted.len() / 2]
+            );
+        }
     }
 
     #[test]
