@@ -124,3 +124,49 @@ jobs:
           path: ${{ runner.temp }}/native-pixels
           if-no-files-found: ignore
       - run: python3 -m unittest discover -s apps/native -p 'test_*.py'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-macos-build
+          path: |
+            apps/native/macos/.build/release/CapturesNative
+            apps/native/macos/.build/release/CapturesNative_CapturesNative.bundle
+          include-hidden-files: true
+          if-no-files-found: error
+
+  development-package:
+    needs: build-and-test
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-build
+          path: native-build
+      - uses: ./.github/actions/prepare-media
+      - name: Stage the isolated native test app with pinned media tools
+        shell: bash
+        run: |
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          python apps/native/package.py --platform macos \
+            --binary native-build/CapturesNative \
+            --resources native-build/CapturesNative_CapturesNative.bundle \
+            --media-target "$target" --adhoc-sign --output native-package \
+            --archive "native-development-$target.zip"
+          ditto -x -k "native-development-$target.zip" native-unpacked
+          app="native-unpacked/native-package/Captures Native Development.app"
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/MacOS/CapturesNative" --font-license
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-development-macos-${{ runner.arch }}
+          path: native-development-*.zip
+          if-no-files-found: error

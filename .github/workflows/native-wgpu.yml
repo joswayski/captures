@@ -137,6 +137,77 @@ jobs:
             apps/native/wgpu/target/release/wayland_clipboard_probe
           if-no-files-found: error
 
+  windows-development-package:
+    needs: [windows-release, workbench]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            base-devel diffutils make mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-yasm mingw-w64-ucrt-x86_64-zlib
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-wgpu-binary-windows-2025
+          path: native-build
+      - uses: ./.github/actions/prepare-media
+      - name: Stage the isolated native test app with pinned media tools
+        run: |
+          python apps/native/package.py --platform windows --binary native-build/captures-wgpu-workbench.exe --media-target x86_64-pc-windows-msvc --output native-package --archive native-development-windows-x64.zip
+          Expand-Archive native-development-windows-x64.zip native-unpacked
+          & "native-unpacked/native-package/CapturesNative.exe" --font-license
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-development-windows-${{ runner.arch }}
+          path: native-development-windows-x64.zip
+          if-no-files-found: error
+
+  linux-development-package:
+    needs: [linux-release, workbench]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+      - name: Install media build and native runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y nasm yasm zlib1g-dev libpipewire-0.3-0 libasound2t64 libdbus-1-3 libgbm1 libxcb1 libxkbcommon0 libx11-6
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-wgpu-binary-ubuntu-24.04
+          path: native-build
+      - uses: ./.github/actions/prepare-media
+      - name: Stage the isolated native test app with pinned media tools
+        run: |
+          python apps/native/package.py --platform linux --binary native-build/captures-wgpu-workbench --media-target x86_64-unknown-linux-gnu --output native-package --archive native-development-linux-x64.tar.gz
+          mkdir native-unpacked
+          tar -xzf native-development-linux-x64.tar.gz -C native-unpacked
+          native-unpacked/native-package/captures-native --font-license
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-development-linux-${{ runner.arch }}
+          path: native-development-linux-x64.tar.gz
+          if-no-files-found: error
+
   linux-smoke:
     needs: linux-release
     runs-on: ubuntu-24.04

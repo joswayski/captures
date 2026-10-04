@@ -5,10 +5,17 @@ Build first. Registration files contain absolute paths: choose the final output
 location before opting into Open With. Existing output is never overwritten.
 """
 import argparse
+import hashlib
+import json
+import os
 from pathlib import Path
 import plistlib
 import re
 import shutil
+import subprocess
+import sys
+import tarfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 IDENTITY = "es.captur.native-development"
@@ -174,9 +181,52 @@ def stage(platform, binary, output, resources=None, media_target=None):
             shutil.copy2(source, destination)
     shutil.copy2(ROOT / "LICENSE", output / "LICENSE")
     shutil.copy2(ROOT / "TRADEMARKS.md", output / "TRADEMARKS.md")
+    shutil.copy2(ROOT / "apps/native/TESTING.md", output / "TESTING.md")
     print(f"Staged unsigned development package: {output}")
     print("Nothing was installed or registered. See DEVELOPMENT.md for opt-in Open With and removal.")
     return launcher, executable
+
+
+def archive(platform, output, executable, destination, media_target=None):
+    """Archive the staged package after signing, preserving executable modes."""
+    output = output.resolve(strict=True)
+    executable = executable.resolve(strict=True)
+    relative = executable.relative_to(output)
+    destination = destination.resolve()
+    if destination.is_relative_to(output):
+        raise ValueError("Archive must be outside the staged package")
+    if destination.exists():
+        raise FileExistsError(destination)
+    digest = hashlib.sha256()
+    with executable.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    info = {"development": True, "platform": platform, "media_target": media_target,
+            "binary": relative.as_posix(), "binary_sha256": digest.hexdigest(),
+            "source_commit": os.environ.get("GITHUB_SHA") if os.environ.get("GITHUB_ACTIONS") == "true" else None}
+    (output / "BUILD_INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stream = destination.open("xb")
+    # These descriptors bind absolute staging paths. Portable archives must
+    # never offer CI-runner paths as usable local Open With registration.
+    excluded = {f"{output.name}/{name}" for name in (
+        "register-open-with.reg", "unregister-open-with.reg", f"{IDENTITY}.desktop")}
+    try:
+        with stream:
+            if platform == "linux":
+                with tarfile.open(fileobj=stream, mode="w:gz") as bundle:
+                    bundle.add(output, arcname=output.name,
+                               filter=lambda item: None if item.name in excluded else item)
+            else:
+                with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+                    for path in sorted(output.rglob("*")):
+                        name = path.relative_to(output.parent).as_posix()
+                        if name not in excluded:
+                            bundle.write(path, arcname=name)
+    except Exception:
+        destination.unlink()
+        raise
+    print(f"Archived development package: {destination}")
 
 
 def main():
@@ -187,8 +237,17 @@ def main():
     parser.add_argument("--resources", type=Path, help="macOS SwiftPM .bundle directory")
     parser.add_argument("--media-target", choices=tuple(target for targets in MEDIA_TARGETS.values() for target in targets),
                         help="Bundle this target's prepared FFmpeg/FFprobe and corresponding source/licenses")
+    parser.add_argument("--adhoc-sign", action="store_true", help="macOS only: ad-hoc sign locally, not notarize")
+    parser.add_argument("--archive", type=Path, help="Also archive as ZIP (macOS/Windows) or tar.gz (Linux)")
     args = parser.parse_args()
-    stage(args.platform, args.binary, args.output, args.resources, args.media_target)
+    if args.adhoc_sign and (args.platform != "macos" or sys.platform != "darwin"):
+        parser.error("--adhoc-sign requires a macOS package on a macOS host")
+    launcher, executable = stage(args.platform, args.binary, args.output, args.resources, args.media_target)
+    if args.adhoc_sign:
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(launcher)], check=True)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(launcher)], check=True)
+    if args.archive:
+        archive(args.platform, args.output, executable, args.archive, args.media_target)
 
 
 if __name__ == "__main__":
