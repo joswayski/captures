@@ -16,7 +16,10 @@ pub use png::{
     png_palette_colors_for_quality,
 };
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
 
 use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
 use image::{GrayImage, Pixel, Rgba, RgbaImage};
@@ -1282,6 +1285,41 @@ fn validate_render(document: &Document, shadows: &BTreeMap<u64, DropShadow>) -> 
     Ok(())
 }
 
+// Finite byte-domain cache of tiny-skia's exact f64 demultiplication, including
+// its rounding. Do not replace this with integer division or fuse it with
+// Pixel::blend: that would change the two separately quantized operations.
+static DEMULTIPLY_CHANNELS: LazyLock<[u8; 256 * 256]> = LazyLock::new(|| {
+    let mut channels = [0; 256 * 256];
+    for alpha in 1..=254u8 {
+        for channel in 0..=alpha {
+            channels[(usize::from(alpha) << 8) | usize::from(channel)] =
+                tiny_skia::PremultipliedColorU8::from_rgba(channel, channel, channel, alpha)
+                    .unwrap()
+                    .demultiply()
+                    .red();
+        }
+    }
+    channels
+});
+
+fn demultiply_cached(
+    color: tiny_skia::PremultipliedColorU8,
+    channels: &[u8; 256 * 256],
+) -> Rgba<u8> {
+    let alpha = color.alpha();
+    if alpha == 0 || alpha == 255 {
+        return Rgba([color.red(), color.green(), color.blue(), alpha]);
+    }
+    // PremultipliedColorU8 guarantees that each channel is <= alpha.
+    let row = usize::from(alpha) << 8;
+    Rgba([
+        channels[row | usize::from(color.red())],
+        channels[row | usize::from(color.green())],
+        channels[row | usize::from(color.blue())],
+        alpha,
+    ])
+}
+
 fn render_validated(
     mut output: RgbaImage,
     crop: Option<PixelRect>,
@@ -1333,6 +1371,7 @@ fn render_validated(
         for layer in layers.iter().skip(usize::from(first_bitmap.is_some())) {
             draw_layer(&mut canvas, layer, shadows.get(&layer.id))?;
         }
+        let channels = &*DEMULTIPLY_CHANNELS;
         if blend_source {
             for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
                 let original =
@@ -1341,8 +1380,7 @@ fn render_validated(
                 // Keep untouched source pixels, including hidden RGB and low
                 // alpha, exact rather than round-tripping them through skia.
                 if original != *rendered {
-                    let color = rendered.demultiply();
-                    source.0 = [color.red(), color.green(), color.blue(), color.alpha()];
+                    *source = demultiply_cached(*rendered, channels);
                 }
             }
         } else {
@@ -1352,13 +1390,7 @@ fn render_validated(
             // and visiting the output for the common untouched case.
             for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
                 if rendered.alpha() != 0 {
-                    let color = rendered.demultiply();
-                    source.blend(&Rgba([
-                        color.red(),
-                        color.green(),
-                        color.blue(),
-                        color.alpha(),
-                    ]));
+                    source.blend(&demultiply_cached(*rendered, channels));
                 }
             }
         }
@@ -1476,6 +1508,69 @@ mod tests {
             });
             assert_eq!(render(&document).unwrap(), legacy_render(&document));
         }
+    }
+
+    #[test]
+    fn cached_demultiply_matches_every_valid_channel_alpha_pair() {
+        for alpha in 0..=255u8 {
+            for red in 0..=alpha {
+                let green = alpha - red;
+                let blue = (u16::from(red) * 53 % (u16::from(alpha) + 1)) as u8;
+                let pixel =
+                    tiny_skia::PremultipliedColorU8::from_rgba(red, green, blue, alpha).unwrap();
+                let expected = pixel.demultiply();
+                assert_eq!(
+                    demultiply_cached(pixel, &DEMULTIPLY_CHANNELS).0,
+                    [
+                        expected.red(),
+                        expected.green(),
+                        expected.blue(),
+                        expected.alpha()
+                    ],
+                    "premultiplied [{red}, {green}, {blue}, {alpha}]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn normal_compositing_matches_legacy_for_every_foreground_background_alpha_pair() {
+        let source = RgbaImage::from_fn(256, 256, |x, y| {
+            Rgba([
+                (x * 37 + y * 11) as u8,
+                (x * 3 + y * 29) as u8,
+                (x ^ y) as u8,
+                x as u8,
+            ])
+        });
+        let pixels = RgbaImage::from_fn(256, 256, |x, y| {
+            Rgba([x as u8, (x * 53 + y * 19) as u8, (255 - x) as u8, y as u8])
+        });
+        let document = Document {
+            source: Arc::new(source),
+            crop: None,
+            layers: vec![Layer {
+                id: 1,
+                shape: Shape::Image {
+                    origin: Point { x: 0., y: 0. },
+                    width: 256.,
+                    height: 256.,
+                    pixels: Arc::new(pixels),
+                },
+                color: [0, 0, 0, 255],
+                stroke_width: 0.,
+                fill: None,
+                rotation_degrees: 0.,
+                rotation_origin: None,
+                blend_mode: BlendMode::Normal,
+            }],
+        };
+        let expected = legacy_render(&document);
+        assert_eq!(render(&document).unwrap(), expected);
+        assert_eq!(
+            render_with_shadows_owned(document, &BTreeMap::new()).unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -1682,6 +1777,18 @@ mod tests {
         assert_eq!(
             render_with_shadows_owned(normal_document(0, 3, false), &BTreeMap::new()).unwrap_err(),
             "Source image is empty"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual cold-start release benchmark; run alone in a fresh process"]
+    fn benchmark_demultiply_cache_initialization() {
+        let started = Instant::now();
+        black_box(LazyLock::force(&DEMULTIPLY_CHANNELS));
+        eprintln!(
+            "demultiply cache first initialization: {:.3} ms; {} bytes retained",
+            started.elapsed().as_secs_f64() * 1000.,
+            std::mem::size_of_val(&*DEMULTIPLY_CHANNELS)
         );
     }
 

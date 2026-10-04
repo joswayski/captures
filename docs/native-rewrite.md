@@ -104,6 +104,30 @@ treated as a verified mechanism. Bitmap ranges were 269.6–302.3 ms before and
 212.2–232.2 ms after. These are still Linux-orb component costs, not whole-app,
 physical-footprint, energy or hardware-platform acceptance results.
 
+The shared compositor now caches tiny-skia's exact byte-channel demultiplication
+in a process-wide 64 KiB table instead of repeating its f64 divisions per pixel.
+The table is built with the dependency's own method; the subsequent
+`image::Pixel::blend` operation remains unchanged. Exhaustive tests cover every
+valid premultiplied channel/alpha pair and every foreground/background alpha
+pair, with asymmetric colors and byte-exact legacy-render comparisons. Existing
+blend, shadow, text and crop regressions retain their pixel expectations.
+Separate paired release trials (three alternating old/new binary rounds, 15
+trial means per version) measured the owned 4K path:
+
+| 4K canvas fixture | Before → cached demultiply, ms/render | Difference |
+| --- | --- | --- |
+| Empty | 14.0 → 14.8 | 0.8 ms slower / 5.7% |
+| Three vector layers | 16.2 → 15.9 | 0.4 ms faster / 2.3% |
+| Full-size mixed-alpha bitmap | 253.9 → 165.1 | 88.8 ms faster / 35.0% |
+
+Empty/vector ranges overlap; the empty median slowdown is disclosed without a
+demonstrated cause. Bitmap ranges were 245.3–289.3 ms before and 160.8–189.3 ms
+after. Three fresh processes measured one-time table initialization at
+0.112–0.133 ms; it occurs on the first layered render, not a layer-free canvas.
+These remain Linux-orb component timings, excluding decoding, UI, encoding and
+presentation. They are not whole-app or physical-platform acceptance results;
+macOS/Windows, Wayland and the broader performance gates remain open.
+
 Both Preferences hosts keep save status on one line, with shipping's 360px error
 cap (42vw for other statuses) further constrained to clear the title/subtitle,
 History and the existing native Retry action. AppKit rebalances on resize;
