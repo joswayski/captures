@@ -1,7 +1,9 @@
 name: Native macOS workbench
 
+# Runs on main only; pull requests get no CI. Use "Run workflow" to test a branch.
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - 'apps/native/**'
       - 'crates/captures-settings*/**'
@@ -18,19 +20,27 @@ on:
       - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
       - 'apps/desktop/assets/icon.svg'
       - '.github/workflows/native-macos.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: write
 
+# The running build always finishes and only the newest waiting push runs next
+# (GitHub replaces older pending runs in the group).
 concurrency:
-  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  route:
+    uses: ./.github/workflows/mac-route.yml
+    secrets: inherit
+
   build-and-test:
+    needs: route
     # Recording's apple-metal bridge needs the macOS 26 SDK, like the desktop CI.
-    runs-on: macos-26
+    runs-on: ${{ needs.route.outputs.mac == 'true' && fromJSON('["self-hosted","josemac"]') || 'macos-26' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -148,8 +158,8 @@ jobs:
             || echo "::warning::Could not cancel the rest of this run"
 
   development-package:
-    needs: build-and-test
-    runs-on: macos-26
+    needs: [route, build-and-test]
+    runs-on: ${{ needs.route.outputs.mac == 'true' && fromJSON('["self-hosted","josemac"]') || 'macos-26' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
