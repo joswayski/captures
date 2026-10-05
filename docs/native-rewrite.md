@@ -1879,6 +1879,12 @@ Post-commit cleanup failure can leave an incomplete old backup; recovery finishe
 the committed cleanup instead of restoring it.
 Stop all app processes and exclude other launches before explicit recovery. Helper
 restart refuses an existing transaction rather than automatically rolling it back.
+`native_update_helper --recover-stopped-development-package ABSOLUTE_PATH
+--all-app-processes-stopped` exposes recovery without a release endpoint or profile.
+The stopped-process flag is an operator assertion, not quiescence detection. The
+command never kills/launches apps and uses the same receipt/hash/lock checks;
+unknown or changed trees are preserved, and missing destinations can be restored
+after an interrupted rename. Confirmed cleanup is not misreported as rollback.
 Process-tree containment, installed-profile handoff and permission identity remain
 separate release work.
 
