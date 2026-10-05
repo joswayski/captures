@@ -66,16 +66,26 @@ guard backport**; its selection/consent/grant paths remain unchanged and it is
 never installed. Stock 0.7.x rejects SHM-only Start, 0.8.x regresses SHM-only init,
 and the intermediate constraints rewrite renegotiates on every frame. These tests
 do not establish stock-backend or physical consent acceptance.
-The no-window probe writes PNG diagnostics, not MP4. Native recording sessions,
-audio, capture-window exclusion, region/window selection and controls remain open;
-the resident Wayland recording gate is unchanged.
+The source probe writes PNG diagnostics. The subsequent session slice encodes
+real MP4/GIF through the shared native runtime, using an explicit `portal_display`
+target with no monitor descriptor. Consent/first-frame cancellation reaches the
+worker; pause/resume obtains a fresh grant. Source loss stops encoding, fails the
+take and preserves decodable media for recovery. An explicit local stop removes
+the PipeWire callbacks before disconnecting, without reporting false stream loss.
+The session diagnostic creates only new isolated data. It passes the same 13
+adversarial protocol cases plus real MP4/GIF publication, asymmetric pause/resume,
+restart replacement, discard/cancel and interrupted/lost-stream recovery. FFmpeg
+decodes both independently specified phases at four asymmetric locations; lossy
+encodings use a stated 15-channel tolerance, not byte equality. Native controls,
+audio/cursor acceptance, capture-window exclusion and region/window selection
+remain open; the resident Wayland recording gate is unchanged.
 
 | Platform | Video-source slice implementation / verification |
 | --- | --- |
-| AppKit/macOS | Existing recorder unchanged; source Linux-gated and diagnostic explicitly unsupported; physical host unverified |
-| Windows | Existing xcap recorder unchanged; source Linux-gated and diagnostic explicitly unsupported; physical host unverified |
-| X11 | Existing segment/frame/encoder paths unchanged; diagnostic rejects DISPLAY and cannot fall back to X11 |
-| Wayland | Portal/PipeWire CPU source and no-window diagnostic exercised on private Sway with the disclosed backend fixture patch; native session/UI and physical GNOME/KDE acceptance remain open |
+| AppKit/macOS | Existing recorder retained; portal target/probes explicitly unsupported; shared session accepts existing descriptors; physical host unverified |
+| Windows | Existing xcap recorder retained; portal target/probes explicitly unsupported; shared session accepts existing descriptors; physical host unverified |
+| X11 | Existing acquisition and pointer path retained; shared encoder/lifecycle refactored; diagnostics reject DISPLAY and cannot fall back to X11 |
+| Wayland | Portal/PipeWire source and real MP4/GIF sessions exercised on private Sway with the disclosed fixture patch; resident UI, audio/cursor and physical GNOME/KDE acceptance remain open |
 
 The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
 when a tray exists. Preferences, Feedback and media bootstrap independently;

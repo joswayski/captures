@@ -425,10 +425,12 @@ setup or a blocking call. Compositor-space stream properties are not treated as
 pixel dimensions or invented monitor geometry.
 
 ```sh
-cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_video_probe
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked \
+  --bin wayland_video_probe --bin wayland_recording_probe
 backend="$(apps/native/build_wayland_portal_fixture.sh)"
 /usr/bin/python3 apps/native/wayland_video_smoke.py \
-  --binary apps/native/wgpu/target/debug/wayland_video_probe --wlr-backend "$backend"
+  --binary apps/native/wgpu/target/debug/wayland_video_probe \
+  --recording-binary apps/native/wgpu/target/debug/wayland_recording_probe --wlr-backend "$backend"
 ```
 
 The private fixture needs the screenshot-smoke dependencies plus Meson, Ninja,
@@ -451,8 +453,30 @@ active stream leaving no output. Terminating the backend while the granted strea
 is running must end the source promptly, without output or a frame timeout; this
 checks transport loss, not physical permission revocation. A still desktop can legitimately stop delivering
 new frames until damage occurs. The no-window probe writes a diagnostic PNG only
-after collection; it does not encode MP4, capture audio, exclude native windows,
-start native recording controls or remove the resident host's Wayland gate.
+after collection.
+
+The separate `wayland_recording_probe` uses the shared native session, H264/MP4
+encoder, media assembly and private History/recovery stores. It requires a **new**
+output directory and never imports/overwrites profile data. `--scenario` accepts
+`video`, `gif`, `pause`, `restart`, `discard`, `recover` or `stream-loss`; the last
+requires externally ending the granted stream. `--duration-ms` defaults to 450;
+`--cancel-after-ms` cancels consent/start or discards an active session. Both probes
+reject DISPLAY. Portal sessions serialize `{"type":"portal_display"}` without
+monitor IDs or origins; dimensions come only from validated pixel frames. Cursor
+pixels are portal-owned, and unsupported click/keystroke overlays are rejected.
+
+Passing `--recording-binary` repeats all 13 protocol cases through the session,
+then checks MP4/GIF publication, asymmetric pause/resume durations (excluding an
+800 ms pause), restart replacement, paused-draft recovery, discard/cancellation,
+and refusal to overwrite existing outputs. FFmpeg independently decodes both
+expected color phases at four asymmetric interior locations, within a 15-channel
+lossy-codec tolerance. Video source bundles are removed only after publication;
+GIF sources remain editable. Backend termination must fail the session promptly,
+then recovery must publish its decodable partial MP4 without reopening capture.
+Explicit local disconnect unregisters callbacks before cleanup and is not failure.
+Native controls/window exclusion, real Wayland audio/cursor, stock-backend consent,
+mixed-DPI/rotation and physical GNOME/KDE acceptance remain open; the resident
+recording gate is unchanged.
 
 ### Native Wayland portal screenshots
 

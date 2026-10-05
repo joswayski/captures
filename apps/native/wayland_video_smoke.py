@@ -162,12 +162,13 @@ def fixture(mode, log):
     GLib.MainLoop().run()
 
 
-def protocols(binary, root, env):
+def protocols(binary, root, env, recording=False):
     modes = ("fd-error", "legacy", "cancel", "denied", "multiple", "missing-streams", "invalid-serial",
              "window", "no-display", "no-cursor", "wait", "method-error")
     for mode in modes:
-        log = root / f"{mode}.jsonl"
-        output = root / f"{mode}.png"
+        suffix = "recording" if recording else "source"
+        log = root / f"{mode}-{suffix}.jsonl"
+        output = root / f"{mode}-{suffix}"
         service = subprocess.Popen([sys.executable, __file__, "--fixture", mode, "--log", str(log)], env=env, stdout=subprocess.PIPE)
         try:
             ready(service)
@@ -178,7 +179,11 @@ def protocols(binary, root, env):
                 arguments += ["--show-cursor", "true"]
             started = time.monotonic()
             result = subprocess.run(arguments, env=env, capture_output=True, text=True, timeout=8)
-            assert result.returncode == 1 and not output.exists(), (mode, result.stdout, result.stderr)
+            assert result.returncode == 1, (mode, result.stdout, result.stderr)
+            if recording:
+                assert not list(output.rglob("*.mp4")) and not (output / "history").exists(), (mode, result.stderr)
+            else:
+                assert not output.exists(), (mode, result.stderr)
             events = [json.loads(line)["event"] for line in log.read_text().splitlines()]
             assert events[-1] == "Session.Close", (mode, events, result.stderr)
             calls = [event for event in events if not event.endswith(".Close")]
@@ -196,13 +201,83 @@ def protocols(binary, root, env):
             stop(service)
     bus = dbus.bus.BusConnection(env["DBUS_SESSION_BUS_ADDRESS"])
     assert not bus.name_has_owner(DESKTOP)
-    result = subprocess.run([binary, "--output", str(root / "pre-cancel.png"), "--cancel-after-ms", "0"], env=env, capture_output=True, text=True, timeout=3)
+    result = subprocess.run([binary, "--output", str(root / f"pre-cancel-{recording}"), "--cancel-after-ms", "0"], env=env, capture_output=True, text=True, timeout=3)
     assert result.returncode == 1 and "cancelled" in result.stderr and not bus.name_has_owner(DESKTOP)
     bus.close()
-    print(json.dumps({"protocols": len(modes) + 1, "peer_spoofs_ignored": True, "failed_sessions_closed": True, "fallback": False}), flush=True)
+    print(json.dumps({"protocols": len(modes) + 1, "recording": recording, "peer_spoofs_ignored": True, "failed_sessions_closed": True, "fallback": False}), flush=True)
 
 
-def real_video(binary, backend, root, env):
+def check_recording(output, events, phases, duration_range, kind="video/mp4"):
+    event = events[-1]
+    assert event["event"] in ("ready", "recovered") and event["warning"] is None, events
+    entry = event["entry"]
+    assert entry["target"] == {"type": "portal_display"}, entry
+    assert (entry["width"], entry["height"], entry["mime_type"]) == (320, 200, kind), entry
+    artifact = Path(event["path"])
+    assert artifact.is_relative_to(output / "history") and artifact.is_file(), event
+    metadata = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(artifact)], timeout=5))
+    streams = metadata["streams"]
+    assert len(streams) == 1 and streams[0]["codec_name"] == ("h264" if kind == "video/mp4" else "gif"), metadata
+    duration = float(metadata["format"]["duration"])
+    assert duration_range[0] <= duration <= duration_range[1], (duration, duration_range, events)
+    decoded = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(artifact), "-f", "rawvideo", "-pix_fmt", "rgb24", "-threads", "1", "-"], timeout=8)
+    frame_size = 320 * 200 * 3
+    assert len(decoded) >= frame_size * 3 and len(decoded) % frame_size == 0, len(decoded)
+    points = ((18, 19), (240, 21), (21, 150), (263, 177))
+    seen = set()
+    for start in range(0, len(decoded), frame_size):
+        samples = [decoded[start + (y * 320 + x) * 3:start + (y * 320 + x) * 3 + 3] for x, y in points]
+        matches = [phase for phase, colors in enumerate(phases)
+                   if all(all(abs(actual - expected) <= 15 for actual, expected in zip(sample, color))
+                          for sample, color in zip(samples, colors))]
+        # H264/GIF are lossy: compare independently specified interior colors,
+        # away from block/region boundaries, not exact source image bytes.
+        assert matches, (start // frame_size, [list(sample) for sample in samples])
+        seen.update(matches)
+    assert seen == {0, 1}, seen
+    manifests = list((output / "recording-recovery").glob("*/manifest.json"))
+    assert len(manifests) == (1 if kind == "image/gif" else 0), manifests
+    if manifests:
+        draft = json.loads(manifests[0].read_text())
+        assert draft["state"] == "ready" and draft["options"]["target"] == {"type": "portal_display"}, draft
+    return len(decoded) // frame_size
+
+
+def recording_sessions(binary, root, env):
+    phases = (((35, 69, 103), (211, 37, 81), (51, 173, 29), (73, 41, 197)),
+              ((181, 23, 57), (31, 211, 63), (93, 17, 191), (207, 127, 41)))
+    frames = 0
+    for scenario in ("video", "gif", "pause", "restart", "recover", "discard", "cancel"):
+        output = root / f"session-{scenario}"
+        arguments = [binary, "--output", str(output), "--scenario", "video" if scenario == "cancel" else scenario]
+        if scenario == "cancel":
+            arguments += ["--duration-ms", "3000", "--cancel-after-ms", "700"]
+        result = subprocess.run(arguments, env=env, capture_output=True, text=True, timeout=15)
+        if scenario == "cancel":
+            assert result.returncode == 1 and "cancelled" in result.stderr.lower(), result.stderr
+        else:
+            assert result.returncode == 0, (scenario, result.stdout, result.stderr)
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        if scenario in ("discard", "cancel"):
+            assert not list(output.rglob("*.mp4")) and not (output / "history").exists(), events
+            assert not list((output / "recording-recovery").glob("*/manifest.json")), events
+        else:
+            duration_range = (.9, 1.6) if scenario == "pause" else (.6, 1.1) if scenario == "restart" else (.3, .8)
+            frames += check_recording(output, events, phases, duration_range, "image/gif" if scenario == "gif" else "video/mp4")
+            if scenario in ("pause", "restart"):
+                assert events[-1]["segments"] == (2 if scenario == "pause" else 1), events
+        # Same output directory is rejected without changing saved bytes.
+        before = {str(path.relative_to(output)): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+        retry = subprocess.run(arguments, env=env, capture_output=True, text=True, timeout=3)
+        assert retry.returncode == 1, retry.stdout
+        assert before == {str(path.relative_to(output)): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+    print(json.dumps({"recording_sessions": 7, "decoded_frames": frames, "mp4_gif": True,
+                      "pause_resume": True, "restart": True, "recovery": True,
+                      "discard_cancel": True, "target_has_no_geometry": True}), flush=True)
+    return phases
+
+
+def real_video(binary, backend, root, env, recording_binary=None):
     width, height = 320, 200
     pixels = bytes(channel for y in range(height) for x in range(width)
                    for channel in ((35, 69, 103, 255) if x < 117 and y < 73 else
@@ -287,6 +362,8 @@ def real_video(binary, backend, root, env):
                                 env=env, capture_output=True, text=True, timeout=4)
         assert result.returncode == 1 and "Video portal diagnostic cancelled" in result.stderr and not cancelled.exists(), result.stderr
         collect(root / "again.png")
+        if recording_binary:
+            phases = recording_sessions(recording_binary, root, env)
         revoked = root / "revoked.png"
         probe = subprocess.Popen([binary, "--output", str(revoked), "--frames", "120"], env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -307,6 +384,36 @@ def real_video(binary, backend, root, env):
             assert "Timed out" not in stderr and ("disconnected" in stderr or "ended" in stderr or "error" in stderr.lower()), stderr
         finally:
             stop(probe)
+        if recording_binary:
+            wlr = subprocess.Popen([backend, "-c", str(backend_config), "-l", "DEBUG"], env=env, stdout=log, stderr=log)
+            services.append(wlr)
+            wait_owner(bus, "org.freedesktop.impl.portal.desktop.wlr", wlr)
+            output = root / "lost-recording"
+            probe = subprocess.Popen([recording_binary, "--output", str(output), "--scenario", "stream-loss", "--duration-ms", "10000"],
+                                     env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    assert probe.poll() is None, "Recording ended before stream loss"
+                    objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                    if any(item.get("info", {}).get("state") == "running" and
+                           item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
+                        break
+                    time.sleep(.05)
+                else:
+                    raise AssertionError("No active recording stream")
+                time.sleep(.4)  # Retain independently decodable media before transport loss.
+                lost_at = time.monotonic()
+                stop(wlr)
+                stdout, stderr = probe.communicate(timeout=8)
+                assert probe.returncode == 0, (stdout, stderr)
+                events = [json.loads(line) for line in stdout.splitlines()]
+                assert any(event["event"] == "stream-lost" for event in events), events
+                frames = check_recording(output, events, phases, (.2, 1.5))
+                print(json.dumps({"stream_loss_failed_then_recovered": True, "decoded_frames": frames,
+                                  "elapsed_after_loss_seconds": round(time.monotonic() - lost_at, 2)}), flush=True)
+            finally:
+                stop(probe)
         print(json.dumps({"real_video": "ScreenCast + portal-granted PipeWire remote", "frames": 24, "exact_pixels": width * height * 2,
                           "changing_frames": True, "stream_cancelled": True, "grant_revoked": True,
                           "repeat_session": True, "display_unset": True}), flush=True)
@@ -324,6 +431,7 @@ def real_video(binary, backend, root, env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path)
+    parser.add_argument("--recording-binary", type=Path, help="Also exercise real MP4/GIF recording sessions")
     parser.add_argument("--wlr-backend", type=Path, default=Path("/usr/libexec/xdg-desktop-portal-wlr"),
                         help="Private ScreenCast backend; use build_wayland_portal_fixture.sh for SHM-only desktops")
     parser.add_argument("--fixture", help=argparse.SUPPRESS)
@@ -340,11 +448,12 @@ def main():
     if not args.binary:
         parser.error("--binary is required")
     binary = str(args.binary.resolve())
+    recording_binary = str(args.recording_binary.resolve()) if args.recording_binary else None
     backend = str(args.wlr_backend.resolve())
     if not args.isolated:
         subprocess.run(["sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
-                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7"',
-                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend], check=True)
+                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"}',
+                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or ""], check=True)
         return
     with tempfile.TemporaryDirectory(prefix="captures-wayland-video-") as temporary:
         root = Path(temporary)
@@ -361,7 +470,9 @@ def main():
         try:
             env["DBUS_SESSION_BUS_ADDRESS"] = daemon.stdout.readline().decode().strip()
             protocols(binary, root, env)
-            real_video(binary, backend, root, env)
+            if recording_binary:
+                protocols(recording_binary, root, env, recording=True)
+            real_video(binary, backend, root, env, recording_binary)
         finally:
             stop(daemon)
             subprocess.run(["fusermount3", "-uz", str(runtime / "doc")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

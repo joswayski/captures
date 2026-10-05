@@ -12,7 +12,7 @@ pub use recovery::{RecordingRecovery, RecoveryDraft, RecoveryOutcome, RecoveryPr
 use std::path::Path;
 
 use captures_capture::DisplayDescriptor;
-use captures_recording::{AudioDevice, RecordingOptions};
+use captures_recording::{AudioDevice, RecordingOptions, RecordingTarget};
 #[cfg(target_os = "macos")]
 pub use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -89,9 +89,23 @@ pub fn microphone_devices() -> Vec<AudioDevice> {
 pub fn start_native_segment(
     options: &RecordingOptions,
     path: &Path,
-    display: &DisplayDescriptor,
+    display: Option<&DisplayDescriptor>,
     exclude_captures_app: bool,
+    is_current: &dyn Fn() -> bool,
 ) -> Result<NativeRecordingSegment, String> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = is_current;
+    if options.target == RecordingTarget::PortalDisplay {
+        if display.is_some() {
+            return Err("Portal recording must not use invented monitor geometry".into());
+        }
+        #[cfg(target_os = "linux")]
+        return NativeRecordingSegment::start_portal(options, path, &|| !is_current())
+            .map_err(|error| error.to_string());
+        #[cfg(not(target_os = "linux"))]
+        return Err("Portal recording is only supported on Linux".into());
+    }
+    let display = display.ok_or("Recording target requires a display")?;
     #[cfg(target_os = "macos")]
     {
         let _ = display;

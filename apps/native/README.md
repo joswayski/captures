@@ -145,6 +145,12 @@ and the existing platform engine across start, pause/resume, restart, stop, disc
 MP4/GIF finalization into private History. Run its blocking methods on a worker.
 Hosts still own permissions, countdown presentation, window exclusion and the
 capture-generation cancellation gate passed to `start`; `prepare` never records.
+Linux portal-selected display sessions use `RecordingTarget::PortalDisplay` and
+`prepare(..., None)`, without invented monitor IDs or geometry. The new target is
+explicitly unsupported on other OSes and rejected by shipping's selection adapter.
+Cancellation reaches portal consent and first-frame waits. Pause/resume requests
+a fresh grant; stream loss stops encoding and retains recoverable media instead
+of publishing a successful take. No native Wayland recording UI is enabled yet.
 Failed assembly/publication keeps source segments. Successful video publication
 removes the draft only after Ready metadata is saved; GIFs keep editable sources.
 Post-publication housekeeping failures return the saved artifact with a warning.

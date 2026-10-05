@@ -36,6 +36,7 @@ use pw::{
     },
     stream::{StreamFlags, StreamState},
 };
+use xcap::Frame;
 
 const DESKTOP: &str = "org.freedesktop.portal.Desktop";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -391,7 +392,7 @@ impl PortalVideoSource {
         show_cursor: bool,
         frame_rate: u16,
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<(Self, Receiver<RgbaImage>), String> {
+    ) -> Result<(Self, Receiver<Frame>), String> {
         if !(1..=60).contains(&frame_rate) {
             return Err(error("invalid video frame rate"));
         }
@@ -441,7 +442,7 @@ impl PortalVideoSource {
         self.finish()
     }
 
-    fn finish(&mut self) -> Result<(), String> {
+    pub(crate) fn finish(&mut self) -> Result<(), String> {
         let _ = self.control.send(());
         if let Some(worker) = self.worker.take() {
             worker.join().map_err(|_| error("video worker panicked"))?;
@@ -458,7 +459,7 @@ impl Drop for PortalVideoSource {
 
 struct VideoData {
     format: Option<(VideoFormat, u32, u32)>,
-    frames: SyncSender<RgbaImage>,
+    frames: SyncSender<Frame>,
     dropped: Arc<AtomicU64>,
     warning: Arc<Mutex<Option<String>>>,
 }
@@ -470,7 +471,7 @@ fn video_loop(
     selected: Stream,
     frame_rate: u16,
     control: pw::channel::Receiver<()>,
-    frames: SyncSender<RgbaImage>,
+    frames: SyncSender<Frame>,
     warning: Arc<Mutex<Option<String>>>,
     dropped: Arc<AtomicU64>,
 ) -> Result<(), String> {
@@ -598,7 +599,11 @@ fn video_loop(
                 decode_frame(bytes, format, width, height, offset, size, stride).map(Some)
             })();
             match decoded {
-                Ok(Some(frame)) => match data.frames.try_send(frame) {
+                Ok(Some(frame)) => match data.frames.try_send(Frame {
+                    width: frame.width(),
+                    height: frame.height(),
+                    raw: frame.into_raw(),
+                }) {
                     Ok(()) => {}
                     Err(TrySendError::Full(_)) => {
                         data.dropped.fetch_add(1, Ordering::Relaxed);
@@ -699,6 +704,9 @@ fn video_loop(
         )
         .map_err(error)?;
     main_loop.run();
+    // A local stop deliberately transitions to Unconnected. Remove callbacks
+    // first so cleanup cannot replace a healthy stream's outcome with failure.
+    drop(_listener);
     stream.disconnect().map_err(error)?;
     Ok(())
 }

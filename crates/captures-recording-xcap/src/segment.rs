@@ -65,8 +65,56 @@ struct EncoderContext {
     pointer_overlay: Option<PointerOverlay>,
 }
 
+enum CaptureRecorder {
+    Direct(VideoRecorder),
+    #[cfg(target_os = "linux")]
+    Portal(crate::PortalVideoSource),
+}
+
+impl CaptureRecorder {
+    fn warning(&self) -> Option<String> {
+        match self {
+            Self::Direct(_) => None,
+            #[cfg(target_os = "linux")]
+            Self::Portal(source) => source.warning(),
+        }
+    }
+
+    fn is_portal(&self) -> bool {
+        match self {
+            Self::Direct(_) => false,
+            #[cfg(target_os = "linux")]
+            Self::Portal(_) => true,
+        }
+    }
+
+    fn stop(self) -> XcapRecordingResult<u64> {
+        match self {
+            Self::Direct(recorder) => recorder
+                .stop()
+                .map(|()| 0)
+                .map_err(|error| XcapRecordingError::Capture(error.to_string())),
+            #[cfg(target_os = "linux")]
+            Self::Portal(mut source) => {
+                source.finish().map_err(XcapRecordingError::Capture)?;
+                if let Some(problem) = source.warning() {
+                    return Err(XcapRecordingError::Capture(problem));
+                }
+                Ok(source.dropped_frames())
+            }
+        }
+    }
+}
+
+struct RecordingInput {
+    recorder: CaptureRecorder,
+    receiver: Receiver<Frame>,
+    first_image: RgbaImage,
+    transform: FrameTransform,
+}
+
 pub struct XcapRecordingSegment {
-    recorder: Option<VideoRecorder>,
+    recorder: Option<CaptureRecorder>,
     stop_requested: Arc<AtomicBool>,
     capture_worker: Option<thread::JoinHandle<()>>,
     encoder_worker: Option<thread::JoinHandle<XcapRecordingResult<WorkerOutcome>>>,
@@ -87,6 +135,9 @@ impl XcapRecordingSegment {
         options
             .validate()
             .map_err(|error| XcapRecordingError::Worker(error.to_owned()))?;
+        if options.target == RecordingTarget::PortalDisplay {
+            return Err(XcapRecordingError::InvalidTarget);
+        }
         if (options.show_cursor || options.highlight_clicks) && !pointer_features_available() {
             return Err(XcapRecordingError::PointerUnavailable);
         }
@@ -154,6 +205,119 @@ impl XcapRecordingSegment {
             return Err(XcapRecordingError::InvalidTarget);
         };
         let (width, height) = transform.dimensions();
+        let source_is_overlay_space = matches!(options.target, RecordingTarget::Region { .. });
+        let pointer_overlay = (options.show_cursor || options.highlight_clicks).then(|| {
+            PointerOverlay::new(
+                PointerLayout::for_capture(
+                    PointerCaptureSpace {
+                        display_x: display.x,
+                        display_y: display.y,
+                        scale_factor: display.scale_factor,
+                        physical_display_geometry: DisplayDescriptor::reports_physical_geometry(),
+                        source,
+                        source_is_overlay_space,
+                    },
+                    width,
+                    height,
+                ),
+                options.show_cursor,
+                options.highlight_clicks,
+            )
+        });
+        Self::encode(
+            options,
+            output_path,
+            RecordingInput {
+                recorder: CaptureRecorder::Direct(recorder),
+                receiver,
+                first_image,
+                transform,
+            },
+            pointer_overlay,
+        )
+    }
+
+    /// Records only the portal-selected display. Cursor pixels come from the
+    /// granted stream; no pointer polling, monitor enumeration or fallback.
+    #[cfg(target_os = "linux")]
+    pub fn start_portal(
+        options: &RecordingOptions,
+        output_path: &Path,
+        cancelled: &dyn Fn() -> bool,
+    ) -> XcapRecordingResult<Self> {
+        options
+            .validate()
+            .map_err(|error| XcapRecordingError::Worker(error.to_owned()))?;
+        if options.target != RecordingTarget::PortalDisplay {
+            return Err(XcapRecordingError::InvalidTarget);
+        }
+        let (source, receiver) = crate::PortalVideoSource::start(
+            options.show_cursor,
+            options.frames_per_second,
+            cancelled,
+        )
+        .map_err(XcapRecordingError::Capture)?;
+        let deadline = Instant::now() + FIRST_FRAME_TIMEOUT;
+        let first_image = loop {
+            if cancelled() {
+                return Err(XcapRecordingError::Capture("Recording cancelled".into()));
+            }
+            if Instant::now() >= deadline {
+                return Err(XcapRecordingError::FirstFrameUnavailable);
+            }
+            match receiver.recv_timeout(CONTROL_POLL_INTERVAL) {
+                Ok(frame) => break frame_image(frame)?,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(XcapRecordingError::Capture(
+                        source.warning().unwrap_or_else(|| {
+                            "The portal video stream ended before its first frame.".into()
+                        }),
+                    ));
+                }
+            }
+        };
+        let transform = FrameTransform::new(
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: first_image.width(),
+                height: first_image.height(),
+            },
+            options.max_resolution,
+            first_image.width(),
+            first_image.height(),
+        )
+        .ok_or(XcapRecordingError::InvalidTarget)?;
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Self::encode(
+            options,
+            output_path,
+            RecordingInput {
+                recorder: CaptureRecorder::Portal(source),
+                receiver,
+                first_image,
+                transform,
+            },
+            None,
+        )
+    }
+
+    fn encode(
+        options: &RecordingOptions,
+        output_path: &Path,
+        input: RecordingInput,
+        pointer_overlay: Option<PointerOverlay>,
+    ) -> XcapRecordingResult<Self> {
+        let RecordingInput {
+            recorder,
+            receiver,
+            first_image,
+            transform,
+        } = input;
+        let (width, height) = transform.dimensions();
         let bitrate = recording_bitrate(width, height, options.frames_per_second);
         let writer = match H264Mp4Writer::create(
             output_path,
@@ -174,25 +338,7 @@ impl XcapRecordingSegment {
         let warning = Arc::new(Mutex::new(None));
         let latest_frame = Arc::new(Mutex::new(Some(first_image)));
         let dropped_frames = Arc::new(AtomicU64::new(0));
-        let source_is_overlay_space = matches!(options.target, RecordingTarget::Region { .. });
-        let pointer_overlay = (options.show_cursor || options.highlight_clicks).then(|| {
-            PointerOverlay::new(
-                PointerLayout::for_capture(
-                    PointerCaptureSpace {
-                        display_x: display.x,
-                        display_y: display.y,
-                        scale_factor: display.scale_factor,
-                        physical_display_geometry: DisplayDescriptor::reports_physical_geometry(),
-                        source,
-                        source_is_overlay_space,
-                    },
-                    width,
-                    height,
-                ),
-                options.show_cursor,
-                options.highlight_clicks,
-            )
-        });
+        let stop_on_disconnect = recorder.is_portal();
         let capture_worker = {
             let stop_requested = stop_requested.clone();
             let warning = warning.clone();
@@ -207,6 +353,7 @@ impl XcapRecordingSegment {
                         &dropped_frames,
                         &stop_requested,
                         &warning,
+                        stop_on_disconnect,
                     );
                 }) {
                 Ok(worker) => worker,
@@ -304,23 +451,15 @@ impl XcapRecordingSegment {
     }
 
     pub fn stop(mut self) -> XcapRecordingResult<RecordingSegmentInfo> {
-        let recorder_result = self
-            .recorder
-            .take()
-            .map(|recorder| {
-                recorder
-                    .stop()
-                    .map_err(|error| XcapRecordingError::Capture(error.to_string()))
-            })
-            .transpose();
         self.stop_requested.store(true, Ordering::Release);
+        let recorder_result = self.recorder.take().map(CaptureRecorder::stop).transpose();
         let system_audio_result = self.system_audio.take().map(AudioSegment::stop).transpose();
         let microphone_result = self.microphone.take().map(AudioSegment::stop).transpose();
         let capture_result = self.join_capture_worker();
         let encoder_result = self.join_encoder_worker();
         capture_result?;
         let outcome = encoder_result?;
-        recorder_result?;
+        let source_dropped = recorder_result?.unwrap_or_default();
         let system_audio = system_audio_result?;
         let microphone = microphone_result?;
         let size_bytes = fs::metadata(&self.output_path)?.len();
@@ -336,7 +475,7 @@ impl XcapRecordingSegment {
             height: self.height,
             duration_ms: outcome.duration_ms,
             size_bytes,
-            dropped_frames: outcome.dropped_frames,
+            dropped_frames: outcome.dropped_frames.saturating_add(source_dropped),
         })
     }
 
@@ -350,10 +489,10 @@ impl XcapRecordingSegment {
     }
 
     fn abort(&mut self) {
+        self.stop_requested.store(true, Ordering::Release);
         if let Some(recorder) = self.recorder.take() {
             let _ = recorder.stop();
         }
-        self.stop_requested.store(true, Ordering::Release);
         if let Some(system_audio) = self.system_audio.take() {
             let _ = system_audio.discard();
         }
@@ -365,9 +504,10 @@ impl XcapRecordingSegment {
     }
 
     pub fn warning(&self) -> Option<String> {
-        self.warning
-            .lock()
-            .clone()
+        self.recorder
+            .as_ref()
+            .and_then(CaptureRecorder::warning)
+            .or_else(|| self.warning.lock().clone())
             .or_else(|| self.system_audio.as_ref().and_then(AudioSegment::warning))
             .or_else(|| self.microphone.as_ref().and_then(AudioSegment::warning))
     }
@@ -415,6 +555,7 @@ fn receive_frames(
     dropped_frames: &AtomicU64,
     stop_requested: &AtomicBool,
     warning: &Mutex<Option<String>>,
+    stop_on_disconnect: bool,
 ) {
     while !stop_requested.load(Ordering::Acquire) {
         match receiver.recv_timeout(CONTROL_POLL_INTERVAL) {
@@ -432,6 +573,9 @@ fn receive_frames(
                     warning,
                     "The screen capture stream stopped unexpectedly.".to_owned(),
                 );
+                if stop_on_disconnect {
+                    stop_requested.store(true, Ordering::Release);
+                }
                 break;
             }
         }

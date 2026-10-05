@@ -866,6 +866,7 @@ fn live_image_for_target(
 ) -> Result<image::RgbaImage, AppError> {
     crate::ensure_capture_session_available()?;
     match target {
+        RecordingTarget::PortalDisplay => Err(AppError::InvalidSelection),
         RecordingTarget::Display { display_id } => {
             Ok(state.backend.capture_display(display_id)?.image)
         }
@@ -923,6 +924,7 @@ fn live_screenshot_image_for_target(
     crate::ensure_capture_session_available()?;
     let cursor = crate::pointer_cursor();
     match target {
+        RecordingTarget::PortalDisplay => Err(AppError::InvalidSelection),
         RecordingTarget::Display { display_id } => {
             let mut frame = state.backend.capture_display(display_id)?;
             crate::apply_screenshot_cursor(
@@ -1004,6 +1006,7 @@ fn apply_screenshot_cursor_to_recording_target(
     enabled: bool,
 ) {
     match target {
+        RecordingTarget::PortalDisplay => {}
         RecordingTarget::Display { .. } => {
             crate::apply_screenshot_cursor(image, display, cursor, enabled);
         }
@@ -1386,7 +1389,13 @@ async fn start_segment(
     let path_for_start = path.clone();
     let exclude_captures_app = should_exclude_captures_app_from_recording(&state);
     let started = tauri::async_runtime::spawn_blocking(move || {
-        start_native_segment(&options, &path_for_start, &display, exclude_captures_app)
+        start_native_segment(
+            &options,
+            &path_for_start,
+            Some(&display),
+            exclude_captures_app,
+            &|| true,
+        )
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?;
@@ -3314,7 +3323,7 @@ pub struct ResolvedRecordingAsset {
 
 fn capture_mode_for_target(target: &RecordingTarget) -> CaptureMode {
     match target {
-        RecordingTarget::Display { .. } => CaptureMode::Display,
+        RecordingTarget::Display { .. } | RecordingTarget::PortalDisplay => CaptureMode::Display,
         RecordingTarget::Region { .. } => CaptureMode::Region,
         RecordingTarget::Window { .. } => CaptureMode::Window,
     }
@@ -3370,6 +3379,7 @@ fn image_for_selection(
         .as_ref()
         .ok_or(AppError::SessionUnavailable)?;
     let image = match target {
+        RecordingTarget::PortalDisplay => return Err(AppError::InvalidSelection),
         RecordingTarget::Display { .. } => image.clone(),
         RecordingTarget::Region { rect, .. } => {
             crop_display_region(image, &selection.summary.display, rect)?

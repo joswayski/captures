@@ -197,8 +197,9 @@ The [Wayland video diagnostic](apps/native/wgpu/README.md#wayland-video-acquisit
 checks ScreenCast consent responses, a granted PipeWire remote and changing
 CPU-mapped pixels without X11. Its private software-rendered fixture uses a pinned
 backend with a SHM-only format-guard backport, not an installed portal replacement.
-Native Wayland recording UI/session integration and physical consent acceptance
-remain open.
+The recording diagnostic also exercises real MP4/GIF session finalization,
+pause/resume, restart, discard/cancel and recovery after transport loss. Native
+Wayland recording UI, audio/cursor and physical consent acceptance remain open.
 
 ### Native exploratory test archives
 
