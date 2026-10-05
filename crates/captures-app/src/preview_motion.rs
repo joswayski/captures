@@ -148,6 +148,26 @@ impl CardExit {
 pub struct StackExits {
     display: Vec<String>,
     exits: Vec<(String, CardExit)>,
+    shifts: Vec<(String, SlotShift)>,
+}
+
+/// A survivor's current presentation and its accumulated destination. A new
+/// exit holds that presentation until its own settle delay, including at zero.
+#[derive(Clone, Debug, PartialEq)]
+struct SlotShift {
+    from: f64,
+    to: f64,
+    start_ms: f64,
+}
+
+impl SlotShift {
+    fn value(&self, now_ms: f64, reduced: bool, settle: &Tween) -> f64 {
+        if now_ms < self.start_ms && !reduced {
+            self.from
+        } else {
+            settle.value(self.from, self.to, now_ms - self.start_ms, reduced)
+        }
+    }
 }
 
 impl StackExits {
@@ -161,6 +181,7 @@ impl StackExits {
                 self.display.push(id.clone());
             }
         }
+        self.shifts.retain(|(id, _)| self.display.contains(id));
     }
 
     /// Start `id`'s exit. `live` is the stack's membership that still includes
@@ -182,6 +203,21 @@ impl StackExits {
             return false;
         }
         let frozen_shift = self.shift_slots(id, now_ms, false, settle);
+        let index = self
+            .display
+            .iter()
+            .position(|existing| existing == id)
+            .unwrap();
+        let survivors: Vec<_> = self.display[..index]
+            .iter()
+            .filter(|older| self.exiting(older).is_none())
+            .map(|older| {
+                (
+                    older.clone(),
+                    self.shift_slots(older, now_ms, false, settle),
+                )
+            })
+            .collect();
         self.exits.push((
             id.to_owned(),
             CardExit {
@@ -192,6 +228,20 @@ impl StackExits {
                 frozen_shift,
             },
         ));
+        self.shifts.retain(|(existing, _)| existing != id);
+        if settles {
+            for (older, from) in survivors {
+                let to = self.target_slots(&older);
+                let ready = now_ms + delay_ms.max(0.0) + kind.settle_delay_ms();
+                let start_ms = self
+                    .shifts
+                    .iter()
+                    .find(|(existing, _)| existing == &older)
+                    .map_or(ready, |(_, shift)| ready.max(shift.start_ms));
+                self.shifts.retain(|(existing, _)| existing != &older);
+                self.shifts.push((older, SlotShift { from, to, start_ms }));
+            }
+        }
         true
     }
 
@@ -244,6 +294,18 @@ impl StackExits {
     /// returning to the stack (a failed Trash); otherwise the slot goes too.
     pub fn release(&mut self, id: &str, keep_slot: bool) -> bool {
         let before = self.exits.len();
+        if keep_slot && self.exiting(id).is_some_and(|exit| exit.settles) {
+            // A failed Trash restores the card, so its hole no longer contributes
+            // to older cards' destinations. Keep their held presentation: the
+            // returned slot does not reflow the layout like a removed slot does.
+            if let Some(index) = self.display.iter().position(|existing| existing == id) {
+                for (older, shift) in &mut self.shifts {
+                    if self.display[..index].contains(older) {
+                        shift.to -= 1.0;
+                    }
+                }
+            }
+        }
         self.exits.retain(|(exit, _)| exit != id);
         if !keep_slot {
             self.remove_slots(&[id.to_owned()]);
@@ -252,7 +314,7 @@ impl StackExits {
     }
 
     /// Reflow advances older cards by a whole slot, even if they froze partway
-    /// through a settle. Cancel that displacement for every retained exit.
+    /// through a settle. Cancel it in both held exits and survivor trajectories.
     fn remove_slots(&mut self, removed: &[String]) {
         if removed.is_empty() {
             return;
@@ -261,17 +323,25 @@ impl StackExits {
         for id in self.display.iter().rev() {
             if removed.contains(id) {
                 later_removed += 1;
-            } else if let Some((_, exit)) = self.exits.iter_mut().find(|(exit, _)| exit == id) {
-                exit.frozen_shift -= f64::from(later_removed);
+            } else {
+                if let Some((_, exit)) = self.exits.iter_mut().find(|(exit, _)| exit == id) {
+                    exit.frozen_shift -= f64::from(later_removed);
+                }
+                if let Some((_, shift)) = self.shifts.iter_mut().find(|(shift, _)| shift == id) {
+                    shift.from -= f64::from(later_removed);
+                    shift.to -= f64::from(later_removed);
+                }
             }
         }
         self.display.retain(|id| !removed.contains(id));
+        self.shifts.retain(|(id, _)| !removed.contains(id));
     }
 
     /// Forget every exit at once (the stack collapsed, closed or rebuilt).
     pub fn clear(&mut self) {
         let exiting: Vec<String> = self.exits.drain(..).map(|(id, _)| id).collect();
         self.display.retain(|id| !exiting.contains(id));
+        self.shifts.clear();
     }
 
     /// Milliseconds until the next exit ends, for hosts that schedule one
@@ -303,6 +373,15 @@ impl StackExits {
         if let Some(exit) = self.exiting(id) {
             return exit.frozen_shift;
         }
+        self.shifts
+            .iter()
+            .find(|(existing, _)| existing == id)
+            .map_or(0.0, |(_, shift)| {
+                shift.value(now_ms, reduced_motion, settle)
+            })
+    }
+
+    fn target_slots(&self, id: &str) -> f64 {
         let Some(index) = self.display.iter().position(|existing| existing == id) else {
             return 0.0;
         };
@@ -315,15 +394,7 @@ impl StackExits {
                     .position(|existing| existing == exit_id)
                     .is_some_and(|slot| slot > index)
             })
-            .map(|(_, exit)| {
-                let since = exit.elapsed_ms(now_ms) - exit.kind.settle_delay_ms();
-                if since < 0.0 && !reduced_motion {
-                    0.0
-                } else {
-                    settle.progress(since.max(0.0), reduced_motion)
-                }
-            })
-            .sum()
+            .count() as f64
     }
 
     /// [`Self::shift_slots`] in points, positive downward.
@@ -1240,6 +1311,110 @@ mod tests {
     }
 
     #[test]
+    fn second_dust_dismissal_before_settle_preserves_the_top_cards_screen_position() {
+        // A linear curve gives independently calculable intermediate positions.
+        // The first source has faded by 550 ms, but its slot waits until 1800 ms.
+        let settle = Tween {
+            duration_ms: 580.,
+            easing: CubicBezier::LINEAR,
+        };
+        for top_anchor in [false, true] {
+            let mut exits = StackExits::default();
+            let mut live = ids(&["top", "middle", "bottom"]);
+            let direction = if top_anchor { -1. } else { 1. };
+            let screen_y = |exits: &StackExits, now: f64| {
+                let later = exits.display_count() - 1; // "top" is the oldest.
+                -(later as f64) * 184. * direction
+                    + exits.shift_px("top", now, false, &settle, top_anchor)
+            };
+            assert!(exits.begin(&live, "bottom", ExitKind::Dust, 0., 0., true, &settle));
+            live.pop();
+            exits.sync(&live);
+            assert_eq!(screen_y(&exits, 1_400.), -368. * direction);
+
+            // Re-entrant Delete must neither discard the first held slot nor
+            // replace its unfinished trajectory with the smaller live layout.
+            assert!(exits.begin(&live, "middle", ExitKind::Dust, 1_400., 0., true, &settle));
+            live.pop();
+            exits.sync(&live);
+            assert_eq!(exits.display_ids(), ["top", "middle", "bottom"]);
+            assert_eq!(screen_y(&exits, 1_400.), -368. * direction);
+            assert_eq!(screen_y(&exits, 1_799.), -368. * direction);
+            assert_eq!(screen_y(&exits, 2_090.), -368. * direction);
+            assert_eq!(screen_y(&exits, 2_380.), -368. * direction);
+
+            let before = screen_y(&exits, 2_900.);
+            assert!(exits.prune(2_900., false));
+            assert_eq!(exits.display_ids(), ["top", "middle"]);
+            assert_eq!(screen_y(&exits, 2_900.), before);
+            assert_eq!(screen_y(&exits, 3_199.), -368. * direction);
+            assert!((screen_y(&exits, 3_490.) + 184. * direction).abs() < 1e-6);
+            assert_eq!(screen_y(&exits, 3_780.), 0.);
+            assert!(exits.prune(4_300., false));
+            assert_eq!(exits.display_ids(), ["top"]);
+            assert_eq!(screen_y(&exits, 4_300.), 0.);
+        }
+    }
+
+    #[test]
+    fn reentrant_dust_at_zero_start_and_after_pruning_keeps_current_positions() {
+        let settle = Tween {
+            duration_ms: 580.,
+            easing: CubicBezier::LINEAR,
+        };
+        for second_at in [1_799., 1_800., 1_801., 2_901.] {
+            for top_anchor in [false, true] {
+                let mut exits = StackExits::default();
+                let mut live = ids(&["top", "middle", "bottom"]);
+                let direction = if top_anchor { -1. } else { 1. };
+                let screen_y = |exits: &StackExits, now: f64| {
+                    -((exits.display_count() - 1) as f64) * 184. * direction
+                        + exits.shift_px("top", now, false, &settle, top_anchor)
+                };
+                assert!(exits.begin(&live, "bottom", ExitKind::Dust, 0., 0., true, &settle));
+                live.pop();
+                exits.prune(second_at, false);
+                let before = screen_y(&exits, second_at);
+                let first_progress = ((second_at - 1_800.) / 580.).clamp(0., 1.);
+                assert!((before - (-368. + 184. * first_progress) * direction).abs() < 1e-6);
+                let middle_shift = exits.shift_slots("middle", second_at, false, &settle);
+                assert!(exits.begin(
+                    &live,
+                    "middle",
+                    ExitKind::Dust,
+                    second_at,
+                    0.,
+                    true,
+                    &settle
+                ));
+                live.pop();
+                exits.sync(&live);
+                assert_eq!(
+                    screen_y(&exits, second_at),
+                    before,
+                    "{second_at}/{top_anchor}"
+                );
+                assert_eq!(exits.exiting("middle").unwrap().frozen_shift, middle_shift);
+                // Zero and a just-started first settle must both hold throughout
+                // the second dust, including when the first slot is pruned.
+                let held = second_at + 1_799.;
+                assert!((screen_y(&exits, held) - before).abs() < 1e-6);
+                exits.prune(held, false);
+                assert!((screen_y(&exits, held) - before).abs() < 1e-6);
+                // The second settle covers the entire outstanding distance,
+                // not a fresh single-slot offset from the previous target.
+                let halfway = second_at + 1_800. + 290.;
+                assert!((screen_y(&exits, halfway) - before * 0.5).abs() < 1e-6);
+                let done = second_at + 2_900.;
+                assert!(screen_y(&exits, done).abs() < 1e-6);
+                assert!(exits.prune(done, false));
+                assert_eq!(exits.display_ids(), ["top"]);
+                assert!(screen_y(&exits, done).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
     fn partial_settles_keep_screen_positions_when_an_earlier_exit_slot_disappears() {
         let settle = Tween {
             duration_ms: 580.,
@@ -1291,6 +1466,52 @@ mod tests {
                 assert!((screen_y(&exits, "a", 4_900.) - before).abs() < 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn failed_trash_during_a_later_hold_removes_only_its_destination() {
+        let settle = Tween {
+            duration_ms: 580.,
+            easing: CubicBezier::LINEAR,
+        };
+        let mut exits = StackExits::default();
+        let live = ids(&["top", "middle", "bottom"]);
+        exits.begin(&live, "bottom", ExitKind::Dust, 0., 0., true, &settle);
+        exits.begin(
+            &live[..2],
+            "middle",
+            ExitKind::Dust,
+            1_400.,
+            0.,
+            true,
+            &settle,
+        );
+        assert_eq!(exits.shift_slots("top", 2_900., false, &settle), 0.);
+        assert!(exits.release("bottom", true));
+        assert_eq!(exits.display_ids(), ["top", "middle", "bottom"]);
+        assert_eq!(exits.shift_slots("top", 2_900., false, &settle), 0.);
+        assert_eq!(exits.shift_slots("top", 3_199., false, &settle), 0.);
+        assert!((exits.shift_slots("top", 3_490., false, &settle) - 0.5).abs() < 1e-6);
+        assert_eq!(exits.shift_slots("top", 3_780., false, &settle), 1.);
+    }
+
+    #[test]
+    fn a_shorter_new_exit_cannot_advance_an_existing_dust_deadline() {
+        let settle = settle();
+        let mut exits = StackExits::default();
+        let live = ids(&["top", "middle", "bottom"]);
+        exits.begin(&live, "bottom", ExitKind::Dust, 0., 0., true, &settle);
+        exits.begin(
+            &live[..2],
+            "middle",
+            ExitKind::Dismiss,
+            500.,
+            0.,
+            true,
+            &settle,
+        );
+        assert_eq!(exits.shift_slots("top", 1_799., false, &settle), 0.);
+        assert_eq!(exits.shift_slots("top", 2_380., false, &settle), 2.);
     }
 
     #[test]

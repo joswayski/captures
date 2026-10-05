@@ -85,6 +85,9 @@ jobs:
       - name: Exercise Wayland resident startup, child windows and real tray recovery
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/wayland_lifecycle_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
+      - name: Hold native preview positions through overlapping dust exits
+        if: runner.os == 'Linux'
+        run: /usr/bin/python3 apps/native/x11_preview_smoke.py --retarget-only --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --output "$RUNNER_TEMP/native-preview-retarget"
       - name: Stop the rest of this run after a failure
         # One failed job already fails the run; cancel the other jobs instead of
         # letting them hold runners (and block newer pushes) until they finish.

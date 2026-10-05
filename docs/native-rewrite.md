@@ -1779,7 +1779,10 @@ permission-recovery relaunch join the worker before releasing profile ownership.
 The isolated `--scene sharing` fixture disables every action and cannot run live.
 Seven Swift regression tests cover original-media selection, busy pinning, patch
 semantics, retry-save, lifecycle and light/dark normal/minimum-size renders;
-execution/render inspection on macOS remains pending for this slice.
+all seven passed in [macOS CI](https://github.com/joswayski/captures/actions/runs/37275047835).
+Light/dark minimum-size renders for all seven fixture states were inspected.
+That run failed a stale mini-preview hover expectation outside SharingTests;
+the native dismissal-retarget slice corrects it. This is not a full-suite pass.
 
 This is connected development behavior, not acceptance of the checklist below.
 Tests use disposable loopback HTTP/fake vaults and software-rendered UI;
@@ -1796,7 +1799,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   The `captures-account` worker covers explicit request/verify,
   account lookup, bearer persistence/retry, invalidation and logout with platform
   vault adapters. Both hosts' controls and retention are connected; AppKit
-  build/render verification and physical-vault acceptance remain open; this does
+  sharing tests/renders passed CI, but physical-vault acceptance remains open; this does
   not check the gate.
 - [ ] The popup previews the selected file and offers link access, optional
   password and expiry before explicit Upload and share. No upload merely from
@@ -1811,7 +1814,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   and durably persists account-scoped create keys. Lost create responses and failed
   post-create association writes replay the same key after restart; conflicts and
   tombstones never silently create replacements. Legacy keyless checkpoints still
-  require explicit reconciliation. AppKit verification, real object-store and
+  require explicit reconciliation. Real object-store and
   physical-platform acceptance remain open.
 - [ ] Reopening manages the existing remote asset/share rather than duplicating
   the upload. Persist the local-artifact/remote-asset association. Show shared date,
@@ -1819,8 +1822,8 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   sharing actions. Stopping denies subsequent access; enabling again rotates the
   link. Cloud Trash retains bytes and restore does not revive old links.
   Account/profile-scoped local associations and server share patch semantics are
-  implemented in shared Rust and both hosts; AppKit build/render and physical
-  verification are open.
+  implemented in shared Rust and both hosts; AppKit sharing tests/renders passed
+  CI, while physical verification remains open.
 - [ ] Integrate both AppKit and wgpu through thin host launch/presentation seams;
   coordinate MiniPreview/Workbench and mini_preview/live changes with the rewrite
   integration owner. Do not fork the auth/upload rules into platform hosts.
@@ -1833,7 +1836,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
 
 | Platform | Sharing coordinator implementation / verification |
 | --- | --- |
-| macOS | Shared worker/coordinator, Keychain adapter and AppKit controls connected; Swift build/tests/render inspection pending; physical vault/object-store acceptance open |
+| macOS | Shared worker/coordinator, Keychain adapter and AppKit controls connected; seven sharing tests passed in CI and light/dark minimum-size renders inspected; physical vault/object-store acceptance open |
 | Windows | Shared worker and wgpu controls connected with Credential Manager adapter; host compilation/runtime and physical vault/object-store acceptance unverified here |
 | X11 | wgpu controls connected; disposable shared-worker HTTP/recovery and native UI tests, software renders; physical Secret Service/object-store acceptance open |
 | Wayland | wgpu History entry point and compositor-controlled child window; shared worker tested, physical Secret Service/compositor/object-store acceptance open |
