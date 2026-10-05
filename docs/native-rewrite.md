@@ -47,6 +47,36 @@ global shortcuts, preview placement and recording remain open.
 | X11 | Existing acquisition path retained; private-X11 capture regression exercises the patched renderer; diagnostic rejects DISPLAY rather than falling back |
 | Wayland | Portal screenshots connected to History and exercised on disposable headless Sway; physical GNOME/KDE acceptance and broader capture/recording parity remain open |
 
+The Linux video-source slice acquires one portal-selected display through
+CreateSession → SelectSources → Start → OpenPipeWireRemote. It pins the portal's
+unique owner, rejects peer/wrong-handle signals, refuses denial/cancellation and
+never connects to an unrestricted PipeWire server or falls back to xcap. Consent
+and calls are bounded; session/request resources close on failure or cancellation.
+The source exposes one bounded CPU-frame channel with validated raw RGB layouts,
+dropped-frame accounting, format-change rejection and deterministic worker cleanup.
+It does not invent display geometry from compositor-space stream properties.
+
+Thirteen private protocol cases and a real ScreenCast/PipeWire diagnostic passed
+with DISPLAY unset: 24 changing frames across two sessions, both independently
+specified asymmetric phases, exact final pixels, active-stream cancellation and
+reopen. Terminating a backend with a running granted stream ends the source
+promptly without output or frame timeout; this is transport-loss coverage, not
+physical permission-revocation acceptance. The SHM-only Sway fixture uses pinned wlr 0.7.1 with a **fixture-only format
+guard backport**; its selection/consent/grant paths remain unchanged and it is
+never installed. Stock 0.7.x rejects SHM-only Start, 0.8.x regresses SHM-only init,
+and the intermediate constraints rewrite renegotiates on every frame. These tests
+do not establish stock-backend or physical consent acceptance.
+The no-window probe writes PNG diagnostics, not MP4. Native recording sessions,
+audio, capture-window exclusion, region/window selection and controls remain open;
+the resident Wayland recording gate is unchanged.
+
+| Platform | Video-source slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing recorder unchanged; source Linux-gated and diagnostic explicitly unsupported; physical host unverified |
+| Windows | Existing xcap recorder unchanged; source Linux-gated and diagnostic explicitly unsupported; physical host unverified |
+| X11 | Existing segment/frame/encoder paths unchanged; diagnostic rejects DISPLAY and cannot fall back to X11 |
+| Wayland | Portal/PipeWire CPU source and no-window diagnostic exercised on private Sway with the disclosed backend fixture patch; native session/UI and physical GNOME/KDE acceptance remain open |
+
 The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
 when a tray exists. Preferences, Feedback and media bootstrap independently;
 empty/GIO relaunch reaches Preferences without flashing History. Missing/lost tray

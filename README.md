@@ -193,7 +193,9 @@ request, and restores them afterward. Captures return to History, without floati
 previews or guessed monitor geometry. **Edit** opens the screenshot editor directly;
 floating-preview **Restore** is disabled. Region/window selection, countdown and
 recording remain unavailable there; portal policy controls consent and cursor
-inclusion. Restored window positions are compositor-controlled. Like the shipping app, the
+inclusion. A separate no-window diagnostic now acquires changing video frames
+through a portal-granted PipeWire connection; native recording controls are not
+connected to that source yet. Restored window positions are compositor-controlled. Like the shipping app, the
 native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic

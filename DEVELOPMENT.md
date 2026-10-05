@@ -193,6 +193,13 @@ handoff and resource collection. Root `cargo test --workspace` does not include
 this experiment; run its manifest-specific checks too. It connects capture and
 recording engines for development but does not select a production renderer.
 
+The [Wayland video diagnostic](apps/native/wgpu/README.md#wayland-video-acquisition-diagnostic)
+checks ScreenCast consent responses, a granted PipeWire remote and changing
+CPU-mapped pixels without X11. Its private software-rendered fixture uses a pinned
+backend with a SHM-only format-guard backport, not an installed portal replacement.
+Native Wayland recording UI/session integration and physical consent acceptance
+remain open.
+
 ### Native exploratory test archives
 
 Native pull-request CI publishes `native-development-macos-ARM64`,

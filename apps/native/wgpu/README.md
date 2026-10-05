@@ -403,6 +403,57 @@ URI rejection, exact RGBA and source retention. The real frontend → wlr backen
 headless Sway test compares every pixel of an asymmetric 310×170 desktop against
 independent expectations. This is not physical GNOME/KDE or native-host acceptance.
 
+### Wayland video acquisition diagnostic
+
+`captures_recording_xcap::PortalVideoSource` requests one display through the public
+ScreenCast portal and connects only to its granted PipeWire remote. CreateSession,
+SelectSources and Start responses are matched to the pinned unique portal owner
+and request handle. Denial/cancellation ends the request without xcap, unrestricted
+PipeWire or compositor fallback. No restore token or persistent permission is
+requested. Cursor inclusion requires the advertised hidden/embedded mode; click
+highlights and window/region targeting are not implemented by this source.
+
+The worker accepts bounded, single-plane CPU-mapped RGBA/BGRA/RGBx/BGRx frames.
+It validates chunk offsets, sizes, positive strides and dimensions, rejects
+DMA-BUF/corruption/format changes, and exposes a bounded one-frame queue, dropped
+frame count and stream warning. Newer portals' `pipewire-serial` selects the node;
+older portals use the granted node ID with reconnection disabled. Stopping or
+dropping joins the worker, releases the remote and closes the portal session.
+Consent has a 120-second deadline; calls take at most five seconds, polling
+50 ms and cleanup calls one second. Cancellation cannot interrupt bus connection
+setup or a blocking call. Compositor-space stream properties are not treated as
+pixel dimensions or invented monitor geometry.
+
+```sh
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_video_probe
+backend="$(apps/native/build_wayland_portal_fixture.sh)"
+/usr/bin/python3 apps/native/wayland_video_smoke.py \
+  --binary apps/native/wgpu/target/debug/wayland_video_probe --wlr-backend "$backend"
+```
+
+The private fixture needs the screenshot-smoke dependencies plus Meson, Ninja,
+libinih/libdrm/libsystemd development headers, wayland-protocols, WirePlumber and
+system Python GTK/Cairo (`python3-gi-cairo`, `gir1.2-gtk-3.0`). Its pinned wlr
+0.7.1 source receives a **fixture-only SHM format-guard backport**: stock 0.7.x
+demands DMA-BUF even with a valid SHM format, while 0.8.x requires DMA-BUF during
+initialization (upstream issue #289). The later upstream constraints rewrite also
+renegotiates every frame before its follow-up fix. The helper neither installs
+the backend/service nor changes selection, consent or remote grants. This is not
+stock-backend or physical consent acceptance.
+
+The smoke uses a private mount namespace, bus, Sway and PipeWire/WirePlumber with
+DISPLAY unset. Thirteen protocol cases cover peer spoofs, early responses,
+denial/cancellation, lost replies, legacy cursors, unsupported display/cursor modes,
+invalid streams and session cleanup. A separate animated Wayland client supplies
+two asymmetric frames. The real portal/PipeWire path must see both phases and
+match every output pixel across repeated sessions, with cancellation during an
+active stream leaving no output. Terminating the backend while the granted stream
+is running must end the source promptly, without output or a frame timeout; this
+checks transport loss, not physical permission revocation. A still desktop can legitimately stop delivering
+new frames until damage occurs. The no-window probe writes a diagnostic PNG only
+after collection; it does not encode MP4, capture audio, exclude native windows,
+start native recording controls or remove the resident host's Wayland gate.
+
 ### Native Wayland portal screenshots
 
 In `--live` History, **Take screenshot…** works without a tray or X11. The host
