@@ -1281,13 +1281,11 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       let currentShiftPx = readStackShiftPx(card);
       if (exiting && hasThumbnailStackShiftPx(currentShiftPx)) {
         // Freeze mid-ease so delete/dismiss starts where the card actually is,
-        // not at the still-animating target slot. Ignore a 0/identity matrix —
-        // jsdom and some WebViews report no visual translate even while the
-        // CSS variable still holds the stacked offset.
+        // not at the still-animating target slot. Zero is valid at the start
+        // of the transition, before the browser paints its first movement.
         const visualPx = readComputedTranslateY(card);
         if (
           visualPx !== null
-          && hasThumbnailStackShiftPx(visualPx)
           && Math.abs(visualPx - currentShiftPx) > 0.5
         ) {
           writeStackShiftPx(card, visualPx, false);

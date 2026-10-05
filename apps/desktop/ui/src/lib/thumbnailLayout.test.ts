@@ -1597,6 +1597,71 @@ describe("thumbnail stack layout", () => {
     }
   });
 
+  it.each([
+    { fromTop: false, offsetMs: -200 },
+    { fromTop: true, offsetMs: -200 },
+    { fromTop: false, offsetMs: 16 },
+    { fromTop: true, offsetMs: 16 },
+  ])("freezes a second delete before the first painted settle (fromTop=$fromTop, offset=$offsetMs)", async ({ fromTop, offsetMs }) => {
+    vi.useFakeTimers();
+    const stack = document.createElement("main");
+    if (fromTop) stack.className = "thumbnail-stack-anchor-top";
+    const [survivor, secondExit, firstExit] = Array.from({ length: 3 }, () => {
+      const card = document.createElement("article");
+      card.className = "thumbnail-card";
+      return card;
+    });
+    const cards = [survivor, secondExit, firstExit];
+    stack.append(...(fromTop ? cards.reverse() : cards));
+    document.body.append(stack);
+    const direction = fromTop ? -1 : 1;
+    const dispose = createThumbnailStackShiftController(stack);
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      firstExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
+      const secondDeleteAt = THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + offsetMs;
+      await vi.advanceTimersByTimeAsync(secondDeleteAt);
+      expect(secondExit.style.translate).toBe(offsetMs < 0 ? "" : `0 ${direction * 184}px`);
+
+      // The target is one slot away, but the browser has not painted any of
+      // that slide yet. Zero is a real presentation position, not missing data.
+      const computed = vi.spyOn(window, "getComputedStyle").mockReturnValue({
+        translate: "0px",
+        transform: "none",
+      } as CSSStyleDeclaration);
+      try {
+        secondExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        computed.mockRestore();
+      }
+      expect(secondExit.style.translate).toBe("");
+      expect(survivor.style.translate).toBe("");
+
+      const untilFirstRemoval = 2_900 - secondDeleteAt;
+      await vi.advanceTimersByTimeAsync(untilFirstRemoval);
+      firstExit.remove();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(secondExit.style.translate).toBe(`0 ${direction * -184}px`);
+      expect(survivor.style.translate).toBe(`0 ${direction * -184}px`);
+
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16 - untilFirstRemoval);
+      expect(survivor.style.translate).toBe(`0 ${direction * 184}px`);
+      expect(survivor).not.toHaveClass("thumbnail-stack-shift-instant");
+      expect(secondExit.style.translate).toBe(`0 ${direction * -184}px`);
+
+      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_MOTION_DURATION_MS);
+      secondExit.remove();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(survivor.style.translate).toBe("");
+    } finally {
+      dispose();
+      stack.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it("reads the rendered slot translate independently of the card's transform", () => {
     const card = document.createElement("article");
     card.style.translate = "0 61px";
