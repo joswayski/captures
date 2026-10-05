@@ -695,7 +695,7 @@ mod tests {
         assert!(settings.pending_capture_after_restart.is_none());
         assert_eq!(
             PathBuf::from(settings.output_directory),
-            fixture.destination.join("exports")
+            fixture.destination.canonicalize().unwrap().join("exports")
         );
         let metadata = super::json(
             &fixture

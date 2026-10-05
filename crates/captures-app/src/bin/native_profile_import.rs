@@ -67,6 +67,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let settings = root.path().join("shipping settings é.json");
         let data = root.path().join("shipping data");
+        // Exercise an aliased parent even on Linux, where /tmp usually is canonical.
+        #[cfg(unix)]
+        let destination = {
+            let alias = root.path().join("parent alias");
+            std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+            alias.join("native development é")
+        };
+        #[cfg(not(unix))]
         let destination = root.path().join("native development é");
         std::fs::create_dir(&data).unwrap();
         let original = serde_json::to_vec(&captures_settings::AppSettings {
@@ -100,7 +108,7 @@ mod tests {
         assert!(!imported.onboarding_completed && !imported.launch_at_login);
         assert_eq!(
             PathBuf::from(imported.output_directory),
-            destination.join("exports")
+            destination.canonicalize().unwrap().join("exports")
         );
         assert!(run(arguments()).unwrap_err().contains("already exists"));
         assert_eq!(std::fs::read(&settings).unwrap(), original);
