@@ -1370,9 +1370,18 @@ def main():
                 assert windows("Capture History"), "opening Preferences leaves History open"
                 time.sleep(.3)
                 shot("root", "lifecycle-preferences")
+                previous = entries()
+                # Preferences focus alone does not release capture shortcuts;
+                # only an active recorder does. Its interception is exercised
+                # separately by --shortcut-editing below.
                 run("xdotool", "windowactivate", "--sync", prefs, "key", "ctrl+shift+F7")
-                time.sleep(.5)
-                assert not windows(SELECTOR), "focused Preferences did not suppress shortcut"
+                selector = wait(lambda: windows(SELECTOR), "focused Preferences permits capture shortcut")[0]
+                shot(selector, "lifecycle-focused-preferences-selector")
+                assert entries() == previous, "focused shortcut captured before region confirmation"
+                run("xdotool", "windowfocus", "--sync", selector, "key", "Escape")
+                wait(lambda: not windows(SELECTOR) and windows("Captures Preferences")
+                     and windows("Capture History"), "focused shortcut cancel restores Preferences and History")
+                assert entries() == previous, "focused shortcut cancellation added an artifact"
                 run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                 assert run("xdotool", "getwindowfocus").decode().strip() == other
                 # X11 activation acknowledgement precedes delivery of egui's
@@ -1746,7 +1755,7 @@ def main():
                   "Clear all preserves files and later arrivals"] if args.stack else []) +
                 (["real SNI menu History/Preferences/Quit", "close-to-background keeps previews",
                   "region/window/display global shortcuts", "release-only launch", "hidden root stays hidden",
-                  "focused Preferences suppression and unfocused/hidden Preferences launch",
+                  "focused/unfocused/hidden Preferences launch; cancellation preserves History",
                   "hidden Preferences countdown and cancellation",
                   "tray region/window capture from hidden Preferences",
                   "tray New Capture, empty-region guard and cross-app Escape preserve hidden root",
