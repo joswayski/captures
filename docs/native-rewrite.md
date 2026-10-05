@@ -33,8 +33,11 @@ the native candidate; no shipping dependency changes.
 Dark/light headless-Sway host tests cover real acquisition, repeated captures,
 three-window exclusion, cancellation/failure, simulated lock and pending-request
 Quit. Portal consent, extent and cursor inclusion remain backend-controlled.
-No monitor identity/origin is invented; no mini preview is placed. The compositor
-may reposition windows after remapping. Native region/window selection, countdown,
+History Edit opens portal captures directly in the screenshot editor; floating
+preview Restore is disabled with a limitation tooltip. Both appearances exercise
+the real History Edit action. No monitor identity/origin is invented; no mini
+preview is placed. The compositor may reposition windows after remapping.
+Native region/window selection, countdown,
 global shortcuts, hidden startup, preview placement and recording remain open.
 
 | Platform | This slice's implementation / verification |

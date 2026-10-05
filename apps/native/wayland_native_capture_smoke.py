@@ -99,13 +99,19 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                 path = (screenshots if screenshots else profile) / f"native-wayland-{mode}-{appearance}-{name}.png"
                 subprocess.run(["grim", str(path)], env=env, check=True, timeout=5)
                 return path
-            def button():
+            def layouts(name):
                 events = [json.loads(line) for line in (profile / "host.log").read_text().splitlines()
                           if line.startswith("{") and line.endswith("}")]
-                layouts = [event["detail"] for event in events if event["event"] == "portal-screenshot-layout"]
+                return [event["detail"] for event in events if event["event"] == name]
+            def button():
+                data = layouts("portal-screenshot-layout")
                 # Ignore a cached layout from before Sway's resize configure.
-                return (layouts[-1]["button"] if layouts and layouts[-1]["enabled"]
-                        and layouts[-1]["viewport_size"] == [880, 640] else None)
+                return (data[-1]["button"] if data and data[-1]["enabled"]
+                        and data[-1]["viewport_size"] == [880, 640] else None)
+            def card_action(artifact_id, action):
+                data = [item for item in layouts("history-action-layout")
+                        if item["id"] == artifact_id and item["action"] == action]
+                return data[-1] if data else None
             def focus_history():
                 history = next(node for node in windows(env) if node["name"] == "Capture History")
                 # Wayland does not promise the old position after unmapping.
@@ -178,8 +184,29 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                 assert len(entries) == 1
                 assert rgba(next(iter(entries)).parent / "capture.png") == EXPECTED
                 wait(shown, "all three windows restored after repeated capture")
-                focus_history()
+                history = focus_history()
                 wait(button, "repeated capture released the busy gate at the restored size")
+                artifact_id = json.loads(next(iter(entries)).read_text())["id"]
+                restore = wait(lambda: card_action(artifact_id, "Restore"), "portal screenshot Restore state")
+                assert not restore["enabled"], "Wayland floating-preview Restore must be visibly unavailable"
+                edit = wait(lambda: card_action(artifact_id, "Edit"), "portal screenshot Edit action")
+                assert edit["enabled"], "Editing must not depend on unavailable preview placement"
+                previous_editors = {node["id"] for node in windows(env) if node["name"] == "Captures Screenshot Editor"}
+                x1, y1, x2, y2 = edit["rect"]
+                rect = history["rect"]
+                click(int(rect["x"] + (x1 + x2) / 2), int(rect["y"] + (y1 + y2) / 2))
+                editor = wait(lambda: next((node for node in windows(env)
+                                           if node["name"] == "Captures Screenshot Editor"
+                                           and node["id"] not in previous_editors), None),
+                              "History Edit opened the new portal screenshot")
+                # A focused tiled window stays below floating History in Sway.
+                # Arrange this review state above the restored fixture windows.
+                subprocess.run(["swaymsg", f'[con_id={editor["id"]}] floating enable, '
+                                'resize set 1160 820, move position 60 40, focus'],
+                               env=env, check=True, stdout=subprocess.DEVNULL)
+                time.sleep(1)
+                shot("editor")
+                focus_history()
             if mode != "real":
                 assert set((profile / "history").glob("*/metadata.json")) == before, "cancel/failure persisted media"
             if mode in ("cancel", "failure", "lock"):

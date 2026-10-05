@@ -190,7 +190,8 @@ regardless of the selected filter, and keeps exported files and recovery drafts.
 It uses separate development data. On Wayland, **Take screenshot…** in native
 History uses the desktop portal without X11, unmaps Captures' windows before the
 request, and restores them afterward. Captures return to History, without floating
-previews or guessed monitor geometry. Region/window selection, countdown and
+previews or guessed monitor geometry. **Edit** opens the screenshot editor directly;
+floating-preview **Restore** is disabled. Region/window selection, countdown and
 recording remain unavailable there; portal policy controls consent and cursor
 inclusion. Restored window positions are compositor-controlled. Like the shipping app, the
 native workbenches open Capture History, Preferences and first-run setup as

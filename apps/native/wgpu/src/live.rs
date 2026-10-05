@@ -8394,7 +8394,7 @@ impl Live {
                     self.request_capture(CaptureRequest::Display);
                     ui.ctx().request_repaint();
                 }
-                ui.label(RichText::new("Desktop portal • Capture returns to History; region/window selection and recording are unavailable.")
+                ui.label(RichText::new("Desktop portal • Screenshots return to History; floating previews, region/window selection and recording are unavailable.")
                     .size(t.number("text-sm")).color(t.color("text-subtle")));
             }
             if self.can_hide == Some(false) {
@@ -8867,6 +8867,14 @@ impl Live {
             return;
         }
         self.card_errors.remove(id);
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+        {
+            self.card_errors.insert(
+                id.to_owned(),
+                "Floating previews are not available on Wayland. Use Edit instead.".into(),
+            );
+            return;
+        }
         self.card_restored = None;
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
         match self
@@ -8905,6 +8913,12 @@ impl Live {
         let Some(index) = self.artifact_index(id) else {
             return Err("The screenshot is no longer in Capture History.".into());
         };
+        // Portal captures have no monitor geometry for a floating preview, but
+        // opening their normal editor does not require that preview side effect.
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+        {
+            return Ok(());
+        }
         let artifact = &self.artifacts[index];
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
         match self
@@ -12207,6 +12221,56 @@ mod tests {
         live.card_action(&ctx, &edited_id, CardAction::Edit, Ok(settings), &frame);
         assert_eq!(live.previews.stack.ids().len(), 2);
         assert!(requests.try_recv().is_err());
+        live.flush();
+    }
+
+    #[test]
+    fn wayland_history_edit_opens_without_preview_and_restore_explains_the_limit() {
+        use captures_app::history_view::CardAction;
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [31, 109, 207, 255]);
+        let id = artifact.entry.id.clone();
+        let ctx = egui::Context::default();
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
+        let frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() {
+            live.recovery.receive();
+            assert!(Instant::now() < deadline, "initial recovery did not settle");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let (jobs, requests) = mpsc::channel();
+        live.tx = jobs;
+        live.pending = 0;
+        live.artifacts = vec![artifact];
+        let settings = AppSettings::default();
+        ctx.begin_pass(Default::default());
+
+        live.card_action(&ctx, &id, CardAction::Restore, Ok(settings.clone()), &frame);
+        assert_eq!(
+            live.card_errors[&id],
+            "Floating previews are not available on Wayland. Use Edit instead."
+        );
+        assert!(live.previews.stack.ids().is_empty());
+        assert!(requests.try_recv().is_err());
+
+        live.card_action(&ctx, &id, CardAction::Edit, Ok(settings.clone()), &frame);
+        assert!(
+            live.editors.contains_key(&id),
+            "the saved screenshot must open without monitor geometry"
+        );
+        assert!(live.card_errors.is_empty());
+        assert!(live.previews.stack.ids().is_empty());
+        assert!(
+            requests.try_recv().is_err(),
+            "no floating preview decode may be queued"
+        );
+        assert!(
+            live.restore_for_edit(&ctx, "missing", &settings, None)
+                .is_err()
+        );
         live.flush();
     }
 

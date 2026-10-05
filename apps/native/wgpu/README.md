@@ -395,6 +395,8 @@ session loss and normal Quit close pending requests without adding History media
 Windows restore afterward, but their compositor-assigned positions may change.
 Portal policy controls consent, image extent and cursor inclusion. There is no
 guessed named-monitor geometry and no mini preview; captures return to History.
+History **Edit** opens the normal screenshot editor directly on Wayland, without
+first placing a preview. **Restore** is disabled with a platform limitation tooltip.
 Nonzero native countdown and region/window/recording requests fail explicitly.
 
 The private eframe patch keeps hidden-root logic running without presenting
@@ -416,6 +418,8 @@ It verifies dark/light real and repeated captures against every independently
 expected desktop pixel with History, Preferences and screenshot editor excluded;
 cancellation/failure and simulated session lock write nothing, normal Quit closes
 the pending request, and second-instance media cannot remap excluded windows.
+It opens a captured screenshot through History **Edit** in both appearances and
+checks that floating-preview **Restore** is disabled.
 After cancellation, failure-dialog dismissal or simulated lock, a successful
 request in the same process must save exactly one independently expected image.
 The fixture keeps one virtual pointer alive to avoid an old wlroots device-removal
