@@ -447,7 +447,18 @@ impl Workbench {
         );
         if launch == Some(app_windows::InteractiveLaunch::Preferences) && !self.options.open_history
         {
+            if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                == Some(true)
+            {
+                self.show_root(ctx);
+            }
             self.preferences.open(ctx);
+        }
+        if self.launched_with_media
+            && ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                == Some(true)
+        {
+            self.show_root(ctx);
         }
         if onboarding_complete && self.options.open_history {
             self.show_root(ctx);
@@ -789,6 +800,11 @@ impl Workbench {
                         "instance-request",
                         || json!({"paths":request.paths.len()}),
                     );
+                    if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                        == Some(true)
+                    {
+                        self.show_root(ctx);
+                    }
                     self.options.open_media.extend(request.paths);
                 }
                 Ok(None) => break,

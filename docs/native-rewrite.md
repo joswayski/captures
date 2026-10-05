@@ -1772,11 +1772,19 @@ native flow. Local capture remains signed-out and never uploads automatically.
   multipart R2 contract, with progress, cancellation, expiry-aware part retry and
   failure recovery. Never show a usable share link before upload completion and
   successful share configuration; configuration failure must not re-upload bytes.
+  The unconnected shared coordinator streams bounded file parts, persists ETags,
+  and durably persists account-scoped create keys. Lost create responses and failed
+  post-create association writes replay the same key after restart; conflicts and
+  tombstones never silently create replacements. Legacy keyless checkpoints still
+  require explicit reconciliation. Host launch, lifecycle, real object-store and
+  physical-platform acceptance remain open.
 - [ ] Reopening manages the existing remote asset/share rather than duplicating
   the upload. Persist the local-artifact/remote-asset association. Show shared date,
   Copy/Open link, editable/removable password and expiry, and adjacent Share/Stop
   sharing actions. Stopping denies subsequent access; enabling again rotates the
   link. Cloud Trash retains bytes and restore does not revive old links.
+  Account/profile-scoped local associations and server share patch semantics are
+  implemented in shared Rust only; native controls and physical verification are open.
 - [ ] Integrate both AppKit and wgpu through thin host launch/presentation seams;
   coordinate MiniPreview/Workbench and mini_preview/live changes with the rewrite
   integration owner. Do not fork the auth/upload rules into platform hosts.
@@ -1786,6 +1794,13 @@ native flow. Local capture remains signed-out and never uploads automatically.
   cancel/retry, password edit, stop/re-enable and reopening states. Record macOS,
   Windows, X11 and Wayland implementation/verification separately; no stub or
   software-only host test closes the parity gate.
+
+| Platform | Sharing coordinator implementation / verification |
+| --- | --- |
+| macOS | Shared Rust coordinator and Keychain adapter exist; host controls and physical vault/object-store acceptance remain open |
+| Windows | Shared Rust coordinator and Credential Manager adapter exist; host controls and physical vault/object-store acceptance remain open |
+| X11 | Shared Rust HTTP/recovery tests pass with disposable loopback servers and a fake vault; native controls and real Secret Service/object-store acceptance remain open |
+| Wayland | Same shared Rust coordinator; no host sharing controls or physical Secret Service/compositor/object-store acceptance claimed |
 
 ## Architecture and ownership
 
