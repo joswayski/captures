@@ -246,8 +246,9 @@ needs pkg-config and libdbus-1-dev; runtime needs a registered StatusNotifier ho
 and `xdg-open` for folder fallbacks; Show in Folder first asks a
 `org.freedesktop.FileManager1` implementer to select the saved file. No watcher/host means an explicit error and
 normal close-to-quit. Losing the tray host restores the root instead of stranding
-the process. XEmbed-only trays require an SNI bridge. Wayland capture/hidden-window
-support remains gated; a tray does not remove that limitation. Physical macOS,
+the process. XEmbed-only trays require an SNI bridge. Wayland History offers
+desktop-portal screenshots even without a tray; hidden startup, native selectors
+and recording remain gated. Physical macOS,
 Windows, mixed-DPI and accessibility acceptance remain open.
 
 ## New Capture controls
@@ -433,9 +434,13 @@ real login-manager acceptance. `--scene window` is a permission-free fixture on
 both hosts. The slice remains experimental and all platform acceptance gates
 stay open until real desktop/input tests pass.
 
-Full UI parity remains
-open. The wgpu Wayland backend cannot verify hiding its root window, so capture
-is disabled there rather than photographing the app itself. Linux X11 needs an
+Full UI parity remains open. The wgpu Wayland host now unmaps Captures' windows,
+waits for compositor-processing acknowledgements, and requests a Screenshot
+portal still from History. It restores the windows on success, cancellation or
+failure. Captures return to History without guessed display geometry or preview
+placement. Native selectors, countdown and recording remain unavailable on
+Wayland; consent and cursor inclusion are portal-controlled. Remapping may change
+compositor-assigned window positions. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and
 must refuse capture. Verify real permission, clipboard ownership, multi-display
 behavior and exported pixels on each OS before accepting the slice.
@@ -524,7 +529,8 @@ all four corners, plus eight-card overflow at bottom-left. CI runs this stack
 mode. macOS CI covers AppKit/ABI lifecycles and renders.
 Physical macOS/Windows desktops, mixed-DPI monitors, compositor behavior,
 transparent hit-region parity and screen-reader/keyboard access still need
-acceptance. Wayland live capture/preview positioning remain unsupported.
+acceptance. Wayland mini-preview positioning remains unsupported; portal
+screenshots return to History instead.
 
 ## Build and try on macOS
 

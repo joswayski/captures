@@ -65,11 +65,23 @@ jobs:
       - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
       - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Acquire exact Wayland pixels through the desktop screenshot portal
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y swaybg pipewire xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-wlr grim
+          cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_screenshot_probe
+          /usr/bin/python3 apps/native/wayland_screenshot_smoke.py --binary apps/native/wgpu/target/debug/wayland_screenshot_probe
       - name: Transfer original files to an independent Wayland client
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y gir1.2-gtk-3.0
           python apps/native/wayland_drag_smoke.py
+      - name: Unmap native windows and capture clean Wayland portal screenshots
+        if: runner.os == 'Linux'
+        run: |
+          cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin captures-wgpu-workbench
+          python apps/native/wayland_visibility_smoke.py
+          /usr/bin/python3 apps/native/wayland_native_capture_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
       - name: Stop the rest of this run after a failure
         # One failed job already fails the run; cancel the other jobs instead of
         # letting them hold runners (and block newer pushes) until they finish.

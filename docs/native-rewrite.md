@@ -17,6 +17,36 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+The Linux screenshot portal acquisition slice now runs without X11 enumeration,
+subscribes before requesting, verifies response handle/owner, closes cancelled or
+timed-out requests, and never falls back to direct capture after cancellation.
+Portal-owned files are read without modification/deletion. A no-window diagnostic
+passes private D-Bus adversarial-response cases and the real frontend → wlr →
+headless Sway path with all 52,700 independently expected pixels matching.
+The wgpu host now connects it to **Take screenshot…** in History. It unmaps all
+current Captures viewports, waits for compositor-processing acknowledgements,
+then requests the portal on a worker. Success restores the windows and inserts
+one normal History artifact; cancellation, failure, session loss and normal Quit
+release the process capture gate without adding media. Hidden repaint work never
+presents a buffer over the capture. Private winit/eframe patches are confined to
+the native candidate; no shipping dependency changes.
+Dark/light headless-Sway host tests cover real acquisition, repeated captures,
+three-window exclusion, cancellation/failure, simulated lock and pending-request
+Quit. Portal consent, extent and cursor inclusion remain backend-controlled.
+History Edit opens portal captures directly in the screenshot editor; floating
+preview Restore is disabled with a limitation tooltip. Both appearances exercise
+the real History Edit action. No monitor identity/origin is invented; no mini
+preview is placed. The compositor may reposition windows after remapping.
+Native region/window selection, countdown,
+global shortcuts, hidden startup, preview placement and recording remain open.
+
+| Platform | This slice's implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing path unchanged; portal API/probe explicitly Linux-gated; no physical-host verification |
+| Windows | Existing path unchanged; probe reports unsupported; no physical-host verification |
+| X11 | Existing acquisition path retained; private-X11 capture regression exercises the patched renderer; diagnostic rejects DISPLAY rather than falling back |
+| Wayland | Portal screenshots connected to History and exercised on disposable headless Sway; physical GNOME/KDE acceptance and broader capture/recording parity remain open |
+
 Both screenshot-editor hosts now expose only shipping's Tiny, Smaller, Balanced,
 High and Highest compression presets (55/70/85/92/98), with no numeric quality
 field. Save stays enabled during Copy; repeated clicks request one Save after

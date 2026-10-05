@@ -115,6 +115,7 @@ impl Window {
             window.clone(),
             attributes.preferred_theme,
         );
+        window_state.set_initially_visible(attributes.visible);
 
         // Set transparency hint.
         window_state.set_transparent(attributes.transparent);
@@ -126,7 +127,7 @@ impl Window {
 
         // Set the app_id.
         if let Some(name) = attributes.platform_specific.name.map(|name| name.general) {
-            window.set_app_id(name);
+            window_state.set_app_id(name);
         }
 
         // Set the window title.
@@ -155,9 +156,9 @@ impl Window {
                     PlatformMonitorHandle::X(_) => None,
                 });
 
-                window.set_fullscreen(output.as_ref())
+                window_state.set_fullscreen(output)
             },
-            _ if attributes.maximized => window.set_maximized(),
+            _ if attributes.maximized => window_state.set_maximized(true),
             _ => (),
         };
 
@@ -188,7 +189,7 @@ impl Window {
         state.windows.get_mut().insert(window_id, window_state.clone());
 
         let window_requests = WindowRequests {
-            redraw_requested: AtomicBool::new(true),
+            redraw_requested: AtomicBool::new(attributes.visible),
             closed: AtomicBool::new(false),
         };
         let window_requests = Arc::new(window_requests);
@@ -250,13 +251,24 @@ impl Window {
     }
 
     #[inline]
-    pub fn set_visible(&self, _visible: bool) {
-        // Not possible on Wayland.
+    pub fn set_visible(&self, visible: bool) {
+        let sync_generation = self.window_state.lock().unwrap().set_visible(visible);
+        if let Some(generation) = sync_generation {
+            self.display.sync(
+                &self.queue_handle,
+                super::state::VisibilitySync { window_id: self.window_id, generation },
+            );
+        }
+        if visible {
+            self.window_requests.redraw_requested.store(true, Ordering::Relaxed);
+        }
+        // Flush requests made off the event-loop thread, including the hide sync.
+        self.event_loop_awakener.ping();
     }
 
     #[inline]
     pub fn is_visible(&self) -> Option<bool> {
-        None
+        Some(self.window_state.lock().unwrap().is_visible())
     }
 
     #[inline]
@@ -456,11 +468,7 @@ impl Window {
 
     #[inline]
     pub fn set_maximized(&self, maximized: bool) {
-        if maximized {
-            self.window.set_maximized()
-        } else {
-            self.window.unset_maximized()
-        }
+        self.window_state.lock().unwrap().set_maximized(maximized)
     }
 
     #[inline]
@@ -496,9 +504,9 @@ impl Window {
                     PlatformMonitorHandle::X(_) => None,
                 });
 
-                self.window.set_fullscreen(output.as_ref())
+                self.window_state.lock().unwrap().set_fullscreen(output)
             },
-            None => self.window.unset_fullscreen(),
+            None => self.window_state.lock().unwrap().unset_fullscreen(),
         }
     }
 

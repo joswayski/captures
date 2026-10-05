@@ -64,6 +64,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(target_os = "linux")]
+const PORTAL_SCREENSHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
@@ -576,6 +579,48 @@ pub fn persist_screenshot(
     };
     captures_history::save_capture(root, &entry, &png, &preview)?;
     artifact(root, entry)
+}
+
+/// Acquire one Linux desktop-portal still and persist it through shared History.
+/// The caller retains the matching [`capture_flow::PortalCapture`] until this
+/// returns. `Ok(None)` is portal or local cancellation.
+#[cfg(target_os = "linux")]
+pub fn capture_portal_screenshot(root: &Path, generation: u64) -> Result<Option<Artifact>, Error> {
+    if !capture_flow::is_current(generation) {
+        return Ok(None);
+    }
+    if !captures_session::capture_session_available() {
+        capture_flow::cancel(generation);
+        return Err(CaptureError::SessionUnavailable.into());
+    }
+
+    let image = captures_capture::portal_screenshot(PORTAL_SCREENSHOT_TIMEOUT, || {
+        !capture_flow::is_current(generation)
+    })?;
+    let Some(image) = image else {
+        return Ok(None);
+    };
+
+    // A lock can race the portal round trip. Fail closed before making History
+    // durable, even when the portal already returned pixels.
+    if !captures_session::capture_session_available() {
+        capture_flow::cancel(generation);
+        return Err(CaptureError::SessionUnavailable.into());
+    }
+    persist_portal_screenshot(root, generation, &image, capture_flow::commit)
+}
+
+#[cfg(target_os = "linux")]
+fn persist_portal_screenshot(
+    root: &Path,
+    generation: u64,
+    image: &RgbaImage,
+    commit: impl FnOnce(u64) -> bool,
+) -> Result<Option<Artifact>, Error> {
+    if !commit(generation) {
+        return Ok(None);
+    }
+    persist_screenshot(root, image, CaptureMode::Display).map(Some)
 }
 
 /// Match screenshot preview Trash: move the explicit export, then let the host
@@ -1196,5 +1241,54 @@ mod tests {
             .is_err()
         );
         assert_eq!(fs::read(missing).unwrap(), b"not a history directory");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portal_persistence_commits_before_exactly_one_unnamed_display_artifact() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let root = tempfile::tempdir().unwrap();
+        let pixels = vec![
+            1, 2, 3, 255, 250, 17, 99, 255, 0, 127, 255, 255, 19, 211, 7, 255, 88, 44, 222, 255, 5,
+            6, 7, 255,
+        ];
+        let image = RgbaImage::from_raw(3, 2, pixels.clone()).unwrap();
+        let pending = AtomicBool::new(true);
+        let commit = |generation| generation == 44 && pending.swap(false, Ordering::AcqRel);
+
+        assert!(
+            persist_portal_screenshot(root.path(), 45, &image, commit)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(root.path().read_dir().unwrap().count(), 0);
+        let artifact = persist_portal_screenshot(root.path(), 44, &image, commit)
+            .unwrap()
+            .unwrap();
+        assert_eq!(artifact.entry.mode, Some(CaptureMode::Display));
+        assert_eq!(artifact.entry.target, None);
+        let saved = image::open(&artifact.image_path).unwrap().to_rgba8();
+        assert_eq!(saved.dimensions(), (3, 2));
+        assert_eq!(saved.as_raw(), &pixels);
+        assert_eq!(
+            captures_history::load(root.path(), Utc::now())
+                .unwrap()
+                .len(),
+            1
+        );
+
+        assert!(
+            persist_portal_screenshot(root.path(), 44, &image, commit)
+                .unwrap()
+                .is_none(),
+            "a duplicate or stale completion must not persist"
+        );
+        assert_eq!(
+            captures_history::load(root.path(), Utc::now())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

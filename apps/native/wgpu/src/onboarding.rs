@@ -351,7 +351,7 @@ pub fn error_block(ui: &mut egui::Ui, t: &Tokens, lines: &[&str]) {
         });
 }
 
-/// Neutral note (Wayland live capture is not available yet).
+/// Neutral platform capability note.
 pub fn note(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add(
         egui::Label::new(
@@ -361,10 +361,6 @@ pub fn note(ui: &mut egui::Ui, t: &Tokens, text: &str) {
         )
         .wrap(),
     );
-}
-
-pub fn wayland_session() -> bool {
-    cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 /// Centered stage of at most 620 px (`.onboarding-stage`), vertically

@@ -9,6 +9,7 @@ use tracing::{info, warn};
 
 use sctk::reexports::client::backend::ObjectId;
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
+use sctk::reexports::client::protocol::wl_output::WlOutput;
 use sctk::reexports::client::protocol::wl_shm::WlShm;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
@@ -66,6 +67,13 @@ pub struct WindowState {
     /// The last received configure.
     pub last_configure: Option<WindowConfigure>,
 
+    /// Client-side mapping lifecycle. Wayland has no compositor visibility query; this tracks
+    /// whether content may currently be attached to the surface.
+    mapping: MappingState,
+    mapping_generation: u64,
+    initially_configured: bool,
+    show_after_unmap: bool,
+
     /// The pointers observed on the window.
     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
 
@@ -85,6 +93,9 @@ pub struct WindowState {
 
     /// The current window title.
     title: String,
+    app_id: Option<String>,
+    requested_maximized: bool,
+    requested_fullscreen: Option<Option<WlOutput>>,
 
     /// Whether the frame is resizable.
     resizable: bool,
@@ -201,6 +212,10 @@ impl WindowState {
             ime_allowed: false,
             ime_purpose: ImePurpose::Normal,
             last_configure: None,
+            mapping: MappingState::AwaitingConfigure,
+            mapping_generation: 0,
+            initially_configured: false,
+            show_after_unmap: false,
             max_inner_size: None,
             min_inner_size: MIN_WINDOW_SIZE,
             resize_increments: None,
@@ -217,6 +232,9 @@ impl WindowState {
             text_inputs: Vec::new(),
             theme,
             title: String::default(),
+            app_id: None,
+            requested_maximized: false,
+            requested_fullscreen: None,
             transparent: false,
             viewport,
             window,
@@ -251,6 +269,9 @@ impl WindowState {
 
     /// Request a frame callback if we don't have one for this window in flight.
     pub fn request_frame_callback(&mut self) {
+        if !self.can_redraw() {
+            return;
+        }
         let surface = self.window.wl_surface();
         match self.frame_callback_state {
             FrameCallbackState::None | FrameCallbackState::Received => {
@@ -267,6 +288,12 @@ impl WindowState {
         shm: &Shm,
         subcompositor: &Option<Arc<SubcompositorState>>,
     ) -> bool {
+        self.initially_configured = true;
+        if self.mapping == MappingState::Hidden || self.mapping == MappingState::Unmapping {
+            return false;
+        }
+
+        let remapping = self.mapping == MappingState::AwaitingConfigure;
         // NOTE: when using fractional scaling or wl_compositor@v6 the scaling
         // should be delivered before the first configure, thus apply it to
         // properly scale the physical sizes provided by the users.
@@ -394,12 +421,16 @@ impl WindowState {
         // NOTE: Set the configure before doing a resize, since we query it during it.
         self.last_configure = Some(configure);
 
-        if state_change_requires_resize || new_size != self.inner_size() {
+        let resized = if state_change_requires_resize || new_size != self.inner_size() {
             self.resize(new_size);
             true
         } else {
             false
+        };
+        if remapping {
+            self.mapping = MappingState::Mapped;
         }
+        resized
     }
 
     /// Compute the bounds for the inner size of the surface.
@@ -581,7 +612,94 @@ impl WindowState {
     /// Whether the window received initial configure event from the compositor.
     #[inline]
     pub fn is_configured(&self) -> bool {
-        self.last_configure.is_some()
+        self.initially_configured
+    }
+
+    /// Whether this client is ready to submit visible content. This deliberately says nothing
+    /// about compositor occlusion or minimization.
+    #[inline]
+    pub fn is_visible(&self) -> bool {
+        matches!(self.mapping, MappingState::Mapped | MappingState::Unmapping)
+    }
+
+    #[inline]
+    pub fn can_redraw(&self) -> bool {
+        self.mapping == MappingState::Mapped
+    }
+
+    pub fn set_initially_visible(&mut self, visible: bool) {
+        if !visible {
+            // The first configure still establishes the initial buffer-ready state.
+            // No content has been attached, so showing later needs no remap handshake.
+            self.mapping = MappingState::InitiallyHidden;
+        }
+    }
+
+    /// Start an unmap/remap transition and return the generation requiring a display sync.
+    pub fn set_visible(&mut self, visible: bool) -> Option<u64> {
+        if visible {
+            if self.mapping == MappingState::Unmapping {
+                // Consume every pre-unmap configure before accepting a remap configure.
+                self.show_after_unmap = true;
+                return None;
+            }
+            if self.mapping == MappingState::InitiallyHidden {
+                self.mapping = MappingState::Mapped;
+                return None;
+            }
+            if matches!(self.mapping, MappingState::Mapped | MappingState::AwaitingConfigure) {
+                return None;
+            }
+            self.mapping_generation = self.mapping_generation.wrapping_add(1);
+            self.mapping = MappingState::AwaitingConfigure;
+            self.last_configure = None;
+            // xdg_toplevel discards all role attributes when unmapped. Reissue the attributes
+            // owned by WindowState before the new initial commit.
+            self.window.set_title(&self.title);
+            if let Some(app_id) = self.app_id.as_ref() {
+                self.window.set_app_id(app_id);
+            }
+            self.reload_min_max_hints();
+            self.resize(self.size);
+            self.window.request_decoration_mode(Some(if self.decorate {
+                DecorationMode::Server
+            } else {
+                DecorationMode::Client
+            }));
+            if self.requested_maximized {
+                self.window.set_maximized();
+            }
+            if let Some(output) = self.requested_fullscreen.as_ref() {
+                self.window.set_fullscreen(output.as_ref());
+            }
+            // An xdg_surface is remapped with the initial, bufferless commit sequence. Content
+            // must not be attached until the resulting configure has been acknowledged.
+            self.window.commit();
+            None
+        } else {
+            self.show_after_unmap = false;
+            if matches!(self.mapping, MappingState::InitiallyHidden | MappingState::Hidden | MappingState::Unmapping) {
+                return None;
+            }
+            self.mapping_generation = self.mapping_generation.wrapping_add(1);
+            self.mapping = MappingState::Unmapping;
+            self.frame_callback_state = FrameCallbackState::None;
+            let surface = self.window.wl_surface();
+            surface.attach(None, 0, 0);
+            surface.commit();
+            Some(self.mapping_generation)
+        }
+    }
+
+    pub fn unmap_processed(&mut self, generation: u64) {
+        if self.mapping == MappingState::Unmapping && self.mapping_generation == generation {
+            self.mapping = MappingState::Hidden;
+            self.last_configure = None;
+            if self.show_after_unmap {
+                self.show_after_unmap = false;
+                self.set_visible(true);
+            }
+        }
     }
 
     #[inline]
@@ -633,6 +751,9 @@ impl WindowState {
 
     /// Refresh the decorations frame if it's present returning whether the client should redraw.
     pub fn refresh_frame(&mut self) -> bool {
+        if !self.can_redraw() {
+            return false;
+        }
         if let Some(frame) = self.frame.as_mut() {
             if !frame.is_hidden() && frame.is_dirty() {
                 return frame.draw();
@@ -1117,6 +1238,30 @@ impl WindowState {
         self.title = title;
     }
 
+    pub fn set_app_id(&mut self, app_id: String) {
+        self.window.set_app_id(&app_id);
+        self.app_id = Some(app_id);
+    }
+
+    pub fn set_maximized(&mut self, maximized: bool) {
+        self.requested_maximized = maximized;
+        if maximized {
+            self.window.set_maximized();
+        } else {
+            self.window.unset_maximized();
+        }
+    }
+
+    pub fn set_fullscreen(&mut self, output: Option<WlOutput>) {
+        self.requested_fullscreen = Some(output.clone());
+        self.window.set_fullscreen(output.as_ref());
+    }
+
+    pub fn unset_fullscreen(&mut self) {
+        self.requested_fullscreen = None;
+        self.window.unset_fullscreen();
+    }
+
     /// Mark the window as transparent.
     #[inline]
     pub fn set_transparent(&mut self, transparent: bool) {
@@ -1192,6 +1337,15 @@ pub enum FrameCallbackState {
     Requested,
     /// The callback was marked as done, and user could receive redraw requested
     Received,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MappingState {
+    AwaitingConfigure,
+    Mapped,
+    Unmapping,
+    Hidden,
+    InitiallyHidden,
 }
 
 impl From<ResizeDirection> for XdgResizeEdge {

@@ -187,15 +187,21 @@ PNG capture, local screenshot history, copy, export, and deletion to
 shared Rust engines. Its History uses the shipping card grid, header, filters,
 Restore to a floating preview and empty states; Delete all asks for a second click, removes all capture types
 regardless of the selected filter, and keeps exported files and recovery drafts.
-It uses separate development data; Wayland capture is gated
-until the candidate can hide its window reliably. Like the shipping app, the
+It uses separate development data. On Wayland, **Take screenshot…** in native
+History uses the desktop portal without X11, unmaps Captures' windows before the
+request, and restores them afterward. Captures return to History, without floating
+previews or guessed monitor geometry. **Edit** opens the screenshot editor directly;
+floating-preview **Restore** is disabled. Region/window selection, countdown and
+recording remain unavailable there; portal policy controls consent and cursor
+inclusion. Restored window positions are compositor-controlled. Like the shipping app, the
 native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
 in a separate development settings file. Fresh native profiles show the shipping
 setup screen before capture or opening queued media. macOS offers explicit Screen
 Recording and optional Microphone access, Settings links, and a permission restart;
-Windows/X11 show screen capture as ready and do not require upfront screen access. Setup does not enable Wayland capture.
+Windows/X11 show screen capture as ready and do not require upfront screen access.
+Wayland screenshot permission is handled by the desktop portal at capture time.
 Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
 "Captures is ready to use" notice with the New Capture shortcut.
 The native workspace now applies
@@ -797,15 +803,16 @@ Custom shadows and pinned-font named styles are connected, including style/size
 choices for new text; new text also takes the drawing defaults' Drop shadow, as in
 the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
-Like the shipping app, the native Capture History window shows only its header,
-filters and grid; captures start from the tray, shortcuts and New Capture menu. A
+Like the shipping app, native Capture History shows its header, filters and grid;
+captures start from the tray, shortcuts and New Capture menu. Wayland additionally
+offers **Take screenshot…** because a tray or global shortcuts may be unavailable. A
 denied capture opens the native permission recovery: Restart & Retry on macOS, or a
 **Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.
-Wayland live capture remains gated. Physical permission-revocation/retry acceptance
-is still open.
+Wayland region/window selection and recording remain gated. Physical
+permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
 physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,
 not native editor acceptance. Resident shortcuts and single-instance relaunch are

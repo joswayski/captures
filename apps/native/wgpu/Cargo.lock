@@ -812,12 +812,15 @@ version = "0.1.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",
+ "dbus",
  "image",
  "mouse_position",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "serde",
  "thiserror 2.0.20",
+ "url",
+ "uuid",
  "windows-sys 0.61.2",
  "x11rb",
  "xcap",
@@ -1672,7 +1675,6 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.36.2"
-source = "git+https://github.com/emilk/egui?rev=60d7caaea38a795618e842925061ad2210028a2a#60d7caaea38a795618e842925061ad2210028a2a"
 dependencies = [
  "ahash",
  "bytemuck",

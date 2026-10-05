@@ -687,6 +687,12 @@ fn card(
         } else {
             (action.label(), action.icon().map(Glyph::for_icon))
         };
+        let restore_unavailable = action == CardAction::Restore
+            && ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(Id::unique("wayland-surface")))
+                == Some(true);
+        let action_enabled = idle && !restore_unavailable;
         let mut response = button(
             ui,
             t,
@@ -699,9 +705,20 @@ fn card(
             } else {
                 ButtonStyle::Secondary
             },
-            idle,
+            action_enabled,
         );
-        if let Some(tooltip) = action.tooltip() {
+        if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
+            println!(
+                "{}",
+                serde_json::json!({"event":"history-action-layout", "detail":{
+                "id":item.id, "action":action.label(), "enabled":action_enabled,
+                "rect":[button_rect.min.x, button_rect.min.y, button_rect.max.x, button_rect.max.y]}})
+            );
+        }
+        if restore_unavailable {
+            response = response
+                .on_hover_text("Floating previews are not available on Wayland. Use Edit instead.");
+        } else if let Some(tooltip) = action.tooltip() {
             response = response.on_hover_text(tooltip);
         }
         if response.clicked() {

@@ -16,6 +16,7 @@ packages=(
   curl
   dbus
   file
+  grim
   hsetroot
   imagemagick
   libayatana-appindicator3-dev
@@ -37,18 +38,23 @@ packages=(
   nasm
   openbox
   picom
+  pipewire
   pkg-config
   postgresql
   python3-dbus
   python3-gi
   python3-xlib
   sway
+  swaybg
   wget
   wl-clipboard
   x11-apps
   x11-utils
   xclip
   xdotool
+  xdg-desktop-portal
+  xdg-desktop-portal-gtk
+  xdg-desktop-portal-wlr
   xdg-utils
   xfce4-panel
   xvfb

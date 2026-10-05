@@ -118,6 +118,11 @@ enum Job {
         preview: Option<PreviewGuard>,
         notice: Option<crate::recording_saved_notice::Guard>,
     },
+    #[cfg(target_os = "linux")]
+    CapturePortal {
+        root: PathBuf,
+        generation: u64,
+    },
     PrepareRegion {
         display_id: String,
         generation: u64,
@@ -209,6 +214,11 @@ enum Reply {
     DisplayCaptured {
         generation: u64,
         result: Result<Box<Artifact>, String>,
+    },
+    #[cfg(target_os = "linux")]
+    PortalCaptured {
+        generation: u64,
+        result: Result<Option<Box<Artifact>>, String>,
     },
     WindowPrepared {
         generation: u64,
@@ -1593,11 +1603,27 @@ impl PileCarry {
     }
 }
 
+pub(crate) fn request_hidden_viewport_paint(ctx: &egui::Context, viewport: egui::ViewportId) {
+    if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true) {
+        // Presenting a buffer would remap an excluded Wayland surface. Eframe
+        // runs hidden-root logic (and UI for visible descendants) without painting.
+        ctx.request_repaint_of(viewport);
+    } else {
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::RequestPaintWhileHidden);
+    }
+}
+
 pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
-    ctx.send_viewport_cmd_to(
-        egui::ViewportId::ROOT,
-        egui::ViewportCommand::RequestPaintWhileHidden,
-    );
+    request_hidden_viewport_paint(ctx, egui::ViewportId::ROOT);
+}
+
+#[cfg(target_os = "linux")]
+struct PortalScreenshot {
+    flow: captures_app::capture_flow::PortalCapture,
+    hidden: Vec<egui::ViewportId>,
+    restore_root: bool,
+    started: Instant,
+    submitted: bool,
 }
 
 /// The nonvisual state machine is intentionally independent of egui so stale
@@ -1780,6 +1806,9 @@ pub struct Live {
     /// A failed capture awaiting the host's shipping error dialog (or
     /// permission recovery). Never shown in the History error card.
     capture_failure: Option<CaptureFailure>,
+    #[cfg(target_os = "linux")]
+    portal_screenshot: Option<PortalScreenshot>,
+    history_requested: bool,
     /// A capture-menu note link asked the workbench to open Preferences here.
     preference_target_requested: Option<PreferenceTarget>,
     /// A start or display switch failed while New Capture stayed open.
@@ -1842,6 +1871,13 @@ impl Live {
                             output_directory,
                         }
                     }
+                    #[cfg(target_os = "linux")]
+                    Job::CapturePortal { root, generation } => Reply::PortalCaptured {
+                        generation,
+                        result: captures_app::capture_portal_screenshot(&root, generation)
+                            .map(|artifact| artifact.map(Box::new))
+                            .map_err(|error| error.to_string()),
+                    },
                     Job::Execute {
                         request,
                         preview,
@@ -2115,12 +2151,18 @@ impl Live {
             recording_screenshot_controls_restored: false,
             restore_root_visible: true,
             capture_failure: None,
+            #[cfg(target_os = "linux")]
+            portal_screenshot: None,
+            history_requested: false,
             preference_target_requested: None,
             controls_error: None,
             permission_recovery_visible: false,
         };
         live.load_history();
-        live.send(Request::Displays);
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) != Some(true)
+        {
+            live.send(Request::Displays);
+        }
         live
     }
 
@@ -2265,6 +2307,10 @@ impl Live {
 
     pub fn is_capturing(&self) -> bool {
         self.flow.is_some() || self.capture_in_flight
+    }
+
+    pub fn take_history_requested(&mut self) -> bool {
+        std::mem::take(&mut self.history_requested)
     }
 
     pub fn can_launch_capture(&self) -> bool {
@@ -2836,6 +2882,12 @@ impl Live {
         let Some(request) = self.requested_capture.take() else {
             return;
         };
+        #[cfg(target_os = "linux")]
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+        {
+            self.launch_portal_screenshot(ctx, frame, request, settings);
+            return;
+        }
         if is_recording_phase(self.capture_phase)
             && let Some(kind) = match request {
                 CaptureRequest::Display => Some(None),
@@ -2993,6 +3045,153 @@ impl Live {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn launch_portal_screenshot(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &eframe::Frame,
+        request: CaptureRequest,
+        settings: Result<AppSettings, String>,
+    ) {
+        if !self.can_start_capture() {
+            self.capture_failed("Capture is unavailable until the current action finishes.".into());
+            return;
+        }
+        if !matches!(
+            request,
+            CaptureRequest::NewCapture | CaptureRequest::Display | CaptureRequest::DisplayMenu
+        ) {
+            self.capture_failed("Wayland supports desktop-portal screenshots here; native region/window selection and recording are not available yet.".into());
+            self.history_requested = true;
+            return;
+        }
+        let settings = match settings {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.capture_failed(error);
+                return;
+            }
+        };
+        if settings.screenshot_countdown_seconds != 0 {
+            self.capture_failed("Native Wayland screenshot countdown is not available yet. Turn off the screenshot countdown in Preferences to use the desktop portal.".into());
+            self.history_requested = true;
+            return;
+        }
+        let flow = match captures_app::capture_flow::PortalCapture::begin() {
+            Ok(flow) => flow,
+            Err(error) => {
+                self.capture_failed(error);
+                return;
+            }
+        };
+        // The portal supplies no named-monitor coordinates. Return to History
+        // instead of placing a preview against guessed desktop bounds.
+        self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
+        let hidden = ctx.input(|input| {
+            input
+                .raw
+                .viewports
+                .iter()
+                .filter(|(id, _)| **id != egui::ViewportId::ROOT)
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        });
+        // Immediate Preferences must not paint while the compositor is still
+        // acknowledging the other windows' unmaps.
+        self.workspace_hidden = true;
+        for id in hidden.iter().copied().chain([egui::ViewportId::ROOT]) {
+            ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(false));
+            ctx.request_repaint_of(id);
+        }
+        let generation = flow.generation();
+        let wake = ctx.clone();
+        thread::spawn(move || {
+            // Keep the logic-only root alive across compositor acknowledgements.
+            // This poll exists only while this capture owns the process gate.
+            while captures_app::capture_flow::is_current(generation) {
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+                thread::sleep(Duration::from_millis(100));
+            }
+            wake.request_repaint_of(egui::ViewportId::ROOT);
+        });
+        self.portal_screenshot = Some(PortalScreenshot {
+            flow,
+            hidden,
+            restore_root: self.root_shown
+                || frame.winit_window().and_then(|window| window.is_visible()) == Some(true),
+            started: Instant::now(),
+            submitted: false,
+        });
+        self.capture_in_flight = true;
+        self.status = "Preparing desktop-portal screenshot…".into();
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn advance_portal_screenshot(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        let Some(portal) = self.portal_screenshot.as_mut() else {
+            return;
+        };
+        crate::diagnostics::event("portal-capture", || {
+            serde_json::json!({
+                "generation":portal.flow.generation(), "submitted":portal.submitted,
+                "current":portal.flow.is_current(),
+                "rootVisible":frame.winit_window().and_then(|window| window.is_visible()),
+                "childrenVisible":ctx.input(|input| portal.hidden.iter().map(|id|
+                    input.raw.viewports.get(id).and_then(|info| info.visible())).collect::<Vec<_>>())
+            })
+        });
+        if portal.submitted {
+            return;
+        }
+        if !portal.flow.is_current() {
+            self.finish_portal_screenshot(ctx, false);
+            self.status = "Screenshot cancelled: desktop session unavailable.".into();
+            return;
+        }
+        for id in &portal.hidden {
+            ctx.request_repaint_of(*id);
+        }
+        let hidden = frame.winit_window().and_then(|window| window.is_visible()) == Some(false)
+            && ctx.input(|input| {
+                portal.hidden.iter().all(|id| {
+                    input
+                        .raw
+                        .viewports
+                        .get(id)
+                        .is_none_or(|info| info.visible() == Some(false))
+                })
+            });
+        if hidden {
+            portal.submitted = true;
+            self.pending += 1;
+            let _ = self.tx.send(Job::CapturePortal {
+                root: self.root.clone(),
+                generation: portal.flow.generation(),
+            });
+            self.status = "Waiting for the desktop screenshot portal…".into();
+        } else if portal.started.elapsed() > Duration::from_secs(2) {
+            self.finish_portal_screenshot(ctx, false);
+            self.capture_failed(
+                "Could not unmap all Captures windows. No screenshot was taken.".into(),
+            );
+            self.history_requested = true;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn finish_portal_screenshot(&mut self, ctx: &egui::Context, captured: bool) {
+        let Some(portal) = self.portal_screenshot.take() else {
+            return;
+        };
+        self.restore_root_visible = portal.restore_root;
+        for id in portal.hidden {
+            ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
+            ctx.request_repaint_of(id);
+        }
+        self.finish_capture(ctx, captured);
+    }
+
     pub fn flush_editors(&self, ctx: &egui::Context) -> Result<(), String> {
         self.recovery.can_quit()?;
         for editor in self.recording_editors.values() {
@@ -3014,6 +3213,10 @@ impl Live {
         // Cancel preparation/countdown before draining work. CaptureFlow::cancel
         // leaves a capture that already crossed its persistence commit point alone.
         self.selector_scope_generation.store(0, Ordering::Release);
+        #[cfg(target_os = "linux")]
+        if let Some(portal) = &self.portal_screenshot {
+            portal.flow.cancel();
+        }
         if let Some(flow) = &self.recording_screenshot_flow {
             flow.cancel();
         }
@@ -3177,6 +3380,8 @@ impl Live {
     }
 
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "linux")]
+        self.advance_portal_screenshot(ctx, frame);
         if let Some((outcome, directory)) = self.recovery.receive() {
             self.previews.remove(&outcome.entry.id);
             self.pending += 1;
@@ -5212,8 +5417,35 @@ impl Live {
                     self.finish_recording_screenshot(ctx, captured);
                     match result {
                         Ok(artifact) => {
-                            self.accept_artifact(*artifact, "Screenshot captured while recording");
+                            self.accept_artifact(
+                                *artifact,
+                                "Screenshot captured while recording",
+                                true,
+                            );
                         }
+                        Err(error) => self.capture_failed(error),
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                Reply::PortalCaptured { generation, result } => {
+                    self.pending = self.pending.saturating_sub(1);
+                    if self.portal_screenshot.as_ref().is_none_or(|portal| {
+                        portal.flow.generation() != generation || !portal.submitted
+                    }) {
+                        continue;
+                    }
+                    let captured = matches!(&result, Ok(Some(_)));
+                    self.history_requested = !matches!(&result, Ok(None));
+                    self.finish_portal_screenshot(ctx, captured);
+                    match result {
+                        Ok(Some(artifact)) => {
+                            self.accept_artifact(
+                                *artifact,
+                                "Screenshot captured through the desktop portal",
+                                false,
+                            );
+                        }
+                        Ok(None) => self.status = "Screenshot cancelled.".into(),
                         Err(error) => self.capture_failed(error),
                     }
                 }
@@ -5229,8 +5461,11 @@ impl Live {
                         let captured = result.is_ok();
                         self.finish_recording_screenshot(ctx, captured);
                         match result {
-                            Ok(artifact) => self
-                                .accept_artifact(*artifact, "Screenshot captured while recording"),
+                            Ok(artifact) => self.accept_artifact(
+                                *artifact,
+                                "Screenshot captured while recording",
+                                true,
+                            ),
                             Err(error) => self.capture_failed(error),
                         }
                         continue;
@@ -5247,7 +5482,9 @@ impl Live {
                     let captured = result.is_ok();
                     self.finish_capture(ctx, captured);
                     match result {
-                        Ok(artifact) => self.accept_artifact(*artifact, "Region captured as PNG"),
+                        Ok(artifact) => {
+                            self.accept_artifact(*artifact, "Region captured as PNG", true)
+                        }
                         Err(error) => self.capture_failed(error),
                     }
                 }
@@ -5409,8 +5646,11 @@ impl Live {
                         let captured = result.is_ok();
                         self.finish_recording_screenshot(ctx, captured);
                         match result {
-                            Ok(artifact) => self
-                                .accept_artifact(*artifact, "Screenshot captured while recording"),
+                            Ok(artifact) => self.accept_artifact(
+                                *artifact,
+                                "Screenshot captured while recording",
+                                true,
+                            ),
                             Err(error) => self.capture_failed(error),
                         }
                         continue;
@@ -5438,6 +5678,7 @@ impl Live {
                             } else {
                                 "Window selection captured as PNG"
                             },
+                            true,
                         ),
                         Err(error) => self.capture_failed(error),
                     }
@@ -6015,10 +6256,14 @@ impl Live {
         ctx.request_repaint();
     }
 
-    fn accept_artifact(&mut self, artifact: Artifact, status: &str) {
+    fn accept_artifact(&mut self, artifact: Artifact, status: &str, preview: bool) {
         let id = artifact.entry.id.clone();
         let path = artifact.image_path.clone();
-        let preview = self.previews.start_artifact(&artifact);
+        let preview = if preview {
+            self.previews.start_artifact(&artifact)
+        } else {
+            Ok(None)
+        };
         self.artifacts.insert(0, artifact);
         self.select(id.clone());
         self.status = status.into();
@@ -6093,7 +6338,7 @@ impl Live {
                     .unwrap_or_else(|| "History loaded".into());
             }
             Response::Captured { artifact } => {
-                self.accept_artifact(artifact, "Full display captured as PNG");
+                self.accept_artifact(artifact, "Full display captured as PNG", true);
             }
             Response::Saved { artifact, path } => {
                 let artifact_id = artifact.entry.id.clone();
@@ -8131,6 +8376,27 @@ impl Live {
             );
             // Shipping History is only the header, filters and grid: captures
             // start from the tray, shortcuts and capture menu.
+            #[cfg(target_os = "linux")]
+            if ui.ctx().data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true) {
+                // Wayland may provide neither a tray host nor global shortcuts.
+                // Keep portal screenshots reachable from the native window.
+                ui.add_space(t.number("s-5"));
+                let button = ui.add_enabled_ui(self.can_launch_capture(), |ui| {
+                    crate::preferences_widgets::button(ui, t, "Take screenshot…", true)
+                }).inner;
+                if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
+                    println!("{}", serde_json::json!({"event":"portal-screenshot-layout",
+                        "detail":{"button":[button.rect.min.x, button.rect.min.y,
+                            button.rect.max.x, button.rect.max.y], "enabled":button.enabled(),
+                            "viewport_size":ui.input(|input| [input.content_rect().width(), input.content_rect().height()])}}));
+                }
+                if button.clicked() {
+                    self.request_capture(CaptureRequest::Display);
+                    ui.ctx().request_repaint();
+                }
+                ui.label(RichText::new("Desktop portal • Screenshots return to History; floating previews, region/window selection and recording are unavailable.")
+                    .size(t.number("text-sm")).color(t.color("text-subtle")));
+            }
             if self.can_hide == Some(false) {
                 ui.add_space(t.number("s-5"));
                 ui.colored_label(t.color("theme-signal"), "Display, region and window capture unavailable: this Wayland backend cannot hide and verify the root window.");
@@ -8601,6 +8867,14 @@ impl Live {
             return;
         }
         self.card_errors.remove(id);
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+        {
+            self.card_errors.insert(
+                id.to_owned(),
+                "Floating previews are not available on Wayland. Use Edit instead.".into(),
+            );
+            return;
+        }
         self.card_restored = None;
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
         match self
@@ -8639,6 +8913,12 @@ impl Live {
         let Some(index) = self.artifact_index(id) else {
             return Err("The screenshot is no longer in Capture History.".into());
         };
+        // Portal captures have no monitor geometry for a floating preview, but
+        // opening their normal editor does not require that preview side effect.
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+        {
+            return Ok(());
+        }
         let artifact = &self.artifacts[index];
         let editor_open = self.editors.get(id).is_some_and(|editor| !editor.closed());
         match self
@@ -10762,6 +11042,22 @@ mod tests {
     }
 
     #[test]
+    fn hidden_wayland_root_wakes_from_a_child_without_presenting_a_buffer() {
+        let ctx = egui::Context::default();
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
+        let received = crate::root_repaint::observe_from_child(&ctx);
+        request_hidden_root_paint(&ctx);
+        assert_eq!(received.try_recv().unwrap(), egui::ViewportId::ROOT);
+        let mut output = ctx.end_pass();
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .is_empty()
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn recording_worker_replies_require_current_generation_and_expected_phase() {
         let starting = |phase| phase == CapturePhase::RecordingStarting;
         assert!(accepts_recording_event(
@@ -11925,6 +12221,56 @@ mod tests {
         live.card_action(&ctx, &edited_id, CardAction::Edit, Ok(settings), &frame);
         assert_eq!(live.previews.stack.ids().len(), 2);
         assert!(requests.try_recv().is_err());
+        live.flush();
+    }
+
+    #[test]
+    fn wayland_history_edit_opens_without_preview_and_restore_explains_the_limit() {
+        use captures_app::history_view::CardAction;
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [31, 109, 207, 255]);
+        let id = artifact.entry.id.clone();
+        let ctx = egui::Context::default();
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
+        let frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.recovery.blocking() {
+            live.recovery.receive();
+            assert!(Instant::now() < deadline, "initial recovery did not settle");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let (jobs, requests) = mpsc::channel();
+        live.tx = jobs;
+        live.pending = 0;
+        live.artifacts = vec![artifact];
+        let settings = AppSettings::default();
+        ctx.begin_pass(Default::default());
+
+        live.card_action(&ctx, &id, CardAction::Restore, Ok(settings.clone()), &frame);
+        assert_eq!(
+            live.card_errors[&id],
+            "Floating previews are not available on Wayland. Use Edit instead."
+        );
+        assert!(live.previews.stack.ids().is_empty());
+        assert!(requests.try_recv().is_err());
+
+        live.card_action(&ctx, &id, CardAction::Edit, Ok(settings.clone()), &frame);
+        assert!(
+            live.editors.contains_key(&id),
+            "the saved screenshot must open without monitor geometry"
+        );
+        assert!(live.card_errors.is_empty());
+        assert!(live.previews.stack.ids().is_empty());
+        assert!(
+            requests.try_recv().is_err(),
+            "no floating preview decode may be queued"
+        );
+        assert!(
+            live.restore_for_edit(&ctx, "missing", &settings, None)
+                .is_err()
+        );
         live.flush();
     }
 

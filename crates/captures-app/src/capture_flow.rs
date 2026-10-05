@@ -187,6 +187,52 @@ pub(crate) fn escape() {
     GATE.escape();
 }
 
+/// Process-wide ownership for a Linux desktop-portal screenshot. Unlike
+/// [`CaptureFlow`], this guard does not register Escape: the portal owns its
+/// consent and cancellation UI.
+#[cfg(target_os = "linux")]
+pub struct PortalCapture {
+    generation: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl PortalCapture {
+    pub fn begin() -> Result<Self, String> {
+        let generation = GATE.begin()?;
+        // Session queries can block on D-Bus. Keep them off the caller's UI
+        // thread and cancel precisely the generation this guard owns.
+        std::thread::spawn(move || {
+            while GATE.is_current(generation) {
+                if !captures_session::capture_session_available() {
+                    GATE.cancel(generation);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        });
+        Ok(Self { generation })
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn is_current(&self) -> bool {
+        GATE.is_current(self.generation)
+    }
+
+    pub fn cancel(&self) {
+        GATE.cancel(self.generation);
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PortalCapture {
+    fn drop(&mut self) {
+        GATE.finish(self.generation);
+    }
+}
+
 /// Uses a monotonic deadline, not a decrementing frame/timer counter. Late UI
 /// callbacks cannot extend the countdown or round the final fraction down early.
 #[derive(Clone, Copy)]
