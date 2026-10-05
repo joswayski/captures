@@ -200,6 +200,7 @@ impl AssociationStore {
     }
 }
 
+#[derive(Clone)]
 pub enum Opened {
     Unassociated,
     Pending,

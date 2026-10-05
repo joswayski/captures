@@ -52,6 +52,13 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
+        // Lucide Share2 for the native sharing entry point, on every OS.
+        "share" => &[
+            "M15 5a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+            "M3 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+            "M15 19a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+            "m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98",
+        ],
         "warning" => &[
             "M10.29 4.86 1.82 19a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 4.86a2 2 0 0 0-3.42 0Z",
             "M12 9.5v5.2M12 17.6h.01",

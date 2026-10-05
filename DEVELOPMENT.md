@@ -19,8 +19,11 @@ migrations and tests, and [`apps/web/README.md`](apps/web/README.md#optional-acc
 for the account placeholder. Sign-in is unavailable. `npm run check` verifies
 that account requests fail closed and the built public website still works.
 
-`captures-account` is a native-host prerequisite, not connected to either host.
-On a serialized worker, construct `AccountClient::production()` without
+The wgpu development host connects `captures-account::native::Worker` to its
+native sharing popup; AppKit presentation remains open. The worker owns the
+selected original bytes, OTP challenge and account session across popup/preview
+closure. Opening or signing in never uploads. At the lower-level client boundary,
+construct `AccountClient::production()` on a serialized worker without
 side effects; only after the user opens Share, explicitly call `load`, `request_code`,
 `verify`, `me`, `retry_save`, or `logout`. The host owns email/code controls and
 selected artifact state; the client owns only the bearer session. If `verify`
@@ -28,13 +31,13 @@ returns a vault error, the accepted user/token stay in memory: call `retry_save`
 without reusing the one-time code. A 401 invalidates the session; if vault removal
 fails, retry `clear_invalid`. Offline/503 leave a valid token alone. Logout revokes
 remotely before deleting locally; if revocation fails, retry logout. There is no
-refresh flow. The account API is still disabled by default, and no native UI is
-connected. Run `cargo test -p captures-account` for the disposable loopback HTTP
+refresh flow. The account API is still disabled by default; native development
+controls do not activate it. Run `cargo test -p captures-account` for the disposable loopback HTTP
 and injected-vault contract tests; never use staging Compose (real SES/R2).
 Custom origins require an injected vault via `AccountClient::new`; the real OS
 vault is bound to the canonical API and cannot be paired with a mock/staging URL.
 
-For the unconnected upload worker, construct `SharingCoordinator::new(&mut account,
+For the underlying upload coordinator, construct `SharingCoordinator::new(&mut account,
 AssociationStore::new(native_profile_root))` without network or file access.
 `open(artifact_id)` explicitly checks the current account and remote list but never
 uploads. Resolve a stable original History file and call `upload` only after the
@@ -52,10 +55,10 @@ the same key recovers the same asset even across process restart. Conflict (409)
 and tombstone (410) retain the key rather than silently creating a replacement.
 Legacy checkpoints without a key remain blocked for explicit `recover_created`
 reconciliation; never clear their marker or guess an ID. The host must serialize
-access to the profile and retain its accepted
-upload worker after the preview closes. Only disposable loopback fixtures and
-fake vaults were exercised; no real SES/R2, physical vault, AppKit, Windows, X11
-or Wayland sharing UI has been exercised.
+access to the profile and retain its accepted upload worker after the preview
+closes. Disposable loopback fixtures/fake vaults, wgpu UI/accessibility tests and
+software-rendered X11 fixtures have been exercised. Real SES/R2, physical vaults,
+AppKit and physical Windows/X11/Wayland acceptance remain open.
 
 `OsVault` uses a separate `es.captur.native.account` credential in macOS Keychain,
 Windows Credential Manager, or Linux Secret Service (with encrypted D-Bus transport),

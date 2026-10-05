@@ -677,6 +677,10 @@ enum PreviewMessage {
         generation: u64,
         directory: PathBuf,
     },
+    Share {
+        artifact_id: String,
+        generation: u64,
+    },
     /// Close, or an unsaved card's Delete (`delete`), which dissolves.
     Dismiss {
         artifact_id: String,
@@ -1739,6 +1743,7 @@ pub struct Live {
     /// Most recent capture display, for editors opened outside a capture.
     last_capture_target: Option<CaptureTarget>,
     previews: MiniPreviews,
+    sharing: crate::sharing::Window,
     clipboard: captures_app::clipboard::ClipboardOwnership,
     root_hide_deferred: bool,
     region_freeze: bool,
@@ -2107,6 +2112,7 @@ impl Live {
             recording_editor_notice_targets: HashMap::new(),
             last_capture_target: None,
             previews: MiniPreviews::default(),
+            sharing: crate::sharing::Window::default(),
             clipboard: Default::default(),
             root_hide_deferred: false,
             region_freeze: false,
@@ -3202,6 +3208,55 @@ impl Live {
         self.finish_capture(ctx, captured);
     }
 
+    fn open_share(&self, ctx: &egui::Context, artifact_id: &str) {
+        let Some(artifact) = self.artifacts.iter().find(|a| a.entry.id == artifact_id) else {
+            return;
+        };
+        let path = if artifact.entry.kind.is_recording() {
+            artifact.entry.recording_media_path(&self.root)
+        } else {
+            Some(artifact.image_path.clone())
+        };
+        let Some(path) = path else {
+            return;
+        };
+        let content_type = match path.extension().and_then(|e| e.to_str()) {
+            Some("gif") => "image/gif",
+            Some("mp4") => "video/mp4",
+            Some("webm") => "video/webm",
+            _ => "image/png",
+        };
+        let name = format!(
+            "Capture-{}.{}",
+            artifact.entry.id,
+            path.extension().and_then(|e| e.to_str()).unwrap_or("png")
+        );
+        let texture = self
+            .previews
+            .cards
+            .get(artifact_id)
+            .and_then(|c| c.texture.clone())
+            .or_else(|| {
+                self.history_thumbnails
+                    .get(artifact_id)
+                    .and_then(|h| match &h.thumbnail {
+                        crate::history::Thumbnail::Ready(t) => Some(t.clone()),
+                        _ => None,
+                    })
+            });
+        self.sharing.open(
+            ctx,
+            self.root.clone(),
+            captures_account::native::Selection {
+                artifact_id: artifact_id.into(),
+                path,
+                name,
+                content_type: content_type.into(),
+            },
+            texture,
+        );
+    }
+
     pub fn flush_editors(&self, ctx: &egui::Context) -> Result<(), String> {
         self.recovery.can_quit()?;
         for editor in self.recording_editors.values() {
@@ -3214,6 +3269,7 @@ impl Live {
     }
 
     pub fn flush(&mut self) {
+        self.sharing.shutdown();
         self.open_media.clear();
         self.pending_editor_opens.clear();
         self.editors.clear();
@@ -4132,6 +4188,17 @@ impl Live {
                         .unwrap_or(captures_capture::CaptureMode::Region);
                     self.open_screenshot_editor(ctx, artifact_id, directory, mode);
                 }
+                PreviewMessage::Share {
+                    artifact_id,
+                    generation,
+                } if self.previews.accepts(&artifact_id, generation)
+                    && !self.workspace_hidden
+                    && self.previews.cards[&artifact_id].busy.is_none()
+                    && self.pending == 0
+                    && !self.permission_recovery_visible =>
+                {
+                    self.open_share(ctx, &artifact_id);
+                }
                 PreviewMessage::Dismiss {
                     artifact_id,
                     generation,
@@ -4190,6 +4257,7 @@ impl Live {
                 | PreviewMessage::Reveal { .. }
                 | PreviewMessage::Trash { .. }
                 | PreviewMessage::MoveStack { .. }
+                | PreviewMessage::Share { .. }
                 | PreviewMessage::Edit { .. } => {}
             }
         }
@@ -6402,6 +6470,7 @@ impl Live {
         settings: Result<AppSettings, String>,
         reduced_motion: bool,
     ) {
+        self.sharing.show(ctx, tokens, self.workspace_hidden);
         for editor in self.editors.values() {
             editor.show(ctx, tokens);
         }
@@ -7057,6 +7126,10 @@ impl Live {
                                 }
                             })
                         }
+                        Some(crate::mini_preview::Action::Share) => Some(PreviewMessage::Share {
+                            artifact_id: card.artifact_id.clone(),
+                            generation: card.generation,
+                        }),
                         Some(crate::mini_preview::Action::Dismiss) => {
                             Some(PreviewMessage::Dismiss {
                                 artifact_id: card.artifact_id.clone(),
@@ -8360,6 +8433,7 @@ impl Live {
         let restored = self.restored_feedback(ui.ctx(), now);
         let margin = |name: &str| t.number(name) as i8;
         let mut header_event = None;
+        let mut share_selected = false;
         egui::Panel::top("live-header")
             .show_separator_line(false)
             .frame(
@@ -8384,6 +8458,10 @@ impl Live {
                     enabled: !busy,
                 },
             );
+            if self.selection.id.is_some() {
+                ui.add_space(t.number("s-5"));
+                share_selected = ui.add_enabled(!busy, egui::Button::new("Share selected capture…")).clicked();
+            }
             // Shipping History is only the header, filters and grid: captures
             // start from the tray, shortcuts and capture menu.
             #[cfg(target_os = "linux")]
@@ -8412,6 +8490,9 @@ impl Live {
                 ui.colored_label(t.color("theme-signal"), "Display, region and window capture unavailable: this Wayland backend cannot hide and verify the root window.");
             }
         });
+        if share_selected && let Some(id) = self.selection.id.clone() {
+            self.open_share(ui.ctx(), &id);
+        }
         match header_event {
             Some(crate::history::HeaderEvent::DeleteAll) => self.delete_all_history(now),
             Some(crate::history::HeaderEvent::Cancel) => self.confirm_clear_history = None,
@@ -11028,6 +11109,135 @@ mod tests {
             )
             .unwrap(),
             original
+        );
+        live.flush();
+    }
+
+    #[test]
+    fn preview_share_rejects_stale_or_blocked_actions_and_pins_its_original_identity() {
+        struct SignedOut;
+        impl captures_account::Vault for SignedOut {
+            fn load(&self) -> Result<Option<String>, captures_account::VaultError> {
+                Ok(None)
+            }
+            fn save(&self, _: &str) -> Result<(), captures_account::VaultError> {
+                unreachable!()
+            }
+            fn delete(&self) -> Result<(), captures_account::VaultError> {
+                Ok(())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        ctx.begin_pass(Default::default());
+        live.logic(&ctx, &mut frame);
+        let artifact = preview_artifact(root.path(), [73, 15, 201, 255]);
+        let other = preview_artifact(root.path(), [14, 118, 52, 255]);
+        let original = artifact.image_path.clone();
+        let id = artifact.entry.id.clone();
+        let other_id = other.entry.id.clone();
+        live.previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 1)
+            .unwrap();
+        let (guard, _) = live.previews.start_artifact(&artifact).unwrap().unwrap();
+        live.artifacts = vec![artifact, other];
+        live.selection.begin(other_id.clone());
+        live.sharing =
+            crate::sharing::Window::with_worker(captures_account::native::Worker::with_client(
+                root.path().into(),
+                captures_account::AccountClient::new("http://127.0.0.1:9", SignedOut).unwrap(),
+                Arc::new(|| {}),
+            ));
+        for blocked in ["stale", "hidden", "busy", "pending", "permission"] {
+            live.workspace_hidden = blocked == "hidden";
+            live.pending = usize::from(blocked == "pending");
+            live.permission_recovery_visible = blocked == "permission";
+            live.previews.cards.get_mut(&id).unwrap().busy =
+                (blocked == "busy").then_some(crate::mini_preview::Busy::Save);
+            live.preview_tx
+                .send(PreviewMessage::Share {
+                    artifact_id: id.clone(),
+                    generation: guard.generation + u64::from(blocked == "stale"),
+                })
+                .unwrap();
+            live.logic(&ctx, &mut frame);
+            assert!(
+                live.sharing.selection().is_none(),
+                "{blocked} must not open Share"
+            );
+        }
+        live.workspace_hidden = false;
+        live.pending = 0;
+        live.permission_recovery_visible = false;
+        live.previews.cards.get_mut(&id).unwrap().busy = None;
+        live.preview_tx
+            .send(PreviewMessage::Share {
+                artifact_id: id.clone(),
+                generation: guard.generation,
+            })
+            .unwrap();
+        live.logic(&ctx, &mut frame);
+        let selected = live.sharing.selection().unwrap();
+        assert_eq!(selected.artifact_id, id);
+        assert_eq!(selected.path, original);
+        assert_eq!(selected.content_type, "image/png");
+        assert_eq!(
+            live.selection.id.as_ref(),
+            Some(&other_id),
+            "sharing must not retarget History"
+        );
+        assert!(live.previews.dismiss(&id, guard.generation));
+        assert_eq!(
+            live.sharing.selection().unwrap().path,
+            original,
+            "preview dismissal does not own accepted sharing"
+        );
+        ctx.end_pass().textures_delta.clear();
+        live.flush();
+    }
+
+    #[test]
+    fn history_sharing_uses_recording_media_not_the_poster_or_export() {
+        struct SignedOut;
+        impl captures_account::Vault for SignedOut {
+            fn load(&self) -> Result<Option<String>, captures_account::VaultError> {
+                Ok(None)
+            }
+            fn save(&self, _: &str) -> Result<(), captures_account::VaultError> {
+                unreachable!()
+            }
+            fn delete(&self) -> Result<(), captures_account::VaultError> {
+                Ok(())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        let mut artifact = preview_artifact(root.path(), [16, 122, 52, 255]);
+        let id = artifact.entry.id.clone();
+        artifact.entry.kind = captures_history::ArtifactKind::Video;
+        artifact.entry.saved_path = Some(root.path().join("export.gif").to_string_lossy().into());
+        let original = root.path().join(&id).join("media.webm");
+        fs::write(&original, b"original recording bytes").unwrap();
+        live.artifacts = vec![artifact];
+        live.sharing =
+            crate::sharing::Window::with_worker(captures_account::native::Worker::with_client(
+                root.path().into(),
+                captures_account::AccountClient::new("http://127.0.0.1:9", SignedOut).unwrap(),
+                Arc::new(|| {}),
+            ));
+        live.open_share(&ctx, &id);
+        let selected = live.sharing.selection().unwrap();
+        assert_eq!(selected.path, original);
+        assert_eq!(selected.content_type, "video/webm");
+        assert_eq!(selected.name, format!("Capture-{id}.webm"));
+        assert!(
+            live.previews.cards.is_empty(),
+            "History is usable without a preview"
         );
         live.flush();
     }

@@ -5,7 +5,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --live --open-preferences (also open the Preferences window at launch)\n\
   --live --open-history (open Capture History at launch instead of Preferences)\n\
   --live -- FILE... (Open With; everything after -- is a local path)\n\
-  --scene preferences|history|hud|preview|editor|capture-controls|region|window|update|countdown|idle\n\
+  --scene preferences|history|hud|preview|sharing|editor|capture-controls|region|window|update|countdown|idle\n\
   --update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date\n\
   --update-tray top|bottom|none (update scene only; stub status source)\n\
   --appearance light|dark|system --theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono\n\
@@ -25,6 +25,7 @@ pub enum Scene {
     History,
     Hud,
     Preview,
+    Sharing,
     Editor,
     CaptureControls,
     Region,
@@ -45,11 +46,12 @@ pub enum HudState {
 }
 
 impl Scene {
-    pub const VISIBLE: [Self; 9] = [
+    pub const VISIBLE: [Self; 10] = [
         Self::Preferences,
         Self::History,
         Self::Hud,
         Self::Preview,
+        Self::Sharing,
         Self::Editor,
         Self::CaptureControls,
         Self::Region,
@@ -62,6 +64,7 @@ impl Scene {
             Self::History => "history",
             Self::Hud => "hud",
             Self::Preview => "preview",
+            Self::Sharing => "sharing",
             Self::Editor => "editor",
             Self::CaptureControls => "capture-controls",
             Self::Region => "region",
@@ -77,6 +80,7 @@ impl Scene {
             Self::History => "Capture history",
             Self::Hud => "Recording controls",
             Self::Preview => "Mini previews",
+            Self::Sharing => "Share capture fixture",
             Self::Editor => "Editor rendering probe",
             Self::CaptureControls => "New Capture controls",
             Self::Region => "Region selector fixture",

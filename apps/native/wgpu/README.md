@@ -53,6 +53,21 @@ Cards follow the shipping hover chrome: an "In editor" pill and accent ring whil
 their screenshot editor is open, a pre-blurred darkened hover image, hover held
 off after an expand or a new card until the pointer moves, and instant glass
 icon tooltips.
+
+Mini-preview **Share capture** and History's **Share selected capture…** open
+native email-code sign-in and upload/link settings. The shared Rust worker owns
+the isolated OS-vault session and exact original bytes, independently of popup
+and preview dismissal. Upload is explicit; progress/cancel/retry, password/expiry,
+Copy/Open link, Stop sharing and confirmed cloud Trash/Restore are connected.
+Configuration retries never repeat a completed upload. These development controls
+depend on the still-disabled #613 API; they do not activate or deploy it. AppKit
+presentation, physical vault/object-store/compositor acceptance remain open.
+
+`--scene sharing` renders without vault/network operations. Set
+`CAPTURES_NATIVE_SHARE_FIXTURE` to `otp`, `vault`, `shared`, `uploading`, `trash`
+or `error` for non-default states (unset means signed out). Fixture actions are
+disabled. This variable never changes the production API origin or vault.
+
 Record creates H.264 MP4 recordings with the stored FPS, maximum resolution,
 countdown, cursor, click-highlight, desktop-audio and microphone defaults where
 the current platform reports support. Pause/resume, confirmed Restart using the
