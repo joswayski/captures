@@ -59,7 +59,8 @@ fn run() -> Result<(), String> {
     let output = output.ok_or("usage: wayland_video_probe --output NEW.png [--frames N] [--cancel-after-ms N] [--show-cursor true|false]")?;
     let started = Instant::now();
     let cancelled = || cancel_after.is_some_and(|duration| started.elapsed() >= duration);
-    let (source, frames) = PortalVideoSource::start(show_cursor, 30, &cancelled)?;
+    let (source, frames) =
+        PortalVideoSource::start(show_cursor, 30, &cancelled).map_err(|error| error.to_string())?;
     let mut last = None;
     let mut corner_colors = BTreeSet::new();
     let mut deadline = Instant::now() + Duration::from_secs(5);

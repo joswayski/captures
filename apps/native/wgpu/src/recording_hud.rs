@@ -184,13 +184,25 @@ fn control_rects_id() -> egui::Id {
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
     let mut action = None;
-    let policy = captures_app::recording_hud::present(&captures_app::recording_hud::Input {
+    let mut policy = captures_app::recording_hud::present(&captures_app::recording_hud::Input {
         state: view.state,
         busy: view.busy,
         has_microphone: view.has_microphone,
         microphone_muted: view.microphone_muted,
         hide_available: view.hide_available,
     });
+    if ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+        == Some(true)
+    {
+        for control in &mut policy.controls {
+            if control.control == Control::Screenshot {
+                control.enabled = false;
+                control.tooltip = "Screenshots during Wayland recording are not available yet";
+            }
+        }
+    }
     let bounds = ui.max_rect();
     // Shipping `startHudDrag`: the HUD background moves the window, controls never do.
     // Registered first so every control sits above it in hit testing.
@@ -290,6 +302,15 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                     }
                                 }
                                 let (response, progress) = control_button(ui, control, tokens);
+                                if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
+                                    println!("{}", serde_json::json!({"event":"recording-hud-control-layout",
+                                        "detail":{"control":control.control, "label":control.label,
+                                            "state":view.state, "elapsed_ms":view.elapsed_ms,
+                                            "enabled":response.enabled(),
+                                            "rect":[response.rect.min.x, response.rect.min.y,
+                                                response.rect.max.x, response.rect.max.y],
+                                            "viewport_size":ui.input(|input| [input.content_rect().width(), input.content_rect().height()])}}));
+                                }
                                 if progress > 0. {
                                     tooltip = Some((response.rect, control.clone(), progress));
                                 }

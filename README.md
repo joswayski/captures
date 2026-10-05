@@ -191,13 +191,15 @@ It uses separate development data. On Wayland, **Take screenshot…** in native
 History uses the desktop portal without X11, unmaps Captures' windows before the
 request, and restores them afterward. Captures return to History, without floating
 previews or guessed monitor geometry. **Edit** opens the screenshot editor directly;
-floating-preview **Restore** is disabled. Region/window selection, countdown and
-recording controls remain unavailable there; portal policy controls consent and cursor
-inclusion. Separate no-window diagnostics acquire changing video frames and
-exercise MP4/GIF sessions, pause/resume and recovery through a portal-granted
-PipeWire connection. Native recording controls are not connected to that source
-yet. Restored window positions are compositor-controlled. Like the shipping app, the
-native workbenches open Capture History, Preferences and first-run setup as
+floating-preview **Restore** is disabled. **Record display…** opens a native
+countdown, requests portal consent, and connects MP4 recording to the normal
+pause/resume, restart, Stop and Delete controls. Cancelling consent removes the
+empty take; losing the stream retains partial media for History recovery.
+Recording controls appear in the output; Hide requires a working tray restore path.
+Region/window selection and screenshots during recording remain unavailable.
+Portal policy controls consent and cursor inclusion. Separate no-window diagnostics
+also exercise GIF sessions. Restored window positions are compositor-controlled.
+Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
 in a separate development settings file. Fresh native profiles show the shipping
@@ -465,7 +467,7 @@ bakes the canvas background into one locked image.
 The original History image and its exports remain unchanged until explicit replacement. Recording completion
 still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
-Wayland recording is gated with the rest of native capture.
+Wayland display recording is exercised on disposable Sway, not accepted on physical GNOME/KDE desktops.
 Both native development hosts accept repeatable `--open-media PATH` arguments
 only with `--live`; `--open-image` remains an alias in the same ordered queue.
 AppKit also handles macOS file-open requests while running. PNG, JPEG and WebP
@@ -817,13 +819,13 @@ the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
 Like the shipping app, native Capture History shows its header, filters and grid;
 captures start from the tray, shortcuts and New Capture menu. Wayland additionally
-offers **Take screenshot…** because a tray or global shortcuts may be unavailable. A
+offers **Take screenshot…** and **Record display…** because a tray or global shortcuts may be unavailable. A
 denied capture opens the native permission recovery: Restart & Retry on macOS, or a
 **Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.
-Wayland region/window selection and recording remain gated. Physical
+Wayland region/window selection remains unavailable. Physical
 permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
 physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,

@@ -87,6 +87,34 @@ remain open; the resident Wayland recording gate is unchanged.
 | X11 | Existing acquisition and pointer path retained; shared encoder/lifecycle refactored; diagnostics reject DISPLAY and cannot fall back to X11 |
 | Wayland | Portal/PipeWire source and real MP4/GIF sessions exercised on private Sway with the disclosed fixture patch; resident UI, audio/cursor and physical GNOME/KDE acceptance remain open |
 
+The recording-controls follow-up connects **Record display…** in Wayland History
+to MP4 recording using preferences, a geometry-free native countdown and the normal
+HUD. The recording worker verifies FFmpeg/ffprobe before preparing the take;
+the process gate/session watcher no longer requires X11 Escape registration.
+History, Preferences and countdown surfaces are acknowledged unmapped before
+portal consent. Pause/resume, confirmed restart/delete and Stop share the existing
+session. Consent cancellation is typed through acquisition: an empty initial take
+is discarded, while cancelling resume retains paused media. Fatal video-source
+loss is distinct from audio warnings, stops the controls/timer and restores History
+recovery after the worker releases its owner. Linux still includes HUD pixels;
+Hide requires a working tray restoration path, and the notice says when it is absent.
+Region/window selection, screenshots during recording and click/keystroke overlays
+remain unsupported on Wayland.
+
+The real-window dark/light Sway smoke uses compositor rectangles and pointer input,
+checks countdown and workspace exclusion, exact paused elapsed time, independently
+probed/decoded MP4 output, closing countdown, protocol consent cancellation,
+backend termination and retained playable recovery bytes after clean normal exit.
+Its consent remains non-interactive fixture policy using the disclosed SHM backport;
+physical GNOME/KDE permission UX, cursor/audio and mixed-DPI acceptance stay open.
+
+| Platform | Recording-controls follow-up implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing recorder and HUD unchanged; portal path Linux-gated; physical execution unverified in this orb |
+| Windows | Existing direct recorder retained; optional placement/session plumbing shared; physical execution unverified in this orb |
+| X11 | Direct target/monitor positioning and global Escape retained; local workspace/native tests cover existing lifecycle; hardware acceptance remains open |
+| Wayland | History/countdown/HUD/MP4 connected and exercised on disposable dark/light Sway, including cancellation and transport-loss recovery; physical parity remains open |
+
 The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
 when a tray exists. Preferences, Feedback and media bootstrap independently;
 empty/GIO relaunch reaches Preferences without flashing History. Missing/lost tray
@@ -1768,9 +1796,10 @@ integration, physical cross-platform acceptance, and renderer/distribution/cutov
 This is not a near-release checklist or a percentage-complete claim: implemented
 features still need acceptance, and the native editor inspector still differs from shipping.
 Shared commands and encoding remain prerequisites, not native editor/output acceptance.
-Native live capture on Wayland remains explicitly
-gated; no stub or X11 result closes that platform gate. Merging development slices
-does not authorize a native release, renderer cutover or removal of Tauri.
+Native Wayland portal screenshots and display recording are connected in the
+development host; region/window targeting and physical compositor acceptance
+remain open. No stub or X11 result closes that platform gate. Merging development
+slices does not authorize a native release, renderer cutover or removal of Tauri.
 
 ## Inventory and acceptance checklist
 
