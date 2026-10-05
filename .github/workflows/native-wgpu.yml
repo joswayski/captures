@@ -81,13 +81,21 @@ jobs:
         run: |
           cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin captures-wgpu-workbench
           python apps/native/wayland_visibility_smoke.py
-          /usr/bin/python3 apps/native/wayland_native_capture_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
+          /usr/bin/python3 apps/native/wayland_native_capture_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe --screenshots native-wayland-capture
       - name: Exercise Wayland resident startup, child windows and real tray recovery
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/wayland_lifecycle_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
       - name: Hold native preview positions through overlapping dust exits
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --retarget-only --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --output "$RUNNER_TEMP/native-preview-retarget"
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux'
+        with:
+          name: native-wgpu-workbench-evidence-${{ matrix.os }}
+          path: |
+            native-wayland-capture
+            ${{ runner.temp }}/native-preview-retarget
+          if-no-files-found: ignore
       - name: Stop the rest of this run after a failure
         # One failed job already fails the run; cancel the other jobs instead of
         # letting them hold runners (and block newer pushes) until they finish.

@@ -55,6 +55,8 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
+    if args.retarget_only:
+        env["CAPTURES_NATIVE_TRACE"] = "1"
     # Live hosts must never unbind the developer's real OS screenshot keys.
     env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
@@ -578,14 +580,39 @@ def main():
                 shot(preview, f"{prefix}-retarget-three")
                 preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
                 x = 290 if placement.endswith("right") else 50
-                click(preview, x, base + (0 if top else 2) * 184 + 22, activate=False)
-                time.sleep(.6)  # First source has faded; its settle has not begun.
-                click(preview, x, base + 184 + 22, activate=False)
+                def delete(slot, entry, second=False):
+                    y = base + slot * 184 + 22
+                    artifact_id = json.loads(entry.read_text())["id"]
+                    def accepted():
+                        for line in (output / f"{prefix}.stdout.log").read_text().splitlines():
+                            if '"name":"preview-exit"' in line and line.endswith("}"):
+                                data = json.loads(line)["detail"]["data"]
+                                if data["id"] == artifact_id:
+                                    assert data["kind"] == "Dust"
+                                    return data
+                    run("xdotool", "mousemove", "--sync", "--window", preview, str(x), str(y))
+                    # XSync acknowledges input, not the next egui frame or its
+                    # click-through shape. Require the actual hovered control
+                    # before pressing rather than relying on a timed move/click.
+                    def hovered():
+                        return run("import", "-window", preview, "-crop", f"1x1+{x - 10}+{y}",
+                                   "-depth", "8", "rgb:-") == bytes.fromhex("ef4650")
+                    wait(hovered, "painted Delete hover")
+                    if second:
+                        assert survivor_pixels() == before, "input missed the before-slide boundary"
+                    run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1")
+                    # Keep the pointer over the button until the host accepts
+                    # this exact artifact's exit, not just a changed hover tint.
+                    return wait(accepted, "Delete consumed before moving the pointer")
+                first_exit = delete(0 if top else 2, stack_entries[2])
+                time.sleep(.8)  # First source has faded; its settle has not begun.
+                second_exit = delete(1, stack_entries[1], second=True)
+                assert second_exit["started_ms"] - first_exit["started_ms"] < 1800, "second exit missed the hold"
                 run("xdotool", "mousemove", "--sync", "640", "440")
-                time.sleep(.7)  # Past the FIRST settle, inside the SECOND hold.
+                time.sleep(1.1)  # Past the FIRST settle, inside the SECOND hold.
                 assert int(window_geometry(preview)["HEIGHT"]) == 608, "held slots disappeared early"
-                assert survivor_pixels() == before, "survivor drifted during the reentrant dust hold"
                 shot(preview, f"{prefix}-retarget-held")
+                assert survivor_pixels() == before, "survivor drifted during the reentrant dust hold"
                 wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 240, "one settled survivor")
                 shot(preview, f"{prefix}-retarget-settled")
                 click(preview, 170, (52 if top else 28) + 61, activate=False)

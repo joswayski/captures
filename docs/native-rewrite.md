@@ -1782,7 +1782,12 @@ semantics, retry-save, lifecycle and light/dark normal/minimum-size renders;
 all seven passed in [macOS CI](https://github.com/joswayski/captures/actions/runs/37275047835).
 Light/dark minimum-size renders for all seven fixture states were inspected.
 That run failed a stale mini-preview hover expectation outside SharingTests;
-the native dismissal-retarget slice corrects it. This is not a full-suite pass.
+the native dismissal-retarget slice corrects it. The subsequent
+[macOS run](https://github.com/joswayski/captures/actions/runs/37280734119)
+passed the full suite: 559 tests, eight skips and zero failures, plus development
+package staging. Its two new preview-retarget motion scenarios were among the
+skips because the runner enabled Reduce Motion. This does not establish
+presentation-motion, physical-vault or installed-app acceptance.
 
 This is connected development behavior, not acceptance of the checklist below.
 Tests use disposable loopback HTTP/fake vaults and software-rendered UI;
@@ -2183,6 +2188,18 @@ tests exercise placement, focus, minimized-root actions, exact capture inclusion
 exclusion and cancellation. AppKit tests cover panel/decode/action
 lifecycles and fixed-glass rendering. Windows runtime, physical macOS, mixed-DPI,
 screen-reader and compositor acceptance remain open; Wayland stays unsupported.
+Overlapping native exits now hold each survivor's current presentation, including
+zero, until the second exit is motion-ready; pruning rebases offsets without
+displacing the surviving cards. AppKit's presentation-layer fixtures now select
+motion through an internal preference reader and restore it afterwards, without
+changing the runner's desktop accessibility settings. The wgpu three-card
+private-X11 probe acknowledges both exact
+artifact exits, verifies the second starts before the first settle, and compares
+survivor edge pixels through the overlapping hold at all four corners. wgpu also
+retains a revealed control's press/release eligibility when its card moves in the
+input-consuming pass; never-revealed and busy controls remain inactive. Delete
+does not prepare unused Close streak textures. These checks do not close the
+physical-host, accessibility or performance acceptance gates.
 Collapsed front-card drag and hover fan are connected on AppKit and wgpu. The
 shared Rust pose expands rear-card spacing from 13 to 16 points in the correct
 direction for top and bottom anchors while leaving the front card and window

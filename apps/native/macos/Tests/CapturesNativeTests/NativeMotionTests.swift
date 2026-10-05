@@ -5,6 +5,19 @@ import XCTest
 final class NativeMotionTests: XCTestCase {
     private var tokens: Tokens { Tokens.variants["dark-mustard"]! }
 
+    func testFixtureMotionPreferenceDrivesDefaultAnimationsWithoutChangingTheSystem() {
+        let motionPreference = NativeMotion.motionPreference
+        defer { NativeMotion.motionPreference = motionPreference }
+        let systemPreference = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        for reduced in [true, false] {
+            NativeMotion.motionPreference = { reduced }
+            XCTAssertEqual(NativeMotion.reduceMotion, reduced)
+            XCTAssertEqual(NativeMotion.play("update_notice_in", on: NSView(), tokens: tokens),
+                           reduced ? 0 : 0.28, accuracy: 1e-9)
+            XCTAssertEqual(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, systemPreference)
+        }
+    }
+
     func testCatalogCarriesEveryShippingAnimationFromTheSharedABI() throws {
         let catalog = NativeMotion.catalog
         for name in ["update_notice_in", "update_notice_restart_exit", "startup_notice_in",
