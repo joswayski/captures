@@ -36,7 +36,7 @@ jobs:
           done | sort -u | while read -r run workflow branch; do
             stuck="$(gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" --jq '
               [.jobs[] | select(.status == "queued")
-                       | select(.labels | index("josemac"))
+                       | select(any(.labels[]; startswith("josemac")))
                        | select((.created_at | fromdateiso8601) < ($ENV.CUTOFF | tonumber))] | length')"
             (( stuck > 0 )) || continue
             echo "Run $run has $stuck job(s) waiting over ${MAX_WAIT_MINUTES}m for the self-hosted Mac; cancelling."
