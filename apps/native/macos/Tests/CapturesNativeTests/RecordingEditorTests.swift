@@ -22,6 +22,8 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem, "704 px")
             XCTAssertEqual(try field("Saved filename", in: controller.root).stringValue, "Clip-edited")
             XCTAssertTrue(controller.savingCopy)
+            XCTAssertFalse(controller.dirty, "loaded defaults are not user edits")
+            XCTAssertTrue(controller.canApplyEdits, "clean defaults still need preview acceptance")
             worker.requestResult = .success(try presentation(revision: 1,
                 sourceWidth: 1600, sourceHeight: 900,
                 output: NativeRecordingDimensions(width: 704, height: 396),
@@ -36,6 +38,7 @@ final class RecordingEditorTests: XCTestCase {
                 "shipping derives palette size from quality, not capture defaults")
             XCTAssertEqual((edit["output_width"] as? NSNumber)?.intValue, 704)
             XCTAssertEqual((edit["output_height"] as? NSNumber)?.intValue, 396)
+            XCTAssertFalse(controller.dirty, "accepting defaults must not make them dirty")
             try render(controller.root, name: "recording-editor-preferred-gif-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "recording-editor-preferred-gif-minimum-\(appearance)")
@@ -47,6 +50,40 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertEqual(worker.openCount, 1, "refocus does not reopen or overwrite edits")
             XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem, "12 FPS")
             XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem, "480 px")
+            XCTAssertTrue(controller.dirty, "refocus cannot discard later user changes")
+            worker.requestResult = .success(try presentation(revision: 2,
+                sourceWidth: 1600, sourceHeight: 900,
+                output: NativeRecordingDimensions(width: 480, height: 270),
+                exportFormat: "gif", exportQuality: "highest", framesPerSecond: 12))
+            controller.applyPendingEdits()
+            XCTAssertTrue(controller.dirty, "preview acceptance is not a save")
+            worker.saveResult = .success(.saved(path: "/Exports/Clip-edited.gif"))
+            try button("Save new copy", in: controller.root).performClick(nil)
+            XCTAssertFalse(controller.dirty, "successful save rebases the clean state")
+            choose(try popup("GIF frame rate", in: controller.root), "27 FPS")
+            XCTAssertTrue(controller.dirty, "opening defaults differ from the later saved state")
+        }
+    }
+
+    func testLoadedDefaultsCloseWithoutDiscardBeforePreviewAcceptance() throws {
+        _ = NSApplication.shared
+        for (mime, preferred) in [("video/mp4", "gif"), ("image/gif", "mp4"),
+                                  ("video/mp4", "webm"), ("video/webm", "mp4")] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                sourceMime: mime, sourceWidth: 1600, sourceHeight: 900,
+                exportFormat: mime == "image/gif" ? "gif" : "mp4"))
+            var discardCalls = 0
+            let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                worker: worker, confirmDiscard: { discardCalls += 1; return false })
+            defer { controller.window.orderOut(nil) }
+            let preferences = try RecordingPreferences(["video_format": preferred,
+                                                        "gif_fps": 27, "gif_max_width": 704])
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                outputDirectory: "/Exports", recordingPreferences: preferences)
+            XCTAssertFalse(controller.dirty, "\(mime) / \(preferred)")
+            XCTAssertTrue(controller.windowShouldClose(controller.window))
+            XCTAssertEqual(discardCalls, 0, "defaults do not require discarding edits")
+            XCTAssertEqual(worker.closeCount, 1)
         }
     }
 
@@ -72,7 +109,7 @@ final class RecordingEditorTests: XCTestCase {
                 XCTAssertTrue(labels(in: controller.root).contains(RecordingEditorCopy.liveTiming.webmExportError))
             } else {
                 XCTAssertFalse(controller.savingCopy, "same-format GIF can replace its original after acceptance")
-                XCTAssertTrue(controller.dirty)
+                XCTAssertFalse(controller.dirty, "loaded GIF defaults are clean")
                 XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem, "12 FPS")
                 XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem, "480 px")
             }

@@ -1154,6 +1154,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                         preferredFormat: preferences.exportFormat)
                     self.format.selectItem(withTitle: ".\(initialFormat)")
                     self.formatChanged()
+                    // Loaded defaults are clean before and after preview acceptance.
+                    self.savedEdit = self.canonicalEdit(self.stagedEdit)
+                    self.savedExport = self.canonical(self.stagedExport)
                 }
                 // Without a replaceable original (a reference or a History-only
                 // recording), Save as new file is locked on with its `-edited`
@@ -1176,9 +1179,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     var dirty: Bool {
-        guard let snapshot = presentation?.snapshot else { return false }
-        return stagedDiffers || canonicalEdit(snapshot.edit) != savedEdit
-            || canonical(snapshot.saveExport) != savedExport
+        guard presentation != nil else { return false }
+        return hasPendingCropInput || canonicalEdit(stagedEdit) != savedEdit
+            || canonical(stagedExport) != savedExport
     }
 
     var activeArtifactID: String? { window.isVisible ? artifactID : nil }

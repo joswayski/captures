@@ -697,6 +697,18 @@ def main():
         if args.export_preferences:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             settle(editor)
+            # Opening with defaults is not an edit, including after the worker
+            # accepts their GIF preview. No Save or discard action is needed.
+            close(editor)
+            wait(lambda: not windows("Captures Editor"), "default-only editor closes without discard")
+            window_artifacts.pop(editor, None)
+            assert not exported(), "closing initialized defaults must not save a copy"
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            click(root, 107, 432)
+            editor = wait(lambda: windows("Captures Editor"), "default-only editor reopens")[0]
+            run("xdotool", "windowmove", "--sync", editor, "80", "60",
+                "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            settle(editor)
             # Never choose GIF or set 27/704: the persisted defaults must reach
             # the real encode without user intervention.
             assert "Frame rate" in controls(editor), "saved GIF format opens the GIF card"
@@ -715,6 +727,10 @@ def main():
                     choose(editor, "Frame rate", "12 FPS")
                     choose(editor, "Maximum width", "480 px")
                     settle(editor)
+                    close(editor)
+                    wait(lambda: "Keep editing" in controls(editor), "user changes retain discard protection")
+                    assert editor in windows("Captures Editor")
+                    press(editor, "Keep editing")
                 destination = exports / f"{name}.gif"
                 set_destination(editor, destination)
                 save_copy(editor)
@@ -742,8 +758,9 @@ def main():
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "exports": results, "checks": ["persisted-format", "custom-cadence-label", "custom-width-label",
                     "81-frames-704x396", "user-change-36-frames-480x270", "duration-pixels",
-                    "normal-minimum-render", "immutable-source-history", "clean-close"]}, indent=2) + "\n")
-            print("PASS export preferences: saved GIF defaults produced 81 frames at 704x396; user changes produced 36 at 480x270; source unchanged")
+                    "normal-minimum-render", "immutable-source-history", "default-only-clean-close",
+                    "user-change-discard-protection", "clean-close"]}, indent=2) + "\n")
+            print("PASS export preferences: default-only clean close; user edits retain discard protection; 81 frames at 704x396 then 36 at 480x270; source unchanged")
             return
         if args.replace_original:
             recovery = artifact / "media.mp4"

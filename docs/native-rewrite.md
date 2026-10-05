@@ -28,6 +28,13 @@ master. Dark/light private-X11 smokes independently probe 81 frames at 704×396,
 then 36 frames at 480×270 after user changes, decoded colors and unchanged source
 bytes. Normal/minimum renders were inspected. The mixed GIF/MP4/WebM/still import
 regression explicitly chooses MP4 for its conversion checks.
+Loaded defaults are now the clean opening baseline, before and after asynchronous
+preview acceptance. Preview application still gates export; later user edits still
+require Save or discard. Refocus does not reset that baseline, and a successful Save
+rebases it. Private-X11 recovery closes the unedited GIF editor normally in both
+appearances; the export-defaults smoke closes/reopens without Save or discard, then
+checks the discard guard after an actual user change. AppKit has matching XCTest
+regressions; their execution awaits macOS CI.
 
 | Platform | Recording export-defaults slice implementation / verification |
 | --- | --- |
