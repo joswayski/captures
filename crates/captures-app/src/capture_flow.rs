@@ -167,6 +167,20 @@ static GATE: Gate = Gate {
     child: AtomicU64::new(0),
 };
 
+fn watch_session(generation: u64) {
+    // Session queries can block on D-Bus. Only this generation is cancelled,
+    // and its watcher stops when the owning event-loop guard ends.
+    std::thread::spawn(move || {
+        while GATE.is_current(generation) {
+            if !captures_session::capture_session_available() {
+                GATE.cancel(generation);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+}
+
 pub fn is_current(generation: u64) -> bool {
     GATE.is_current(generation)
 }
@@ -199,17 +213,7 @@ pub struct PortalCapture {
 impl PortalCapture {
     pub fn begin() -> Result<Self, String> {
         let generation = GATE.begin()?;
-        // Session queries can block on D-Bus. Keep them off the caller's UI
-        // thread and cancel precisely the generation this guard owns.
-        std::thread::spawn(move || {
-            while GATE.is_current(generation) {
-                if !captures_session::capture_session_available() {
-                    GATE.cancel(generation);
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        });
+        watch_session(generation);
         Ok(Self { generation })
     }
 
@@ -285,17 +289,7 @@ impl CaptureFlow {
         })();
         match registration {
             Ok(manager) => {
-                // Session queries can block (e.g. D-Bus); never run them on the
-                // event-loop thread. This watcher exists only for this capture.
-                std::thread::spawn(move || {
-                    while GATE.is_current(generation) {
-                        if !captures_session::capture_session_available() {
-                            GATE.cancel(generation);
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(250));
-                    }
-                });
+                watch_session(generation);
                 Ok(Self {
                     generation,
                     countdown: Countdown::new(Instant::now(), seconds),
@@ -332,15 +326,7 @@ impl CaptureFlow {
             GATE.cancel(generation);
             return Err(error);
         }
-        std::thread::spawn(move || {
-            while GATE.is_current(generation) {
-                if !captures_session::capture_session_available() {
-                    GATE.cancel(generation);
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        });
+        watch_session(generation);
         Ok(Self {
             generation,
             countdown: Countdown::new(Instant::now(), seconds),
