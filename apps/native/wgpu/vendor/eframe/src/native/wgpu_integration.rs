@@ -67,14 +67,12 @@ struct WgpuWinitRunning<'app> {
 
     /// Wrapped in an `Rc<RefCell<…>>` so it can be re-entrantly shared via a weak-pointer.
     shared: Rc<RefCell<SharedState>>,
-
-    pending_deltas: TexturesDelta,
 }
 
 impl Drop for WgpuWinitRunning<'_> {
     fn drop(&mut self) {
         // Avoid debug panic when dropping unapplied deltas on teardown
-        self.pending_deltas.clear();
+        self.shared.borrow_mut().pending_deltas.clear();
     }
 }
 
@@ -90,6 +88,10 @@ pub struct SharedState {
     viewport_from_window: HashMap<WindowId, ViewportId>,
     focused_viewport: Option<ViewportId>,
     resized_viewport: Option<ViewportId>,
+
+    /// All viewports share one renderer and texture namespace. A hidden root's
+    /// allocations must precede a nested immediate viewport's partial updates.
+    pending_deltas: TexturesDelta,
 }
 
 pub type Viewports = egui::OrderedViewportIdMap<Viewport>;
@@ -105,9 +107,6 @@ pub struct Viewport {
     native_hidden: bool,
     actions_requested: Vec<ActionRequested>,
 
-    /// Any not yet applied deltas for this viewport.
-    pending_delta: TexturesDelta,
-
     /// `None` for sync viewports.
     viewport_ui_cb: Option<Arc<DeferredViewportUiCallback>>,
 
@@ -117,13 +116,6 @@ pub struct Viewport {
 
     /// `window` and `egui_winit` are initialized together.
     egui_winit: Option<egui_winit::State>,
-}
-
-impl Drop for Viewport {
-    fn drop(&mut self) {
-        // Avoid debug panic when dropping unapplied deltas on teardown
-        self.pending_delta.clear();
-    }
 }
 
 /// Mapping is distinct from compositor occlusion. Only our Wayland visibility
@@ -373,7 +365,6 @@ impl<'app> WgpuWinitApp<'app> {
                 viewport_ui_cb: None,
                 window: Some(window),
                 egui_winit: Some(egui_winit),
-                pending_delta: Default::default(),
             },
         );
 
@@ -384,6 +375,7 @@ impl<'app> WgpuWinitApp<'app> {
             painter,
             focused_viewport: Some(ViewportId::ROOT),
             resized_viewport: None,
+            pending_deltas: Default::default(),
         }));
 
         {
@@ -404,7 +396,6 @@ impl<'app> WgpuWinitApp<'app> {
             integration,
             app,
             shared,
-            pending_deltas: Default::default(),
         }))
     }
 }
@@ -644,7 +635,6 @@ impl WgpuWinitRunning<'_> {
             app,
             integration,
             shared,
-            pending_deltas,
         } = self;
 
         let mut frame_timer = crate::stopwatch::Stopwatch::new();
@@ -682,9 +672,11 @@ impl WgpuWinitRunning<'_> {
                     );
                     // ViewportInfo has no mapping flag. Treat an acknowledged
                     // native hide as non-renderable, without losing OS occlusion.
-                    // Preserve eframe's initial hidden-root bootstrap paint.
+                    // Preserve the first paint for normally visible roots, but
+                    // never map a root whose caller explicitly requested hidden.
                     let bootstrapping_root = viewport.class == ViewportClass::Root
-                        && integration.frame.info().cpu_usage.is_none();
+                        && integration.frame.info().cpu_usage.is_none()
+                        && viewport.builder.visible != Some(false);
                     viewport.info.occluded = if !bootstrapping_root && native_hidden {
                         Some(true)
                     } else {
@@ -731,11 +723,15 @@ impl WgpuWinitRunning<'_> {
 
             // A hidden window is not painted, since nothing would be shown — unless someone
             // wants the pixels anyway, e.g. to screenshot an app that is in the background:
-            let is_visible = viewport.info.visible().unwrap_or(true)
-                || viewport
-                    .actions_requested
-                    .iter()
-                    .any(egui_winit::ActionRequested::wants_paint);
+            let wants_paint = viewport
+                .actions_requested
+                .iter()
+                .any(ActionRequested::wants_paint);
+            let hidden_wayland = wayland_unmapped(window) == Some(true);
+            let bootstrap_ui = viewport.class == ViewportClass::Root
+                && integration.frame.info().cpu_usage.is_none();
+            let is_visible =
+                viewport.info.visible().unwrap_or(true) || (wants_paint && !hidden_wayland);
 
             {
                 profiling::scope!("set_window");
@@ -747,7 +743,11 @@ impl WgpuWinitRunning<'_> {
             };
             let mut raw_input = egui_winit.take_egui_input(window);
 
-            let show_ui = is_visible || is_viewport_or_descendant_visible(viewports, viewport_id);
+            // An explicit hidden-root UI request declares new children without
+            // attaching a buffer to that root. Ordinary wakes stay logic-only.
+            let show_ui = is_visible
+                || is_viewport_or_descendant_visible(viewports, viewport_id)
+                || (hidden_wayland && (wants_paint || bootstrap_ui));
 
             integration.pre_update();
 
@@ -828,6 +828,7 @@ impl WgpuWinitRunning<'_> {
             viewports,
             painter,
             viewport_from_window,
+            pending_deltas,
             ..
         } = &mut *shared_mut;
 
@@ -917,6 +918,13 @@ impl WgpuWinitRunning<'_> {
 
             vsync_secs
         } else {
+            // A hidden Wayland UI pass satisfies PaintWhileHidden without
+            // presentation; leaving it queued would force every future wake
+            // through a full UI pass. Screenshot requests cannot be fulfilled
+            // without remapping, so do not manufacture a captured buffer.
+            viewport
+                .actions_requested
+                .retain(|action| !matches!(action, ActionRequested::PaintWhileHidden));
             0.0
         };
 
@@ -1280,6 +1288,7 @@ fn render_immediate_viewport(
         viewports,
         painter,
         viewport_from_window,
+        pending_deltas,
         ..
     } = &mut *shared_mut;
 
@@ -1287,7 +1296,7 @@ fn render_immediate_viewport(
         warn!("Viewport disappeared unexpectedly!");
         return;
     };
-    viewport.pending_delta.append(textures_delta);
+    pending_deltas.append(textures_delta);
 
     viewport.info.events.clear(); // they should have been processed
     let (Some(egui_winit), Some(window)) = (&mut viewport.egui_winit, &viewport.window) else {
@@ -1309,14 +1318,17 @@ fn render_immediate_viewport(
     // Immediate callbacks may run while a sibling is still configuring its
     // remap. Do not attach a buffer to an acknowledged hidden native window.
     if wayland_unmapped(window) != Some(true)
-        || viewport.actions_requested.iter().any(ActionRequested::wants_paint)
+        || viewport
+            .actions_requested
+            .iter()
+            .any(ActionRequested::wants_paint)
     {
         painter.paint_and_update_textures(
             ids.this,
             pixels_per_point,
             [0.0, 0.0, 0.0, 0.0],
             &clipped_primitives,
-            &mut viewport.pending_delta,
+            pending_deltas,
             vec![],
             window,
         );
@@ -1431,7 +1443,6 @@ fn initialize_or_update_viewport<'a>(
                 viewport_ui_cb,
                 window: None,
                 egui_winit: None,
-                pending_delta: Default::default(),
             })
         }
 

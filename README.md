@@ -482,11 +482,13 @@ without files restores hidden recording controls or focuses the open setup, edit
 History or Preferences window in that order, else opens Preferences. A visible
 native launch opens Preferences (setup on first run), as the shipping app does.
 Native Preferences → General offers opt-in **Start Captures on login**
-for macOS, Windows and X11 development profiles. It starts that profile hidden;
+for macOS, Windows and Linux development profiles. It starts that profile hidden;
 relaunch or the tray/menu bar restores it. This uses a separate user-owned login
 entry, not Tauri's setting or registration. Disable it before moving/removing the
-development binary. Wayland hidden startup and physical sign-in acceptance remain
-open; [development setup/removal](DEVELOPMENT.md#native-development-login-items)
+development binary. On Wayland, quiet startup keeps History unmapped when a tray
+exists; Preferences, Feedback and media open independently. Missing or lost trays
+expose History so the process remains reachable. Physical compositor/sign-in
+acceptance remains open; [development setup/removal](DEVELOPMENT.md#native-development-login-items)
 documents the platform entries and conflict recovery.
 Native capture shortcuts remain available while Preferences is focused, except
 while a shortcut recorder is active. Updates keep the version and **Native
@@ -821,7 +823,7 @@ connected, but physical cross-platform acceptance and full feature/design parity
 remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
 existing Preview features remain available during development. The wgpu candidate
-does not yet support hidden-window idle on Wayland; see its
+supports hidden Wayland startup, but physical resource acceptance remains open; see its
 [evaluation limits](apps/native/wgpu/README.md).
 
 ## License and trademarks

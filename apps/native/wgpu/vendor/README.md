@@ -48,15 +48,22 @@ No root workspace or shipping Tauri patch is involved.
 Only `src/native/wgpu_integration.rs` has source changes: refresh acknowledged
 Wayland mapping state for all viewports before a root pass; preserve compositor
 occlusion separately; avoid painting unmapped immediate surfaces; and recreate
-GPU surfaces after remapping. Keep the initial root bootstrap. Extra mapping and
-surface-reset behavior is gated to actual Linux Wayland window handles; Windows
-and X11 retain upstream behavior. Glow is unused by this workbench and unchanged.
+GPU surfaces after remapping. An explicitly hidden root runs its initial UI pass
+without presenting a buffer. One-shot `RequestPaintWhileHidden` requests declare
+new children without remapping History; consumed requests do not turn ordinary
+worker wakes into recurring UI passes. Normally visible roots keep their initial
+paint. Pending texture deltas now share the renderer's single texture namespace
+across root, deferred and immediate viewports, preserving allocation-before-update
+order when a hidden root does not paint. This queue is shared on every host;
+extra mapping and surface-reset behavior is gated to actual Linux Wayland window
+handles. Glow is unused by this workbench and unchanged.
 
 To update, vendor the new locked Git package into a temporary directory, copy
 only eframe, retain its licenses/README, repin all egui siblings to the same
 revision, and reapply this one-file patch against upstream. Do not retain vendor
 checksum metadata for changed sources. Update the private lockfile and run native
-gates, the visibility/native-portal smokes and X11 capture/editor regressions.
+gates, the visibility/native-portal/resident-lifecycle smokes and X11
+capture/editor regressions.
 
 ## Updating winit
 

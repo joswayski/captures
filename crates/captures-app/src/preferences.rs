@@ -584,9 +584,7 @@ pub fn login_item_error(error: &str) -> String {
 pub fn login_item_unavailable(platform: ShortcutPlatform) -> &'static str {
     match platform {
         ShortcutPlatform::Macos => "Available in a live development profile.",
-        _ => {
-            "Available in a live Windows or X11 development profile. Wayland hidden startup is not supported."
-        }
+        _ => "Available in a live Windows or Linux development profile.",
     }
 }
 

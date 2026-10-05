@@ -118,7 +118,7 @@ contact captur.es; fixture mode keeps submission disabled. The form previews the
 included app/system context below its header before editable fields, retains drafts on errors and when the window is
 closed and reopened, and prevents duplicate sends while pending.
 Captures, files, and diagnostics are never attached. General offers opt-in
-development login startup on X11/Windows; Wayland hidden startup remains gated.
+development login startup on Windows/Linux, including Wayland hidden residency.
 Updates retains native build identity and a disabled check action; signed native
 updates remain unavailable.
 
@@ -338,10 +338,11 @@ panel behavior still needs desktop verification. Preview positioning is unsuppor
 on Wayland. Windows preview runtime, nonactivation, and accessibility also remain
 unverified beyond compilation and focused host tests.
 
-**Hidden idle is not accepted on this candidate's Wayland backend.** The private
-winit patch supports compositor-acknowledged unmapping for portal captures, but
-resident hidden startup and resource acceptance remain gated. `--scene idle` exits with an explicit unsupported event
-and status 3 rather than measuring a visible window. On X11/Windows the workbench
+**Wayland hidden startup is connected, not physically accepted.** The private
+winit/eframe patches now support compositor-acknowledged unmapping and hidden
+resident startup, exercised on disposable Sway. Physical resource acceptance is
+still open; backend implementations without visibility acknowledgement report
+unsupported rather than measuring a visible window. On X11/Windows the workbench
 re-hides the root after eframe's automatic first paint and verifies visibility at
 the quit deadline. A transient startup map remains possible. Resolving this is a
 renderer gate.
@@ -366,7 +367,7 @@ store check. The orb's wlr 0.7 backend is version 1 and returned success even wi
 the disposable permission set to “no”; this is not a client fallback or proof of
 consent enforcement. The smoke reports the backend version/policy it exercised.
 Native window targeting, selectors, countdown, preview placement, global shortcut
-registration, hidden startup and recording remain gated. Portal still capture is
+registration and recording remain gated. Portal still capture is
 connected to History as described below.
 
 ```sh
@@ -427,6 +428,31 @@ crash and hides its idle cursor for the exact desktop-pixel comparisons.
 The visibility probe also covers initially hidden windows, rapid hide/show and
 hidden redraw suppression. These are software-rendered integration checks, not
 physical GNOME/KDE, multi-display, mixed-DPI or accessibility acceptance.
+
+### Native Wayland resident lifecycle
+
+Quiet live launches keep History unmapped when an SNI tray exists. The startup
+notice expires; tray Preferences/Feedback, empty relaunch and image/recording media
+open only the requested child. Closing those children retains residency. Missing
+or lost trays expose reachable History with normal close-to-quit. General's
+development login toggle is explicit and OS-authoritative on Wayland too.
+The notice points to History in the tray menu instead of advertising an
+unregistered Wayland global shortcut.
+
+```sh
+/usr/bin/python3 apps/native/wayland_lifecycle_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
+```
+
+Use the builds/dependencies above and the installed Swaybar SNI tray. This smoke
+owns its compositor, bus, XDG configuration and autostart files. It acknowledges
+window-event subscription before launch and drains events at each check, rejecting
+even transient History mapping. It exercises real tray menu actions, input-driven
+login enable/disable, GIO entry relaunch, Unicode media and normal Quit. It neither
+sends Feedback nor changes installed data or login registration. Optional
+`--screenshots DIRECTORY` captures review states. Physical GNOME/KDE, sign-in,
+tray-icon notice placement/focus and whole-app resource acceptance remain open.
 
 **Transparent Vulkan windows failed under the orb's Xvfb/Mesa llvmpipe setup.**
 The countdown's GPU readback was correct, but the compositor displayed no content.

@@ -1582,6 +1582,7 @@ impl Editor {
     pub fn focus(&self, ctx: &egui::Context) {
         ctx.send_viewport_cmd_to(self.viewport, egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd_to(self.viewport, egui::ViewportCommand::Focus);
+        crate::live::request_hidden_root_ui(ctx);
         wake(ctx, self.viewport);
     }
 

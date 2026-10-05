@@ -199,8 +199,10 @@ physical platform/input or lifecycle parity.
 
 General is the first Preferences card and owns the opt-in **Start Captures on
 login** control. Existing per-profile development login entries remain separate
-from the shipping app; Wayland hidden startup remains gated. Updates keep the
-actual crate version and **Native development** identity on the left, with a
+from the shipping app; Wayland now supports tray-resident hidden startup and
+independent Preferences/media/Feedback windows. Physical sign-in acceptance stays
+open. Updates keep the actual crate version and **Native development** identity
+on the left, with a
 160-point disabled Check Now action and unavailable status on the right at both
 normal and compact widths. There is no native check or last-checked timestamp.
 Feedback places Included automatically app/system details directly below its
@@ -247,8 +249,9 @@ and `xdg-open` for folder fallbacks; Show in Folder first asks a
 `org.freedesktop.FileManager1` implementer to select the saved file. No watcher/host means an explicit error and
 normal close-to-quit. Losing the tray host restores the root instead of stranding
 the process. XEmbed-only trays require an SNI bridge. Wayland History offers
-desktop-portal screenshots even without a tray; hidden startup, native selectors
-and recording remain gated. Physical macOS,
+desktop-portal screenshots even without a tray. Quiet startup stays hidden with a
+tray and exposes History without one; tray loss also exposes History, and closing
+it quits normally. Native selectors and recording remain gated. Physical macOS,
 Windows, mixed-DPI and accessibility acceptance remain open.
 
 ## New Capture controls

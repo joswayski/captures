@@ -105,7 +105,7 @@ impl PreferencesWindow {
         }
         // The root may be hidden (closed History); paint it once so this
         // child window is declared.
-        crate::live::request_hidden_root_paint(ctx);
+        crate::live::request_hidden_root_ui(ctx);
         ctx.request_repaint();
     }
 
@@ -140,7 +140,7 @@ impl PreferencesWindow {
             // Create the window in a root pass the host dispatches as a
             // window event (see `during_window_event`).
             ROOT_PASS_REQUESTED.with(|cell| cell.set(true));
-            crate::live::request_hidden_root_paint(ctx);
+            crate::live::request_hidden_root_ui(ctx);
             ctx.request_repaint();
             return None;
         }
