@@ -1,7 +1,9 @@
 name: Native macOS workbench
 
+# Runs on main only; pull requests get no CI. Use "Run workflow" to test a branch.
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - 'apps/native/**'
       - 'crates/captures-settings*/**'
@@ -18,19 +20,27 @@ on:
       - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
       - 'apps/desktop/assets/icon.svg'
       - '.github/workflows/native-macos.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: write
 
+# The running build always finishes and only the newest waiting push runs next
+# (GitHub replaces older pending runs in the group).
 concurrency:
-  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  route:
+    uses: ./.github/workflows/mac-route.yml
+    secrets: inherit
+
   build-and-test:
+    needs: route
     # Recording's apple-metal bridge needs the macOS 26 SDK, like the desktop CI.
-    runs-on: macos-26
+    runs-on: ${{ needs.route.outputs.mac == 'true' && fromJSON('["self-hosted","josemac"]') || 'macos-26' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +50,44 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
+      - name: Describe the macOS toolchain, display and session
+        # The self-hosted VM and GitHub-hosted macos-26 differ in Xcode, display
+        # scale, Reduce Motion and window-server state; the motion and pixel
+        # tests depend on all of them, so print them before the tests run.
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          cat >"$RUNNER_TEMP/display-probe.swift" <<'SWIFT'
+          import AppKit
+          let app = NSApplication.shared
+          app.setActivationPolicy(.accessory)
+          let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 200, height: 120),
+                                styleMask: [.borderless], backing: .buffered, defer: false)
+          window.contentView?.wantsLayer = true
+          window.orderFrontRegardless()
+          var completed = false
+          CATransaction.begin()
+          CATransaction.setCompletionBlock { completed = true }
+          let fade = CABasicAnimation(keyPath: "opacity")
+          fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.2
+          window.contentView?.layer?.add(fade, forKey: "probe")
+          CATransaction.commit()
+          let deadline = Date().addingTimeInterval(3)
+          while !completed && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+          let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+          print("screens:", NSScreen.screens.map { "\($0.localizedName) \($0.frame.size) @\($0.backingScaleFactor)x" })
+          print("main display asleep:", CGDisplayIsAsleep(CGMainDisplayID()) != 0)
+          print("session on console:", session["kCGSSessionOnConsoleKey"] ?? "unknown",
+                "screen locked:", session["CGSSessionScreenIsLocked"] ?? false)
+          print("Reduce Motion:", NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+          print("probe window visible:", window.isVisible, "unoccluded:", window.occlusionState.contains(.visible))
+          print("Core Animation completion within 3 s:", completed)
+          if !completed {
+            print("::warning::The window server is not compositing this session (display off, asleep or locked); Core Animation completions never fire, so the on-screen motion tests cannot settle.")
+          }
+          SWIFT
+          swift "$RUNNER_TEMP/display-probe.swift" || echo "::warning::display probe did not run"
       - name: Provision FFmpeg verification tools
         run: |
           brew install ffmpeg
@@ -148,8 +196,8 @@ jobs:
             || echo "::warning::Could not cancel the rest of this run"
 
   development-package:
-    needs: build-and-test
-    runs-on: macos-26
+    needs: [route, build-and-test]
+    runs-on: ${{ needs.route.outputs.mac == 'true' && fromJSON('["self-hosted","josemac"]') || 'macos-26' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

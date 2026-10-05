@@ -314,6 +314,10 @@ def main():
             compositor_capture(binary, root, env)
         finally:
             stop(daemon)
+            # The activated document portal can leave a disconnected FUSE
+            # mount after its bus exits. Detach it before temp-tree traversal.
+            subprocess.run(["fusermount3", "-uz", str(runtime / "doc")],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 if __name__ == "__main__":

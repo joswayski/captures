@@ -1,31 +1,19 @@
 name: AWS API image
 
 on:
-  # PRs only need this check when an input of the image changes. The paths are
-  # exactly what apps/api/Dockerfile copies into its build context (Cargo
-  # resolves every workspace manifest, hence src-tauri and crates), plus the
-  # files that define the build. Pushes to main stay unfiltered so every main
-  # commit still publishes its immutable image.
-  pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'apps/api/**'
-      - 'apps/desktop/src-tauri/**'
-      - 'crates/**'
-      - '.dockerignore'
-      - '.github/workflows/aws-api-image.yml'
+  # Runs on main only; pull requests get no CI. Every main commit publishes its
+  # immutable image.
   push:
     branches: [main]
 
 permissions:
   contents: read
 
-# Supersede stale PR runs only; main pushes publish images and each keeps its
-# own group so none is ever cancelled.
+# Main pushes publish images and each keeps its own group so none is ever
+# cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   api-arm64:
@@ -43,7 +31,6 @@ jobs:
           load: true
           tags: captures-api:test
           cache-from: type=gha,scope=captures-api
-          # PRs reuse main's layers but do not export their own copy.
           cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=captures-api,mode=max' || '' }}
       - name: Verify image, startup migrations, and protected API
         shell: bash
