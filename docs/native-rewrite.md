@@ -1786,9 +1786,38 @@ describe the limits, including I/O-boundary cancellation and its request timeout
 | X11 | Rust signature, target/version, byte-exact download, cancellation and cleanup tests run in Linux orb; no GUI/capture changes |
 | Wayland | Same backend has no X11/window dependency; no compositor-specific behavior added or accepted |
 
-This is acquisition, not a complete updater. Safe archive extraction, native
-installation/relaunch, signed channel publication, freshness/rollback policy,
-installed-data migration and end-to-end cross-platform acceptance remain open.
+This is acquisition, not a complete updater. Temporary archive staging is described
+below; native installation/relaunch, signed channel publication, freshness/rollback
+policy, installed-data migration and end-to-end cross-platform acceptance remain open.
+
+### Native update package staging: temporary validation, no installation
+
+`VerifiedUpdate::stage` consumes signed/verified bytes, rehashes a private copy,
+then extracts `package.py` ZIP32 or tar.gz archives into owned temporary storage.
+It rejects traversal, links/special entries, portable-path collisions and
+unsupported metadata, bounds entries/implicit directories and expanded bytes,
+and validates the development package's target, executable hash/permissions,
+media sidecars, corresponding source/licenses and macOS bundle identity/resources.
+Drop, failure and cancellation remove owned scratch without changing an existing
+app/profile. Exposed staged paths are mutable; a future installer must reverify
+its copies. Forced termination may leave scratch, not an installed update.
+
+`native_update_probe --stage-directory EXISTING_DIRECTORY` exercises acquisition
+and temporary validation without a GUI, execution, registration or relaunch. The
+existing notice, disabled update controls and absence of a production endpoint/key
+are unchanged. [Format, limits and diagnostic usage](../apps/native/README.md#native-update-acquisition-diagnostic)
+include the deliberately narrow ASCII resource-path and archive-format contract.
+
+| Platform | Staging slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared Rust validates ARM64/x64 development layouts and bundle identity; real Python-packager fixtures with inert bodies run in Linux and are included in existing macOS updater tests; OS signatures, installer and physical acceptance open |
+| Windows | Shared Rust validates development ZIP layout and sidecars; cross-target packager fixtures run in Linux and are included in existing Windows updater tests; installer/relaunch and physical acceptance open |
+| X11 | Linux tar/PAX package fixtures, adversarial archives, rehash/limits/cancellation and cleanup run in the orb; no capture/GUI changes |
+| Wayland | Identical window-independent staging backend; no compositor behavior changed or accepted |
+
+This closes neither signed OS distribution nor the Notices/updates gate. Installed
+replacement/relaunch, rollback, channel publication and installed-data migration
+remain separate work.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

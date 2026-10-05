@@ -3,8 +3,12 @@
 //! A pinned Minisign key authenticates the exact manifest bytes *before* parsing.
 //! The signed manifest binds the development identity, renderer, target, version,
 //! artifact URL, byte count and SHA-256. Downloads remain private temporary files
-//! until all checks succeed. This does not extract, install, replace or relaunch.
+//! until all checks succeed. Staging validates packages in private temporary
+//! directories. Nothing installs, replaces, registers or relaunches an app.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
+mod staging;
+pub use staging::StagedUpdate;
+
 use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom, Write},
@@ -87,6 +91,12 @@ pub enum Error {
     Size,
     #[error("Native update artifact hash does not match its signed manifest.")]
     Hash,
+    #[error("Native update archive is invalid or exceeds its limits.")]
+    Archive,
+    #[error("Native update archive contains an unsafe or conflicting path.")]
+    ArchivePath,
+    #[error("Native update package is incomplete or has the wrong development identity.")]
+    Package,
     #[error("Native update cancelled.")]
     Cancelled,
     #[error("Native update file operation failed: {0}")]
@@ -146,6 +156,7 @@ pub struct PendingUpdate {
 pub struct VerifiedUpdate {
     info: ReleaseInfo,
     file: NamedTempFile,
+    hash: [u8; 32],
 }
 
 impl UpdateClient {
@@ -293,43 +304,9 @@ impl PendingUpdate {
         reader: impl Read,
         directory: &Path,
         cancel: &CancelToken,
-        mut progress: impl FnMut(u64, u64),
+        progress: impl FnMut(u64, u64),
     ) -> Result<VerifiedUpdate, Error> {
-        check_cancel(cancel)?;
-        let mut file = NamedTempFile::new_in(directory)?;
-        // Never consume an unbounded body, even if Content-Length is absent.
-        let mut reader = reader.take(self.info.size + 1);
-        let mut hasher = Sha256::new();
-        let mut downloaded = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            check_cancel(cancel)?;
-            let count = reader.read(&mut buffer)?;
-            check_cancel(cancel)?;
-            if count == 0 {
-                break;
-            }
-            downloaded += count as u64;
-            if downloaded > self.info.size {
-                return Err(Error::Size);
-            }
-            file.write_all(&buffer[..count])?;
-            hasher.update(&buffer[..count]);
-            progress(downloaded, self.info.size);
-        }
-        if downloaded != self.info.size {
-            return Err(Error::Size);
-        }
-        if <[u8; 32]>::from(hasher.finalize()) != self.hash {
-            return Err(Error::Hash);
-        }
-        file.as_file_mut().sync_all()?;
-        file.seek(SeekFrom::Start(0))?;
-        check_cancel(cancel)?;
-        Ok(VerifiedUpdate {
-            info: self.info.clone(),
-            file,
-        })
+        verify_file(reader, directory, &self.info, self.hash, cancel, progress)
     }
 }
 
@@ -341,6 +318,53 @@ impl VerifiedUpdate {
     pub fn file(&self) -> &std::fs::File {
         self.file.as_file()
     }
+}
+
+fn verify_file(
+    reader: impl Read,
+    directory: &Path,
+    info: &ReleaseInfo,
+    hash: [u8; 32],
+    cancel: &CancelToken,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<VerifiedUpdate, Error> {
+    check_cancel(cancel)?;
+    let mut file = NamedTempFile::new_in(directory)?;
+    // Acquisition and staging both use the signed byte limit, even without
+    // Content-Length or after another holder mutates the downloaded handle.
+    let mut reader = reader.take(info.size + 1);
+    let mut hasher = Sha256::new();
+    let mut downloaded = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        check_cancel(cancel)?;
+        let count = reader.read(&mut buffer)?;
+        check_cancel(cancel)?;
+        if count == 0 {
+            break;
+        }
+        downloaded += count as u64;
+        if downloaded > info.size {
+            return Err(Error::Size);
+        }
+        file.write_all(&buffer[..count])?;
+        hasher.update(&buffer[..count]);
+        progress(downloaded, info.size);
+    }
+    if downloaded != info.size {
+        return Err(Error::Size);
+    }
+    if <[u8; 32]>::from(hasher.finalize()) != hash {
+        return Err(Error::Hash);
+    }
+    file.as_file_mut().sync_all()?;
+    file.seek(SeekFrom::Start(0))?;
+    check_cancel(cancel)?;
+    Ok(VerifiedUpdate {
+        info: info.clone(),
+        file,
+        hash,
+    })
 }
 
 fn http_client(redirect: Policy) -> Result<Client, Error> {
