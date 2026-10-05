@@ -515,10 +515,9 @@ impl View {
     }
 
     fn dirty(&self) -> bool {
-        self.unapplied()
-            || self.presented.as_ref().is_some_and(|p| {
-                p.edit != self.saved_edit || Some(&p.export) != self.saved_export.as_ref()
-            })
+        self.presented.as_ref().is_some_and(|p| {
+            self.staged_edit(p) != self.saved_edit || Some(self.export_spec()) != self.saved_export
+        })
     }
 
     fn can_replace(&self) -> bool {
@@ -985,6 +984,10 @@ impl View {
                     if self.gif {
                         self.quality = recording_editor_ui::DEFAULT_COMPRESS_PRESET;
                     }
+                    // Loaded defaults are the clean opening state, even while
+                    // their preview waits for the worker to accept them.
+                    self.saved_edit = self.staged_edit(self.presented.as_ref().unwrap());
+                    self.saved_export = Some(self.export_spec());
                 }
                 // Without a replaceable original (a reference or a History-only
                 // recording), Save as new file is locked on with its `-edited`
@@ -4454,6 +4457,13 @@ mod tests {
             assert_eq!(view.gif_frames_per_second, Some(27));
             assert_eq!(view.gif_maximum_width, Some(704));
             assert!(view.opening_preferences.is_none());
+            assert!(
+                !view.dirty(),
+                "{mime} / {preferred:?}: defaults are not user edits"
+            );
+            view.request_close();
+            assert!(view.closed && !view.confirm_close);
+            view.closed = false;
             if expected == VideoFormat::Gif {
                 assert_eq!(view.quality, QualityPreset::Highest);
                 assert_eq!(view.export_spec().frames_per_second, Some(27));
@@ -4468,6 +4478,26 @@ mod tests {
                     (Some(704), Some(396))
                 );
                 assert!(view.unapplied() && !view.can_save());
+                let mut accepted = opened().presented.unwrap();
+                accepted.source = view.presented.as_ref().unwrap().source.clone();
+                accepted.edit = view.presented.as_ref().unwrap().edit.clone();
+                accepted.edit.output_width = Some(704);
+                accepted.edit.output_height = Some(396);
+                accepted.export = ExportSpec {
+                    format: ExportFormat::Gif,
+                    quality: QualityPreset::Highest,
+                    max_size_bytes: None,
+                    frames_per_second: Some(27),
+                    gif_max_colors: Some(256),
+                };
+                view.receive(&ctx, Event::Presented(Ok(accepted)));
+                assert!(
+                    !view.unapplied() && !view.dirty(),
+                    "accepted defaults stay clean"
+                );
+                view.request_close();
+                assert!(view.closed && !view.confirm_close);
+                view.closed = false;
             } else {
                 assert!(!view.unapplied());
             }
@@ -4485,12 +4515,17 @@ mod tests {
             view.webm = false;
             view.gif_frames_per_second = Some(12);
             view.gif_maximum_width = Some(480);
+            assert!(
+                view.dirty(),
+                "a later user change must not reset the baseline"
+            );
             let mut accepted = opened().presented.unwrap();
             accepted.export.format = ExportFormat::Gif;
             accepted.export.frames_per_second = Some(12);
             view.receive(&ctx, Event::Presented(Ok(accepted)));
             assert_eq!(view.gif_frames_per_second, Some(12));
             assert_eq!(view.gif_maximum_width, Some(480));
+            assert!(view.dirty());
         }
     }
 
