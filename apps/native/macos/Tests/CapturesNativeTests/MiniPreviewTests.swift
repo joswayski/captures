@@ -312,11 +312,56 @@ final class MiniPreviewTests: XCTestCase {
                        ["Close", "Delete", "Edit", "Copy", "Save file"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
         XCTAssertTrue(buttons.allSatisfy(\.isHidden))
+        XCTAssertFalse(panel.isKeyWindow)
         XCTAssertTrue(panel.makeFirstResponder(card))
-        XCTAssertFalse(try XCTUnwrap(buttons.first { $0.title == "Copy" }).isHidden,
-                       "Keyboard focus reveals the controls, like :focus-within")
-        XCTAssertTrue(panel.makeFirstResponder(nil))
-        try waitUntil { buttons.allSatisfy(\.isHidden) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(buttons.allSatisfy(\.isHidden),
+                      "Focus in a panel that is not key shows no chrome, like :focus-within in a background window")
+        XCTAssertTrue(card.hasVisibleLabels)
+    }
+
+    func testFocusRevealsChromeOnlyWhileThePanelIsKey() throws {
+        _ = NSApplication.shared
+        let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1), size: NSSize(width: 284, height: 160))
+        let panel = fixturePanel(ids: ["older", "newer"], images: ["older": image, "newer": image])
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 120),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { panel.close(); other.close() }
+        NSApp.activate(ignoringOtherApps: true)
+        let deadline = Date().addingTimeInterval(2)
+        while !NSApp.isActive && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        let cards = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }
+        XCTAssertEqual(cards.count, 2)
+        func copyHidden(_ card: MiniPreviewCardView) -> Bool {
+            card.subviews.compactMap { $0 as? MiniPreviewButton }.first { $0.title == "Copy" }?.isHidden != false
+        }
+        // Ordering the panel in hands its initial card first responder while
+        // Captures is active, but that alone must not raise any card's chrome.
+        panel.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertFalse(panel.isKeyWindow)
+        for card in cards {
+            XCTAssertTrue(copyHidden(card), "a shown panel puts up no chrome until it is key")
+            XCTAssertTrue(card.hasVisibleLabels, "the dimensions badge stays up")
+        }
+
+        try XCTSkipUnless(NSApp.isActive, "Making the panel key needs Captures active in a window-server session")
+        let first = try XCTUnwrap(panel.initialFirstResponder as? MiniPreviewCardView)
+        panel.makeKey()
+        try waitUntil { panel.isKeyWindow }
+        if panel.firstResponder !== first { XCTAssertTrue(panel.makeFirstResponder(first)) }
+        try waitUntil { !copyHidden(first) }
+        XCTAssertFalse(first.hasVisibleLabels, "chrome replaces the dimensions badge")
+        for card in cards where card !== first {
+            XCTAssertTrue(copyHidden(card), "only the focused card shows its chrome")
+        }
+
+        // Focus stays on the card, but its chrome leaves with key status.
+        other.makeKeyAndOrderFront(nil)
+        try waitUntil { !panel.isKeyWindow }
+        XCTAssertTrue(panel.firstResponder === first)
+        try waitUntil { copyHidden(first) && first.hasVisibleLabels }
     }
 
     func testOutboundCardDragIsCopyOnlyAndCompactPileRemainsMoveOnly() throws {

@@ -942,13 +942,21 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     /// Re-evaluate pointer hover after the stack's stale-pointer lock changes.
-    func hoverLockChanged() { refreshPointerChrome() }
+    func hoverLockChanged() { refreshChrome() }
 
-    private func refreshPointerChrome() {
+    /// Shipping `:focus-within` matches only while the document has focus,
+    /// so a card's (or its controls') keyboard focus counts only while the
+    /// panel is key. Merely ordering the panel in makes its initial card
+    /// first responder; that alone must not raise chrome.
+    private var hasKeyFocusWithin: Bool {
+        guard let window, window.isKeyWindow, let responder = window.firstResponder as? NSView else { return false }
+        return responder.isDescendant(of: self)
+    }
+
+    /// Pointer hover (once unlocked) or key-window focus within keeps chrome up.
+    fileprivate func refreshChrome() {
         guard !isExiting else { return }
-        let focusedControl = window?.firstResponder === self
-            || actionButtons.contains { $0.window?.firstResponder === $0 }
-        setChromeVisible((pointerInside && !isHoverLocked()) || focusedControl)
+        setChromeVisible((pointerInside && !isHoverLocked()) || hasKeyFocusWithin)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -1062,24 +1070,22 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         updateWarning()
     }
     override var acceptsFirstResponder: Bool { !compact && !isExiting }
-    override func becomeFirstResponder() -> Bool { let result = super.becomeFirstResponder(); if result { setChromeVisible(true) }; return result }
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result, window?.isKeyWindow == true { setChromeVisible(true) }
+        return result
+    }
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
         if result { focusWithinChanged() }
         return result
     }
     /// Shipping `:focus-within`: keyboard focus on the card or one of its
-    /// controls keeps the chrome up. Once focus leaves, the chrome hides
-    /// unless the pointer is still over the card.
+    /// controls keeps the chrome up while the panel is key. Once focus
+    /// leaves, the chrome hides unless the pointer is still over the card.
     fileprivate func focusWithinChanged() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let window = self.window else { return }
-            if let responder = window.firstResponder as? NSView, responder.isDescendant(of: self) {
-                self.setChromeVisible(true); return
-            }
-            // Same rule as pointer chrome: hover counts only once unlocked.
-            self.setChromeVisible(self.pointerInside && !self.isHoverLocked())
-        }
+        // The window's first responder updates after this callback returns.
+        DispatchQueue.main.async { [weak self] in self?.refreshChrome() }
     }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
@@ -1088,11 +1094,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
     override func mouseEntered(with event: NSEvent) {
         pointerInside = true
-        refreshPointerChrome()
+        refreshChrome()
     }
     override func mouseExited(with event: NSEvent) {
         pointerInside = false
-        if !actionButtons.contains(where: { $0.window?.firstResponder === $0 }) { setChromeVisible(false) }
+        let focusedControl = window?.isKeyWindow == true
+            && actionButtons.contains { $0.window?.firstResponder === $0 }
+        if !focusedControl { setChromeVisible(false) }
     }
 
     private func styleLabelBacking(_ label: NSTextField) {
@@ -1685,6 +1693,9 @@ final class MiniPreviewView: NSView {
 
     func warningText(for artifactID: String) -> String? { cards[artifactID]?.warningText }
 
+    /// Focus-driven chrome follows the panel's key state (`MiniPreviewPanel`).
+    func keyStateChanged() { cards.values.forEach { $0.refreshChrome() } }
+
     /// Shipping DOM order: the collapsed pile's expand control, the stack
     /// toolbar (Clear all, Minimize), the overflow cues, then each card and
     /// its controls (Close, Delete, Edit, Copy, Save file or Show in Folder).
@@ -2102,6 +2113,10 @@ final class MiniPreviewPanel: NSPanel {
     /// `becomesKeyOnlyIfNeeded` keeps clicks from taking focus from an editor.
     override var canBecomeKey: Bool { NSApp.isActive }
     override var canBecomeMain: Bool { false }
+    /// Ordering the panel in already makes its initial card first responder;
+    /// that focus shows chrome only once the panel is key (Ctrl-F6, Cmd-`).
+    override func becomeKey() { super.becomeKey(); previewView.keyStateChanged() }
+    override func resignKey() { super.resignKey(); previewView.keyStateChanged() }
 
     init(frame: NSRect, geometry: CapturesPreviewGeometry, contentHeight: Double,
          resources: [String: MiniPreviewResource], ids: [String],
