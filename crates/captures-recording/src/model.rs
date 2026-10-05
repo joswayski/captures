@@ -46,6 +46,9 @@ impl CaptureRect {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RecordingTarget {
+    /// A display selected by the public ScreenCast portal, with no stable
+    /// monitor ID or compositor-space geometry claimed by Captures.
+    PortalDisplay,
     Display {
         display_id: String,
     },
@@ -177,6 +180,11 @@ impl RecordingOptions {
         if self.countdown_seconds > 10 {
             return Err("recording countdown must be at most 10 seconds");
         }
+        if self.target == RecordingTarget::PortalDisplay
+            && (self.highlight_clicks || self.show_keystrokes)
+        {
+            return Err("portal recording does not support click highlights or keystrokes");
+        }
         if matches!(self.target, RecordingTarget::Region { rect, .. } if !rect.is_valid()) {
             return Err("recording region must be larger than zero pixels");
         }
@@ -272,6 +280,30 @@ mod tests {
         assert_eq!(MaxResolution::P1080.constrain(3_840, 2_160), (1_920, 1_080));
         assert_eq!(MaxResolution::P1080.constrain(1_919, 1_079), (1_918, 1_078));
         assert_eq!(MaxResolution::Original.constrain(753, 597), (752, 596));
+    }
+
+    #[test]
+    fn portal_target_roundtrips_without_geometry_and_rejects_unsupported_overlays() {
+        let mut recording = options(RecordingKind::Video);
+        recording.target = RecordingTarget::PortalDisplay;
+        assert_eq!(
+            serde_json::to_value(&recording.target).unwrap(),
+            serde_json::json!({"type": "portal_display"})
+        );
+        let bytes = serde_json::to_vec(&recording).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<RecordingOptions>(&bytes).unwrap(),
+            recording
+        );
+        assert!(recording.validate().is_ok()); // Embedded portal cursor is supported.
+        for (clicks, keys) in [(true, false), (false, true)] {
+            recording.highlight_clicks = clicks;
+            recording.show_keystrokes = keys;
+            assert_eq!(
+                recording.validate(),
+                Err("portal recording does not support click highlights or keystrokes")
+            );
+        }
     }
 
     #[test]

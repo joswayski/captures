@@ -75,6 +75,8 @@ fn run() -> Result<(), String> {
             }
             match frames.recv_timeout(Duration::from_millis(50)) {
                 Ok(frame) => {
+                    let frame = image::RgbaImage::from_raw(frame.width, frame.height, frame.raw)
+                        .ok_or("Invalid portal RGBA frame")?;
                     corner_colors.insert(frame.get_pixel(0, 0).0);
                     last = Some(frame);
                     deadline = Instant::now() + Duration::from_secs(5);
