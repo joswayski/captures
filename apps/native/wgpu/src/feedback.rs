@@ -41,10 +41,7 @@ pub fn viewport_id() -> egui::ViewportId {
 /// the (possibly hidden) root that keeps registering it.
 fn wake(ctx: &egui::Context) {
     ctx.request_repaint_of(egui::ViewportId::ROOT);
-    ctx.send_viewport_cmd_to(
-        egui::ViewportId::ROOT,
-        egui::ViewportCommand::RequestPaintWhileHidden,
-    );
+    crate::live::request_hidden_root_paint(ctx);
     ctx.request_repaint_of(viewport_id());
 }
 

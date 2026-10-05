@@ -1675,7 +1675,6 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.36.2"
-source = "git+https://github.com/emilk/egui?rev=60d7caaea38a795618e842925061ad2210028a2a#60d7caaea38a795618e842925061ad2210028a2a"
 dependencies = [
  "ahash",
  "bytemuck",

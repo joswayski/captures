@@ -135,6 +135,16 @@ impl Workbench {
     ) -> Self {
         crate::ui_fonts::install(&cc.egui_ctx);
         crate::primitives::install_focus_ring(&cc.egui_ctx);
+        #[cfg(target_os = "linux")]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            let wayland = cc
+                .winit_window()
+                .and_then(|window| window.window_handle().ok())
+                .is_some_and(|handle| matches!(handle.as_raw(), RawWindowHandle::Wayland(_)));
+            cc.egui_ctx
+                .data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), wayland));
+        }
         if let Some(instance) = &instance {
             let wake = cc.egui_ctx.clone();
             // The socket worker can wake while an editor owns the current
@@ -437,7 +447,18 @@ impl Workbench {
         );
         if launch == Some(app_windows::InteractiveLaunch::Preferences) && !self.options.open_history
         {
+            if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                == Some(true)
+            {
+                self.show_root(ctx);
+            }
             self.preferences.open(ctx);
+        }
+        if self.launched_with_media
+            && ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                == Some(true)
+        {
+            self.show_root(ctx);
         }
         if onboarding_complete && self.options.open_history {
             self.show_root(ctx);
@@ -490,6 +511,17 @@ impl Workbench {
                 live.capture_action(capture, ctx);
             }
             return;
+        }
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+        {
+            if action != TrayAction::Quit && self.live.as_ref().is_some_and(Live::is_capturing) {
+                return;
+            }
+            if matches!(action, TrayAction::Preferences | TrayAction::SendFeedback) {
+                // A new child needs a root UI pass. Do not present an unmapped
+                // Wayland root merely to bootstrap it: show History normally.
+                self.show_root(ctx);
+            }
         }
         match action {
             TrayAction::NewCapture
@@ -742,7 +774,13 @@ impl Workbench {
         let _span = crate::diagnostics::span("instance-drain");
         // Preserve startup-file order and leave the transport queue bounded while
         // settings are loading. Preferences' completion already wakes this pass.
-        if self.preferences_state.is_loading() {
+        if self.preferences_state.is_loading()
+            || (ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                == Some(true)
+                && self.live.as_ref().is_some_and(Live::is_capturing))
+        {
+            // A forwarded open/relaunch must not remap an excluded surface.
+            // Drain it after the portal reply restores the workspace.
             return;
         }
         for _ in 0..32 {
@@ -760,6 +798,11 @@ impl Workbench {
                         "instance-request",
                         || json!({"paths":request.paths.len()}),
                     );
+                    if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                        == Some(true)
+                    {
+                        self.show_root(ctx);
+                    }
                     self.options.open_media.extend(request.paths);
                 }
                 Ok(None) => break,
@@ -1291,11 +1334,15 @@ impl Workbench {
                 Some(Target::Microphone) => prefs.request_onboarding_microphone(),
                 None => {}
             }
-            if view::wayland_session() {
+            if ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                == Some(true)
+            {
                 view::note(
                     ui,
                     t,
-                    "Wayland live capture is not supported yet. Setup does not enable capture on this display server.",
+                    "Wayland screenshots use your desktop portal. Native region/window selection and recording are not available yet.",
                 );
             }
             if let Some(error) = &error {
@@ -1391,11 +1438,11 @@ fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t:
                     }
                     None => {}
                 }
-                if crate::onboarding::wayland_session() {
+                if ui.ctx().data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true) {
                     crate::onboarding::note(
                         ui,
                         t,
-                        "Wayland live capture remains unavailable in this build.",
+                        "Wayland screenshots use your desktop portal. Native region/window selection and recording are not available yet.",
                     );
                 }
             }
@@ -1546,6 +1593,9 @@ impl eframe::App for Workbench {
         // A media launch shows only its editors; a failed open is reported
         // in History.
         if self.live.as_mut().is_some_and(Live::take_media_open_failed) && self.root_hidden {
+            self.show_root(ctx);
+        }
+        if self.live.as_mut().is_some_and(Live::take_history_requested) {
             self.show_root(ctx);
         }
         self.sync_shortcuts(ctx);
@@ -2321,10 +2371,7 @@ fn window_selection_name(
 fn wake_shortcut_host(ctx: &egui::Context) {
     // OS callbacks can run while a preview/editor owns the shared egui context.
     // Shortcut routing lives in ROOT, including when the resident window is hidden.
-    ctx.send_viewport_cmd_to(
-        egui::ViewportId::ROOT,
-        egui::ViewportCommand::RequestPaintWhileHidden,
-    );
+    crate::live::request_hidden_root_paint(ctx);
     ctx.request_repaint_of(egui::ViewportId::ROOT);
 }
 

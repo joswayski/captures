@@ -512,6 +512,10 @@ impl<T: 'static> EventLoop<T> {
                     .lock()
                     .unwrap();
 
+                if !window.can_redraw() {
+                    return None;
+                }
+
                 if window.frame_callback_state() == FrameCallbackState::Requested {
                     return None;
                 }

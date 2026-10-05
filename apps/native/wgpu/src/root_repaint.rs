@@ -1,5 +1,5 @@
-//! Event-driven fallback for Windows' visible ROOT paint starvation in winit
-//! 0.30.13 / eframe 0.36.2. Never invent work or advance a requested deadline.
+//! Event-driven ROOT repaint fallback for Windows paint starvation and Wayland
+//! unmap acknowledgements. Never invent work or advance a requested deadline.
 use std::time::Instant;
 
 #[derive(Default)]

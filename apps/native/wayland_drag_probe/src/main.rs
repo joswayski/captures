@@ -1,4 +1,5 @@
 use std::{
+    io::{self, BufRead},
     num::NonZeroU32,
     path::PathBuf,
     sync::{
@@ -21,6 +22,12 @@ use winit::{
 enum Mode {
     Source(PathBuf),
     Receiver,
+    Visibility,
+}
+
+#[derive(Debug)]
+enum UserEvent {
+    Command(String),
 }
 
 struct App {
@@ -30,19 +37,27 @@ struct App {
     dragging: Arc<AtomicBool>,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let titles: &[&str] = match self.mode {
             Mode::Source(_) => &["drag-source", "drag-own-receiver"],
             Mode::Receiver => &["drag-receiver"],
+            Mode::Visibility => &["visibility-primary", "visibility-initially-hidden"],
         };
-        for title in titles {
+        for (index, title) in titles.iter().enumerate() {
+            let initially_visible = !matches!(self.mode, Mode::Visibility) || index == 0;
             let window = Arc::new(
                 event_loop
                     .create_window(
                         WindowAttributes::default()
                             .with_title(*title)
-                            .with_inner_size(winit::dpi::LogicalSize::new(300, 220)),
+                            .with_inner_size(if matches!(self.mode, Mode::Visibility) {
+                                winit::dpi::LogicalSize::new(80, 60)
+                            } else {
+                                winit::dpi::LogicalSize::new(300, 220)
+                            })
+                            .with_resizable(!matches!(self.mode, Mode::Visibility))
+                            .with_visible(initially_visible),
                     )
                     .unwrap(),
             );
@@ -55,16 +70,42 @@ impl ApplicationHandler for App {
                     NonZeroU32::new(size.height).unwrap(),
                 )
                 .unwrap();
-            let mut buffer = surface.buffer_mut().unwrap();
-            buffer.fill(if matches!(self.mode, Mode::Source(_)) {
-                0xff224488
-            } else {
-                0xff228844
-            });
-            buffer.present().unwrap();
+            if initially_visible {
+                let mut buffer = surface.buffer_mut().unwrap();
+                buffer.fill(if matches!(self.mode, Mode::Source(_)) {
+                    0xff224488
+                } else if matches!(self.mode, Mode::Visibility) {
+                    0xffcc3311
+                } else {
+                    0xff228844
+                });
+                buffer.present().unwrap();
+            }
             self.windows.push(window);
             self.surfaces.push(surface);
             println!("READY {title}");
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        let UserEvent::Command(command) = event;
+        let mut words = command.split_whitespace();
+        match (words.next(), words.next()) {
+            (Some("hide"), Some(index)) => {
+                self.windows[index.parse::<usize>().unwrap()].set_visible(false)
+            }
+            (Some("show"), Some(index)) => {
+                self.windows[index.parse::<usize>().unwrap()].set_visible(true)
+            }
+            (Some("redraw"), Some(index)) => {
+                self.windows[index.parse::<usize>().unwrap()].request_redraw()
+            }
+            (Some("status"), Some(index)) => {
+                let index = index.parse::<usize>().unwrap();
+                println!("STATUS {index} {:?}", self.windows[index].is_visible());
+            }
+            (Some("quit"), _) => event_loop.exit(),
+            _ => panic!("bad visibility command: {command}"),
         }
     }
 
@@ -124,6 +165,24 @@ impl ApplicationHandler for App {
                     hex(&bytes)
                 );
             }
+            WindowEvent::RedrawRequested if matches!(self.mode, Mode::Visibility) => {
+                let index = self
+                    .windows
+                    .iter()
+                    .position(|window| window.id() == id)
+                    .unwrap();
+                let size = self.windows[index].inner_size();
+                self.surfaces[index]
+                    .resize(
+                        NonZeroU32::new(size.width).unwrap(),
+                        NonZeroU32::new(size.height).unwrap(),
+                    )
+                    .unwrap();
+                let mut buffer = self.surfaces[index].buffer_mut().unwrap();
+                buffer.fill(if index == 0 { 0xffcc3311 } else { 0xff22aa55 });
+                buffer.present().unwrap();
+                println!("REDRAW {index}");
+            }
             WindowEvent::CloseRequested => event_loop.exit(),
             _ => {}
         }
@@ -138,17 +197,42 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let command = args.next();
     if command.as_deref() == Some("inject") {
-        inject(args.next().as_deref().unwrap_or("reject"));
+        inject(args.next().as_deref().unwrap_or("reject"), None);
+        return;
+    }
+    if command.as_deref() == Some("pointer") {
+        inject("pointer", None);
+        return;
+    }
+    if command.as_deref() == Some("click") {
+        let coordinates = std::array::from_fn(|_| {
+            args.next()
+                .expect("x y width height")
+                .parse::<u32>()
+                .expect("coordinate")
+        });
+        inject("click", Some(coordinates));
         return;
     }
     let mode = match command.as_deref() {
         Some("source") => Mode::Source(PathBuf::from(args.next().expect("source path"))),
         Some("receiver") => Mode::Receiver,
+        Some("visibility") => Mode::Visibility,
         _ => panic!("usage: probe source PATH | receiver"),
     };
-    let mut builder = EventLoop::builder();
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
     builder.with_wayland();
     let event_loop = builder.build().unwrap();
+    if matches!(mode, Mode::Visibility) {
+        let proxy = event_loop.create_proxy();
+        thread::spawn(move || {
+            for line in io::stdin().lock().lines() {
+                if proxy.send_event(UserEvent::Command(line.unwrap())).is_err() {
+                    break;
+                }
+            }
+        });
+    }
     let mut app = App {
         mode,
         windows: Vec::new(),
@@ -158,7 +242,7 @@ fn main() {
     event_loop.run_app(&mut app).unwrap();
 }
 
-fn inject(destination: &str) {
+fn inject(destination: &str, click: Option<[u32; 4]>) {
     use wayland_client::{
         globals::{registry_queue_init, GlobalListContents},
         protocol::{wl_pointer::ButtonState, wl_registry},
@@ -209,25 +293,53 @@ fn inject(destination: &str) {
         .bind::<ZwlrVirtualPointerManagerV1, _, _>(&qh, 1..=2, ())
         .unwrap();
     let pointer = manager.create_virtual_pointer(None, &qh, ());
-    pointer.motion_absolute(1, 180, 150, 900, 500);
-    pointer.frame();
     queue.roundtrip(&mut State).unwrap();
-    thread::sleep(Duration::from_millis(150));
-    pointer.button(2, 0x110, ButtonState::Pressed);
-    pointer.frame();
-    queue.roundtrip(&mut State).unwrap();
-    thread::sleep(Duration::from_millis(150));
-    let (x, y) = match destination {
-        "accept" => (570, 150),
-        "self" => (210, 170),
-        _ => (850, 450),
+    let clock = std::time::Instant::now();
+    let timestamp = || clock.elapsed().as_millis() as u32;
+    let mut perform = |click: Option<[u32; 4]>| {
+        let [x, y, width, height] = click.unwrap_or([180, 150, 900, 500]);
+        pointer.motion_absolute(timestamp(), x, y, width, height);
+        pointer.frame();
+        queue.roundtrip(&mut State).unwrap();
+        thread::sleep(Duration::from_millis(150));
+        pointer.button(timestamp(), 0x110, ButtonState::Pressed);
+        pointer.frame();
+        queue.roundtrip(&mut State).unwrap();
+        thread::sleep(Duration::from_millis(150));
+        if click.is_none() {
+            let (x, y) = match destination {
+                "accept" => (570, 150),
+                "self" => (210, 170),
+                _ => (850, 450),
+            };
+            pointer.motion_absolute(timestamp(), x, y, 900, 500);
+            pointer.frame();
+            queue.roundtrip(&mut State).unwrap();
+            thread::sleep(Duration::from_millis(150));
+        }
+        pointer.button(timestamp(), 0x110, ButtonState::Released);
+        pointer.frame();
+        queue.roundtrip(&mut State).unwrap();
+        thread::sleep(Duration::from_millis(150));
     };
-    pointer.motion_absolute(3, x, y, 900, 500);
-    pointer.frame();
-    queue.roundtrip(&mut State).unwrap();
-    thread::sleep(Duration::from_millis(150));
-    pointer.button(4, 0x110, ButtonState::Released);
-    pointer.frame();
-    queue.roundtrip(&mut State).unwrap();
-    thread::sleep(Duration::from_millis(150));
+    if destination == "pointer" {
+        // Keep a pointer device present through the entire private desktop test.
+        // Reconnecting per click exposes old wlroots' inert-relative-pointer bug.
+        println!("READY");
+        for line in io::stdin().lock().lines() {
+            let line = line.unwrap();
+            let mut values = line.split_whitespace();
+            let coordinates = std::array::from_fn(|_| {
+                values
+                    .next()
+                    .expect("x y width height")
+                    .parse::<u32>()
+                    .expect("coordinate")
+            });
+            perform(Some(coordinates));
+            println!("CLICKED");
+        }
+    } else {
+        perform(click);
+    }
 }

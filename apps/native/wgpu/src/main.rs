@@ -29,7 +29,7 @@ mod recording_recovery;
 mod recording_region;
 mod recording_saved_notice;
 mod reveal;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod root_repaint;
 mod selector;
 mod shortcut_input;
@@ -77,9 +77,9 @@ struct InputApplication<'a> {
     shortcut_input: shortcut_input::Bridge,
     shortcuts: workbench::ShortcutOwner,
     root_state: Option<Rc<RefCell<RootState>>>,
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     root_repaints: root_repaint::Pending,
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     root_suspended: bool,
     /// The Captures window that owns keyboard focus. Shortcut recording
     /// happens in the Preferences window, which is not the root.
@@ -90,7 +90,7 @@ struct InputApplication<'a> {
 
 impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             self.root_suspended = false;
         }
@@ -164,7 +164,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         }
         self.outbound_drag.begin_event(window_id, &event);
         self.paste_input.begin_event(window_id, &event);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         if matches!(event, WindowEvent::Destroyed)
             && let Some(state) = &self.root_state
             && state.borrow().root_window_id == Some(window_id)
@@ -178,7 +178,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         self.paste_input.end_event();
         self.outbound_drag.end_event();
         self.outbound_drag.service(event_loop);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.service_root_repaint(event_loop);
     }
 
@@ -186,7 +186,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         let _span = diagnostics::span("new-events");
         self.inner.new_events(event_loop, cause);
         self.dispatch_requested_root_pass(event_loop);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.service_root_repaint(event_loop);
     }
 
@@ -209,9 +209,9 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         {
             self.trace_root_repaint("before", *when, *cumulative_pass_nr, event_loop);
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         if let Some((when, requested_pass)) = root_repaint
-            && let Some((ctx, _)) = self.visible_root(event_loop)
+            && let Some((ctx, _)) = self.repaint_root(event_loop)
         {
             self.root_repaints.request(
                 ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT),
@@ -221,7 +221,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         }
         self.inner.user_event(event_loop, event);
         self.dispatch_requested_root_pass(event_loop);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.service_root_repaint(event_loop);
         if let Some((when, cumulative_pass_nr)) = root_repaint {
             self.trace_root_repaint("after", when, cumulative_pass_nr, event_loop);
@@ -242,10 +242,14 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         self.inner.about_to_wait(event_loop);
         self.dispatch_requested_root_pass(event_loop);
         self.outbound_drag.service(event_loop);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             self.service_root_repaint(event_loop);
             if !event_loop.exiting()
+                && (cfg!(target_os = "windows")
+                    || self
+                        .repaint_root(event_loop)
+                        .is_some_and(|(_, window)| window.is_visible() == Some(false)))
                 && let Some(deadline) = self.root_repaints.next_deadline()
             {
                 use winit::event_loop::ControlFlow;
@@ -263,7 +267,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             self.root_suspended = true;
             self.root_repaints.clear();
@@ -272,7 +276,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
     }
 
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.root_repaints.clear();
         self.inner.exiting(event_loop);
     }
@@ -303,8 +307,8 @@ impl InputApplication<'_> {
         self.paste_input.end_event();
     }
 
-    #[cfg(target_os = "windows")]
-    fn visible_root(
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn repaint_root(
         &self,
         event_loop: &ActiveEventLoop,
     ) -> Option<(egui::Context, std::sync::Arc<winit::window::Window>)> {
@@ -313,19 +317,34 @@ impl InputApplication<'_> {
         }
         let state = self.root_state.as_ref()?.borrow();
         let window = state.root_window.as_ref()?.upgrade()?;
+        let ctx = state.egui_ctx.clone()?;
         // Hidden/minimized roots already use eframe's throttled direct dispatch.
+        #[cfg(target_os = "windows")]
         if window.is_visible() != Some(true) || window.is_minimized() == Some(true) {
             return None;
         }
-        Some((state.egui_ctx.clone()?, window))
+        #[cfg(target_os = "linux")]
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) != Some(true)
+        {
+            return None;
+        }
+        Some((ctx, window))
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn service_root_repaint(&mut self, event_loop: &ActiveEventLoop) {
-        let Some((ctx, window)) = self.visible_root(event_loop) else {
+        let Some((ctx, window)) = self.repaint_root(event_loop) else {
             self.root_repaints.clear();
             return;
         };
+        #[cfg(target_os = "linux")]
+        if window.is_visible() != Some(false) {
+            // Retain accepted requests across the asynchronous unmap ack. Winit
+            // suppresses redraws in that gap; dispatch only after confirmed hide.
+            self.root_repaints
+                .prune(ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT));
+            return;
+        }
         if self.root_repaints.take_due(
             ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT),
             Instant::now(),
@@ -335,6 +354,8 @@ impl InputApplication<'_> {
             // already runs this same renderer synchronously on Windows resize.
             // Dispatch one accepted, due ROOT pass after the inner handler has
             // returned; never recurse or touch native WM_PAINT bookkeeping.
+            // Wayland's acknowledged hidden root takes eframe's logic-only path:
+            // no buffer is presented, and no portal-excluded window is remapped.
             diagnostics::event(
                 "root-repaint-fallback",
                 || json!({"pass":ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)}),
@@ -524,8 +545,9 @@ fn main() -> eframe::Result {
         }),
         &event_loop,
     );
-    let root_state =
-        (cfg!(target_os = "windows") || diagnostics::is_enabled()).then_some(native_state);
+    let root_state = (cfg!(any(target_os = "windows", target_os = "linux"))
+        || diagnostics::is_enabled())
+    .then_some(native_state);
     let mut application = InputApplication {
         inner,
         outbound_drag,
@@ -533,9 +555,9 @@ fn main() -> eframe::Result {
         shortcut_input,
         shortcuts,
         root_state,
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         root_repaints: root_repaint::Pending::default(),
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         root_suspended: false,
         focused_window: None,
         root_id,

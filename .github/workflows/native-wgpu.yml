@@ -70,6 +70,12 @@ jobs:
         run: |
           sudo apt-get install -y gir1.2-gtk-3.0
           python apps/native/wayland_drag_smoke.py
+      - name: Unmap native windows and capture clean Wayland portal screenshots
+        if: runner.os == 'Linux'
+        run: |
+          cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin captures-wgpu-workbench
+          python apps/native/wayland_visibility_smoke.py
+          /usr/bin/python3 apps/native/wayland_native_capture_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
 
   windows-release:
     name: release (windows-2025)

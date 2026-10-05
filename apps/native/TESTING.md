@@ -3,7 +3,8 @@
 This is an experimental native build, **not the shipping Captures Preview**.
 Do not replace the installed app or point this build at its settings or History.
 Signed updates, installed-data migration/rollback and full platform acceptance
-are not ready. Wayland capture/recording remains unavailable.
+are not ready. Wayland supports desktop-portal screenshots returning to History;
+native region/window selection, countdown, floating previews and recording remain unavailable.
 
 ## Start safely
 
@@ -17,8 +18,9 @@ are not ready. Wayland capture/recording remains unavailable.
    other macOS versions and Intel Macs are not verified by this artifact.
 4. Windows: run `.\CapturesNative.exe --live` from PowerShell in this directory.
    It is unsigned and may show an OS security warning.
-5. Linux: run `./captures-native --live` in an X11 session. CI builds on Ubuntu
-   24.04 x86_64; other distributions may need a local build and runtime libraries.
+5. Linux: run `./captures-native --live`. X11 supports the capture workflows below;
+   Wayland additionally needs a working Screenshot desktop portal. CI builds on
+   Ubuntu 24.04 x86_64; other distributions may need a local build and runtime libraries.
 
 Portable Windows/Linux archives omit Open With registration files because their
 paths must be generated on your own computer. Do not register a locally staged
@@ -32,11 +34,16 @@ profile. Leave Start Captures on login off during this first test.
 ## Useful first pass
 
 - Screenshot a region, a window and a display. Try Escape, countdown cancellation
-  and repeated captures. Check that Captures' own controls are excluded.
+  and repeated captures on macOS, Windows or X11. On Wayland, use **Take screenshot…**
+  in History; try portal cancellation and repeated screenshots with Preferences
+  and editors open. Check that Captures' windows are excluded and restored.
+  Portal policy determines consent, image extent and cursor inclusion. Window
+  placement after restoration is compositor-controlled; no monitor geometry is guessed.
 - Open a screenshot in the editor. Add text/shapes, crop, use Undo/Redo, Copy and
   Save. Close/reopen an unsaved draft and verify its recovery.
 - Record a short disposable MP4/GIF. Try pause/resume, mute, Stop, editing/export
-  and Hide/restore through the tray/menu bar. Test real audio only if desired.
+  and Hide/restore through the tray/menu bar on macOS, Windows or X11.
+  Test real audio only if desired; native Wayland recording is not available.
 - Drag History and mini-preview files to another app. Check copied bytes and
   cancelled drags. Delete only test captures; ordinary exported files remain.
 - Use capture shortcuts while Preferences is focused, then actively record a new

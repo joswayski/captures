@@ -338,8 +338,9 @@ panel behavior still needs desktop verification. Preview positioning is unsuppor
 on Wayland. Windows preview runtime, nonactivation, and accessibility also remain
 unverified beyond compilation and focused host tests.
 
-**Hidden idle is unsupported on this candidate's Wayland backend.** winit cannot
-hide/query the root there; live capture is disabled, and `--scene idle` exits with an explicit unsupported event
+**Hidden idle is not accepted on this candidate's Wayland backend.** The private
+winit patch supports compositor-acknowledged unmapping for portal captures, but
+resident hidden startup and resource acceptance remain gated. `--scene idle` exits with an explicit unsupported event
 and status 3 rather than measuring a visible window. On X11/Windows the workbench
 re-hides the root after eframe's automatic first paint and verifies visibility at
 the quit deadline. A transient startup map remains possible. Resolving this is a
@@ -364,8 +365,9 @@ In xdg-desktop-portal 1.16, version-1 Screenshot backends bypass its permission
 store check. The orb's wlr 0.7 backend is version 1 and returned success even with
 the disposable permission set to “no”; this is not a client fallback or proof of
 consent enforcement. The smoke reports the backend version/policy it exercised.
-Live Wayland capture, window targeting, selectors, preview placement, global
-shortcut registration, hidden startup and recording remain gated.
+Native window targeting, selectors, countdown, preview placement, global shortcut
+registration, hidden startup and recording remain gated. Portal still capture is
+connected to History as described below.
 
 ```sh
 cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_screenshot_probe
@@ -382,6 +384,45 @@ responses, wrong sender/path signals, cancellation, timeout, failed method repli
 URI rejection, exact RGBA and source retention. The real frontend → wlr backend →
 headless Sway test compares every pixel of an asymmetric 310×170 desktop against
 independent expectations. This is not physical GNOME/KDE or native-host acceptance.
+
+### Native Wayland portal screenshots
+
+In `--live` History, **Take screenshot…** works without a tray or X11. The host
+unmaps every current Captures viewport and waits for compositor-processing
+acknowledgements before requesting a portal still on its worker. Success persists
+one shared History screenshot and optionally copies it; cancellation, failure,
+session loss and normal Quit close pending requests without adding History media.
+Windows restore afterward, but their compositor-assigned positions may change.
+Portal policy controls consent, image extent and cursor inclusion. There is no
+guessed named-monitor geometry and no mini preview; captures return to History.
+Nonzero native countdown and region/window/recording requests fail explicitly.
+
+The private eframe patch keeps hidden-root logic running without presenting
+buffers, refreshes child visibility, preserves compositor occlusion, and recreates
+Wayland GPU surfaces after remapping. Normal Windows/X11 rendering is retained.
+The capture wake poll runs only while the process capture gate is owned.
+
+```sh
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin captures-wgpu-workbench
+cargo build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked
+python3 apps/native/wayland_visibility_smoke.py
+/usr/bin/python3 apps/native/wayland_native_capture_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
+```
+
+The host smoke uses the same disposable portal/Sway environment as the diagnostic.
+It verifies dark/light real and repeated captures against every independently
+expected desktop pixel with History, Preferences and screenshot editor excluded;
+cancellation/failure and simulated session lock write nothing, normal Quit closes
+the pending request, and second-instance media cannot remap excluded windows.
+After cancellation, failure-dialog dismissal or simulated lock, a successful
+request in the same process must save exactly one independently expected image.
+The fixture keeps one virtual pointer alive to avoid an old wlroots device-removal
+crash and hides its idle cursor for the exact desktop-pixel comparisons.
+The visibility probe also covers initially hidden windows, rapid hide/show and
+hidden redraw suppression. These are software-rendered integration checks, not
+physical GNOME/KDE, multi-display, mixed-DPI or accessibility acceptance.
 
 **Transparent Vulkan windows failed under the orb's Xvfb/Mesa llvmpipe setup.**
 The countdown's GPU readback was correct, but the compositor displayed no content.

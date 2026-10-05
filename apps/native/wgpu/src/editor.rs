@@ -1801,10 +1801,7 @@ fn decode_import(path: &Path) -> Result<RgbaImage, String> {
 }
 
 fn wake(ctx: &egui::Context, viewport: egui::ViewportId) {
-    ctx.send_viewport_cmd_to(
-        egui::ViewportId::ROOT,
-        egui::ViewportCommand::RequestPaintWhileHidden,
-    );
+    crate::live::request_hidden_root_paint(ctx);
     ctx.request_repaint_of(egui::ViewportId::ROOT);
     ctx.request_repaint_of(viewport);
 }
@@ -2074,10 +2071,7 @@ impl Editor {
         {
             // Shutdown's final deallocations have no reply; retire on a later
             // root pass, never by joining on this one.
-            ctx.send_viewport_cmd_to(
-                egui::ViewportId::ROOT,
-                egui::ViewportCommand::RequestPaintWhileHidden,
-            );
+            crate::live::request_hidden_root_paint(ctx);
             ctx.request_repaint_after(Duration::from_millis(10));
         }
     }

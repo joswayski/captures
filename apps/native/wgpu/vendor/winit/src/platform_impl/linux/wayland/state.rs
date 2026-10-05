@@ -8,6 +8,7 @@ use sctk::reexports::calloop::LoopHandle;
 use sctk::reexports::client::backend::ObjectId;
 use sctk::reexports::client::globals::GlobalList;
 use sctk::reexports::client::protocol::wl_output::WlOutput;
+use sctk::reexports::client::protocol::wl_callback;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
 
@@ -37,6 +38,12 @@ use crate::platform_impl::wayland::types::xdg_activation::XdgActivationState;
 use crate::platform_impl::wayland::window::{WindowRequests, WindowState};
 use crate::platform_impl::wayland::{WaylandError, WindowId};
 use crate::platform_impl::OsError;
+
+#[derive(Debug, Clone, Copy)]
+pub struct VisibilitySync {
+    pub window_id: WindowId,
+    pub generation: u64,
+}
 
 /// Winit's Wayland state.
 pub struct WinitState {
@@ -290,26 +297,46 @@ impl WindowHandler for WinitState {
         };
 
         // Populate the configure to the window.
-        self.window_compositor_updates[pos].resized |= self
+        let mut window_state = self
             .windows
             .get_mut()
             .get_mut(&window_id)
             .expect("got configure for dead window.")
             .lock()
-            .unwrap()
-            .configure(configure, &self.shm, &self.subcompositor_state);
+            .unwrap();
+        self.window_compositor_updates[pos].resized |=
+            window_state.configure(configure, &self.shm, &self.subcompositor_state);
+        let can_redraw = window_state.can_redraw();
 
         // NOTE: configure demands wl_surface::commit, however winit doesn't commit on behalf of the
         // users, since it can break a lot of things, thus it'll ask users to redraw instead.
-        self.window_requests
-            .get_mut()
-            .get(&window_id)
-            .unwrap()
-            .redraw_requested
-            .store(true, Ordering::Relaxed);
+        if can_redraw {
+            self.window_requests
+                .get_mut()
+                .get(&window_id)
+                .unwrap()
+                .redraw_requested
+                .store(true, Ordering::Relaxed);
+        }
 
         // Manually mark that we've got an event, since configure may not generate a resize.
         self.dispatched_events = true;
+    }
+}
+
+impl wayland_client::Dispatch<wl_callback::WlCallback, VisibilitySync> for WinitState {
+    fn event(
+        state: &mut Self,
+        _: &wl_callback::WlCallback,
+        _: wl_callback::Event,
+        sync: &VisibilitySync,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let Some(window) = state.windows.get_mut().get(&sync.window_id) {
+            window.lock().unwrap().unmap_processed(sync.generation);
+            state.dispatched_events = true;
+        }
     }
 }
 
