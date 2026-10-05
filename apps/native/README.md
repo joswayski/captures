@@ -18,24 +18,28 @@ development archives with pinned media tools, source/licenses and build identity
 See [download instructions and platform limits](../../DEVELOPMENT.md#native-exploratory-test-archives)
 and the included [TESTING.md](TESTING.md). Use a new export folder and quit the
 shipping app first. macOS CI archives are ad-hoc signed, Windows unsigned and
-Linux X11-only; these artifacts do not close signing, updater, migration or
-physical-platform acceptance gates.
+Linux requires the documented X11 or experimental Wayland prerequisites. These
+artifacts do not close signing, updater, migration or physical-platform acceptance
+gates.
 
 ## Native update acquisition diagnostic
 
 `captures_app::updater` implements shared signed-manifest checks and bounded,
-streamed downloads without Tauri. It is **not an enabled updater**: Preferences,
-tray actions and the update-notice fixture remain unchanged. There is no bundled
-native signing key, release endpoint, installer, restart or rollback yet.
+streamed downloads and temporary package staging without Tauri. It is **not an
+enabled updater**: Preferences, tray actions and the update-notice fixture remain
+unchanged. There is no bundled native signing key, release endpoint, installer,
+restart or rollback yet.
 `native_update_probe` creates no window, changes no installed/profile data and
-removes its temporary download on normal exit. It requires an explicit endpoint,
-standard two-line Minisign public key file, renderer and current version:
+removes its download and staged files on normal exit. It requires an explicit
+endpoint, standard two-line Minisign public key file, renderer and current version:
 
 ```sh
 cargo +1.95.0 run --manifest-path apps/native/wgpu/Cargo.toml --bin native_update_probe -- \
   --manifest-url "$NATIVE_TEST_MANIFEST_URL" --public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
   --renderer wgpu --current-version 0.1.0
 # Add --download-directory EXISTING_DIRECTORY to acquire and verify bytes only.
+# Or --stage-directory EXISTING_DIRECTORY to also extract and validate a package.
+# These modes are mutually exclusive. Both remove their temporary files on exit.
 ```
 
 The manifest is UTF-8 JSON, at most 256 KiB. `<manifest path>.minisig` contains a
@@ -73,7 +77,29 @@ Tampering, truncated/oversized bytes, wrong signatures/identities/targets and
 cancelled downloads never produce a verified file. Tests use disposable in-memory
 keys and private loopback data, not release keys or public services. Signature and
 version checks do not establish channel freshness, installed-data migration,
-archive extraction safety, OS signing or physical-platform acceptance.
+OS signing or physical-platform acceptance.
+
+Staging consumes a verified download, rehashes a private copy, and extracts only
+inside an owned temporary directory. It accepts `package.py`'s current single-root
+development ZIP32 (macOS/Windows) and tar.gz (Linux) layouts with media sidecars,
+source/licenses, matching `BUILD_INFO.json`, executable hash and permissions,
+and the macOS development bundle identity/resources. It never executes binaries,
+imports registration files or changes a profile. `StagedUpdate` owns cleanup;
+callers must keep it alive while reading its paths. Exposed files are not immutable:
+any future installer must reverify its copies before use. Forced termination can
+leave private scratch behind; this is not installed-app rollback.
+
+The staging format deliberately rejects symlinks/hardlinks/special entries,
+traversal/absolute paths, Windows device/stream names, trailing dots/spaces,
+duplicates, case conflicts and file/directory collisions. Resource names inside
+the outer folder must be ASCII; the outer folder may contain Unicode. Limits are
+10,000 archive records and 10,000 path nodes (including implicit directories),
+512 MiB per file, 2 GiB expanded file bytes, 256 KiB metadata and 8 MiB ZIP central
+metadata. ZIP64, comments, extra fields, encryption and data descriptors are not
+supported. Local PAX path metadata is bounded; global PAX and GNU extensions are
+rejected. Tests use the real Python packager with inert bodies for all four target
+layouts and adversarial archives. These are extraction checks, not signed OS
+distribution or real-machine acceptance.
 
 ## Native sharing controls
 

@@ -18,6 +18,7 @@ fn run() -> Result<(), String> {
     let mut current_version = None;
     let mut renderer = None;
     let mut download_directory = None;
+    let mut stage_directory = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -35,10 +36,15 @@ fn run() -> Result<(), String> {
                 })
             }
             "--download-directory" => download_directory = Some(PathBuf::from(value)),
+            "--stage-directory" => stage_directory = Some(PathBuf::from(value)),
             _ => return Err(format!("Unknown argument {argument}")),
         }
     }
-    let usage = "usage: native_update_probe --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu [--download-directory EXISTING_DIRECTORY]";
+    if download_directory.is_some() && stage_directory.is_some() {
+        return Err("Choose either --download-directory or --stage-directory.".into());
+    }
+    let stage = stage_directory.is_some();
+    let usage = "usage: native_update_probe --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu [--download-directory EXISTING_DIRECTORY | --stage-directory EXISTING_DIRECTORY]";
     let endpoint = endpoint.ok_or(usage)?;
     let public_key =
         fs::read_to_string(public_key.ok_or(usage)?).map_err(|error| error.to_string())?;
@@ -57,15 +63,25 @@ fn run() -> Result<(), String> {
     match client.check(&cancel).map_err(|error| error.to_string())? {
         None => println!("{}", json!({"state": "up_to_date", "installed": false})),
         Some(update) => {
-            if let Some(directory) = download_directory {
+            if let Some(directory) = download_directory.or(stage_directory) {
                 let verified = update
                     .download(&directory, &cancel, |_, _| {})
                     .map_err(|error| error.to_string())?;
-                println!(
-                    "{}",
-                    json!({"state": "verified", "release": verified.info(), "installed": false})
-                );
-                // Verified bytes remain temporary and are removed on normal exit.
+                if stage {
+                    let staged = verified
+                        .stage(&directory, &cancel)
+                        .map_err(|error| error.to_string())?;
+                    println!(
+                        "{}",
+                        json!({"state": "staged", "release": staged.info(), "temporary": true, "installed": false})
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        json!({"state": "verified", "release": verified.info(), "installed": false})
+                    );
+                }
+                // Both downloaded bytes and staged files are removed on exit.
             } else {
                 println!(
                     "{}",

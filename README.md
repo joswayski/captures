@@ -453,8 +453,9 @@ Both native workbenches also render the Preview update notice (release notes,
 download progress, restart countdown and errors) from a simulated status source.
 Native app update actions remain unavailable. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
-checks signed native manifests and verifies temporary downloads; it never installs
-or replaces an app, and no native update channel is enabled.
+checks signed native manifests, verifies downloads and can validate unpacked native
+packages in temporary storage. It never installs or replaces an app, and no native
+update channel is enabled.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
