@@ -767,8 +767,9 @@ upload progress/cancel/retry, and password/expiry/link management. Opening a pop
 never uploads. Their shared Rust worker retains the selected original bytes
 through sign-in and preview dismissal; completed uploads are not duplicated when
 link configuration retries. Closing Share retains work; Quit drains the worker
-before releasing the development profile. AppKit build/render verification and
-physical platform acceptance remain open in the
+before releasing the development profile. The seven AppKit sharing regressions
+passed in macOS CI; light/dark minimum-size fixture renders were inspected.
+Physical platform/vault/object-store acceptance remains open in the
 [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--acceptance-open).
 The account API is still in development and disabled; these native development
 controls do not enable hosted sharing in the shipping app or deploy its service.

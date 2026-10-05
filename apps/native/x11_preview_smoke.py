@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--sharing-only", action="store_true", help="Exercise Share lifetime and exact capture exclusion")
+    parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
     parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
     parser.add_argument("--system-motion-only", action="store_true", help="Exercise desktop motion preference refresh")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
@@ -481,6 +482,9 @@ def main():
             cases = cases[:1]
         if args.sharing_only:
             cases = [("bottom_left", True, False), ("bottom_left", True, True)]
+        if args.retarget_only:
+            assert not args.reduced_motion, "retarget requires animated dust"
+            cases = cases[:4]
         for placement, enabled, include in cases:
             prefix = f"{placement}-enabled-{enabled}-include-{include}"
             history = output / prefix / "history"
@@ -555,6 +559,43 @@ def main():
             first = capture((140, 180, 310, 170))
             stack_entries = [first]
             assert rgb(first.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
+            if args.retarget_only:
+                for rect in [(45, 55, 230, 110), (260, 240, 200, 140)]:
+                    stack_entries.append(capture(rect))
+                preview = wait(lambda: windows(PREVIEW), "three-card retarget preview")[0]
+                wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608, "three held slots")
+                run("xdotool", "mousemove", "--sync", "640", "440")
+                time.sleep(1.1)  # Finish arrivals before sampling the oldest card.
+                top = placement.startswith("top")
+                base = 52 if top else 28
+                survivor_y = base + (2 if top else 0) * 184
+                # Include the media edge, not only a flat interior where an
+                # incorrectly moving card could return identical pixels.
+                crop = f"16x40+100+{survivor_y - 4}"
+                def survivor_pixels():
+                    return run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+                before = survivor_pixels()
+                shot(preview, f"{prefix}-retarget-three")
+                preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
+                x = 290 if placement.endswith("right") else 50
+                click(preview, x, base + (0 if top else 2) * 184 + 22, activate=False)
+                time.sleep(.6)  # First source has faded; its settle has not begun.
+                click(preview, x, base + 184 + 22, activate=False)
+                run("xdotool", "mousemove", "--sync", "640", "440")
+                time.sleep(.7)  # Past the FIRST settle, inside the SECOND hold.
+                assert int(window_geometry(preview)["HEIGHT"]) == 608, "held slots disappeared early"
+                assert survivor_pixels() == before, "survivor drifted during the reentrant dust hold"
+                shot(preview, f"{prefix}-retarget-held")
+                wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 240, "one settled survivor")
+                shot(preview, f"{prefix}-retarget-settled")
+                click(preview, 170, (52 if top else 28) + 61, activate=False)
+                wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"), "oldest survivor remains actionable")
+                assert entries() == set(preserved), "preview deletion removed History"
+                assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
+                run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
+                assert app.wait(timeout=10) == 0
+                print(f"PASS {placement}: three-card reentrant dust holds pixels and settles to the oldest capture", flush=True)
+                continue
             if enabled:
                 preview = wait(lambda: windows(PREVIEW), "mini preview")[0]
                 wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,

@@ -1549,6 +1549,17 @@ final class MiniPreviewView: NSView {
               !NativeMotion.reduceMotion else { return nil }
         let tables = PreviewMotionTables.shared
         if tooltipOwner?.isDescendant(of: card) == true { tooltipOwner = nil; tooltipView.isHidden = true }
+        // A card can begin leaving at the first settle frame, when its model
+        // frame already holds the target but its presentation is still zero.
+        // Freeze the presentation before building the dust source or streak.
+        if let layer = card.layer, layer.animation(forKey: "preview-settle-position") != nil {
+            let from = (layer.presentation() ?? layer).position
+            let delta = NSPoint(x: from.x - layer.position.x, y: from.y - layer.position.y)
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            card.setFrameOrigin(NSPoint(x: card.frame.minX + delta.x, y: card.frame.minY + delta.y))
+            layer.removeAnimation(forKey: "preview-settle-position")
+            CATransaction.commit()
+        }
         // Paint above the survivors that slide into the slot.
         if let superview = card.superview {
             card.removeFromSuperview(); superview.addSubview(card)
@@ -1591,22 +1602,33 @@ final class MiniPreviewView: NSView {
 
     /// Older cards slide one slot toward the stack anchor into `id`'s slot
     /// after `delay`: bottom-anchored stacks move them down, top-anchored up.
+    /// Retarget from the current presentation, holding it until the latest
+    /// exit is ready. The model frame accumulates the destination for all holes.
     /// Cards already leaving keep their place.
     func settleSurvivors(into id: String, after delay: Double) {
         guard let index = artifactIDs.firstIndex(of: id) else { return }
         let older = Array(artifactIDs[..<index])
         let shift = anchoredAtTop ? -cardSlot : cardSlot
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { [weak self] in
-            guard let self, self.window?.isVisible == true else { return }
-            let settle = NativeMotion.transition("preview_stack_settle", tokens: self.tokens)
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = settle.duration
-                context.timingFunction = settle.timing
-                for id in older where !self.exitingArtifactIDs.contains(id) {
-                    guard let card = self.cards[id] else { continue }
-                    card.animator().setFrameOrigin(NSPoint(x: card.frame.minX, y: card.frame.minY + shift))
-                }
+        let settle = NativeMotion.transition("preview_stack_settle", tokens: tokens)
+        for id in older where !exitingArtifactIDs.contains(id) {
+            guard let card = cards[id], let layer = card.layer else { continue }
+            let from = (layer.presentation() ?? layer).position
+            let ready = layer.convertTime(CACurrentMediaTime(), from: nil) + max(0, delay)
+            let start = max(ready, layer.animation(forKey: "preview-settle-position")?.beginTime ?? ready)
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            card.setFrameOrigin(NSPoint(x: card.frame.minX, y: card.frame.minY + shift))
+            layer.removeAnimation(forKey: "preview-settle-position")
+            if settle.duration > 0 {
+                let move = CABasicAnimation(keyPath: "position")
+                move.fromValue = NSValue(point: from)
+                move.toValue = NSValue(point: layer.position)
+                move.duration = settle.duration
+                move.timingFunction = settle.timing
+                move.beginTime = start
+                move.fillMode = .backwards
+                layer.add(move, forKey: "preview-settle-position")
             }
+            CATransaction.commit()
         }
     }
 

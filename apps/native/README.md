@@ -34,9 +34,10 @@ releasing the isolated profile. Capture hides Share regardless of preview inclus
 AppKit `--scene sharing` renders disabled controls without a worker. Set
 `CAPTURES_NATIVE_SHARE_FIXTURE` to `otp`, `vault`, `shared`, `uploading`, `trash`
 or `error`; live transport ignores fixture state. Tests collect light/dark and
-minimum-size renders through `CAPTURES_TEST_ARTIFACTS`. AppKit build/render
-verification and physical macOS/Windows/X11/Wayland vault/object-store acceptance
-remain open. The account service is still disabled and undeployed; these controls
+minimum-size renders through `CAPTURES_TEST_ARTIFACTS`. All seven AppKit sharing
+regressions passed in macOS CI; the light/dark minimum-size states were inspected.
+Physical macOS/Windows/X11/Wayland vault/object-store acceptance remains open.
+The account service is still disabled and undeployed; these controls
 do not activate it or change the shipping Preview.
 
 ## Persisted native Preferences
@@ -498,6 +499,11 @@ into dust from the trash control (AppKit filters chips with Core Image, wgpu
 paints them as a textured egui mesh; AppKit falls back to the shipping
 scale-and-fade when Metal is unavailable). The exiting card keeps its slot while
 older cards slide into it after the shipping delay, then the window resizes.
+An overlapping deletion freezes the exiting card and affected survivors at their
+current presentation (zero is valid), holds until the new exit is ready, then
+eases the accumulated distance. Removing a held slot rebases the Rust trajectory
+without moving its survivor. AppKit retargets its Core Animation presentation
+rather than scheduling independent model-frame shifts.
 Clear all streaks every card out, bottom first. Show less and expand fly the
 cards between the list and the compact pile, and the stack toolbar enters, leaves
 and clears with its shipping keyframes; the Show less pill morphs over 240 ms.
@@ -507,6 +513,15 @@ Reduce Motion skips every exit, flight, highlight and sparkle. The Close streak
 steps through shipping's horizontal Gaussian filters on wgpu (AppKit uses Core
 Image motion blur); dust chips carry only the pre-blurred hover media, not their own
 dissolve blur.
+
+Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --retarget-only --binary
+apps/native/wgpu/target/debug/captures-wgpu-workbench --output /tmp/native-retarget`
+with a fresh output folder to exercise three-card dust holds in all four corners.
+It compares the survivor's media-edge pixels past the first settle deadline,
+checks the final actionable card and preserves original History bytes. Shared
+clock-driven tests cover zero, just-started settle and slot-pruning boundaries;
+AppKit tests read presentation-layer positions, not model targets. Software-X11
+and macOS CI do not establish physical Windows/macOS or Wayland preview acceptance.
 
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.
 Overflow scrolls without dropping captures; chevron cues at the stack edges

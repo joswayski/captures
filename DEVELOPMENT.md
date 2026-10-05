@@ -59,7 +59,8 @@ access to the profile and retain its accepted upload worker after the preview
 closes. Disposable loopback fixtures/fake vaults, wgpu UI/accessibility tests and
 software-rendered X11 fixtures have been exercised. AppKit tests cover command
 selection, retained forms, capture hiding and minimum-size light/dark fixtures;
-their macOS execution/render inspection remains pending for this slice. Real
+all seven passed in macOS CI, and the light/dark minimum-size renders were
+inspected. Real
 SES/R2, physical vaults and physical macOS/Windows/X11/Wayland acceptance remain open.
 
 On macOS, `--scene sharing` is a disabled render fixture (not `--live` or
