@@ -207,6 +207,20 @@ final class PreviewMotionTests: XCTestCase {
         controller.setCollapsed(false)
         let expanded = try XCTUnwrap(controller.previewView)
         XCTAssertEqual(expanded.visibleCardLabelCount, 0, "cards fly out of the pile compact")
+        // Ordering the rebuilt panel in hands its initial first responder (the
+        // first card) keyboard focus once Captures is active, which earlier
+        // suites leave it in a real window-server session. Focus-within keeps
+        // that card's chrome up, and chrome replaces the dimensions badge, so
+        // that card stays without labels after landing until focus leaves.
+        let responder = expanded.window?.firstResponder as? NSView
+        let focused = expanded.renderedArtifactIDs.filter { id in
+            guard let responder, let card = expanded.card(for: id) else { return false }
+            return responder.isDescendant(of: card)
+        }
+        XCTAssertLessThanOrEqual(focused.count, 1)
+        try waitUntil { expanded.visibleCardLabelCount == 2 - focused.count }
+        // Once focus leaves, the focused card gets its labels back too.
+        expanded.window?.makeFirstResponder(nil)
         try waitUntil { expanded.visibleCardLabelCount == 2 }
     }
 
