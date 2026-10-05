@@ -939,7 +939,8 @@ final class MiniPreviewTests: XCTestCase {
             // colorAt returns a calibrated NSColor even for this sRGB bitmap;
             // converting that color again changes the already-correct bytes.
             var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
-            bitmap.getPixel(&pixel, atX: 170, y: 132)
+            let point = bitmapPoint(in: bitmap, of: panel, x: 170, y: 132)
+            bitmap.getPixel(&pixel, atX: point.x, y: point.y)
             return CGFloat(pixel[0]) / 255
         }
         XCTAssertEqual(try red(), 1, accuracy: 0.01)
@@ -973,10 +974,10 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertEqual(panel.previewView.cardPaintOrder, ids,
                 "chronological subview order paints newest on top")
             let bitmap = try render(panel)
-            XCTAssertEqual(try XCTUnwrap(bitmap.colorAt(x: 10, y: 10)).alphaComponent, 0,
+            XCTAssertEqual(try XCTUnwrap(pixelColor(in: bitmap, of: panel, x: 10, y: 10)).alphaComponent, 0,
                            accuracy: 0.01, "stack padding remains transparent")
             let newestSampleY = name == "bottom-expanded" ? 436 : 90
-            let frontPixel = try XCTUnwrap(bitmap.colorAt(x: 170, y: newestSampleY))
+            let frontPixel = try XCTUnwrap(pixelColor(in: bitmap, of: panel, x: 170, y: newestSampleY))
             XCTAssertGreaterThan(frontPixel.alphaComponent, 0.9)
             XCTAssertGreaterThan(frontPixel.blueComponent, frontPixel.redComponent,
                 "the newest blue capture must paint over older cards")
@@ -992,7 +993,7 @@ final class MiniPreviewTests: XCTestCase {
         let white = fixturePanel(ids: ["white"], images: ["white": solidImage(.white)])
         defer { white.close() }
         let whiteBitmap = try render(white)
-        let whiteImagePixel = try XCTUnwrap(whiteBitmap.colorAt(x: 170, y: 90))
+        let whiteImagePixel = try XCTUnwrap(pixelColor(in: whiteBitmap, of: white, x: 170, y: 90))
         XCTAssertGreaterThan(whiteImagePixel.brightnessComponent, 0.9)
         try write(whiteBitmap, name: "mini-preview-single-white.png")
     }
@@ -1392,6 +1393,21 @@ final class MiniPreviewTests: XCTestCase {
             .retagging(with: .sRGB))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return bitmap
+    }
+
+    /// The bitmap pixel under view point (`x`, `y`) from the top left. `render`
+    /// caches at the window's backing scale, so a Retina display (2x) has
+    /// twice the pixels of a 1x one; sample in points, not raw pixels.
+    private func bitmapPoint(in bitmap: NSBitmapImageRep, of panel: MiniPreviewPanel,
+                             x: CGFloat, y: CGFloat) -> (x: Int, y: Int) {
+        let scale = CGFloat(bitmap.pixelsWide) / panel.previewView.bounds.width
+        return (Int(x * scale), Int(y * scale))
+    }
+
+    private func pixelColor(in bitmap: NSBitmapImageRep, of panel: MiniPreviewPanel,
+                            x: CGFloat, y: CGFloat) -> NSColor? {
+        let point = bitmapPoint(in: bitmap, of: panel, x: x, y: y)
+        return bitmap.colorAt(x: point.x, y: point.y)
     }
 
     private func write(_ bitmap: NSBitmapImageRep, name: String) throws {
