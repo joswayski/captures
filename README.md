@@ -191,10 +191,15 @@ It uses separate development data. On Wayland, **Take screenshot…** in native
 History uses the desktop portal without X11, unmaps Captures' windows before the
 request, and restores them afterward. Captures return to History, without floating
 previews or guessed monitor geometry. **Edit** opens the screenshot editor directly;
-floating-preview **Restore** is disabled. Region/window selection, countdown and
-recording remain unavailable there; portal policy controls consent and cursor
-inclusion. Restored window positions are compositor-controlled. Like the shipping app, the
-native workbenches open Capture History, Preferences and first-run setup as
+floating-preview **Restore** is disabled. **Record display…** opens a native
+countdown, requests portal consent, and connects MP4 recording to the normal
+pause/resume, restart, Stop and Delete controls. Cancelling consent removes the
+empty take; losing the stream retains partial media for History recovery.
+Recording controls appear in the output; Hide requires a working tray restore path.
+Region/window selection and screenshots during recording remain unavailable.
+Portal policy controls consent and cursor inclusion. Separate no-window diagnostics
+also exercise GIF sessions. Restored window positions are compositor-controlled.
+Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
 in a separate development settings file. Fresh native profiles show the shipping
@@ -446,7 +451,11 @@ notice offers Save file, then Show in Folder after saving a permanent copy. Dism
 or letting it expire preserves History and exports; failed saves can be retried.
 Both native workbenches also render the Preview update notice (release notes,
 download progress, restart countdown and errors) from a simulated status source.
-Native builds cannot check for, download or install updates yet.
+Native app update actions remain unavailable. A separate opt-in
+[development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
+checks signed native manifests, verifies downloads and can validate unpacked native
+packages in temporary storage. It never installs or replaces an app, and no native
+update channel is enabled.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
@@ -459,7 +468,7 @@ bakes the canvas background into one locked image.
 The original History image and its exports remain unchanged until explicit replacement. Recording completion
 still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
 Windows recording, audio devices, multi-display and hardware acceptance remain open;
-Wayland recording is gated with the rest of native capture.
+Wayland display recording is exercised on disposable Sway, not accepted on physical GNOME/KDE desktops.
 Both native development hosts accept repeatable `--open-media PATH` arguments
 only with `--live`; `--open-image` remains an alias in the same ordered queue.
 AppKit also handles macOS file-open requests while running. PNG, JPEG and WebP
@@ -767,8 +776,9 @@ upload progress/cancel/retry, and password/expiry/link management. Opening a pop
 never uploads. Their shared Rust worker retains the selected original bytes
 through sign-in and preview dismissal; completed uploads are not duplicated when
 link configuration retries. Closing Share retains work; Quit drains the worker
-before releasing the development profile. AppKit build/render verification and
-physical platform acceptance remain open in the
+before releasing the development profile. The seven AppKit sharing regressions
+passed in macOS CI; light/dark minimum-size fixture renders were inspected.
+Physical platform/vault/object-store acceptance remains open in the
 [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--acceptance-open).
 The account API is still in development and disabled; these native development
 controls do not enable hosted sharing in the shipping app or deploy its service.
@@ -810,13 +820,13 @@ the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
 Like the shipping app, native Capture History shows its header, filters and grid;
 captures start from the tray, shortcuts and New Capture menu. Wayland additionally
-offers **Take screenshot…** because a tray or global shortcuts may be unavailable. A
+offers **Take screenshot…** and **Record display…** because a tray or global shortcuts may be unavailable. A
 denied capture opens the native permission recovery: Restart & Retry on macOS, or a
 **Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.
-Wayland region/window selection and recording remain gated. Physical
+Wayland region/window selection remains unavailable. Physical
 permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
 physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,

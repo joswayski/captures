@@ -740,6 +740,95 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(transport.trashCount, 1)
     }
 
+    func testSecondDustDismissalBeforeSettleKeepsTheTopCardInItsPresentationSlot() throws {
+        _ = NSApplication.shared
+        let motionPreference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = motionPreference }
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { path in
+            let colors = ["top.png": NSColor.systemBlue, "middle.png": NSColor.systemOrange,
+                          "bottom.png": NSColor.systemPurple]
+            return self.solidImage(colors[(path as NSString).lastPathComponent] ?? .systemGray)
+        })
+        defer { controller.close() }
+        let settings = previewSettings()
+        for id in ["top", "middle", "bottom"] {
+            let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
+            controller.present(artifact(id: id, previewPath: "/\(id).png"), on: screenID(),
+                               settings: settings, generation: generation)
+            try waitUntil { controller.decodedArtifactIDs.contains(id) && controller.isPanelVisible }
+        }
+        let view = try XCTUnwrap(controller.previewView)
+        let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
+        let top = try XCTUnwrap(view.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }
+            .first { $0.artifactID == "top" })
+        let layer = try XCTUnwrap(top.layer)
+        let original = layer.position.y
+        func presentationY() -> CGFloat { (layer.presentation() ?? layer).position.y }
+        let originalPanel = panel.frame
+        XCTAssertEqual(controller.dismiss("bottom", exit: .dust), 2.9, accuracy: 0.01,
+                       "exercise actual dust, not the short no-Metal fallback")
+        // The source fades in 550 ms; survivors wait 1800 ms before sliding.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        XCTAssertEqual(presentationY(), original, accuracy: 0.1)
+        try write(render(panel), name: "mini-preview-reentrant-before-second-dust.png")
+        XCTAssertEqual(controller.dismiss("middle", exit: .dust), 2.9, accuracy: 0.01)
+        XCTAssertTrue(controller.previewView === view, "the second exit must retain the presentation surface")
+        XCTAssertEqual(panel.frame, originalPanel, "held slots must not resize/reposition the native window")
+        // Cross the FIRST settle deadline, but stay within the SECOND hold.
+        // Reading the model frame here would test the target, not what paints.
+        RunLoop.current.run(until: Date().addingTimeInterval(1.35))
+        XCTAssertEqual(presentationY(), original, accuracy: 0.1,
+                       "the first settle must not drift during the second dust hold")
+        try write(render(panel), name: "mini-preview-reentrant-after-second-dust.png")
+        try waitUntil { !controller.isTransitioning }
+        XCTAssertEqual(controller.presentedArtifactIDs, ["top"])
+        let final = try XCTUnwrap(controller.previewView)
+        XCTAssertEqual(final.artifactIDs, ["top"])
+        try write(render(try XCTUnwrap(final.window as? MiniPreviewPanel)),
+                  name: "mini-preview-reentrant-settled.png")
+    }
+
+    func testZeroPresentationRetargetsBothHeldSlotsForEitherAnchor() throws {
+        _ = NSApplication.shared
+        let motionPreference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = motionPreference }
+        for topAnchor in [false, true] {
+            let panel = fixturePanel(ids: ["top", "middle", "bottom"], images: [
+                "top": solidImage(.systemBlue), "middle": solidImage(.systemOrange),
+                "bottom": solidImage(.systemPurple)], topAnchor: topAnchor)
+            defer { panel.close() }
+            panel.orderFrontRegardless(); panel.display()
+            let view = panel.previewView
+            let top = try XCTUnwrap(view.card(for: "top"))
+            let middle = try XCTUnwrap(view.card(for: "middle"))
+            let layer = try XCTUnwrap(top.layer)
+            let original = layer.position.y
+            let middleOrigin = middle.frame.minY
+            view.settleSurvivors(into: "bottom", after: 1.8)
+            let firstMove = try XCTUnwrap(layer.animation(forKey: "preview-settle-position"))
+            CATransaction.flush()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            // A valid rendered zero while the model already targets one slot.
+            XCTAssertEqual((layer.presentation() ?? layer).position.y, original, accuracy: 0.1)
+            XCTAssertEqual(abs(layer.position.y - original), 184, accuracy: 0.1)
+            XCTAssertNotNil(view.playExit(for: "middle", kind: .dust))
+            XCTAssertEqual(middle.frame.minY, middleOrigin, accuracy: 0.1,
+                           "the exiting card must freeze its presentation too")
+            view.settleSurvivors(into: "middle", after: 0.45)
+            let move = try XCTUnwrap(layer.animation(forKey: "preview-settle-position") as? CABasicAnimation)
+            let from = try XCTUnwrap(move.fromValue as? NSValue).pointValue.y
+            let to = try XCTUnwrap(move.toValue as? NSValue).pointValue.y
+            XCTAssertEqual(from, original, accuracy: 0.1)
+            XCTAssertEqual(to - from, topAnchor ? -368 : 368, accuracy: 0.1)
+            XCTAssertEqual(move.beginTime, firstMove.beginTime, accuracy: 0.001,
+                           "a shorter second exit must not advance the first dust deadline")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertEqual((layer.presentation() ?? layer).position.y, original, accuracy: 0.1)
+        }
+    }
+
     func testTrashFailureCanRetryAndKeepsReadableErrorDetail() throws {
         _ = NSApplication.shared
         let captured = artifact(id: "retry", previewPath: "/preview.png",
@@ -1281,7 +1370,7 @@ final class MiniPreviewTests: XCTestCase {
         view.samplePointer(NSPoint(x: 100, y: 105))
         XCTAssertFalse(view.isCardHoverLocked)
         XCTAssertTrue(card.mediaHovered)
-        XCTAssertEqual(Set(view.visibleCardActionTitles), ["Delete", "Edit", "Copy", "Save file"])
+        XCTAssertEqual(Set(view.visibleCardActionTitles), ["Delete", "Edit", "Share capture", "Copy", "Save file"])
         // Leaving the stack releases a lock too.
         card.mouseExited(with: hover)
         view.lockCardHover(releaseIfPointerOutside: false)

@@ -134,6 +134,7 @@ export interface RecordingSettings {
 }
 
 export type RecordingTarget =
+  | { type: "portal_display" }
   | { type: "display"; display_id: string }
   | { type: "region"; display_id: string; rect: { x: number; y: number; width: number; height: number } }
   | { type: "window"; window_id: string };

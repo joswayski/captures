@@ -17,6 +17,25 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Both recording-editor hosts now initialize new windows from persisted export
+format, GIF FPS and maximum width. The shared shipping policy retains GIF sources,
+uses explicit GIF/WebM preferences for video, and preserves a WebM source when the
+preference is MP4. WebM keeps its unavailable-export state; explicit conversion to
+MP4/GIF remains available. Refocus and subsequent worker results do not reapply
+defaults over edits. Custom valid defaults such as 27 FPS and 704 px have visible
+menu labels. GIF palettes still follow editor quality; capture still makes a video
+master. Dark/light private-X11 smokes independently probe 81 frames at 704×396,
+then 36 frames at 480×270 after user changes, decoded colors and unchanged source
+bytes. Normal/minimum renders were inspected. The mixed GIF/MP4/WebM/still import
+regression explicitly chooses MP4 for its conversion checks.
+
+| Platform | Recording export-defaults slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Implemented through the shared C ABI; XCTest covers defaults, custom values, refocus and format precedence; macOS execution pending, no physical verification in this orb |
+| Windows | Implemented through the shared wgpu editor; Windows compilation/runtime and physical acceptance unverified for this slice |
+| X11 | Verified on disposable software-rendered X11 in both appearances, including real exports and mixed-file regression; physical acceptance open |
+| Wayland | Implemented through the same wgpu editor; shared tests pass, compositor/physical export-defaults acceptance unverified |
+
 The Linux screenshot portal acquisition slice now runs without X11 enumeration,
 subscribes before requesting, verifies response handle/owner, closes cancelled or
 timed-out requests, and never falls back to direct capture after cancellation.
@@ -46,6 +65,74 @@ global shortcuts, preview placement and recording remain open.
 | Windows | Existing path unchanged; probe reports unsupported; no physical-host verification |
 | X11 | Existing acquisition path retained; private-X11 capture regression exercises the patched renderer; diagnostic rejects DISPLAY rather than falling back |
 | Wayland | Portal screenshots connected to History and exercised on disposable headless Sway; physical GNOME/KDE acceptance and broader capture/recording parity remain open |
+
+The Linux video-source slice acquires one portal-selected display through
+CreateSession → SelectSources → Start → OpenPipeWireRemote. It pins the portal's
+unique owner, rejects peer/wrong-handle signals, refuses denial/cancellation and
+never connects to an unrestricted PipeWire server or falls back to xcap. Consent
+and calls are bounded; session/request resources close on failure or cancellation.
+The source exposes one bounded CPU-frame channel with validated raw RGB layouts,
+dropped-frame accounting, format-change rejection and deterministic worker cleanup.
+It does not invent display geometry from compositor-space stream properties.
+
+Thirteen private protocol cases and a real ScreenCast/PipeWire diagnostic passed
+with DISPLAY unset: 24 changing frames across two sessions, both independently
+specified asymmetric phases, exact final pixels, active-stream cancellation and
+reopen. Terminating a backend with a running granted stream ends the source
+promptly without output or frame timeout; this is transport-loss coverage, not
+physical permission-revocation acceptance. The SHM-only Sway fixture uses pinned wlr 0.7.1 with a **fixture-only format
+guard backport**; its selection/consent/grant paths remain unchanged and it is
+never installed. Stock 0.7.x rejects SHM-only Start, 0.8.x regresses SHM-only init,
+and the intermediate constraints rewrite renegotiates on every frame. These tests
+do not establish stock-backend or physical consent acceptance.
+The source probe writes PNG diagnostics. The subsequent session slice encodes
+real MP4/GIF through the shared native runtime, using an explicit `portal_display`
+target with no monitor descriptor. Consent/first-frame cancellation reaches the
+worker; pause/resume obtains a fresh grant. Source loss stops encoding, fails the
+take and preserves decodable media for recovery. An explicit local stop removes
+the PipeWire callbacks before disconnecting, without reporting false stream loss.
+The session diagnostic creates only new isolated data. It passes the same 13
+adversarial protocol cases plus real MP4/GIF publication, asymmetric pause/resume,
+restart replacement, discard/cancel and interrupted/lost-stream recovery. FFmpeg
+decodes both independently specified phases at four asymmetric locations; lossy
+encodings use a stated 15-channel tolerance, not byte equality. Native controls,
+audio/cursor acceptance, capture-window exclusion and region/window selection
+remain open; the resident Wayland recording gate is unchanged.
+
+| Platform | Video-source slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing recorder retained; portal target/probes explicitly unsupported; shared session accepts existing descriptors; physical host unverified |
+| Windows | Existing xcap recorder retained; portal target/probes explicitly unsupported; shared session accepts existing descriptors; physical host unverified |
+| X11 | Existing acquisition and pointer path retained; shared encoder/lifecycle refactored; diagnostics reject DISPLAY and cannot fall back to X11 |
+| Wayland | Portal/PipeWire source and real MP4/GIF sessions exercised on private Sway with the disclosed fixture patch; resident UI, audio/cursor and physical GNOME/KDE acceptance remain open |
+
+The recording-controls follow-up connects **Record display…** in Wayland History
+to MP4 recording using preferences, a geometry-free native countdown and the normal
+HUD. The recording worker verifies FFmpeg/ffprobe before preparing the take;
+the process gate/session watcher no longer requires X11 Escape registration.
+History, Preferences and countdown surfaces are acknowledged unmapped before
+portal consent. Pause/resume, confirmed restart/delete and Stop share the existing
+session. Consent cancellation is typed through acquisition: an empty initial take
+is discarded, while cancelling resume retains paused media. Fatal video-source
+loss is distinct from audio warnings, stops the controls/timer and restores History
+recovery after the worker releases its owner. Linux still includes HUD pixels;
+Hide requires a working tray restoration path, and the notice says when it is absent.
+Region/window selection, screenshots during recording and click/keystroke overlays
+remain unsupported on Wayland.
+
+The real-window dark/light Sway smoke uses compositor rectangles and pointer input,
+checks countdown and workspace exclusion, exact paused elapsed time, independently
+probed/decoded MP4 output, closing countdown, protocol consent cancellation,
+backend termination and retained playable recovery bytes after clean normal exit.
+Its consent remains non-interactive fixture policy using the disclosed SHM backport;
+physical GNOME/KDE permission UX, cursor/audio and mixed-DPI acceptance stay open.
+
+| Platform | Recording-controls follow-up implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing recorder and HUD unchanged; portal path Linux-gated; physical execution unverified in this orb |
+| Windows | Existing direct recorder retained; optional placement/session plumbing shared; physical execution unverified in this orb |
+| X11 | Direct target/monitor positioning and global Escape retained; local workspace/native tests cover existing lifecycle; hardware acceptance remains open |
+| Wayland | History/countdown/HUD/MP4 connected and exercised on disposable dark/light Sway, including cancellation and transport-loss recovery; physical parity remains open |
 
 The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
 when a tray exists. Preferences, Feedback and media bootstrap independently;
@@ -1697,15 +1784,70 @@ input. AppKit has XCTest coverage and compiles in macOS CI only. macOS, Windows
 and Wayland presentation, placement at a real tray icon, focus and accessibility
 are unverified. The Notices/updates gate stays open.
 
+### Signed native update acquisition: backend and opt-in diagnostic only
+
+Shared `captures_app::updater` now authenticates byte-exact Minisign v1 manifests,
+selects the matching native development identity/renderer/platform, rejects equal
+or older semantic versions and verifies streamed artifact size/SHA-256 in private
+temporary files. Signature, metadata and download limits, HTTPS/redirect policy,
+progress, cancellation and failed-download cleanup are covered by real signatures
+and loopback tests. `native_update_probe` can check or verify a supplied development
+endpoint without a window, installation or relaunch. No production key/endpoint
+is configured and no release/service is activated. The existing update-notice
+source remains a fixture; Preferences and tray update actions remain disabled.
+[Protocol and diagnostic usage](../apps/native/README.md#native-update-acquisition-diagnostic)
+describe the limits, including I/O-boundary cancellation and its request timeout.
+
+| Platform | Acquisition slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared Rust backend accepts ARM64/x64 AppKit identity; dedicated Rust fixture tests added to macOS CI; native UI/installer integration and physical verification open |
+| Windows | Same Rust backend and host-target diagnostic; fixture tests added to Windows CI; installer/relaunch and physical verification open |
+| X11 | Rust signature, target/version, byte-exact download, cancellation and cleanup tests run in Linux orb; no GUI/capture changes |
+| Wayland | Same backend has no X11/window dependency; no compositor-specific behavior added or accepted |
+
+This is acquisition, not a complete updater. Temporary archive staging is described
+below; native installation/relaunch, signed channel publication, freshness/rollback
+policy, installed-data migration and end-to-end cross-platform acceptance remain open.
+
+### Native update package staging: temporary validation, no installation
+
+`VerifiedUpdate::stage` consumes signed/verified bytes, rehashes a private copy,
+then extracts `package.py` ZIP32 or tar.gz archives into owned temporary storage.
+It rejects traversal, links/special entries, portable-path collisions and
+unsupported metadata, bounds entries/implicit directories and expanded bytes,
+and validates the development package's target, executable hash/permissions,
+media sidecars, corresponding source/licenses and macOS bundle identity/resources.
+Drop, failure and cancellation remove owned scratch without changing an existing
+app/profile. Exposed staged paths are mutable; a future installer must reverify
+its copies. Forced termination may leave scratch, not an installed update.
+
+`native_update_probe --stage-directory EXISTING_DIRECTORY` exercises acquisition
+and temporary validation without a GUI, execution, registration or relaunch. The
+existing notice, disabled update controls and absence of a production endpoint/key
+are unchanged. [Format, limits and diagnostic usage](../apps/native/README.md#native-update-acquisition-diagnostic)
+include the deliberately narrow ASCII resource-path and archive-format contract.
+
+| Platform | Staging slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared Rust validates ARM64/x64 development layouts and bundle identity; real Python-packager fixtures with inert bodies run in Linux and are included in existing macOS updater tests; OS signatures, installer and physical acceptance open |
+| Windows | Shared Rust validates development ZIP layout and sidecars; cross-target packager fixtures run in Linux and are included in existing Windows updater tests; installer/relaunch and physical acceptance open |
+| X11 | Linux tar/PAX package fixtures, adversarial archives, rehash/limits/cancellation and cleanup run in the orb; no capture/GUI changes |
+| Wayland | Identical window-independent staging backend; no compositor behavior changed or accepted |
+
+This closes neither signed OS distribution nor the Notices/updates gate. Installed
+replacement/relaunch, rollback, channel publication and installed-data migration
+remain separate work.
+
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
 integration, physical cross-platform acceptance, and renderer/distribution/cutover.
 This is not a near-release checklist or a percentage-complete claim: implemented
 features still need acceptance, and the native editor inspector still differs from shipping.
 Shared commands and encoding remain prerequisites, not native editor/output acceptance.
-Native live capture on Wayland remains explicitly
-gated; no stub or X11 result closes that platform gate. Merging development slices
-does not authorize a native release, renderer cutover or removal of Tauri.
+Native Wayland portal screenshots and display recording are connected in the
+development host; region/window targeting and physical compositor acceptance
+remain open. No stub or X11 result closes that platform gate. Merging development
+slices does not authorize a native release, renderer cutover or removal of Tauri.
 
 ## Inventory and acceptance checklist
 
@@ -1779,7 +1921,15 @@ permission-recovery relaunch join the worker before releasing profile ownership.
 The isolated `--scene sharing` fixture disables every action and cannot run live.
 Seven Swift regression tests cover original-media selection, busy pinning, patch
 semantics, retry-save, lifecycle and light/dark normal/minimum-size renders;
-execution/render inspection on macOS remains pending for this slice.
+all seven passed in [macOS CI](https://github.com/joswayski/captures/actions/runs/37275047835).
+Light/dark minimum-size renders for all seven fixture states were inspected.
+That run failed a stale mini-preview hover expectation outside SharingTests;
+the native dismissal-retarget slice corrects it. The subsequent
+[macOS run](https://github.com/joswayski/captures/actions/runs/37280734119)
+passed the full suite: 559 tests, eight skips and zero failures, plus development
+package staging. Its two new preview-retarget motion scenarios were among the
+skips because the runner enabled Reduce Motion. This does not establish
+presentation-motion, physical-vault or installed-app acceptance.
 
 This is connected development behavior, not acceptance of the checklist below.
 Tests use disposable loopback HTTP/fake vaults and software-rendered UI;
@@ -1796,7 +1946,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   The `captures-account` worker covers explicit request/verify,
   account lookup, bearer persistence/retry, invalidation and logout with platform
   vault adapters. Both hosts' controls and retention are connected; AppKit
-  build/render verification and physical-vault acceptance remain open; this does
+  sharing tests/renders passed CI, but physical-vault acceptance remains open; this does
   not check the gate.
 - [ ] The popup previews the selected file and offers link access, optional
   password and expiry before explicit Upload and share. No upload merely from
@@ -1811,7 +1961,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   and durably persists account-scoped create keys. Lost create responses and failed
   post-create association writes replay the same key after restart; conflicts and
   tombstones never silently create replacements. Legacy keyless checkpoints still
-  require explicit reconciliation. AppKit verification, real object-store and
+  require explicit reconciliation. Real object-store and
   physical-platform acceptance remain open.
 - [ ] Reopening manages the existing remote asset/share rather than duplicating
   the upload. Persist the local-artifact/remote-asset association. Show shared date,
@@ -1819,8 +1969,8 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   sharing actions. Stopping denies subsequent access; enabling again rotates the
   link. Cloud Trash retains bytes and restore does not revive old links.
   Account/profile-scoped local associations and server share patch semantics are
-  implemented in shared Rust and both hosts; AppKit build/render and physical
-  verification are open.
+  implemented in shared Rust and both hosts; AppKit sharing tests/renders passed
+  CI, while physical verification remains open.
 - [ ] Integrate both AppKit and wgpu through thin host launch/presentation seams;
   coordinate MiniPreview/Workbench and mini_preview/live changes with the rewrite
   integration owner. Do not fork the auth/upload rules into platform hosts.
@@ -1833,7 +1983,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
 
 | Platform | Sharing coordinator implementation / verification |
 | --- | --- |
-| macOS | Shared worker/coordinator, Keychain adapter and AppKit controls connected; Swift build/tests/render inspection pending; physical vault/object-store acceptance open |
+| macOS | Shared worker/coordinator, Keychain adapter and AppKit controls connected; seven sharing tests passed in CI and light/dark minimum-size renders inspected; physical vault/object-store acceptance open |
 | Windows | Shared worker and wgpu controls connected with Credential Manager adapter; host compilation/runtime and physical vault/object-store acceptance unverified here |
 | X11 | wgpu controls connected; disposable shared-worker HTTP/recovery and native UI tests, software renders; physical Secret Service/object-store acceptance open |
 | Wayland | wgpu History entry point and compositor-controlled child window; shared worker tested, physical Secret Service/compositor/object-store acceptance open |
@@ -2180,6 +2330,18 @@ tests exercise placement, focus, minimized-root actions, exact capture inclusion
 exclusion and cancellation. AppKit tests cover panel/decode/action
 lifecycles and fixed-glass rendering. Windows runtime, physical macOS, mixed-DPI,
 screen-reader and compositor acceptance remain open; Wayland stays unsupported.
+Overlapping native exits now hold each survivor's current presentation, including
+zero, until the second exit is motion-ready; pruning rebases offsets without
+displacing the surviving cards. AppKit's presentation-layer fixtures now select
+motion through an internal preference reader and restore it afterwards, without
+changing the runner's desktop accessibility settings. The wgpu three-card
+private-X11 probe acknowledges both exact
+artifact exits, verifies the second starts before the first settle, and compares
+survivor edge pixels through the overlapping hold at all four corners. wgpu also
+retains a revealed control's press/release eligibility when its card moves in the
+input-consuming pass; never-revealed and busy controls remain inactive. Delete
+does not prepare unused Close streak textures. These checks do not close the
+physical-host, accessibility or performance acceptance gates.
 Collapsed front-card drag and hover fan are connected on AppKit and wgpu. The
 shared Rust pose expands rear-card spacing from 13 to 16 points in the correct
 direction for top and bottom anchors while leaving the front card and window

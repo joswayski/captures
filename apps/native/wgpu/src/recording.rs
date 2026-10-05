@@ -24,7 +24,7 @@ pub enum Command {
         generation: u64,
         recovery_root: PathBuf,
         options: RecordingOptions,
-        display: DisplayDescriptor,
+        display: Option<DisplayDescriptor>,
     },
     Start {
         generation: u64,
@@ -137,9 +137,9 @@ impl Worker {
                         microphone_peak: session
                             .as_ref()
                             .map_or(0., RecordingSession::microphone_level),
-                        result: session.as_ref().map_or_else(
+                        result: session.as_mut().map_or_else(
                             || Err("Recording session is unavailable".into()),
-                            |session| Ok(session.snapshot()),
+                            |session| Ok(session.refresh()),
                         ),
                     },
                     Command::Prepare {
@@ -148,7 +148,17 @@ impl Worker {
                         options,
                         display,
                     } => {
-                        let result = RecordingSession::prepare(recovery_root, options, display)
+                        // History can launch a portal recording without opening the
+                        // capture menu, whose direct path verifies the toolchain.
+                        let verified = if cfg!(target_os = "linux")
+                            && matches!(options.target, captures_recording::RecordingTarget::PortalDisplay)
+                        {
+                            tools.verify().map_err(|error| format!("Native recording requires FFmpeg and ffprobe: {error}"))
+                        } else {
+                            Ok(())
+                        };
+                        let result = verified
+                            .and_then(|()| RecordingSession::prepare(recovery_root, options, display))
                             .map(|prepared| {
                                 let snapshot = prepared.snapshot();
                                 session = Some(prepared);
@@ -327,7 +337,7 @@ mod tests {
         let prepare = || Command::Prepare {
             generation: 4,
             recovery_root: recovery_root.clone(),
-            display: DisplayDescriptor {
+            display: Some(DisplayDescriptor {
                 id: "fixture".into(),
                 name: "Fixture".into(),
                 x: 0,
@@ -336,7 +346,7 @@ mod tests {
                 height: 480,
                 scale_factor: 1.,
                 is_primary: true,
-            },
+            }),
             options: serde_json::from_value(serde_json::json!({
                 "kind":"video", "target":{"type":"display","display_id":"fixture"},
                 "frames_per_second":15, "max_resolution":"original", "countdown_seconds":0,

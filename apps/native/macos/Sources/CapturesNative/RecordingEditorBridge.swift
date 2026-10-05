@@ -1033,6 +1033,11 @@ enum RecordingEditorCopy {
             ?? "Edit recording"
     }
 
+    static func initialOutputFormat(mimeType: String, preferredFormat: String) -> String {
+        request(["operation": "initial_output_format", "mime_type": mimeType,
+                 "preferred_format": preferredFormat])?["format"] as? String ?? "mp4"
+    }
+
     static func time(_ milliseconds: UInt64, duration: UInt64) -> String {
         request(["operation": "time", "ms": milliseconds, "duration_ms": duration])?["label"]
             as? String ?? "\(milliseconds) ms"

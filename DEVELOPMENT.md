@@ -59,7 +59,8 @@ access to the profile and retain its accepted upload worker after the preview
 closes. Disposable loopback fixtures/fake vaults, wgpu UI/accessibility tests and
 software-rendered X11 fixtures have been exercised. AppKit tests cover command
 selection, retained forms, capture hiding and minimum-size light/dark fixtures;
-their macOS execution/render inspection remains pending for this slice. Real
+all seven passed in macOS CI, and the light/dark minimum-size renders were
+inspected. Real
 SES/R2, physical vaults and physical macOS/Windows/X11/Wayland acceptance remain open.
 
 On macOS, `--scene sharing` is a disabled render fixture (not `--live` or
@@ -191,6 +192,17 @@ Its README covers native build prerequisites, viewport smoke tests, hardware
 handoff and resource collection. Root `cargo test --workspace` does not include
 this experiment; run its manifest-specific checks too. It connects capture and
 recording engines for development but does not select a production renderer.
+
+The [Wayland video diagnostic](apps/native/wgpu/README.md#wayland-video-acquisition-diagnostic)
+checks ScreenCast consent responses, a granted PipeWire remote and changing
+CPU-mapped pixels without X11. Its private software-rendered fixture uses a pinned
+backend with a SHM-only format-guard backport, not an installed portal replacement.
+The recording diagnostic also exercises real MP4/GIF session finalization,
+pause/resume, restart, discard/cancel and recovery after transport loss. The
+[native Wayland recording host smoke](apps/native/wgpu/README.md#native-wayland-recording-controls)
+exercises the real History/countdown/HUD path in both appearances, cancellation
+and source-loss recovery with the same disposable backend. Physical consent,
+audio/cursor and GNOME/KDE acceptance remain open.
 
 ### Native exploratory test archives
 

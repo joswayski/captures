@@ -5,7 +5,11 @@ mod overlay;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod pointer;
 #[cfg(target_os = "linux")]
+mod portal;
+#[cfg(target_os = "linux")]
 mod system_audio_linux;
+#[cfg(target_os = "linux")]
+pub use portal::{PortalVideoError, PortalVideoSource};
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod transform;
 

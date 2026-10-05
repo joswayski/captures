@@ -10,11 +10,11 @@ use captures_history::HistoryEntry;
 use captures_media::{CancelToken, MediaToolchain, RecordingAssemblyKind, RecordingSegmentInput};
 use captures_recording::{
     DraftStore, RecordingCoordinator, RecordingDraftManifest, RecordingKind, RecordingOptions,
-    RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState,
+    RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState, RecordingTarget,
 };
 use serde::Serialize;
 
-use crate::{NativeRecordingSegment, recovery::RecoveryLease, start_native_segment};
+use crate::{NativeRecordingSegment, StartFailure, recovery::RecoveryLease, start_segment};
 
 #[derive(Debug, Serialize)]
 pub struct FinalizedRecording {
@@ -30,7 +30,7 @@ pub struct RecordingSession {
     store: DraftStore,
     manifest: RecordingDraftManifest,
     directory: PathBuf,
-    display: DisplayDescriptor,
+    display: Option<DisplayDescriptor>,
     active: Option<NativeRecordingSegment>,
     started_at_ms: Option<u64>,
 }
@@ -41,8 +41,19 @@ impl RecordingSession {
     pub fn prepare(
         recovery_root: PathBuf,
         options: RecordingOptions,
-        display: DisplayDescriptor,
+        display: impl Into<Option<DisplayDescriptor>>,
     ) -> Result<Self, String> {
+        let display = display.into();
+        if options.target == RecordingTarget::PortalDisplay {
+            if !cfg!(target_os = "linux") {
+                return Err("Portal recording is only supported on Linux".into());
+            }
+            if display.is_some() {
+                return Err("Portal recording must not use invented monitor geometry".into());
+            }
+        } else if display.is_none() {
+            return Err("Recording target requires a display".into());
+        }
         let now = now_ms();
         let mut coordinator = RecordingCoordinator::default();
         let initial = coordinator.begin(options.clone(), now).map_err(string)?;
@@ -88,6 +99,20 @@ impl RecordingSession {
         snapshot
     }
 
+    /// Refresh on the recording worker. Source loss ends the take and retains
+    /// its recovery media; ordinary audio warnings do not stop video.
+    pub fn refresh(&mut self) -> RecordingSessionSnapshot {
+        #[cfg(target_os = "linux")]
+        if let Some(error) = self
+            .active
+            .as_ref()
+            .and_then(NativeRecordingSegment::source_failure)
+        {
+            self.fail(error);
+        }
+        self.snapshot()
+    }
+
     /// Current engine microphone peak, without changing the recording or its
     /// recovery bundle. Inactive and muted sessions have no live meter.
     pub fn microphone_level(&self) -> f32 {
@@ -127,7 +152,7 @@ impl RecordingSession {
         exclude_captures_app: bool,
         is_current: impl Fn() -> bool,
     ) -> Result<RecordingSessionSnapshot, String> {
-        self.start_with(exclude_captures_app, is_current, start_native_segment)
+        self.start_with(exclude_captures_app, is_current, start_segment)
     }
 
     fn start_with(
@@ -137,9 +162,10 @@ impl RecordingSession {
         open: impl FnOnce(
             &RecordingOptions,
             &Path,
-            &DisplayDescriptor,
+            Option<&DisplayDescriptor>,
             bool,
-        ) -> Result<NativeRecordingSegment, String>,
+            &dyn Fn() -> bool,
+        ) -> Result<NativeRecordingSegment, StartFailure>,
     ) -> Result<RecordingSessionSnapshot, String> {
         if !matches!(
             self.manifest.state,
@@ -159,18 +185,32 @@ impl RecordingSession {
         let segment = match open(
             &self.manifest.options,
             &path,
-            &self.display,
+            self.display.as_ref(),
             exclude_captures_app,
+            &is_current,
         ) {
             Ok(segment) => segment,
+            #[cfg(target_os = "linux")]
+            Err(StartFailure::Cancelled) => {
+                if self.manifest.state == RecordingState::Countdown {
+                    self.discard()?;
+                }
+                return Err("Recording cancelled".into());
+            }
+            Err(_) if !is_current() => {
+                if self.manifest.state == RecordingState::Countdown {
+                    self.discard()?;
+                }
+                return Err("Recording cancelled".into());
+            }
             // Like the shipping app, a resume or microphone change whose engine
             // cannot open (for example an unplugged microphone) leaves the take
             // paused with its completed media, so it can be retried or saved.
-            Err(error) if self.manifest.state == RecordingState::Paused => {
+            Err(StartFailure::Failed(error)) if self.manifest.state == RecordingState::Paused => {
                 self.started_at_ms = None;
                 return Err(error);
             }
-            Err(error) => return Err(self.fail(error)),
+            Err(StartFailure::Failed(error)) => return Err(self.fail(error)),
         };
         if !is_current() {
             if let Err(error) = segment.discard() {
@@ -241,12 +281,7 @@ impl RecordingSession {
         exclude_captures_app: bool,
         is_current: impl Fn() -> bool,
     ) -> Result<RecordingSessionSnapshot, String> {
-        self.set_microphone_muted_with(
-            muted,
-            exclude_captures_app,
-            is_current,
-            start_native_segment,
-        )
+        self.set_microphone_muted_with(muted, exclude_captures_app, is_current, start_segment)
     }
 
     fn set_microphone_muted_with(
@@ -257,9 +292,10 @@ impl RecordingSession {
         open: impl FnOnce(
             &RecordingOptions,
             &Path,
-            &DisplayDescriptor,
+            Option<&DisplayDescriptor>,
             bool,
-        ) -> Result<NativeRecordingSegment, String>,
+            &dyn Fn() -> bool,
+        ) -> Result<NativeRecordingSegment, StartFailure>,
     ) -> Result<RecordingSessionSnapshot, String> {
         if !is_current() {
             return Err("Recording cancelled".into());
@@ -683,6 +719,129 @@ mod tests {
     }
 
     #[test]
+    fn target_geometry_is_validated_before_creating_a_recovery_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let recovery = root.path().join("recovery");
+        let display = display();
+        let mut options = options(&display);
+        assert!(RecordingSession::prepare(recovery.clone(), options.clone(), None).is_err());
+        assert!(!recovery.exists());
+        options.target = RecordingTarget::PortalDisplay;
+        assert!(RecordingSession::prepare(recovery.clone(), options, display).is_err());
+        assert!(!recovery.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portal_start_forwards_cancellation_and_discards_only_initial_cancelled_bundle() {
+        use std::cell::Cell;
+        let root = tempfile::tempdir().unwrap();
+        let recovery = root.path().join("recovery");
+        let mut options = options(&display());
+        options.target = RecordingTarget::PortalDisplay;
+        let mut session = RecordingSession::prepare(recovery.clone(), options, None).unwrap();
+        let directory = session.directory().to_owned();
+        let current = Cell::new(true);
+        let error = session
+            .start_with(
+                false,
+                || current.get(),
+                |options, _, display, _, active| {
+                    assert_eq!(options.target, RecordingTarget::PortalDisplay);
+                    assert!(display.is_none() && active());
+                    current.set(false);
+                    assert!(!active());
+                    Err(StartFailure::Failed(
+                        "cancelled while waiting for portal consent".into(),
+                    ))
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error, "Recording cancelled");
+        assert_eq!(session.snapshot().state, RecordingState::Discarded);
+        assert!(!directory.exists());
+
+        let options = session.snapshot().options;
+        let mut paused = RecordingSession::prepare(recovery, options, None).unwrap();
+        paused
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+        paused.pause().unwrap();
+        let before = paused.manifest.clone();
+        current.set(true);
+        assert!(
+            paused
+                .start_with(
+                    false,
+                    || current.get(),
+                    |_, _, display, _, active| {
+                        assert!(display.is_none() && active());
+                        current.set(false);
+                        Err(StartFailure::Failed("cancelled resume grant".into()))
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(paused.snapshot().state, RecordingState::Paused);
+        assert_eq!(paused.store.load(&before.session_id).unwrap(), before);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portal_consent_cancel_discards_initial_take_but_retains_paused_media() {
+        let root = tempfile::tempdir().unwrap();
+        let mut options = options(&display());
+        options.target = RecordingTarget::PortalDisplay;
+        let mut initial =
+            RecordingSession::prepare(root.path().into(), options.clone(), None).unwrap();
+        let directory = initial.directory().to_owned();
+        assert_eq!(
+            initial
+                .start_with(false, || true, |_, _, _, _, _| Err(StartFailure::Cancelled))
+                .unwrap_err(),
+            "Recording cancelled"
+        );
+        assert_eq!(initial.snapshot().state, RecordingState::Discarded);
+        assert!(!directory.exists());
+
+        let mut paused =
+            RecordingSession::prepare(root.path().into(), options.clone(), None).unwrap();
+        paused
+            .transition(RecordingState::Recording, now_ms())
+            .unwrap();
+        paused.pause().unwrap();
+        let media = paused.directory().join("accepted.mp4");
+        std::fs::write(&media, b"already accepted media").unwrap();
+        let before = paused.manifest.clone();
+        assert_eq!(
+            paused
+                .start_with(false, || true, |_, _, _, _, _| Err(StartFailure::Cancelled))
+                .unwrap_err(),
+            "Recording cancelled"
+        );
+        assert_eq!(paused.snapshot().state, RecordingState::Paused);
+        assert_eq!(paused.store.load(&before.session_id).unwrap(), before);
+        assert_eq!(std::fs::read(media).unwrap(), b"already accepted media");
+        paused.discard().unwrap();
+
+        // Error copy containing "cancelled" is not a protocol cancellation.
+        let mut failed = RecordingSession::prepare(root.path().into(), options, None).unwrap();
+        let message = "backend failed after another selection was cancelled";
+        assert_eq!(
+            failed
+                .start_with(
+                    false,
+                    || true,
+                    |_, _, _, _, _| Err(StartFailure::Failed(message.into()))
+                )
+                .unwrap_err(),
+            message
+        );
+        assert_eq!(failed.snapshot().state, RecordingState::Failed);
+        assert!(failed.directory().is_dir());
+    }
+
+    #[test]
     fn microphone_polling_is_zero_outside_live_unmuted_engine_and_does_not_write() {
         let root = tempfile::tempdir().unwrap();
         let display = display();
@@ -821,7 +980,11 @@ mod tests {
             .start_with(
                 false,
                 || true,
-                |_, _, _, _| Err("no microphone device is available".into()),
+                |_, _, _, _, _| {
+                    Err(StartFailure::Failed(
+                        "no microphone device is available".into(),
+                    ))
+                },
             )
             .unwrap_err();
         assert_eq!(error, "no microphone device is available");
@@ -856,7 +1019,11 @@ mod tests {
             .start_with(
                 false,
                 || true,
-                |_, _, _, _| Err("no microphone device is available".into()),
+                |_, _, _, _, _| {
+                    Err(StartFailure::Failed(
+                        "no microphone device is available".into(),
+                    ))
+                },
             )
             .unwrap_err();
         assert_eq!(error, "no microphone device is available");
@@ -975,7 +1142,7 @@ mod tests {
                 false,
                 false,
                 || true,
-                |_, _, _, _| panic!("unchanged mute opened a recording engine"),
+                |_, _, _, _, _| panic!("unchanged mute opened a recording engine"),
             )
             .unwrap();
 
@@ -1019,7 +1186,11 @@ mod tests {
                 true,
                 false,
                 || true,
-                |_, _, _, _| Err("replacement microphone could not open".into()),
+                |_, _, _, _, _| {
+                    Err(StartFailure::Failed(
+                        "replacement microphone could not open".into(),
+                    ))
+                },
             )
             .unwrap_err();
 

@@ -18,8 +18,88 @@ development archives with pinned media tools, source/licenses and build identity
 See [download instructions and platform limits](../../DEVELOPMENT.md#native-exploratory-test-archives)
 and the included [TESTING.md](TESTING.md). Use a new export folder and quit the
 shipping app first. macOS CI archives are ad-hoc signed, Windows unsigned and
-Linux X11-only; these artifacts do not close signing, updater, migration or
-physical-platform acceptance gates.
+Linux requires the documented X11 or experimental Wayland prerequisites. These
+artifacts do not close signing, updater, migration or physical-platform acceptance
+gates.
+
+## Native update acquisition diagnostic
+
+`captures_app::updater` implements shared signed-manifest checks and bounded,
+streamed downloads and temporary package staging without Tauri. It is **not an
+enabled updater**: Preferences, tray actions and the update-notice fixture remain
+unchanged. There is no bundled native signing key, release endpoint, installer,
+restart or rollback yet.
+`native_update_probe` creates no window, changes no installed/profile data and
+removes its download and staged files on normal exit. It requires an explicit
+endpoint, standard two-line Minisign public key file, renderer and current version:
+
+```sh
+cargo +1.95.0 run --manifest-path apps/native/wgpu/Cargo.toml --bin native_update_probe -- \
+  --manifest-url "$NATIVE_TEST_MANIFEST_URL" --public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
+  --renderer wgpu --current-version 0.1.0
+# Add --download-directory EXISTING_DIRECTORY to acquire and verify bytes only.
+# Or --stage-directory EXISTING_DIRECTORY to also extract and validate a package.
+# These modes are mutually exclusive. Both remove their temporary files on exit.
+```
+
+The manifest is UTF-8 JSON, at most 256 KiB. `<manifest path>.minisig` contains a
+standard detached **prehashed** Minisign signature, not Tauri's outer base64.
+Verify/sign the exact bytes; whitespace or reserialization changes the signature.
+The signed v1 shape is:
+
+```json
+{
+  "schema": 1,
+  "identity": "es.captur.native-development",
+  "renderer": "wgpu",
+  "version": "2026.10.50",
+  "notes": "Development fixture only.",
+  "artifacts": {
+    "x86_64-unknown-linux-gnu": {
+      "url": "https://example.invalid/native-development.tar.gz",
+      "size": 23,
+      "sha256": "d2820340a902904952ed3ce50313a4867f8717eadfbbc24378a863d52d2009cf"
+    }
+  }
+}
+```
+
+This example is illustrative, not a download or signed release. Replace every
+artifact value with the actual native package's URL, byte count and SHA-256 before
+signing. `appkit` accepts macOS ARM64/x64 targets; `wgpu` additionally accepts
+Windows x64 and Linux x64. Renderer and current host target must match. Equal,
+older and build-metadata-only versions do not offer a download. HTTPS is required;
+HTTP is allowed only for loopback diagnostics. Metadata redirects are rejected;
+artifact redirects are bounded and may not downgrade to non-loopback HTTP.
+The signature is bounded to 8 KiB and artifacts to 1 GiB. Cancellation checks occur
+at I/O boundaries; a blocked HTTP request can take up to its 60-second timeout.
+Tampering, truncated/oversized bytes, wrong signatures/identities/targets and
+cancelled downloads never produce a verified file. Tests use disposable in-memory
+keys and private loopback data, not release keys or public services. Signature and
+version checks do not establish channel freshness, installed-data migration,
+OS signing or physical-platform acceptance.
+
+Staging consumes a verified download, rehashes a private copy, and extracts only
+inside an owned temporary directory. It accepts `package.py`'s current single-root
+development ZIP32 (macOS/Windows) and tar.gz (Linux) layouts with media sidecars,
+source/licenses, matching `BUILD_INFO.json`, executable hash and permissions,
+and the macOS development bundle identity/resources. It never executes binaries,
+imports registration files or changes a profile. `StagedUpdate` owns cleanup;
+callers must keep it alive while reading its paths. Exposed files are not immutable:
+any future installer must reverify its copies before use. Forced termination can
+leave private scratch behind; this is not installed-app rollback.
+
+The staging format deliberately rejects symlinks/hardlinks/special entries,
+traversal/absolute paths, Windows device/stream names, trailing dots/spaces,
+duplicates, case conflicts and file/directory collisions. Resource names inside
+the outer folder must be ASCII; the outer folder may contain Unicode. Limits are
+10,000 archive records and 10,000 path nodes (including implicit directories),
+512 MiB per file, 2 GiB expanded file bytes, 256 KiB metadata and 8 MiB ZIP central
+metadata. ZIP64, comments, extra fields, encryption and data descriptors are not
+supported. Local PAX path metadata is bounded; global PAX and GNU extensions are
+rejected. Tests use the real Python packager with inert bodies for all four target
+layouts and adversarial archives. These are extraction checks, not signed OS
+distribution or real-machine acceptance.
 
 ## Native sharing controls
 
@@ -34,9 +114,10 @@ releasing the isolated profile. Capture hides Share regardless of preview inclus
 AppKit `--scene sharing` renders disabled controls without a worker. Set
 `CAPTURES_NATIVE_SHARE_FIXTURE` to `otp`, `vault`, `shared`, `uploading`, `trash`
 or `error`; live transport ignores fixture state. Tests collect light/dark and
-minimum-size renders through `CAPTURES_TEST_ARTIFACTS`. AppKit build/render
-verification and physical macOS/Windows/X11/Wayland vault/object-store acceptance
-remain open. The account service is still disabled and undeployed; these controls
+minimum-size renders through `CAPTURES_TEST_ARTIFACTS`. All seven AppKit sharing
+regressions passed in macOS CI; the light/dark minimum-size states were inspected.
+Physical macOS/Windows/X11/Wayland vault/object-store acceptance remains open.
+The account service is still disabled and undeployed; these controls
 do not activate it or change the shipping Preview.
 
 ## Persisted native Preferences
@@ -90,13 +171,22 @@ and the existing platform engine across start, pause/resume, restart, stop, disc
 MP4/GIF finalization into private History. Run its blocking methods on a worker.
 Hosts still own permissions, countdown presentation, window exclusion and the
 capture-generation cancellation gate passed to `start`; `prepare` never records.
+Linux portal-selected display sessions use `RecordingTarget::PortalDisplay` and
+`prepare(..., None)`, without invented monitor IDs or geometry. The new target is
+explicitly unsupported on other OSes and rejected by shipping's selection adapter.
+Cancellation reaches portal consent and first-frame waits. Pause/resume requests
+a fresh grant; stream loss stops encoding and retains recoverable media instead
+of publishing a successful take. The wgpu Wayland host connects History's
+**Record display…** to native countdown/HUD controls and MP4 publication; its
+worker refreshes source failures into History recovery. Portal consent cancellation
+discards only an empty initial take and retains accepted paused media on resume.
 Failed assembly/publication keeps source segments. Successful video publication
 removes the draft only after Ready metadata is saved; GIFs keep editable sources.
 Post-publication housekeeping failures return the saved artifact with a warning.
 Restart discards only that session's active and completed segments, retains its
 target/options, resets elapsed time, and returns to the stored countdown. The
-same capture generation rearms global Escape for that countdown before either
-host can open the replacement engine.
+same capture generation rearms global Escape for direct recording, or focused
+countdown cancellation on Wayland, before opening the replacement engine.
 Both hosts connect Video-only Record controls and region/window/display recording
 shortcuts. From idle the keys open Record on that target; in an open selector,
 screenshot and recording keys switch mode/target in place. Busy recording phases
@@ -108,7 +198,13 @@ the selector/countdown, and a completed still follows normal History, mini-previ
 and auto-copy behavior. AppKit/Windows apply capture exclusion; X11 hides the HUD and
 guide from the still but cannot exclude the selector from ongoing recording pixels.
 Both hosts open recordings in the native recording editor, which saves MP4 and
-GIF. Unsigned development packages can include the existing pinned media tools,
+GIF. New editor windows honor the saved export format, GIF frame rate and maximum
+width, including custom valid values. GIF sources stay GIF; the MP4 preference
+preserves an opened WebM's format. WebM remains explicitly unavailable in bundled
+tools; choose MP4 or GIF to export it. Refocusing an existing editor retains its
+edits. Capture still records a video master, and GIF palettes follow editor quality,
+not the recording palette preference.
+Unsigned development packages can include the existing pinned media tools,
 corresponding source and licenses; see [staging](../../DEVELOPMENT.md#native-development-open-with).
 History **Save file**
 copies original video/GIF bytes to the configured output folder without encoding
@@ -460,8 +556,11 @@ Full UI parity remains open. The wgpu Wayland host now unmaps Captures' windows,
 waits for compositor-processing acknowledgements, and requests a Screenshot
 portal still from History. It restores the windows on success, cancellation or
 failure. Captures return to History without guessed display geometry or preview
-placement. Native selectors, countdown and recording remain unavailable on
-Wayland; consent and cursor inclusion are portal-controlled. Remapping may change
+placement. **Record display…** uses the same unmapping acknowledgement before
+portal consent, then the normal MP4 recording controls with compositor placement.
+Region/window selectors and screenshots during a recording remain unavailable;
+recording controls are included in output and Hide needs a working tray.
+Consent and cursor inclusion are portal-controlled. Remapping may change
 compositor-assigned window positions. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and
 must refuse capture. Verify real permission, clipboard ownership, multi-display
@@ -498,6 +597,11 @@ into dust from the trash control (AppKit filters chips with Core Image, wgpu
 paints them as a textured egui mesh; AppKit falls back to the shipping
 scale-and-fade when Metal is unavailable). The exiting card keeps its slot while
 older cards slide into it after the shipping delay, then the window resizes.
+An overlapping deletion freezes the exiting card and affected survivors at their
+current presentation (zero is valid), holds until the new exit is ready, then
+eases the accumulated distance. Removing a held slot rebases the Rust trajectory
+without moving its survivor. AppKit retargets its Core Animation presentation
+rather than scheduling independent model-frame shifts.
 Clear all streaks every card out, bottom first. Show less and expand fly the
 cards between the list and the compact pile, and the stack toolbar enters, leaves
 and clears with its shipping keyframes; the Show less pill morphs over 240 ms.
@@ -507,6 +611,15 @@ Reduce Motion skips every exit, flight, highlight and sparkle. The Close streak
 steps through shipping's horizontal Gaussian filters on wgpu (AppKit uses Core
 Image motion blur); dust chips carry only the pre-blurred hover media, not their own
 dissolve blur.
+
+Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --retarget-only --binary
+apps/native/wgpu/target/debug/captures-wgpu-workbench --output /tmp/native-retarget`
+with a fresh output folder to exercise three-card dust holds in all four corners.
+It compares the survivor's media-edge pixels past the first settle deadline,
+checks the final actionable card and preserves original History bytes. Shared
+clock-driven tests cover zero, just-started settle and slot-pruning boundaries;
+AppKit tests read presentation-layer positions, not model targets. Software-X11
+and macOS CI do not establish physical Windows/macOS or Wayland preview acceptance.
 
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.
 Overflow scrolls without dropping captures; chevron cues at the stack edges

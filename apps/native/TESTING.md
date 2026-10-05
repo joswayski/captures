@@ -3,8 +3,9 @@
 This is an experimental native build, **not the shipping Captures Preview**.
 Do not replace the installed app or point this build at its settings or History.
 Signed updates, installed-data migration/rollback and full platform acceptance
-are not ready. Wayland supports desktop-portal screenshots returning to History;
-native region/window selection, countdown, floating previews and recording remain unavailable.
+are not ready. Wayland supports desktop-portal screenshots returning to History
+and display MP4 recording with native countdown and controls. Region/window
+selection, floating previews and screenshots during recording remain unavailable.
 
 ## Start safely
 
@@ -19,8 +20,9 @@ native region/window selection, countdown, floating previews and recording remai
 4. Windows: run `.\CapturesNative.exe --live` from PowerShell in this directory.
    It is unsigned and may show an OS security warning.
 5. Linux: run `./captures-native --live`. X11 supports the capture workflows below;
-   Wayland additionally needs a working Screenshot desktop portal. CI builds on
-   Ubuntu 24.04 x86_64; other distributions may need a local build and runtime libraries.
+   Wayland additionally needs working Screenshot and ScreenCast desktop portals
+   and PipeWire for recording. CI builds on Ubuntu 24.04 x86_64; other distributions
+   may need a local build and runtime libraries.
 
 Portable Windows/Linux archives omit Open With registration files because their
 paths must be generated on your own computer. Do not register a locally staged
@@ -43,7 +45,11 @@ profile. Leave Start Captures on login off during this first test.
   Save. Close/reopen an unsaved draft and verify its recovery.
 - Record a short disposable MP4/GIF. Try pause/resume, mute, Stop, editing/export
   and Hide/restore through the tray/menu bar on macOS, Windows or X11.
-  Test real audio only if desired; native Wayland recording is not available.
+  On Wayland, use **Record display…** in History for an MP4; try countdown/consent
+  cancellation, pause/resume and Stop. Controls appear in the video; Hide requires
+  a working tray restore path. Cancelling initial consent removes the empty take;
+  a lost stream retains partial media in History recovery. Test real audio only
+  if desired; physical compositor/audio/cursor acceptance remains open.
 - Drag History and mini-preview files to another app. Check copied bytes and
   cancelled drags. Delete only test captures; ordinary exported files remain.
 - Use capture shortcuts while Preferences is focused, then actively record a new

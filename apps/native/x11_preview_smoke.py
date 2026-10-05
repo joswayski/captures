@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--sharing-only", action="store_true", help="Exercise Share lifetime and exact capture exclusion")
+    parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
     parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
     parser.add_argument("--system-motion-only", action="store_true", help="Exercise desktop motion preference refresh")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
@@ -54,6 +55,8 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
+    if args.retarget_only:
+        env["CAPTURES_NATIVE_TRACE"] = "1"
     # Live hosts must never unbind the developer's real OS screenshot keys.
     env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
@@ -481,6 +484,9 @@ def main():
             cases = cases[:1]
         if args.sharing_only:
             cases = [("bottom_left", True, False), ("bottom_left", True, True)]
+        if args.retarget_only:
+            assert not args.reduced_motion, "retarget requires animated dust"
+            cases = cases[:4]
         for placement, enabled, include in cases:
             prefix = f"{placement}-enabled-{enabled}-include-{include}"
             history = output / prefix / "history"
@@ -555,6 +561,68 @@ def main():
             first = capture((140, 180, 310, 170))
             stack_entries = [first]
             assert rgb(first.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
+            if args.retarget_only:
+                for rect in [(45, 55, 230, 110), (260, 240, 200, 140)]:
+                    stack_entries.append(capture(rect))
+                preview = wait(lambda: windows(PREVIEW), "three-card retarget preview")[0]
+                wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608, "three held slots")
+                run("xdotool", "mousemove", "--sync", "640", "440")
+                time.sleep(1.1)  # Finish arrivals before sampling the oldest card.
+                top = placement.startswith("top")
+                base = 52 if top else 28
+                survivor_y = base + (2 if top else 0) * 184
+                # Include the media edge, not only a flat interior where an
+                # incorrectly moving card could return identical pixels.
+                crop = f"16x40+100+{survivor_y - 4}"
+                def survivor_pixels():
+                    return run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
+                before = survivor_pixels()
+                shot(preview, f"{prefix}-retarget-three")
+                preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
+                x = 290 if placement.endswith("right") else 50
+                def delete(slot, entry, second=False):
+                    y = base + slot * 184 + 22
+                    artifact_id = json.loads(entry.read_text())["id"]
+                    def accepted():
+                        for line in (output / f"{prefix}.stdout.log").read_text().splitlines():
+                            if '"name":"preview-exit"' in line and line.endswith("}"):
+                                data = json.loads(line)["detail"]["data"]
+                                if data["id"] == artifact_id:
+                                    assert data["kind"] == "Dust"
+                                    return data
+                    run("xdotool", "mousemove", "--sync", "--window", preview, str(x), str(y))
+                    # XSync acknowledges input, not the next egui frame or its
+                    # click-through shape. Require the actual hovered control
+                    # before pressing rather than relying on a timed move/click.
+                    def hovered():
+                        return run("import", "-window", preview, "-crop", f"1x1+{x - 10}+{y}",
+                                   "-depth", "8", "rgb:-") == bytes.fromhex("ef4650")
+                    wait(hovered, "painted Delete hover")
+                    if second:
+                        assert survivor_pixels() == before, "input missed the before-slide boundary"
+                    run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1")
+                    # Keep the pointer over the button until the host accepts
+                    # this exact artifact's exit, not just a changed hover tint.
+                    return wait(accepted, "Delete consumed before moving the pointer")
+                first_exit = delete(0 if top else 2, stack_entries[2])
+                time.sleep(.8)  # First source has faded; its settle has not begun.
+                second_exit = delete(1, stack_entries[1], second=True)
+                assert second_exit["started_ms"] - first_exit["started_ms"] < 1800, "second exit missed the hold"
+                run("xdotool", "mousemove", "--sync", "640", "440")
+                time.sleep(1.1)  # Past the FIRST settle, inside the SECOND hold.
+                assert int(window_geometry(preview)["HEIGHT"]) == 608, "held slots disappeared early"
+                shot(preview, f"{prefix}-retarget-held")
+                assert survivor_pixels() == before, "survivor drifted during the reentrant dust hold"
+                wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 240, "one settled survivor")
+                shot(preview, f"{prefix}-retarget-settled")
+                click(preview, 170, (52 if top else 28) + 61, activate=False)
+                wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"), "oldest survivor remains actionable")
+                assert entries() == set(preserved), "preview deletion removed History"
+                assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
+                run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
+                assert app.wait(timeout=10) == 0
+                print(f"PASS {placement}: three-card reentrant dust holds pixels and settles to the oldest capture", flush=True)
+                continue
             if enabled:
                 preview = wait(lambda: windows(PREVIEW), "mini preview")[0]
                 wait(lambda: int(run("import", "-window", preview, "-format", "%k", "info:")) > 16,
@@ -1302,9 +1370,18 @@ def main():
                 assert windows("Capture History"), "opening Preferences leaves History open"
                 time.sleep(.3)
                 shot("root", "lifecycle-preferences")
+                previous = entries()
+                # Preferences focus alone does not release capture shortcuts;
+                # only an active recorder does. Its interception is exercised
+                # separately by --shortcut-editing below.
                 run("xdotool", "windowactivate", "--sync", prefs, "key", "ctrl+shift+F7")
-                time.sleep(.5)
-                assert not windows(SELECTOR), "focused Preferences did not suppress shortcut"
+                selector = wait(lambda: windows(SELECTOR), "focused Preferences permits capture shortcut")[0]
+                shot(selector, "lifecycle-focused-preferences-selector")
+                assert entries() == previous, "focused shortcut captured before region confirmation"
+                run("xdotool", "windowfocus", "--sync", selector, "key", "Escape")
+                wait(lambda: not windows(SELECTOR) and windows("Captures Preferences")
+                     and windows("Capture History"), "focused shortcut cancel restores Preferences and History")
+                assert entries() == previous, "focused shortcut cancellation added an artifact"
                 run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                 assert run("xdotool", "getwindowfocus").decode().strip() == other
                 # X11 activation acknowledgement precedes delivery of egui's
@@ -1678,7 +1755,7 @@ def main():
                   "Clear all preserves files and later arrivals"] if args.stack else []) +
                 (["real SNI menu History/Preferences/Quit", "close-to-background keeps previews",
                   "region/window/display global shortcuts", "release-only launch", "hidden root stays hidden",
-                  "focused Preferences suppression and unfocused/hidden Preferences launch",
+                  "focused/unfocused/hidden Preferences launch; cancellation preserves History",
                   "hidden Preferences countdown and cancellation",
                   "tray region/window capture from hidden Preferences",
                   "tray New Capture, empty-region guard and cross-app Escape preserve hidden root",

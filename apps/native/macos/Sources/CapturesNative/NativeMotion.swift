@@ -113,7 +113,10 @@ enum NativeMotion {
         return Catalog(keyframes: keyframes, transitions: transitions)
     }
 
-    static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    // Internal read seam: fixtures can select motion without writing the
+    // host's accessibility preferences. Live application code keeps this reader.
+    static var motionPreference: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    static var reduceMotion: Bool { motionPreference() }
 
     static func seconds(_ timing: MotionKeyframes.Timing, tokens: Tokens) -> Double {
         switch timing {

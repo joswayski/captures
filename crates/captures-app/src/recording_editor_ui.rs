@@ -5,6 +5,7 @@
 //! here is pure: no media, files, host windows or clocks.
 
 use captures_media::{ExportStage, QualityPreset};
+use captures_settings::VideoFormat;
 use serde::{Deserialize, Serialize};
 
 pub const TITLE_RECORDING: &str = "Edit recording";
@@ -17,6 +18,23 @@ pub const GIF_FRAME_RATES: [u16; 7] = [8, 10, 12, 15, 20, 24, 30];
 pub const GIF_MAXIMUM_WIDTHS: [u32; 5] = [320, 480, 640, 800, 1200];
 /// Shipping `.timeline-track` height and handle/label geometry, in points.
 pub const TIMELINE_TRACK_HEIGHT: f32 = 76.;
+
+/// Shipping `recordingInitialOutputFormat`: GIF sources stay GIF; an explicit
+/// GIF/WebM preference applies to videos, while MP4 preserves the source format.
+pub fn initial_output_format(source_mime: &str, preferred: VideoFormat) -> VideoFormat {
+    let essence = source_mime.split(';').next().unwrap_or_default().trim();
+    if essence.eq_ignore_ascii_case("image/gif") {
+        VideoFormat::Gif
+    } else if preferred != VideoFormat::Mp4 {
+        preferred
+    } else if essence.eq_ignore_ascii_case("video/webm")
+        || essence.eq_ignore_ascii_case("audio/webm")
+    {
+        VideoFormat::WebM
+    } else {
+        VideoFormat::Mp4
+    }
+}
 
 /// Header title: shipping shows "Edit GIF" for GIF sources.
 pub fn title(mime_type: &str) -> &'static str {
@@ -573,6 +591,22 @@ pub fn menus(gif: bool, base_width: u32, base_height: u32) -> Menus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_format_matches_shipping_source_and_preference_precedence() {
+        use VideoFormat::{Gif, Mp4, WebM};
+        for (mime, expected) in [
+            ("video/mp4", [Mp4, Gif, WebM]),
+            ("image/gif", [Gif, Gif, Gif]),
+            ("video/webm", [WebM, Gif, WebM]),
+            (" AUDIO/WEBM ; codecs=opus", [WebM, Gif, WebM]),
+            ("IMAGE/GIF; charset=binary", [Gif, Gif, Gif]),
+        ] {
+            for (preferred, expected) in [Mp4, Gif, WebM].into_iter().zip(expected) {
+                assert_eq!(initial_output_format(mime, preferred), expected, "{mime}");
+            }
+        }
+    }
 
     #[test]
     fn titles_and_times_follow_shipping_formatting() {

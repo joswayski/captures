@@ -328,7 +328,8 @@ enum CapturePhase {
     },
     ControlsCapturing,
     RecordingPreparing {
-        target: capture_controls::Target,
+        /// None when display selection belongs to the desktop portal.
+        target: Option<capture_controls::Target>,
     },
     RecordingCountdown,
     RecordingStarting,
@@ -719,7 +720,7 @@ struct CountdownExit {
     until: Instant,
     viewport: egui::ViewportId,
     title: &'static str,
-    target: CaptureTarget,
+    target: Option<CaptureTarget>,
     kind: crate::countdown::Kind,
     remaining: u8,
 }
@@ -728,7 +729,7 @@ impl CountdownExit {
     fn new(
         viewport: egui::ViewportId,
         title: &'static str,
-        target: CaptureTarget,
+        target: impl Into<Option<CaptureTarget>>,
         kind: crate::countdown::Kind,
         remaining: u8,
     ) -> Self {
@@ -736,7 +737,7 @@ impl CountdownExit {
             until: Instant::now() + Duration::from_millis(crate::countdown::CANCEL_LINGER_MS),
             viewport,
             title,
-            target,
+            target: target.into(),
             kind,
             remaining,
         }
@@ -1190,6 +1191,10 @@ impl MiniPreviews {
             settles,
             &preview_motion::settle_tween(),
         ) {
+            crate::diagnostics::event("preview-exit", || {
+                serde_json::json!({"id":artifact_id, "kind":format!("{kind:?}"),
+                    "started_ms":now, "delay_ms":delay_ms, "settles":settles})
+            });
             self.exiting.insert(
                 artifact_id.to_owned(),
                 ExitingCard {
@@ -1677,6 +1682,8 @@ pub struct Live {
     /// A hidden editor must finish its draft before this capture opens again.
     pending_editor_opens: HashMap<String, (PathBuf, captures_capture::CaptureMode)>,
     recording_editors: HashMap<String, crate::recording_editor::Editor>,
+    /// Latest Preferences snapshot, used only when opening a new editor.
+    recording_editor_preferences: Result<captures_settings::RecordingSettings, String>,
     recovery: crate::recording_recovery::Recovery,
     recovery_selection: u64,
     history_filter: HistoryFilter,
@@ -1720,6 +1727,8 @@ pub struct Live {
     flow: Option<CaptureFlow>,
     capture_phase: Option<CapturePhase>,
     countdown_target: Option<CaptureTarget>,
+    /// Windows unmapped before portal recording; restore only after the take.
+    recording_portal_windows: Vec<egui::ViewportId>,
     /// Keeps a cancelled countdown up briefly with the shipping "Cancelling…" copy.
     countdown_exit: Option<CountdownExit>,
     region_session: Option<Box<RegionSession>>,
@@ -2064,6 +2073,7 @@ impl Live {
             editors: HashMap::new(),
             pending_editor_opens: HashMap::new(),
             recording_editors: HashMap::new(),
+            recording_editor_preferences: Err("Recording preferences are still loading.".into()),
             history_filter: HistoryFilter::All,
             selection: Selection::default(),
             history_cards: HashMap::new(),
@@ -2093,6 +2103,7 @@ impl Live {
             flow: None,
             capture_phase: None,
             countdown_target: None,
+            recording_portal_windows: Vec::new(),
             countdown_exit: None,
             region_session: None,
             region_texture: None,
@@ -2270,16 +2281,43 @@ impl Live {
             .focus(ctx);
     }
 
+    pub fn set_recording_editor_preferences(
+        &mut self,
+        preferences: Result<captures_settings::RecordingSettings, String>,
+    ) {
+        self.recording_editor_preferences = preferences;
+    }
+
     fn open_recording_editor(
         &mut self,
         ctx: &egui::Context,
         id: String,
         output_directory: PathBuf,
     ) {
+        // Refocusing an existing editor never replaces its staged edits with
+        // newly saved application defaults.
+        if let Some(editor) = self.recording_editors.get(&id) {
+            editor.focus(ctx);
+            return;
+        }
+        let preferences = match &self.recording_editor_preferences {
+            Ok(preferences) => preferences.clone(),
+            Err(error) => {
+                self.error = Some(format!("Could not load recording preferences: {error}"));
+                self.media_open_failed = true;
+                return;
+            }
+        };
         self.recording_editors
             .entry(id.clone())
             .or_insert_with(|| {
-                crate::recording_editor::Editor::open(ctx, self.root.clone(), id, output_directory)
+                crate::recording_editor::Editor::open(
+                    ctx,
+                    self.root.clone(),
+                    id,
+                    output_directory,
+                    preferences,
+                )
             })
             .focus(ctx);
     }
@@ -2901,7 +2939,11 @@ impl Live {
         #[cfg(target_os = "linux")]
         if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
         {
-            self.launch_portal_screenshot(ctx, frame, request, settings);
+            if request == CaptureRequest::Recording(capture_controls::TargetMode::Display) {
+                self.launch_portal_recording(ctx, frame, settings);
+            } else {
+                self.launch_portal_screenshot(ctx, frame, request, settings);
+            }
             return;
         }
         if is_recording_phase(self.capture_phase)
@@ -3062,6 +3104,80 @@ impl Live {
     }
 
     #[cfg(target_os = "linux")]
+    fn launch_portal_recording(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &eframe::Frame,
+        settings: Result<AppSettings, String>,
+    ) {
+        if !self.can_start_capture() {
+            self.capture_failed("Capture is unavailable until the current action finishes.".into());
+            return;
+        }
+        let (settings, options) = match settings.and_then(|settings| {
+            portal_recording_options(&settings.recording).map(|options| (settings, options))
+        }) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.capture_failed(error);
+                return;
+            }
+        };
+        let flow = match CaptureFlow::begin_portal(0) {
+            Ok(flow) => flow,
+            Err(error) => {
+                self.capture_failed(error);
+                return;
+            }
+        };
+        let generation = flow.generation();
+        self.restore_root_visible = self.root_shown
+            || frame.winit_window().and_then(|window| window.is_visible()) == Some(true);
+        self.flow = Some(flow);
+        self.countdown_target = None;
+        self.auto_copy_on_capture = false;
+        self.open_editor_after_recording = settings
+            .recording
+            .open_editor_after_recording
+            .then(|| PathBuf::from(&settings.output_directory));
+        self.new_capture_shortcut = settings.new_capture_shortcut;
+        // Linux cannot exclude its controls from the granted video. The HUD
+        // states this explicitly and uses the existing manual Hide action.
+        self.include_recording_controls = true;
+        self.workspace_hidden = true;
+        self.recording_portal_windows = ctx.input(|input| {
+            input
+                .raw
+                .viewports
+                .keys()
+                .copied()
+                .filter(|id| *id != egui::ViewportId::ROOT)
+                .collect()
+        });
+        self.recording_portal_windows
+            .push(main_countdown_viewport());
+        for id in self
+            .recording_portal_windows
+            .iter()
+            .copied()
+            .filter(|id| *id != main_countdown_viewport())
+            .chain([egui::ViewportId::ROOT])
+        {
+            ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(false));
+            ctx.request_repaint_of(id);
+        }
+        self.capture_phase = Some(CapturePhase::RecordingPreparing { target: None });
+        self.recording_worker.send(recording::Command::Prepare {
+            generation,
+            recovery_root: recording_recovery_root(&self.root),
+            options,
+            display: None,
+        });
+        self.status = "Preparing portal recording…".into();
+        request_hidden_root_paint(ctx);
+    }
+
+    #[cfg(target_os = "linux")]
     fn launch_portal_screenshot(
         &mut self,
         ctx: &egui::Context,
@@ -3077,7 +3193,7 @@ impl Live {
             request,
             CaptureRequest::NewCapture | CaptureRequest::Display | CaptureRequest::DisplayMenu
         ) {
-            self.capture_failed("Wayland supports desktop-portal screenshots here; native region/window selection and recording are not available yet.".into());
+            self.capture_failed("Wayland supports desktop-portal screenshots and display recording here; native region/window selection is not available yet.".into());
             self.history_requested = true;
             return;
         }
@@ -3748,12 +3864,14 @@ impl Live {
                     // The menu stays up showing "Starting…" while the take prepares,
                     // as shipping's selector does until `start_recording` hides it.
                     self.selector_scope_generation.store(0, Ordering::Release);
-                    self.capture_phase = Some(CapturePhase::RecordingPreparing { target });
+                    self.capture_phase = Some(CapturePhase::RecordingPreparing {
+                        target: Some(target),
+                    });
                     self.recording_worker.send(recording::Command::Prepare {
                         generation,
                         recovery_root: recording_recovery_root(&self.root),
                         options,
-                        display,
+                        display: Some(display),
                     });
                     self.status = "Preparing recording… Press Escape to cancel.".into();
                     request_hidden_root_paint(ctx);
@@ -4283,6 +4401,19 @@ impl Live {
                     self.recording_snapshot_poll_pending = false;
                     let hud_changed = match result {
                         Ok(snapshot) => {
+                            if snapshot.state == RecordingState::Failed
+                                && matches!(
+                                    self.capture_phase,
+                                    Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
+                                )
+                            {
+                                self.error = snapshot.error;
+                                self.status =
+                                    "Recording source ended; partial media retained for recovery."
+                                        .into();
+                                self.finish_capture(ctx, false);
+                                continue;
+                            }
                             let warning_changed = self.recording_hud_error.apply(
                                 captures_app::recording_hud::ErrorEvent::Warning {
                                     warning: snapshot.warning.clone(),
@@ -4337,7 +4468,7 @@ impl Live {
                                 Ok(()) => {
                                     self.capture_phase = Some(CapturePhase::RecordingCountdown);
                                     self.status = "Recording ready. Press Escape to cancel.".into();
-                                    request_hidden_root_paint(ctx);
+                                    request_hidden_root_ui(ctx);
                                 }
                                 Err(error) => {
                                     self.capture_failure = Some(CaptureFailure {
@@ -4353,7 +4484,13 @@ impl Live {
                         Err(error) => {
                             // Shipping `initialize_recording_session` failures
                             // keep the menu open with the inline error.
-                            self.keep_controls_open_with_error(ctx, error);
+                            if self.capture_phase
+                                == Some(CapturePhase::RecordingPreparing { target: None })
+                            {
+                                self.fail_recording(ctx, error);
+                            } else {
+                                self.keep_controls_open_with_error(ctx, error);
+                            }
                         }
                     }
                 }
@@ -4403,12 +4540,20 @@ impl Live {
                             self.previews.restore_capture();
                             self.capture_phase = Some(CapturePhase::Recording);
                             self.status = "Recording in progress".into();
-                            request_hidden_root_paint(ctx);
+                            request_hidden_root_ui(ctx);
                         }
                         Err(failure) => {
                             let current = self.flow.as_ref().is_some_and(CaptureFlow::is_current);
                             let snapshot = failure.snapshot.map(|snapshot| *snapshot);
                             match snapshot {
+                                Some(snapshot)
+                                    if snapshot.state == RecordingState::Discarded
+                                        && !self.recording_has_started =>
+                                {
+                                    self.status = "Recording cancelled.".into();
+                                    self.finish_capture(ctx, false);
+                                    continue;
+                                }
                                 Some(snapshot)
                                     if snapshot.state == RecordingState::Failed
                                         && !self.recording_has_started
@@ -4670,13 +4815,12 @@ impl Live {
                                 | CapturePhase::RecordingCountdown
                         )
                     )
-                    && let Some(target) = self.countdown_target
                 {
                     let (title, kind) = main_countdown_presentation(self.capture_phase);
                     self.countdown_exit = Some(CountdownExit::new(
                         main_countdown_viewport(),
                         title,
-                        target,
+                        self.countdown_target,
                         kind,
                         remaining,
                     ));
@@ -4985,8 +5129,21 @@ impl Live {
             }
         }
         if self.capture_waiting_for_hide {
+            for id in &self.recording_portal_windows {
+                ctx.send_viewport_cmd_to(*id, egui::ViewportCommand::Visible(false));
+                ctx.request_repaint_of(*id);
+            }
+            let portal_windows_hidden = ctx.input(|input| {
+                self.recording_portal_windows.iter().all(|id| {
+                    input
+                        .raw
+                        .viewports
+                        .get(id)
+                        .is_none_or(|info| info.visible() == Some(false))
+                })
+            });
             let visible = frame.winit_window().and_then(|window| window.is_visible());
-            if visible == Some(false) && !self.companion_visible {
+            if visible == Some(false) && !self.companion_visible && portal_windows_hidden {
                 self.hidden_since.get_or_insert_with(Instant::now);
             } else {
                 self.hidden_since = None;
@@ -4996,6 +5153,29 @@ impl Live {
                 .is_some_and(|since| since.elapsed() >= Duration::from_millis(150))
             {
                 self.capture_waiting_for_hide = false;
+                if self.capture_phase == Some(CapturePhase::RecordingCountdown)
+                    && self.recording_snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.options.target == RecordingTarget::PortalDisplay
+                    })
+                {
+                    let Some(flow) = &self.flow else { return };
+                    if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
+                        println!(
+                            "{}",
+                            serde_json::json!({"event":"portal-recording-submit",
+                            "detail":{"generation":flow.generation(), "root_visible":visible,
+                                "children_hidden":portal_windows_hidden}})
+                        );
+                    }
+                    self.capture_phase = Some(CapturePhase::RecordingStarting);
+                    self.recording_worker.send(recording::Command::Start {
+                        generation: flow.generation(),
+                        exclude_captures_app: false,
+                    });
+                    self.status = "Waiting for desktop-portal recording consent…".into();
+                    request_hidden_root_paint(ctx);
+                    return;
+                }
                 let Some(display_id) = self.display_id.clone() else {
                     self.flow = None;
                     self.workspace_hidden = false;
@@ -5933,6 +6113,7 @@ impl Live {
         self.recording_hidden_notice_until = None;
         self.capture_phase = Some(CapturePhase::RecordingFailed);
         self.hud_action_failed(ctx, error);
+        request_hidden_root_ui(ctx);
     }
 
     /// The recording controls' Screenshot button: shipping
@@ -6329,6 +6510,12 @@ impl Live {
         self.window_selector.lock().unwrap().reset();
         self.controls.lock().unwrap().reset();
         self.workspace_hidden = false;
+        for id in self.recording_portal_windows.drain(..) {
+            if id != main_countdown_viewport() {
+                ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
+                ctx.request_repaint_of(id);
+            }
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.restore_root_visible));
         request_hidden_root_paint(ctx);
         ctx.request_repaint();
@@ -6704,8 +6891,13 @@ impl Live {
             }
         }
         // The Close streak's stepped horizontal blurs, once per exit.
-        for exiting in self.previews.exiting.values_mut() {
-            if exiting.streak.is_empty()
+        for (id, exiting) in &mut self.previews.exiting {
+            if self
+                .previews
+                .exits
+                .exiting(id)
+                .is_some_and(|exit| exit.kind == captures_app::preview_motion::ExitKind::Dismiss)
+                && exiting.streak.is_empty()
                 && let Some(media) = &exiting.media
             {
                 exiting.streak = crate::mini_preview::streak_blur_images(media)
@@ -7700,11 +7892,7 @@ impl Live {
         }
         if let Some((hud_state, phase_busy)) =
             recording_hud_state(self.capture_phase, self.recording_has_started)
-            && let (Some(flow), Some(snapshot), Some(target)) = (
-                &self.flow,
-                self.recording_snapshot.clone(),
-                self.countdown_target,
-            )
+            && let (Some(flow), Some(snapshot)) = (&self.flow, self.recording_snapshot.clone())
         {
             let generation = flow.generation();
             let running = matches!(
@@ -7731,20 +7919,24 @@ impl Live {
             let include_controls = self.include_recording_controls;
             let error_line = self.recording_hud_error.line(snapshot.error.as_deref());
             let microphone_peak = self.recording_microphone_peak;
-            let position = target.position
-                + egui::vec2(
-                    (target.size.x - crate::recording_hud::SIZE.x).max(0.) / 2.,
-                    (target.size.y - crate::recording_hud::SIZE.y).max(0.) - 20.,
-                );
+            let position = self.countdown_target.map(|target| {
+                target.position
+                    + egui::vec2(
+                        (target.size.x - crate::recording_hud::SIZE.x).max(0.) / 2.,
+                        (target.size.y - crate::recording_hud::SIZE.y).max(0.) - 20.,
+                    )
+            });
             ctx.show_viewport_deferred(
                 egui::ViewportId::from_hash_of("recording-controls"),
-                egui::ViewportBuilder::default()
+                egui::ViewportBuilder {
+                    position,
+                    ..egui::ViewportBuilder::default()
                     .with_title("Captures Recording Controls")
                     .with_inner_size(crate::recording_hud::SIZE)
-                    .with_position(position)
                     .with_transparent(true)
                     .with_decorations(false)
-                    .with_always_on_top(),
+                    .with_always_on_top()
+                },
                 move |ui, _| {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Visible(!controls_hidden));
@@ -7758,7 +7950,11 @@ impl Live {
                             recording_controls_are_excluded(include_controls),
                         ));
                     let notice = if cfg!(target_os = "linux") || include_controls {
-                        "These controls will show in recordings · Use Hide controls to keep them out"
+                        if hide_available {
+                            "These controls will show in recordings · Use Hide controls to keep them out"
+                        } else {
+                            "These controls will show in recordings · Hide unavailable without a tray"
+                        }
                     } else {
                         "These controls won’t show in recordings"
                     };
@@ -7834,14 +8030,16 @@ impl Live {
                 let offset = (crate::recording_hud::SIZE - notice_size) / 2.;
                 ctx.show_viewport_deferred(
                     egui::ViewportId::from_hash_of("recording-controls-hidden"),
-                    egui::ViewportBuilder::default()
-                        .with_title(captures_app::recording_hud::HIDDEN_NOTICE_TITLE)
-                        .with_inner_size(notice_size)
-                        .with_position(position + offset)
-                        .with_transparent(true)
-                        .with_decorations(false)
-                        .with_always_on_top()
-                        .with_mouse_passthrough(true),
+                    egui::ViewportBuilder {
+                        position: position.map(|position| position + offset),
+                        ..egui::ViewportBuilder::default()
+                            .with_title(captures_app::recording_hud::HIDDEN_NOTICE_TITLE)
+                            .with_inner_size(notice_size)
+                            .with_transparent(true)
+                            .with_decorations(false)
+                            .with_always_on_top()
+                            .with_mouse_passthrough(true)
+                    },
                     move |ui, _| {
                         notice_tokens.glass_controls(ui);
                         // Shipping `recording-controls-hidden-lifecycle` (6 s) ends
@@ -7871,12 +8069,14 @@ impl Live {
                 let tokens = t.clone();
                 ctx.show_viewport_deferred(
                     egui::ViewportId::from_hash_of("recording-restart-confirmation"),
-                    egui::ViewportBuilder::default()
+                    egui::ViewportBuilder {
+                        position: position.map(|position| position + egui::vec2(35., -170.)),
+                        ..egui::ViewportBuilder::default()
                         .with_title("Restart recording?")
                         .with_inner_size([360., 150.])
-                        .with_position(position + egui::vec2(35., -170.))
                         .with_always_on_top()
-                        .with_resizable(false),
+                        .with_resizable(false)
+                    },
                     move |ui, _| {
                         tokens.glass_controls(ui);
                         if ui.input(|input| input.viewport().close_requested()) {
@@ -7915,12 +8115,14 @@ impl Live {
                 // Shipping `deleteRecording` message dialog.
                 ctx.show_viewport_deferred(
                     egui::ViewportId::from_hash_of("recording-delete-confirmation"),
-                    egui::ViewportBuilder::default()
-                        .with_title("Delete recording?")
-                        .with_inner_size([360., 150.])
-                        .with_position(position + egui::vec2(35., -170.))
-                        .with_always_on_top()
-                        .with_resizable(false),
+                    egui::ViewportBuilder {
+                        position: position.map(|position| position + egui::vec2(35., -170.)),
+                        ..egui::ViewportBuilder::default()
+                            .with_title("Delete recording?")
+                            .with_inner_size([360., 150.])
+                            .with_always_on_top()
+                            .with_resizable(false)
+                    },
                     move |ui, _| {
                         tokens.glass_controls(ui);
                         if ui.input(|input| input.viewport().close_requested()) {
@@ -8335,11 +8537,10 @@ impl Live {
             if clock.remaining(Instant::now()) > 0 {
                 let t = t.clone();
                 let generation = flow.generation();
-                let target = self.countdown_target.expect("countdown target validated");
                 let (title, kind) = main_countdown_presentation(self.capture_phase);
                 ctx.show_viewport_deferred(
                     main_countdown_viewport(),
-                    capture_viewport(title, target.monitor, target.position, target.size),
+                    countdown_viewport(title, self.countdown_target, &t),
                     move |ui, _| {
                         if ui.input(|i| {
                             i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
@@ -8381,12 +8582,7 @@ impl Live {
                 let t = t.clone();
                 ctx.show_viewport_deferred(
                     exit.viewport,
-                    capture_viewport(
-                        exit.title,
-                        exit.target.monitor,
-                        exit.target.position,
-                        exit.target.size,
-                    ),
+                    countdown_viewport(exit.title, exit.target, &t),
                     move |ui, _| {
                         // Shipping `.recording-countdown.exiting` fade over the linger.
                         let now = Instant::now();
@@ -8467,22 +8663,36 @@ impl Live {
             #[cfg(target_os = "linux")]
             if ui.ctx().data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true) {
                 // Wayland may provide neither a tray host nor global shortcuts.
-                // Keep portal screenshots reachable from the native window.
+                // Keep portal capture reachable from the native window.
                 ui.add_space(t.number("s-5"));
-                let button = ui.add_enabled_ui(self.can_launch_capture(), |ui| {
-                    crate::preferences_widgets::button(ui, t, "Take screenshot…", true)
+                let (button, record) = ui.horizontal(|ui| {
+                    let button = ui.add_enabled_ui(self.can_launch_capture(), |ui| {
+                        crate::preferences_widgets::button(ui, t, "Take screenshot…", true)
+                    }).inner;
+                    let record = ui.add_enabled_ui(self.can_launch_capture(), |ui| {
+                        crate::preferences_widgets::button(ui, t, "Record display…", false)
+                    }).inner;
+                    (button, record)
                 }).inner;
                 if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
                     println!("{}", serde_json::json!({"event":"portal-screenshot-layout",
                         "detail":{"button":[button.rect.min.x, button.rect.min.y,
                             button.rect.max.x, button.rect.max.y], "enabled":button.enabled(),
                             "viewport_size":ui.input(|input| [input.content_rect().width(), input.content_rect().height()])}}));
+                    println!("{}", serde_json::json!({"event":"portal-recording-layout",
+                        "detail":{"button":[record.rect.min.x, record.rect.min.y,
+                            record.rect.max.x, record.rect.max.y], "enabled":record.enabled(),
+                            "viewport_size":ui.input(|input| [input.content_rect().width(), input.content_rect().height()])}}));
                 }
                 if button.clicked() {
                     self.request_capture(CaptureRequest::Display);
                     ui.ctx().request_repaint();
                 }
-                ui.label(RichText::new("Desktop portal • Screenshots return to History; floating previews, region/window selection and recording are unavailable.")
+                if record.clicked() {
+                    self.request_capture(CaptureRequest::Recording(capture_controls::TargetMode::Display));
+                    ui.ctx().request_repaint();
+                }
+                ui.label(RichText::new("Desktop portal • Screenshots and display recording. Region/window selection and floating previews are unavailable.")
                     .size(t.number("text-sm")).color(t.color("text-subtle")));
             }
             if self.can_hide == Some(false) {
@@ -9239,6 +9449,28 @@ fn capture_viewport(
         .with_taskbar(false)
 }
 
+fn countdown_viewport(
+    title: &str,
+    target: Option<CaptureTarget>,
+    t: &Tokens,
+) -> egui::ViewportBuilder {
+    match target {
+        Some(target) => capture_viewport(title, target.monitor, target.position, target.size),
+        None => egui::ViewportBuilder::default()
+            .with_title(title)
+            .with_inner_size(egui::vec2(
+                t.number("countdown-number-min") * 2. + t.number("s-9"),
+                t.number("countdown-number-min") * 2.,
+            ))
+            .with_transparent(true)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_has_shadow(false)
+            .with_always_on_top()
+            .with_taskbar(false),
+    }
+}
+
 fn same_display_geometry(left: &DisplayDescriptor, right: &DisplayDescriptor) -> bool {
     left.id == right.id
         && left.x == right.x
@@ -9371,6 +9603,31 @@ fn recording_rect(rect: LogicalRect, display: &DisplayDescriptor) -> Result<Capt
 
 fn recording_recovery_root(history_root: &Path) -> PathBuf {
     history_root.with_file_name("recording-recovery")
+}
+
+#[cfg(target_os = "linux")]
+fn portal_recording_options(
+    settings: &captures_settings::RecordingSettings,
+) -> Result<RecordingOptions, String> {
+    let options = RecordingOptions {
+        kind: RecordingKind::Video,
+        target: RecordingTarget::PortalDisplay,
+        frames_per_second: settings.video_fps,
+        max_resolution: settings.video_max_resolution,
+        countdown_seconds: settings.countdown_seconds,
+        show_cursor: settings.show_cursor,
+        highlight_clicks: settings.highlight_clicks,
+        show_keystrokes: settings.show_keystrokes,
+        audio: AudioOptions {
+            capture_system_audio: settings.capture_system_audio,
+            microphone_device_id: settings.microphone_device_id.clone(),
+            mono_output: settings.mono_audio,
+            ..AudioOptions::default()
+        },
+        gif: GifOptions::default(),
+    };
+    options.validate().map_err(str::to_owned)?;
+    Ok(options)
 }
 
 /// The HUD state for a capture phase, and whether an action is in flight.
@@ -9720,7 +9977,7 @@ mod tests {
             // Shipping `screenshot_capture_is_blocked`: refused silently.
             (
                 CapturePhase::RecordingPreparing {
-                    target: capture_controls::Target::Display,
+                    target: Some(capture_controls::Target::Display),
                 },
                 None,
             ),
@@ -9774,7 +10031,7 @@ mod tests {
             // Shipping `screenshot_capture_is_blocked`: refused silently.
             for phase in [
                 CapturePhase::RecordingPreparing {
-                    target: capture_controls::Target::Display,
+                    target: Some(capture_controls::Target::Display),
                 },
                 CapturePhase::RecordingCountdown,
                 CapturePhase::RecordingPausing,
@@ -10526,7 +10783,7 @@ mod tests {
         live.display_id = Some("left".into());
         live.countdown_target = Some(target(0));
         live.capture_phase = Some(CapturePhase::RecordingPreparing {
-            target: capture_controls::Target::Display,
+            target: Some(capture_controls::Target::Display),
         });
         live.controls
             .lock()
@@ -11329,6 +11586,44 @@ mod tests {
         assert_eq!(interpolated_recording_elapsed(37_000, None), 37_000);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portal_recording_preserves_preferences_without_inventing_a_display() {
+        let mut settings = captures_settings::RecordingSettings {
+            video_fps: 15,
+            video_max_resolution: captures_recording::MaxResolution::P1080,
+            countdown_seconds: 5,
+            show_cursor: true,
+            capture_system_audio: false,
+            microphone_device_id: Some("chosen microphone".into()),
+            mono_audio: true,
+            ..Default::default()
+        };
+        let options = portal_recording_options(&settings).unwrap();
+        assert_eq!(options.kind, RecordingKind::Video);
+        assert_eq!(options.frames_per_second, 15);
+        assert_eq!(
+            options.max_resolution,
+            captures_recording::MaxResolution::P1080
+        );
+        assert_eq!(options.countdown_seconds, 5);
+        assert!(options.show_cursor && options.audio.mono_output);
+        assert!(!options.audio.capture_system_audio);
+        assert_eq!(
+            options.audio.microphone_device_id.as_deref(),
+            Some("chosen microphone")
+        );
+        assert_eq!(
+            serde_json::to_value(options.target).unwrap(),
+            serde_json::json!({"type":"portal_display"})
+        );
+        settings.highlight_clicks = true;
+        assert!(portal_recording_options(&settings).is_err());
+        settings.highlight_clicks = false;
+        settings.show_keystrokes = true;
+        assert!(portal_recording_options(&settings).is_err());
+    }
+
     #[test]
     fn recording_options_are_video_and_preserve_the_selected_target_and_settings() {
         let display = DisplayDescriptor {
@@ -11514,6 +11809,28 @@ mod tests {
                 crate::countdown::Kind::Screenshot
             )
         );
+    }
+
+    #[test]
+    fn portal_countdown_is_compact_while_direct_countdown_keeps_its_monitor() {
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let portal = countdown_viewport("Recording", None, &tokens);
+        assert_eq!(portal.position, None);
+        assert_eq!(portal.monitor, None);
+        assert_ne!(portal.fullscreen, Some(true));
+        assert_eq!(portal.inner_size, Some(egui::vec2(332., 300.)));
+        assert_eq!(portal.transparent, Some(true));
+        let target = CaptureTarget {
+            monitor: 2,
+            position: egui::pos2(-640., 75.),
+            size: egui::vec2(1280., 900.),
+            preview_bounds: None,
+        };
+        let direct = countdown_viewport("Recording", Some(target), &tokens);
+        assert_eq!(direct.monitor, Some(2));
+        assert_eq!(direct.position, Some(egui::pos2(-640., 75.)));
+        assert_eq!(direct.inner_size, Some(egui::vec2(1280., 900.)));
+        assert_eq!(direct.fullscreen, Some(true));
     }
 
     #[test]

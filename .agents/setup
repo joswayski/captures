@@ -23,19 +23,24 @@ packages=(
   libasound2-dev
   libclang-dev
   libdbus-1-dev
+  libdrm-dev
   libegl-dev
   libgbm-dev
+  libinih-dev
   libpipewire-0.3-dev
   libspa-0.2-dev
   librsvg2-dev
   libssl-dev
+  libsystemd-dev
   libwayland-dev
   libwebkit2gtk-4.1-dev
   libxcb1-dev
   libxdo-dev
   libxkbcommon-x11-0
   libxrandr-dev
+  meson
   nasm
+  ninja-build
   openbox
   picom
   pipewire
@@ -43,10 +48,13 @@ packages=(
   postgresql
   python3-dbus
   python3-gi
+  python3-gi-cairo
   python3-xlib
   sway
   swaybg
+  wayland-protocols
   wget
+  wireplumber
   wl-clipboard
   x11-apps
   x11-utils
