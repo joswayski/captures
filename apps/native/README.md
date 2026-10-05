@@ -27,8 +27,9 @@ gates.
 `captures_app::updater` implements shared signed-manifest checks and bounded,
 streamed downloads and temporary package staging without Tauri. It is **not an
 enabled updater**: Preferences, tray actions and the update-notice fixture remain
-unchanged. There is no bundled native signing key, release endpoint, installer,
-restart or rollback yet.
+unchanged. There is no bundled native signing key, release endpoint, installer
+helper or restart yet. The explicit development-package replacement API below
+adds rollback, but no host or diagnostic calls it.
 `native_update_probe` creates no window, changes no installed/profile data and
 removes its download and staged files on normal exit. It requires an explicit
 endpoint, standard two-line Minisign public key file, renderer and current version:
@@ -86,8 +87,8 @@ source/licenses, matching `BUILD_INFO.json`, executable hash and permissions,
 and the macOS development bundle identity/resources. It never executes binaries,
 imports registration files or changes a profile. `StagedUpdate` owns cleanup;
 callers must keep it alive while reading its paths. Exposed files are not immutable:
-any future installer must reverify its copies before use. Forced termination can
-leave private scratch behind; this is not installed-app rollback.
+replacement rehashes and re-extracts the retained verified archive instead of
+trusting those files. Forced termination can leave private staging scratch behind.
 
 The staging format deliberately rejects symlinks/hardlinks/special entries,
 traversal/absolute paths, Windows device/stream names, trailing dots/spaces,
@@ -100,6 +101,36 @@ supported. Local PAX path metadata is bounded; global PAX and GNU extensions are
 rejected. Tests use the real Python packager with inert bodies for all four target
 layouts and adversarial archives. These are extraction checks, not signed OS
 distribution or real-machine acceptance.
+
+### Development-package replacement and interruption recovery
+
+`StagedUpdate::replace` explicitly replaces an existing **development package
+root**, not an `.app` bundle, Preview installation or profile. It validates the
+old package, re-extracts signed bytes on the destination filesystem, and retains
+the entire old package until `PendingInstallation::confirm`. `rollback` or
+`recover_installation` restores unconfirmed replacements, including the gap
+between renames. Confirmed replacements finish cleanup without restoring old bytes.
+Transaction IDs reject stale handles; an OS file lock serializes operations and
+releases after termination. Cleanup commits an atomic directory rename before
+recursive deletion, so partial deletion does not destroy recovery's decision.
+
+This API requires the exact absolute destination path, the current host target,
+a trusted parent directory, all app processes stopped, the caller running outside
+the package, and all profile/export data outside it. It never launches either
+version or runs a health check: the future helper must receive a successful
+health acknowledgement before confirming. Changed files, invalid receipts,
+links/junctions and unfamiliar packages are preserved for manual recovery.
+Interruption before the preparation receipt is published can leave scratch that
+requires manual cleanup; it has not moved the old app. A persistent empty sibling
+lock file is intentional. Process-interruption recovery is **not a cross-platform
+power-loss guarantee**; Windows directory syncing is not supplied by Rust `std`.
+
+Tests use real Python-packaged, signed **inert** binaries/sidecars and disposable
+profiles. They cover each rename/cleanup boundary, exact old/new content,
+tampering, cancellation, locks, stale handles and conflicting files. The existing
+macOS/Windows updater CI jobs include these tests; physical installed-app,
+permission-identity and crash/relaunch acceptance remain open. No GUI, diagnostic,
+channel, registration or installed-data migration is enabled by this backend.
 
 ## Native sharing controls
 
