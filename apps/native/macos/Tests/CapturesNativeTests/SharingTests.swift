@@ -145,7 +145,7 @@ final class SharingTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(form.footer.frame.minY, 0, "\(appearance)/\(state)/\(size)")
                     XCTAssertEqual(form.footer.frame.maxY, size.height, accuracy: 0.01)
                     XCTAssertLessThanOrEqual(form.scroll.frame.maxY, form.footer.frame.minY)
-                    let actions = form.root.subviewsRecursive.compactMap { $0 as? CaptureButton }
+                    let actions = descendants(form.root).compactMap { $0 as? CaptureButton }
                     XCTAssertFalse(actions.isEmpty)
                     XCTAssertTrue(actions.allSatisfy { !$0.isEnabled })
                     for action in actions {
@@ -169,6 +169,10 @@ final class SharingTests: XCTestCase {
         XCTAssertThrowsError(try Options(["--scene", "sharing", "--live"]))
         XCTAssertThrowsError(try Options(["--scene", "sharing", "--exercise"]))
         XCTAssertThrowsError(try Options(["--scene", "sharing"], bundled: true))
+    }
+
+    private func descendants(_ view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants($0) }
     }
 
     private func render(_ form: SharingController, name: String) throws {
