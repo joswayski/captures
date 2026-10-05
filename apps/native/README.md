@@ -203,6 +203,49 @@ and exact backup retention. Host tests cover settings/render/tool readiness and
 termination. Linux X11/software-rendered handoff is tested in the orb; macOS,
 Windows and live Wayland acceptance remain unverified.
 
+## Explicit offline development-profile import
+
+`native_profile_import` copies explicitly selected shipping settings and local
+data into a **new** native development profile. It does not discover installed
+locations, change the source, launch an app or connect profile import to updating.
+Stop shipping/native app processes and other data writers, exclude new launches,
+and choose a private destination parent you own:
+
+```sh
+cargo run -p captures-app --bin native_profile_import -- \
+  --source-settings-file "$ABSOLUTE_SHIPPING_SETTINGS_JSON" \
+  --source-data-directory "$ABSOLUTE_SHIPPING_LOCAL_DATA_DIRECTORY" \
+  --new-development-profile "$ABSOLUTE_NEW_NATIVE_PROFILE" \
+  --all-app-processes-stopped
+```
+
+The stopped-process flag is an operator assertion, not detection. The destination
+must not exist or overlap source data. Import copies only settings, `capture-history`,
+`screenshot-editor-drafts` and `recording-recovery`; account/credential stores,
+registration and external exports are not imported. `source-snapshot` retains the
+selected original file bytes and empty directories with SHA-256 receipts. A second
+copy supplies native `settings.json`, `history`, `editor-drafts` and recovery.
+Expect roughly twice the selected source size in additional storage. Limits are
+100,000 entries, 64 GiB selected source bytes and 8 MiB JSON documents.
+
+Schema migrations run only on the working copy. New exports use the profile's
+`exports` folder; copied History cannot overwrite/trash shipping exports. Login,
+onboarding and permission/restart bookkeeping reset for the new app identity.
+Invalid/newer schemas, missing media, reference-only recordings without retained
+History media, unfinished publication intents and links/special files reject the
+whole import. Nothing outside the selected trees is followed to repair them.
+Source changes, conflicts and cancellation leave no partially published profile.
+An OS lock serializes imports; its empty sibling file remains. Forced termination
+may leave private sibling scratch. This is not a power-loss durability claim.
+
+Launch either development host manually with `--live --history-root
+"$ABSOLUTE_NEW_NATIVE_PROFILE/history" --settings-file
+"$ABSOLUTE_NEW_NATIVE_PROFILE/settings.json"`. Setup must run for the new identity.
+Rollback means quitting native and returning to the unchanged shipping profile;
+do not copy a snapshot over installed data. The signed update helper still accepts
+only a new empty test profile. Automatic handoff, reference-only-media reconciliation,
+OS permission identity and physical macOS/Windows/X11/Wayland acceptance remain open.
+
 ## Native sharing controls
 
 Both hosts connect mini-preview Share and selected History to the shared Rust

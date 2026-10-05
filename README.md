@@ -459,6 +459,10 @@ update channel is enabled. An explicit [development helper](apps/native/README.m
 can replace a stopped development package and test startup with a new empty
 profile, or explicitly recover a failed replacement after all app processes stop.
 It does not update installed copies or import their data.
+A separate [offline development-profile import](apps/native/README.md#explicit-offline-development-profile-import)
+can copy explicitly selected shipping settings, retained History and drafts into a
+new isolated profile with an original-data snapshot. It leaves shipping data and
+exports unchanged; automatic migration and installed-app update handoff remain open.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
