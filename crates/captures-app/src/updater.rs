@@ -4,9 +4,13 @@
 //! The signed manifest binds the development identity, renderer, target, version,
 //! artifact URL, byte count and SHA-256. Downloads remain private temporary files
 //! until all checks succeed. Staging validates packages in private temporary
-//! directories. Nothing installs, replaces, registers or relaunches an app.
+//! directories. Explicit replacement retains the previous development package
+//! until confirmation, with interruption recovery. Nothing registers, launches,
+//! activates a channel or changes a profile; no host calls replacement yet.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
+mod installation;
 mod staging;
+pub use installation::{PendingInstallation, recover_installation};
 pub use staging::StagedUpdate;
 
 use std::{
@@ -97,6 +101,8 @@ pub enum Error {
     ArchivePath,
     #[error("Native update package is incomplete or has the wrong development identity.")]
     Package,
+    #[error("Native update replacement cannot proceed: {0}")]
+    Installation(&'static str),
     #[error("Native update cancelled.")]
     Cancelled,
     #[error("Native update file operation failed: {0}")]

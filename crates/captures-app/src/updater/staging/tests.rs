@@ -7,7 +7,7 @@ const EXECUTABLE: &[u8] = b"asymmetric native bytes\0\xff";
 
 // Use the real Python packager, not the extraction code, for layout/hash fixtures.
 // The media bodies are inert test bytes, not playable/runnable distribution files.
-fn package_fixture(target: Target, scenario: &str) -> Vec<u8> {
+pub(in crate::updater) fn package_fixture(target: Target, scenario: &str) -> Vec<u8> {
     let root = tempfile::tempdir().unwrap();
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -77,7 +77,11 @@ else:
     .unwrap()
 }
 
-fn verified(body: &[u8], target: Target, directory: &Path) -> VerifiedUpdate {
+pub(in crate::updater) fn verified(
+    body: &[u8],
+    target: Target,
+    directory: &Path,
+) -> VerifiedUpdate {
     let key = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
     let renderer = if matches!(target, Target::MacArm64 | Target::MacX64) {
         Renderer::Appkit

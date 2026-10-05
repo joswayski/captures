@@ -1818,8 +1818,9 @@ unsupported metadata, bounds entries/implicit directories and expanded bytes,
 and validates the development package's target, executable hash/permissions,
 media sidecars, corresponding source/licenses and macOS bundle identity/resources.
 Drop, failure and cancellation remove owned scratch without changing an existing
-app/profile. Exposed staged paths are mutable; a future installer must reverify
-its copies. Forced termination may leave scratch, not an installed update.
+app/profile. Exposed staged paths are mutable; replacement re-extracts the
+retained verified archive instead of trusting them. Forced termination may leave
+scratch, not an installed update.
 
 `native_update_probe --stage-directory EXISTING_DIRECTORY` exercises acquisition
 and temporary validation without a GUI, execution, registration or relaunch. The
@@ -1837,6 +1838,36 @@ include the deliberately narrow ASCII resource-path and archive-format contract.
 This closes neither signed OS distribution nor the Notices/updates gate. Installed
 replacement/relaunch, rollback, channel publication and installed-data migration
 remain separate work.
+
+### Development-package replacement: shared transaction, no host integration
+
+`StagedUpdate::replace` now validates an explicitly selected stopped development
+package, rehashes/re-extracts signed bytes beside it and retains the entire previous
+package until explicit health confirmation. Unconfirmed activation and interrupted
+rollback restore the previous tree. A receipt binds the destination/host target and
+both complete tree hashes; transaction IDs reject old handles. OS file locks
+serialize operations. Cleanup atomically moves the transaction into disposable
+storage before deleting it, retaining the decision across partial deletion.
+Changed files, links/junctions and invalid receipts are preserved for manual recovery.
+
+The API requires a trusted parent, profiles outside the package and an updater
+process outside it, with all app processes stopped. No host or diagnostic invokes
+replacement; no helper, automatic health/relaunch, registration, channel or profile
+migration is enabled. Preparation before receipt publication may leave harmless
+scratch requiring manual cleanup. Process-interruption recovery does not establish
+cross-platform power-loss durability. [API limits](../apps/native/README.md#development-package-replacement-and-interruption-recovery)
+also document the persistent empty lock file.
+
+| Platform | Replacement slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared Rust package-root transaction and current-target checks; same-target inert package fixtures included in existing macOS updater CI; helper, OS signing/permission identity and physical acceptance open |
+| Windows | Same transaction and OS file lock; Windows-only locked-directory rename-failure regression included in existing updater CI; helper, relaunch and physical acceptance open |
+| X11 | Signed inert Linux package replacement/confirmation, all rename/cleanup states, tamper/cancel/conflicts and exact rollback checked in the orb; no GUI/capture changes |
+| Wayland | Identical window-independent transaction; no compositor behavior changed or accepted |
+
+This backend does not close distribution or Notices/updates acceptance. Executable
+handoff, health/relaunch integration, OS installers/signing, channel publication
+and installed-data backup/migration remain open.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

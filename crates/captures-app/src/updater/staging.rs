@@ -1,5 +1,5 @@
 //! Bounded extraction of the development packages produced by native/package.py.
-//! Never install, register, replace, execute or change an existing profile.
+//! Staging never installs, replaces, executes or changes an existing profile.
 use super::{
     DEVELOPMENT_IDENTITY, Error, ReleaseInfo, Target, VerifiedUpdate, check_cancel, decode_hash,
     verify_file,
@@ -14,25 +14,26 @@ use std::{
 };
 use tempfile::TempDir;
 
-const MAX_ENTRIES: usize = 10_000;
-const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub(super) const MAX_ENTRIES: usize = 10_000;
+pub(super) const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+pub(super) const MAX_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 256 * 1024;
 const MAX_CENTRAL_BYTES: u64 = 8 * 1024 * 1024;
 
 /// A validated private package, not an installed update. Drop removes it.
-/// Retain this owner while inspecting paths. A future installer must reverify
-/// copied files; exposing a path does not make its contents permanently immutable.
+/// Retain this owner while inspecting paths. Replacement re-extracts the retained
+/// verified archive; exposed files are not trusted as installation inputs.
 pub struct StagedUpdate {
+    // Close the archive before TempDir cleanup, including on Windows.
+    pub(super) archive: VerifiedUpdate,
     _directory: TempDir,
-    info: ReleaseInfo,
     package: PathBuf,
     executable: PathBuf,
 }
 
 impl StagedUpdate {
     pub fn info(&self) -> &ReleaseInfo {
-        &self.info
+        self.archive.info()
     }
     pub fn package(&self) -> &Path {
         &self.package
@@ -68,12 +69,12 @@ impl VerifiedUpdate {
         let package = extraction
             .root
             .join(extraction.package.ok_or(Error::Package)?);
-        let executable = validate_package(&package, &self.info, &extraction.executables, cancel)?;
-        drop(copy);
+        let executable =
+            validate_package(&package, self.info.target, &extraction.executables, cancel)?;
         check_cancel(cancel)?;
         Ok(StagedUpdate {
+            archive: copy,
             _directory: directory,
-            info: self.info,
             package,
             executable,
         })
@@ -523,13 +524,13 @@ fn required_file(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_package(
+pub(super) fn validate_package(
     package: &Path,
-    info: &ReleaseInfo,
+    target: Target,
     executables: &HashSet<PathBuf>,
     cancel: &CancelToken,
 ) -> Result<PathBuf, Error> {
-    let (platform, binary, resources) = match info.target {
+    let (platform, binary, resources) = match target {
         Target::MacArm64 | Target::MacX64 => (
             "macos",
             "Captures Native Development.app/Contents/MacOS/CapturesNative",
@@ -543,7 +544,7 @@ fn validate_package(
     if !build.development
         || build.platform != platform
         || build.binary != binary
-        || build.media_target.as_deref() != Some(info.target.as_str())
+        || build.media_target.as_deref() != Some(target.as_str())
         || build.source_commit.as_ref().is_some_and(|commit| {
             commit.len() != 40 || !commit.bytes().all(|c| c.is_ascii_hexdigit())
         })
@@ -561,7 +562,7 @@ fn validate_package(
     for name in ["ffmpeg", "ffprobe"] {
         let tool = executable.parent().unwrap().join("binaries").join(format!(
             "{name}-{}{}",
-            info.target.as_str(),
+            target.as_str(),
             if platform == "windows" { ".exe" } else { "" }
         ));
         required_file(&tool)?;
@@ -633,4 +634,4 @@ fn validate_package(
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::updater) mod tests;
