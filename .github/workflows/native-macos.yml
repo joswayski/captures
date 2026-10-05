@@ -73,8 +73,24 @@ jobs:
           fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.2
           window.contentView?.layer?.add(fade, forKey: "probe")
           CATransaction.commit()
-          let deadline = Date().addingTimeInterval(3)
+          let started = Date()
+          let deadline = started.addingTimeInterval(3)
           while !completed && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+          let elapsed = Date().timeIntervalSince(started)
+          // Occlusion arrives as a window-server event: pump AppKit's queue
+          // before reading it, then name every on-screen window above ours.
+          let settle = Date().addingTimeInterval(1)
+          while Date() < settle {
+            if let event = app.nextEvent(matching: .any, until: Date().addingTimeInterval(0.05),
+                                         inMode: .default, dequeue: true) { app.sendEvent(event) }
+          }
+          let above = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow],
+                                                 CGWindowID(window.windowNumber)) as? [[String: Any]] ?? []
+          for info in above {
+            print("window above probe:", info[kCGWindowOwnerName as String] ?? "?",
+                  "name:", info[kCGWindowName as String] ?? "", "layer:", info[kCGWindowLayer as String] ?? "?",
+                  "alpha:", info[kCGWindowAlpha as String] ?? "?", "bounds:", info[kCGWindowBounds as String] ?? "?")
+          }
           let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
           print("screens:", NSScreen.screens.map { "\($0.localizedName) \($0.frame.size) @\($0.backingScaleFactor)x" })
           print("main display asleep:", CGDisplayIsAsleep(CGMainDisplayID()) != 0)
@@ -82,7 +98,7 @@ jobs:
                 "screen locked:", session["CGSSessionScreenIsLocked"] ?? false)
           print("Reduce Motion:", NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
           print("probe window visible:", window.isVisible, "unoccluded:", window.occlusionState.contains(.visible))
-          print("Core Animation completion within 3 s:", completed)
+          print("Core Animation completion within 3 s:", completed, String(format: "after %.2f s (animation 0.20 s)", elapsed))
           if !completed {
             print("::warning::The window server is not compositing this session (display off, asleep or locked); Core Animation completions never fire, so the on-screen motion tests cannot settle.")
           }

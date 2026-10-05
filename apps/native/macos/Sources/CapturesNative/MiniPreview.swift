@@ -514,6 +514,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var isHighlighting: Bool { highlightRing.animation(forKey: "preview-capture-highlight") != nil }
     private var savedFeedbackActive = false
     private var savedFeedbackToken = 0
+    private var highlightToken = 0
     private var saved = false
     private var tracking: NSTrackingArea?
     private var compact = false
@@ -685,9 +686,22 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     /// Shipping `thumbnail-capture-highlight`: hold the outline for a second,
     /// then fade it. `startedAgo` resumes it on a rebuilt stack.
+    /// The highlight ends on the main-queue clock, like the stack's exits and
+    /// rebuilds. Core Animation's own removal of a finished animation is not
+    /// guaranteed while the window server is not compositing the panel (an
+    /// occluded panel, as on the self-hosted CI VM), and the card would then
+    /// report a highlight forever.
     func playCaptureHighlight(startedAgo: Double = 0) {
-        NativeMotion.play("preview_capture_highlight", onLayer: highlightRing, down: 1, tokens: tokens,
-                          startedAgo: startedAgo, key: "preview-capture-highlight")
+        highlightToken &+= 1
+        let token = highlightToken
+        let seconds = NativeMotion.play("preview_capture_highlight", onLayer: highlightRing, down: 1,
+                                        tokens: tokens, startedAgo: startedAgo,
+                                        key: "preview-capture-highlight")
+        guard seconds > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, self.highlightToken == token else { return }
+            self.highlightRing.removeAnimation(forKey: "preview-capture-highlight")
+        }
     }
 
     /// Shipping `.thumbnail-meta .warning`: "Not in History" or "Clipboard
@@ -1305,6 +1319,8 @@ final class MiniPreviewView: NSView {
     /// Cards playing an exit in place, and their dust overlays.
     private(set) var exitingArtifactIDs: Set<String> = []
     private var dustOverlays: [PreviewMotionOverlay] = []
+    /// The latest list <-> pile flight; an older flight's end never lands.
+    private var flyToken = 0
     /// Dust chips on screen, for tests.
     var dustChipCount: Int { dustOverlays.reduce(0) { $0 + ($1.content.sublayers?.count ?? 0) } }
     /// `.thumbnail-collapsed-hit-target::before/::after` sparkles.
@@ -1637,17 +1653,26 @@ final class MiniPreviewView: NSView {
             if !collapsing { card.frame = pile }
             moves.append((card, collapsing ? pile : laid))
         }
-        NSAnimationContext.runAnimationGroup({ context in
+        flyToken &+= 1
+        let token = flyToken
+        NSAnimationContext.runAnimationGroup { context in
             context.duration = fly.duration
             context.timingFunction = fly.timing
             for (card, target) in moves {
                 card.animator().frame = target
                 card.setDepthShade(visible: collapsing, animated: true)
             }
-        }, completionHandler: {
-            guard !collapsing else { return }
-            for (card, _) in moves { card.setCompact(false, depth: 0) }
-        })
+        }
+        // Expanded cards get their labels back when the flight ends on the
+        // main-queue clock (the same clock as the collapse rebuild), not on
+        // Core Animation's completion, which never arrives while the window
+        // server is not compositing the panel (an occluded panel).
+        if !collapsing {
+            DispatchQueue.main.asyncAfter(deadline: .now() + fly.duration) { [weak self] in
+                guard let self, self.flyToken == token else { return }
+                for (card, _) in moves { card.setCompact(false, depth: 0) }
+            }
+        }
         return fly.duration
     }
 
