@@ -20,6 +20,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::{AccountClient, Error as AccountError, Session, Vault};
 
@@ -36,17 +37,12 @@ pub enum Error {
     Offline,
     Unavailable,
     NotFound,
+    Conflict,
+    Gone,
     Protocol,
     Storage,
-    /// Create may have committed without a response. Never repeat it blindly.
+    /// A legacy checkpoint has no create key. Never guess a replacement key.
     CreateUncertain,
-    /// Create returned an ID, but local persistence failed. Keep this ID for
-    /// explicit `recover_created` after fixing local storage.
-    StoreAfterCreate {
-        asset_id: String,
-        part_size: u64,
-        part_count: u32,
-    },
 }
 
 impl From<AccountError> for Error {
@@ -130,7 +126,11 @@ struct Record {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 enum Phase {
-    Creating,
+    Creating {
+        /// Older development checkpoints lacked a replayable create identity.
+        #[serde(default)]
+        request_id: Option<Uuid>,
+    },
     Uploading {
         id: String,
         part_size: u64,
@@ -273,8 +273,9 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
             .ok_or(Error::NotFound)
     }
 
-    /// Explicit upload. A create with an ambiguous outcome is durably blocked;
-    /// an acknowledged upload resumes from saved ETags, including after restart.
+    /// Explicit upload. Persist the account-scoped create key before sending;
+    /// retry the same key after response loss or a failed association write.
+    /// Acknowledged uploads resume from saved ETags, including after restart.
     pub fn upload(
         &mut self,
         artifact: &str,
@@ -309,52 +310,44 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
                 content_type: content_type.to_owned(),
                 byte_size: size,
                 sha256: hash,
-                phase: Phase::Creating,
+                phase: Phase::Creating {
+                    request_id: Some(Uuid::new_v4()),
+                },
             };
             if cancelled.load(Ordering::Relaxed) {
                 return Err(Error::Cancelled);
             }
             self.store.put(&user, artifact, record.clone())?;
-            let response = self
+            record
+        };
+        if let Phase::Creating { request_id } = record.phase {
+            let request_id = request_id.ok_or(Error::CreateUncertain)?;
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            let request = self
                 .account
                 .http
-                .post(self.account.url("api/assets"))
+                .put(self.account.url(&format!("api/asset-uploads/{request_id}")))
                 .header(AUTHORIZATION, self.bearer()?)
-                .json(&serde_json::json!({"name":name,"contentType":content_type,"byteSize":size}))
-                .send();
-            let created: Created = match response {
-                Ok(response) => match self.decode_api(response, 201) {
-                    Ok(created) => created,
-                    Err(Error::Account(error)) => return Err(Error::Account(error)),
-                    Err(_) => return Err(Error::CreateUncertain),
-                },
-                Err(_) => return Err(Error::CreateUncertain),
-            };
-            check_id(&created.id).map_err(|_| Error::CreateUncertain)?;
+                .json(&serde_json::json!({"name":name,"contentType":content_type,"byteSize":size}));
+            let created: Created = self.api(request, 201)?;
+            check_id(&created.id).map_err(|_| Error::Protocol)?;
             validate_parts(size, created.part_size, created.part_count)?;
-            let mut record = record;
             record.phase = Phase::Uploading {
-                id: created.id.clone(),
+                id: created.id,
                 part_size: created.part_size,
                 etags: vec![None; created.part_count as usize],
             };
-            self.store
-                .put(&user, artifact, record.clone())
-                .map_err(|_| Error::StoreAfterCreate {
-                    asset_id: created.id,
-                    part_size: created.part_size,
-                    part_count: created.part_count,
-                })?;
-            record
-        };
-        if matches!(record.phase, Phase::Creating) {
-            return Err(Error::CreateUncertain);
+            // If replacement fails, the original Creating/key checkpoint remains
+            // replayable; no returned ID has to survive outside this coordinator.
+            self.store.put(&user, artifact, record.clone())?;
         }
         self.transfer(&user, artifact, file, &cancelled, &progress, &mut record)
     }
 
-    /// Only for an ID returned in `StoreAfterCreate` after local storage is
-    /// repaired. Never guesses an ID from a failed/ambiguous create request.
+    /// Explicit reconciliation for old development checkpoints without a key.
+    /// Modern checkpoints recover by retrying `upload`, never by guessing an ID.
     pub fn recover_created(
         &mut self,
         artifact: &str,
@@ -366,7 +359,7 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
         check_id(id)?;
         let user = self.account.me()?.id;
         let mut record = self.store.get(&user, artifact)?.ok_or(Error::NotFound)?;
-        if !matches!(record.phase, Phase::Creating) {
+        if !matches!(record.phase, Phase::Creating { request_id: None }) {
             return Err(Error::InvalidInput);
         }
         validate_parts(record.byte_size, part_size, part_count)?;
@@ -647,6 +640,12 @@ impl<'a, V: Vault> SharingCoordinator<'a, V> {
         }
         if status == 404 {
             return Err(Error::NotFound);
+        }
+        if status == 409 {
+            return Err(Error::Conflict);
+        }
+        if status == 410 {
+            return Err(Error::Gone);
         }
         if status != expected {
             return Err(Error::Protocol);

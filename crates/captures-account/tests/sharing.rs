@@ -3,9 +3,11 @@ use captures_account::{
     sharing::{AssociationStore, Error, Opened, Patch, Progress, SharePatch, SharingCoordinator},
 };
 use std::{
+    collections::BTreeMap,
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -31,6 +33,9 @@ impl Vault for Fake {
 struct State {
     requests: Vec<(String, String, Vec<u8>)>,
     create: usize,
+    create_keys: BTreeMap<String, serde_json::Value>,
+    fail_store_after_create: Option<PathBuf>,
+    reject_create: Option<u16>,
     parts: Vec<(String, Vec<u8>)>,
     completed: Vec<serde_json::Value>,
     shares: Vec<serde_json::Value>,
@@ -109,9 +114,52 @@ impl Server {
                         .to_owned(),
                         "",
                     )
-                } else if line.starts_with("POST /api/assets HTTP/") {
-                    state.create += 1;
+                } else if line.starts_with("PUT /api/asset-uploads/")
+                    && state.reject_create.is_some()
+                {
+                    (
+                        match state.reject_create.unwrap() {
+                            409 => "409 Conflict",
+                            410 => "410 Gone",
+                            _ => unreachable!(),
+                        },
+                        "{}".into(),
+                        "",
+                    )
+                } else if line.starts_with("PUT /api/asset-uploads/") {
+                    let key = line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap()
+                        .strip_prefix("/api/asset-uploads/")
+                        .unwrap()
+                        .to_owned();
+                    assert!(
+                        uuid::Uuid::parse_str(&key).is_ok(),
+                        "create key must be a UUID"
+                    );
+                    let metadata = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+                    if let Some(original) = state.create_keys.get(&key) {
+                        assert_eq!(metadata, *original, "retries keep immutable metadata");
+                    } else {
+                        state.create_keys.insert(key.clone(), metadata);
+                        state.create += 1;
+                    }
+                    if let Some(profile) = state.fail_store_after_create.take() {
+                        let checkpoint: serde_json::Value = serde_json::from_slice(
+                            &fs::read(profile.join("native-share-associations.json")).unwrap(),
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            checkpoint["accounts"]["owner1"]["artifact1"]["phase"]["request_id"],
+                            key,
+                            "the key must already be durable when create reaches the server"
+                        );
+                        fs::rename(&profile, profile.with_extension("retained")).unwrap();
+                        fs::write(&profile, b"storage unavailable").unwrap();
+                    }
                     if state.ambiguous_create {
+                        state.ambiguous_create = false;
                         continue;
                     } // Server may have committed; no response.
                     (
@@ -119,6 +167,8 @@ impl Server {
                         r#"{"id":"asset1","partSize":3,"partCount":2}"#.to_owned(),
                         "",
                     )
+                } else if line.starts_with("POST /api/assets HTTP/") {
+                    ("404 Not Found", "{}".into(), "") // Never use legacy non-idempotent creation.
                 } else if line.starts_with("POST /api/assets/asset1/parts ") {
                     let part =
                         serde_json::from_slice::<serde_json::Value>(&body).unwrap()["partNumber"]
@@ -393,7 +443,7 @@ fn upload_retries_expired_part_without_credentials_then_configures_without_reupl
 }
 
 #[test]
-fn ambiguous_create_is_not_retried_after_restart_and_missing_file_never_creates() {
+fn lost_create_response_replays_one_persisted_key_after_restart() {
     let server = Server::new();
     server.state.lock().unwrap().ambiguous_create = true;
     let dir = tempfile::tempdir().unwrap();
@@ -424,12 +474,185 @@ fn ambiguous_create_is_not_retried_after_restart_and_missing_file_never_creates(
             progress()
         )
         .err(),
-        Some(Error::CreateUncertain)
+        Some(Error::Offline)
     );
+    let stored: serde_json::Value = serde_json::from_slice(
+        &fs::read(dir.path().join("native-share-associations.json")).unwrap(),
+    )
+    .unwrap();
+    let key = stored["accounts"]["owner1"]["artifact1"]["phase"]["request_id"]
+        .as_str()
+        .unwrap();
+    assert!(uuid::Uuid::parse_str(key).is_ok());
     drop(flow);
+    drop(account);
+    let mut account = client(&server.url);
     let mut flow =
         SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
     assert!(matches!(flow.open("artifact1").unwrap(), Opened::Pending));
+    assert_eq!(
+        flow.upload(
+            "artifact1",
+            &path,
+            "original.png",
+            "image/png",
+            cancelled(),
+            progress()
+        )
+        .unwrap()
+        .id,
+        "asset1"
+    );
+    let state = server.state.lock().unwrap();
+    assert_eq!(
+        state.create, 1,
+        "one remote asset, despite two create requests"
+    );
+    let creates: Vec<_> = state
+        .requests
+        .iter()
+        .filter(|(line, _, _)| line.starts_with("PUT /api/asset-uploads/"))
+        .collect();
+    assert_eq!(creates.len(), 2);
+    for (line, _, body) in creates {
+        assert_eq!(line, &format!("PUT /api/asset-uploads/{key} HTTP/1.1"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(body).unwrap(),
+            serde_json::json!({"name":"original.png","contentType":"image/png","byteSize":5})
+        );
+    }
+    assert_eq!(
+        state
+            .parts
+            .iter()
+            .map(|(_, bytes)| bytes.as_slice())
+            .collect::<Vec<_>>(),
+        [b"ABC".as_slice(), b"DE".as_slice()]
+    );
+}
+
+#[test]
+fn failed_association_write_recovers_from_durable_key_without_external_asset_id() {
+    let server = Server::new();
+    let dir = tempfile::tempdir().unwrap();
+    let profile = dir.path().join("profile");
+    let path = dir.path().join("original.png");
+    fs::write(&path, b"ABCDE").unwrap();
+    server.state.lock().unwrap().fail_store_after_create = Some(profile.clone());
+    let mut account = client(&server.url);
+    let mut flow = SharingCoordinator::new(&mut account, AssociationStore::new(&profile)).unwrap();
+    assert_eq!(
+        flow.upload(
+            "artifact1",
+            &path,
+            "original.png",
+            "image/png",
+            cancelled(),
+            progress()
+        )
+        .err(),
+        Some(Error::Storage)
+    );
+    drop(flow);
+    drop(account);
+    fs::remove_file(&profile).unwrap();
+    fs::rename(profile.with_extension("retained"), &profile).unwrap();
+    let mut account = client(&server.url);
+    let mut flow = SharingCoordinator::new(&mut account, AssociationStore::new(&profile)).unwrap();
+    assert_eq!(
+        flow.upload(
+            "artifact1",
+            &path,
+            "original.png",
+            "image/png",
+            cancelled(),
+            progress()
+        )
+        .unwrap()
+        .id,
+        "asset1"
+    );
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.create, 1);
+    assert_eq!(state.create_keys.len(), 1);
+    assert_eq!(state.parts.len(), 2);
+    assert_eq!(state.completed.len(), 1);
+}
+
+#[test]
+fn create_conflict_and_tombstone_never_regenerate_the_key() {
+    for (status, expected) in [(409, Error::Conflict), (410, Error::Gone)] {
+        let server = Server::new();
+        server.state.lock().unwrap().reject_create = Some(status);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original.png");
+        fs::write(&path, b"ABCDE").unwrap();
+        for _ in 0..2 {
+            let mut account = client(&server.url);
+            let mut flow =
+                SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
+            assert_eq!(
+                flow.upload(
+                    "artifact1",
+                    &path,
+                    "original.png",
+                    "image/png",
+                    cancelled(),
+                    progress()
+                )
+                .err()
+                .as_ref(),
+                Some(&expected)
+            );
+        }
+        let state = server.state.lock().unwrap();
+        let creates: Vec<_> = state
+            .requests
+            .iter()
+            .filter(|(line, _, _)| line.starts_with("PUT /api/asset-uploads/"))
+            .collect();
+        assert_eq!(creates.len(), 2);
+        assert_eq!(creates[0], creates[1]);
+        assert_eq!(state.create, 0);
+        assert!(state.parts.is_empty());
+        assert!(state.completed.is_empty());
+        assert!(state.shares.is_empty());
+    }
+}
+
+#[test]
+fn legacy_marker_cannot_silently_create_a_replacement_asset() {
+    let server = Server::new();
+    server.state.lock().unwrap().ambiguous_create = true;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original.png");
+    fs::write(&path, b"ABCDE").unwrap();
+    let mut account = client(&server.url);
+    let mut flow =
+        SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
+    assert_eq!(
+        flow.upload(
+            "artifact1",
+            &path,
+            "original.png",
+            "image/png",
+            cancelled(),
+            progress()
+        )
+        .err(),
+        Some(Error::Offline)
+    );
+    drop(flow);
+    let association = dir.path().join("native-share-associations.json");
+    let mut checkpoint: serde_json::Value =
+        serde_json::from_slice(&fs::read(&association).unwrap()).unwrap();
+    checkpoint["accounts"]["owner1"]["artifact1"]["phase"]
+        .as_object_mut()
+        .unwrap()
+        .remove("request_id");
+    fs::write(&association, serde_json::to_vec(&checkpoint).unwrap()).unwrap();
+    let mut flow =
+        SharingCoordinator::new(&mut account, AssociationStore::new(dir.path())).unwrap();
     assert_eq!(
         flow.upload(
             "artifact1",
@@ -443,6 +666,24 @@ fn ambiguous_create_is_not_retried_after_restart_and_missing_file_never_creates(
         Some(Error::CreateUncertain)
     );
     assert_eq!(server.state.lock().unwrap().create, 1);
+    // Only explicit reconciliation of an independently known asset may adopt it.
+    flow.recover_created("artifact1", "asset1", 3, 2).unwrap();
+    assert_eq!(
+        flow.upload(
+            "artifact1",
+            &path,
+            "original.png",
+            "image/png",
+            cancelled(),
+            progress()
+        )
+        .unwrap()
+        .id,
+        "asset1"
+    );
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.create, 1);
+    assert_eq!(state.parts.len(), 2);
 }
 
 #[test]

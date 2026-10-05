@@ -45,11 +45,14 @@ ready state atomically. `configure_share` is a separate explicit operation; only
 its successful response supplies a usable share ID. `Patch::Keep` omits a field,
 `Patch::Clear` sends null and `Patch::Set` sends a value. `trash`/`restore` preserve
 the association; restore never revives an old share. A failed share configuration
-can be retried without re-upload. An ambiguous asset-create response is blocked
-durably, because the API has no idempotency key; do not reset the marker or create
-again without manual remote reconciliation. A confirmed create with a failed
-association write returns its ID for explicit `recover_created` after storage is
-repaired. The host must serialize access to the profile and retain its accepted
+can be retried without re-upload. Before create, the coordinator persists a UUID
+and immutable metadata, then uses `PUT /api/asset-uploads/{UUID}` from the accounts
+API (#613/#806). Retry `upload` after a lost response or repaired local storage:
+the same key recovers the same asset even across process restart. Conflict (409)
+and tombstone (410) retain the key rather than silently creating a replacement.
+Legacy checkpoints without a key remain blocked for explicit `recover_created`
+reconciliation; never clear their marker or guess an ID. The host must serialize
+access to the profile and retain its accepted
 upload worker after the preview closes. Only disposable loopback fixtures and
 fake vaults were exercised; no real SES/R2, physical vault, AppKit, Windows, X11
 or Wayland sharing UI has been exercised.
