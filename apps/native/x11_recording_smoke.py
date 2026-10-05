@@ -177,26 +177,32 @@ def main():
         # registered shortcut instead of clicking a previous layout's row.
         run("xdotool", "key", "ctrl+alt+r", "sleep", ".6")
         shot(selector, name)
-        # Observe the actual selected area: the unified controls toolbar does
-        # not necessarily change its pixels when a region becomes valid.
-        before = run("import", "-window", selector, "-crop", "310x170+140+180",
-                     "-depth", "8", "rgb:-")
         # egui must observe a held pointer, not press/release in one input batch.
         # Like the capture smoke, focus the mapped selector before injecting
         # input so the window manager does not consume the press for activation.
         run("xdotool", "windowfocus", "--sync", selector,
             "mousemove", "--sync", "--window", selector, "140", "180",
-            "sleep", ".1", "mousedown", "1", "sleep", ".2",
-            "mousemove", "--sync", "--window", selector, "450", "350",
-            "sleep", ".2", "mouseup", "1")
-        wait(lambda: run("import", "-window", selector, "-crop", "310x170+140+180",
-                         "-depth", "8", "rgb:-") != before,
-             "painted recording selection before confirmation")
+            "sleep", ".5", "mousedown", "1", "sleep", ".8",
+            "mousemove", "--sync", "--window", selector, "450", "350")
+
+        def selection_border_painted():
+            # This fixture selects mustard: require its vertical region border,
+            # not any repaint in the area (hover/guidance can change those pixels
+            # even when the renderer never observed the short held press).
+            pixels = run("import", "-window", selector, "-crop", "3x100+139+220",
+                         "-depth", "8", "rgb:-")
+            return sum(pixels[index] > 220 and pixels[index + 1] > 150
+                       and pixels[index + 2] < 95 for index in range(0, len(pixels), 3)) >= 80
+
+        wait(selection_border_painted, "painted region border while pointer remains held")
+        # Let the software-rendered child consume release before switching its
+        # target; otherwise the next target can consume the release instead.
+        run("xdotool", "mouseup", "1", "sleep", "1.2")
         if shortcuts:
             # Switching across every target must retain this asymmetric region,
             # not replace the child or accidentally start a Display recording.
             for chord in ("ctrl+alt+d", "ctrl+alt+w", "ctrl+alt+r"):
-                run("xdotool", "key", chord, "sleep", ".2")
+                run("xdotool", "key", chord, "sleep", "1.2")
                 assert windows("Captures Capture Controls") == [selector]
                 assert manifest() is None and not history()
             # Do not drag this corner again: the retained selection correctly

@@ -42,6 +42,9 @@ pub enum XcapRecordingError {
     FirstFrameUnavailable,
     #[error("screen capture failed: {0}")]
     Capture(String),
+    #[cfg(target_os = "linux")]
+    #[error("Recording cancelled")]
+    PortalCancelled,
     #[error("recording worker failed: {0}")]
     Worker(String),
     #[error(transparent)]
@@ -256,11 +259,14 @@ impl XcapRecordingSegment {
             options.frames_per_second,
             cancelled,
         )
-        .map_err(XcapRecordingError::Capture)?;
+        .map_err(|error| match error {
+            crate::PortalVideoError::Cancelled => XcapRecordingError::PortalCancelled,
+            crate::PortalVideoError::Failed(error) => XcapRecordingError::Capture(error),
+        })?;
         let deadline = Instant::now() + FIRST_FRAME_TIMEOUT;
         let first_image = loop {
             if cancelled() {
-                return Err(XcapRecordingError::Capture("Recording cancelled".into()));
+                return Err(XcapRecordingError::PortalCancelled);
             }
             if Instant::now() >= deadline {
                 return Err(XcapRecordingError::FirstFrameUnavailable);
@@ -510,6 +516,21 @@ impl XcapRecordingSegment {
             .or_else(|| self.warning.lock().clone())
             .or_else(|| self.system_audio.as_ref().and_then(AudioSegment::warning))
             .or_else(|| self.microphone.as_ref().and_then(AudioSegment::warning))
+    }
+
+    /// Fatal loss of a granted video source, distinct from device warnings.
+    pub fn source_failure(&self) -> Option<String> {
+        let recorder = self
+            .recorder
+            .as_ref()
+            .filter(|recorder| recorder.is_portal())?;
+        recorder.warning().or_else(|| {
+            if self.stop_requested.load(Ordering::Acquire) {
+                self.warning.lock().clone()
+            } else {
+                None
+            }
+        })
     }
 
     pub fn microphone_level(&self) -> f32 {

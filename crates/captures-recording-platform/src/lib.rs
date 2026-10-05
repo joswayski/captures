@@ -93,29 +93,63 @@ pub fn start_native_segment(
     exclude_captures_app: bool,
     is_current: &dyn Fn() -> bool,
 ) -> Result<NativeRecordingSegment, String> {
+    start_segment(options, path, display, exclude_captures_app, is_current).map_err(|error| {
+        match error {
+            #[cfg(target_os = "linux")]
+            StartFailure::Cancelled => "Recording cancelled".into(),
+            StartFailure::Failed(error) => error,
+        }
+    })
+}
+
+enum StartFailure {
+    #[cfg(target_os = "linux")]
+    Cancelled,
+    Failed(String),
+}
+
+fn start_segment(
+    options: &RecordingOptions,
+    path: &Path,
+    display: Option<&DisplayDescriptor>,
+    exclude_captures_app: bool,
+    is_current: &dyn Fn() -> bool,
+) -> Result<NativeRecordingSegment, StartFailure> {
     #[cfg(not(target_os = "linux"))]
     let _ = is_current;
     if options.target == RecordingTarget::PortalDisplay {
         if display.is_some() {
-            return Err("Portal recording must not use invented monitor geometry".into());
+            return Err(StartFailure::Failed(
+                "Portal recording must not use invented monitor geometry".into(),
+            ));
         }
         #[cfg(target_os = "linux")]
-        return NativeRecordingSegment::start_portal(options, path, &|| !is_current())
-            .map_err(|error| error.to_string());
+        return NativeRecordingSegment::start_portal(options, path, &|| !is_current()).map_err(
+            |error| match error {
+                captures_recording_xcap::XcapRecordingError::PortalCancelled => {
+                    StartFailure::Cancelled
+                }
+                error => StartFailure::Failed(error.to_string()),
+            },
+        );
         #[cfg(not(target_os = "linux"))]
-        return Err("Portal recording is only supported on Linux".into());
+        return Err(StartFailure::Failed(
+            "Portal recording is only supported on Linux".into(),
+        ));
     }
-    let display = display.ok_or("Recording target requires a display")?;
+    let display = display
+        .ok_or_else(|| StartFailure::Failed("Recording target requires a display".into()))?;
     #[cfg(target_os = "macos")]
     {
         let _ = display;
         NativeRecordingSegment::start(options, path, exclude_captures_app)
-            .map_err(|error| error.to_string())
+            .map_err(|error| StartFailure::Failed(error.to_string()))
     }
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         let _ = exclude_captures_app;
-        NativeRecordingSegment::start(options, path, display).map_err(|error| error.to_string())
+        NativeRecordingSegment::start(options, path, display)
+            .map_err(|error| StartFailure::Failed(error.to_string()))
     }
 }
 

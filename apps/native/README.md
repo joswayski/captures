@@ -150,14 +150,17 @@ Linux portal-selected display sessions use `RecordingTarget::PortalDisplay` and
 explicitly unsupported on other OSes and rejected by shipping's selection adapter.
 Cancellation reaches portal consent and first-frame waits. Pause/resume requests
 a fresh grant; stream loss stops encoding and retains recoverable media instead
-of publishing a successful take. No native Wayland recording UI is enabled yet.
+of publishing a successful take. The wgpu Wayland host connects History's
+**Record display…** to native countdown/HUD controls and MP4 publication; its
+worker refreshes source failures into History recovery. Portal consent cancellation
+discards only an empty initial take and retains accepted paused media on resume.
 Failed assembly/publication keeps source segments. Successful video publication
 removes the draft only after Ready metadata is saved; GIFs keep editable sources.
 Post-publication housekeeping failures return the saved artifact with a warning.
 Restart discards only that session's active and completed segments, retains its
 target/options, resets elapsed time, and returns to the stored countdown. The
-same capture generation rearms global Escape for that countdown before either
-host can open the replacement engine.
+same capture generation rearms global Escape for direct recording, or focused
+countdown cancellation on Wayland, before opening the replacement engine.
 Both hosts connect Video-only Record controls and region/window/display recording
 shortcuts. From idle the keys open Record on that target; in an open selector,
 screenshot and recording keys switch mode/target in place. Busy recording phases
@@ -521,8 +524,11 @@ Full UI parity remains open. The wgpu Wayland host now unmaps Captures' windows,
 waits for compositor-processing acknowledgements, and requests a Screenshot
 portal still from History. It restores the windows on success, cancellation or
 failure. Captures return to History without guessed display geometry or preview
-placement. Native selectors, countdown and recording remain unavailable on
-Wayland; consent and cursor inclusion are portal-controlled. Remapping may change
+placement. **Record display…** uses the same unmapping acknowledgement before
+portal consent, then the normal MP4 recording controls with compositor placement.
+Region/window selectors and screenshots during a recording remain unavailable;
+recording controls are included in output and Hide needs a working tray.
+Consent and cursor inclusion are portal-controlled. Remapping may change
 compositor-assigned window positions. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and
 must refuse capture. Verify real permission, clipboard ownership, multi-display

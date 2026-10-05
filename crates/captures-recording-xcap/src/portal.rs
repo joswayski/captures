@@ -50,6 +50,20 @@ const MAX_FRAME_BYTES: usize = 128 * 1024 * 1024;
 
 type Response = (String, Result<(u32, PropMap), String>);
 
+#[derive(Debug, thiserror::Error)]
+pub enum PortalVideoError {
+    #[error("Desktop recording portal: selection cancelled")]
+    Cancelled,
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl From<String> for PortalVideoError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
 struct PortalSession {
     connection: Connection,
     owner: String,
@@ -63,7 +77,7 @@ impl PortalSession {
     fn open(
         show_cursor: bool,
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<(Self, OwnedFd, Stream), String> {
+    ) -> Result<(Self, OwnedFd, Stream), PortalVideoError> {
         check_cancel(cancelled)?;
         let deadline = Instant::now() + CONSENT_TIMEOUT;
         let connection = Connection::new_session().map_err(error)?;
@@ -151,7 +165,7 @@ impl PortalSession {
             .and_then(|value| value.0.as_str())
             .ok_or_else(|| error("CreateSession has no session handle"))?;
         if !path.starts_with(&format!("{DESKTOP_PATH}/session/")) {
-            return Err(error("CreateSession returned an invalid session handle"));
+            return Err(error("CreateSession returned an invalid session handle").into());
         }
         session.path = Path::new(path.to_owned()).map_err(error)?;
         check_cancel(cancelled)?;
@@ -163,7 +177,7 @@ impl PortalSession {
             .get(SCREENCAST, "AvailableSourceTypes")
             .map_err(error)?;
         if sources & 1 == 0 {
-            return Err(error("the portal cannot share a display"));
+            return Err(error("the portal cannot share a display").into());
         }
         let cursor_mode = if show_cursor { 2_u32 } else { 1_u32 };
         if version >= 2 {
@@ -171,12 +185,10 @@ impl PortalSession {
                 .get(SCREENCAST, "AvailableCursorModes")
                 .map_err(error)?;
             if modes & cursor_mode == 0 {
-                return Err(error(
-                    "the portal does not support the requested cursor mode",
-                ));
+                return Err(error("the portal does not support the requested cursor mode").into());
             }
         } else if show_cursor {
-            return Err(error("this portal cannot embed the cursor"));
+            return Err(error("this portal cannot embed the cursor").into());
         }
         let path = session.path.clone();
         session.request("SelectSources", cancelled, |proxy, mut options| {
@@ -219,7 +231,7 @@ impl PortalSession {
             dbus::blocking::Proxy<'_, &Connection>,
             PropMap,
         ) -> Result<(Path<'static>,), dbus::Error>,
-    ) -> Result<PropMap, String> {
+    ) -> Result<PropMap, PortalVideoError> {
         self.pending(cancelled)?;
         let token = token();
         let sender = self
@@ -242,7 +254,7 @@ impl PortalSession {
             Ok((path,)) => path,
             Err(problem) => {
                 self.close_request(&expected);
-                return Err(error(format!("{method}: {problem}")));
+                return Err(error(format!("{method}: {problem}")).into());
             }
         };
         let result = (|| {
@@ -253,8 +265,8 @@ impl PortalSession {
                         let (status, results) = result?;
                         return match status {
                             0 => Ok(results),
-                            1 => Err(error("selection cancelled")),
-                            _ => Err(error(format!("{method} was denied or failed"))),
+                            1 => Err(PortalVideoError::Cancelled),
+                            _ => Err(error(format!("{method} was denied or failed")).into()),
                         };
                     }
                 }
@@ -269,17 +281,17 @@ impl PortalSession {
         result
     }
 
-    fn pending(&self, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+    fn pending(&self, cancelled: &dyn Fn() -> bool) -> Result<(), PortalVideoError> {
         check_cancel(cancelled)?;
         if Instant::now() >= self.deadline {
-            return Err(error("timed out waiting for consent"));
+            return Err(error("timed out waiting for consent").into());
         }
         if self
             .closed
             .try_iter()
             .any(|path| path == self.path.as_ref())
         {
-            return Err(error("the screen cast session was closed"));
+            return Err(error("the screen cast session was closed").into());
         }
         Ok(())
     }
@@ -310,9 +322,9 @@ fn token() -> String {
 fn error(item: impl std::fmt::Display) -> String {
     format!("Desktop recording portal: {item}")
 }
-fn check_cancel(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+fn check_cancel(cancelled: &dyn Fn() -> bool) -> Result<(), PortalVideoError> {
     if cancelled() {
-        Err(error("recording cancelled"))
+        Err(PortalVideoError::Cancelled)
     } else {
         Ok(())
     }
@@ -392,9 +404,9 @@ impl PortalVideoSource {
         show_cursor: bool,
         frame_rate: u16,
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<(Self, Receiver<Frame>), String> {
+    ) -> Result<(Self, Receiver<Frame>), PortalVideoError> {
         if !(1..=60).contains(&frame_rate) {
-            return Err(error("invalid video frame rate"));
+            return Err(error("invalid video frame rate").into());
         }
         let (session, fd, stream) = PortalSession::open(show_cursor, cancelled)?;
         let (control, commands) = pw::channel::channel();

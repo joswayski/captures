@@ -198,8 +198,11 @@ checks ScreenCast consent responses, a granted PipeWire remote and changing
 CPU-mapped pixels without X11. Its private software-rendered fixture uses a pinned
 backend with a SHM-only format-guard backport, not an installed portal replacement.
 The recording diagnostic also exercises real MP4/GIF session finalization,
-pause/resume, restart, discard/cancel and recovery after transport loss. Native
-Wayland recording UI, audio/cursor and physical consent acceptance remain open.
+pause/resume, restart, discard/cancel and recovery after transport loss. The
+[native Wayland recording host smoke](apps/native/wgpu/README.md#native-wayland-recording-controls)
+exercises the real History/countdown/HUD path in both appearances, cancellation
+and source-loss recovery with the same disposable backend. Physical consent,
+audio/cursor and GNOME/KDE acceptance remain open.
 
 ### Native exploratory test archives
 

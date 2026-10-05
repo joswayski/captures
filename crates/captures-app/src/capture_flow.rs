@@ -167,6 +167,20 @@ static GATE: Gate = Gate {
     child: AtomicU64::new(0),
 };
 
+fn watch_session(generation: u64) {
+    // Session queries can block on D-Bus. Only this generation is cancelled,
+    // and its watcher stops when the owning event-loop guard ends.
+    std::thread::spawn(move || {
+        while GATE.is_current(generation) {
+            if !captures_session::capture_session_available() {
+                GATE.cancel(generation);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+}
+
 pub fn is_current(generation: u64) -> bool {
     GATE.is_current(generation)
 }
@@ -199,17 +213,7 @@ pub struct PortalCapture {
 impl PortalCapture {
     pub fn begin() -> Result<Self, String> {
         let generation = GATE.begin()?;
-        // Session queries can block on D-Bus. Keep them off the caller's UI
-        // thread and cancel precisely the generation this guard owns.
-        std::thread::spawn(move || {
-            while GATE.is_current(generation) {
-                if !captures_session::capture_session_available() {
-                    GATE.cancel(generation);
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        });
+        watch_session(generation);
         Ok(Self { generation })
     }
 
@@ -258,15 +262,33 @@ impl Countdown {
 /// winit event-loop thread. Session polling stops after the guard ends; Escape
 /// hotkeys are released and the Windows low-level capture hook is disarmed.
 /// Registration failure refuses the capture rather than silently losing Cancel.
+/// Linux portal flows instead use focused-window cancellation and the portal's
+/// consent UI, without attempting an X11 global hotkey registration.
 pub struct CaptureFlow {
     generation: u64,
     countdown: Countdown,
-    manager: Rc<GlobalHotKeyManager>,
+    manager: Option<Rc<GlobalHotKeyManager>>,
     escape_registered: bool,
     _event_loop_thread: PhantomData<Rc<()>>,
 }
 
 impl CaptureFlow {
+    #[cfg(target_os = "linux")]
+    pub fn begin_portal(seconds: u8) -> Result<Self, String> {
+        if seconds > 10 {
+            return Err("Unsupported recording countdown".into());
+        }
+        let generation = GATE.begin()?;
+        watch_session(generation);
+        Ok(Self {
+            generation,
+            countdown: Countdown::new(Instant::now(), seconds),
+            manager: None,
+            escape_registered: false,
+            _event_loop_thread: PhantomData,
+        })
+    }
+
     pub fn begin(seconds: u8) -> Result<Self, String> {
         if seconds > 10 {
             return Err("Unsupported screenshot countdown".into());
@@ -285,21 +307,11 @@ impl CaptureFlow {
         })();
         match registration {
             Ok(manager) => {
-                // Session queries can block (e.g. D-Bus); never run them on the
-                // event-loop thread. This watcher exists only for this capture.
-                std::thread::spawn(move || {
-                    while GATE.is_current(generation) {
-                        if !captures_session::capture_session_available() {
-                            GATE.cancel(generation);
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(250));
-                    }
-                });
+                watch_session(generation);
                 Ok(Self {
                     generation,
                     countdown: Countdown::new(Instant::now(), seconds),
-                    manager,
+                    manager: Some(manager),
                     escape_registered: true,
                     _event_loop_thread: PhantomData,
                 })
@@ -316,13 +328,17 @@ impl CaptureFlow {
         if seconds > 10 {
             return Err("Unsupported screenshot countdown".into());
         }
+        let manager = self
+            .manager
+            .as_ref()
+            .ok_or("Portal recordings require desktop-portal screenshots")?;
         let generation = GATE.begin_child(self.generation)?;
         let registration: Result<(), String> = (|| {
-            self.manager
+            manager
                 .register(HotKey::new(None, Code::Escape))
                 .map_err(|error| error.to_string())?;
             captures_session::ensure_capture_escape_hook().inspect_err(|_| {
-                let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+                let _ = manager.unregister(HotKey::new(None, Code::Escape));
             })?;
             captures_session::set_capture_escape_handler(Some(escape));
             captures_session::set_capture_escape_enabled(true);
@@ -332,19 +348,11 @@ impl CaptureFlow {
             GATE.cancel(generation);
             return Err(error);
         }
-        std::thread::spawn(move || {
-            while GATE.is_current(generation) {
-                if !captures_session::capture_session_available() {
-                    GATE.cancel(generation);
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        });
+        watch_session(generation);
         Ok(Self {
             generation,
             countdown: Countdown::new(Instant::now(), seconds),
-            manager: Rc::clone(&self.manager),
+            manager: Some(Rc::clone(manager)),
             escape_registered: true,
             _event_loop_thread: PhantomData,
         })
@@ -377,18 +385,25 @@ impl CaptureFlow {
         if self.escape_registered {
             return Err("Recording countdown Escape is already armed".into());
         }
-        self.manager
+        let Some(manager) = &self.manager else {
+            if !GATE.rearm_escape(self.generation) {
+                return Err("Capture is no longer pending".into());
+            }
+            self.countdown = Countdown::new(Instant::now(), seconds);
+            return Ok(());
+        };
+        manager
             .register(HotKey::new(None, Code::Escape))
             .map_err(|error| error.to_string())?;
         captures_session::ensure_capture_escape_hook().inspect_err(|_| {
-            let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+            let _ = manager.unregister(HotKey::new(None, Code::Escape));
         })?;
         captures_session::set_capture_escape_handler(Some(escape));
         captures_session::set_capture_escape_enabled(true);
         if !GATE.rearm_escape(self.generation) {
             captures_session::set_capture_escape_enabled(false);
             captures_session::set_capture_escape_handler(None);
-            let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+            let _ = manager.unregister(HotKey::new(None, Code::Escape));
             return Err("Capture is no longer pending".into());
         }
         self.escape_registered = true;
@@ -406,13 +421,15 @@ impl CaptureFlow {
         if !GATE.disarm_escape(self.generation) {
             return Err("Capture was cancelled before recording started".into());
         }
-        captures_session::set_capture_escape_enabled(false);
-        captures_session::set_capture_escape_handler(None);
-        if self.escape_registered {
-            self.manager
-                .unregister(HotKey::new(None, Code::Escape))
-                .map_err(|error| error.to_string())?;
-            self.escape_registered = false;
+        if let Some(manager) = &self.manager {
+            captures_session::set_capture_escape_enabled(false);
+            captures_session::set_capture_escape_handler(None);
+            if self.escape_registered {
+                manager
+                    .unregister(HotKey::new(None, Code::Escape))
+                    .map_err(|error| error.to_string())?;
+                self.escape_registered = false;
+            }
         }
         Ok(())
     }
@@ -424,10 +441,12 @@ impl CaptureFlow {
 impl Drop for CaptureFlow {
     fn drop(&mut self) {
         GATE.finish(self.generation);
-        captures_session::set_capture_escape_enabled(false);
-        captures_session::set_capture_escape_handler(None);
-        if self.escape_registered {
-            let _ = self.manager.unregister(HotKey::new(None, Code::Escape));
+        if let Some(manager) = &self.manager {
+            captures_session::set_capture_escape_enabled(false);
+            captures_session::set_capture_escape_handler(None);
+            if self.escape_registered {
+                let _ = manager.unregister(HotKey::new(None, Code::Escape));
+            }
         }
     }
 }
@@ -435,6 +454,50 @@ impl Drop for CaptureFlow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portal_recording_handoff_restart_and_child_refusal_preserve_ownership() {
+        // Exercise the manager-free lifecycle without a real desktop-session
+        // watcher; the resident Wayland smoke covers begin_portal on D-Bus.
+        let mut flow = CaptureFlow {
+            generation: GATE.begin().unwrap(),
+            countdown: Countdown::new(Instant::now(), 0),
+            manager: None,
+            escape_registered: false,
+            _event_loop_thread: PhantomData,
+        };
+        assert!(flow.start_countdown(11).is_err());
+        flow.start_countdown(3).unwrap();
+        assert_eq!(flow.countdown().remaining(Instant::now()), 3);
+        flow.disarm_escape().unwrap();
+        escape();
+        assert!(
+            flow.is_current(),
+            "accepted portal media must survive Escape"
+        );
+        assert!(flow.begin_recording_screenshot(0).is_err());
+        assert_eq!(GATE.child.load(Ordering::Acquire), 0);
+        assert!(
+            flow.is_current(),
+            "unsupported child cannot cancel the take"
+        );
+        assert!(flow.restart_countdown(11).is_err());
+        assert!(flow.is_current());
+        flow.restart_countdown(1).unwrap();
+        assert!(flow.restart_countdown(1).is_err());
+        assert_eq!(flow.countdown().remaining(Instant::now()), 1);
+        flow.disarm_escape().unwrap();
+        flow.cancel();
+        assert!(!flow.is_current());
+        let next = GATE.begin().unwrap();
+        drop(flow);
+        assert!(
+            GATE.is_current(next),
+            "stale cleanup cannot release a new owner"
+        );
+        GATE.finish(next);
+    }
 
     #[test]
     fn deadline_boundaries_and_delayed_wakes_do_not_capture_early() {

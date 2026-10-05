@@ -474,9 +474,45 @@ lossy-codec tolerance. Video source bundles are removed only after publication;
 GIF sources remain editable. Backend termination must fail the session promptly,
 then recovery must publish its decodable partial MP4 without reopening capture.
 Explicit local disconnect unregisters callbacks before cleanup and is not failure.
-Native controls/window exclusion, real Wayland audio/cursor, stock-backend consent,
+Automatic controls exclusion, real Wayland audio/cursor, stock-backend consent,
 mixed-DPI/rotation and physical GNOME/KDE acceptance remain open; the resident
-recording gate is unchanged.
+controls follow-up below connects MP4 recording in the development host.
+
+### Native Wayland recording controls
+
+In `--live` Wayland History, **Record display…** prepares an MP4 take from the
+recording preferences, verifies FFmpeg/ffprobe on the worker, and shows a compact
+native countdown without monitor IDs, origins or geometry. Before portal consent,
+the host unmaps History, Preferences and the countdown and waits for compositor
+acknowledgements. A new session uses only the portal-granted PipeWire remote.
+The normal HUD connects pause/resume (a fresh grant), confirmed restart/delete,
+Stop, and History publication. Focused Escape/closing cancels the countdown;
+portal cancellation discards the empty initial bundle. A cancelled resume leaves
+accepted media paused. Source loss stops the timer/controls, releases the session
+owner, restores the workspace and exposes retained partial media in recovery.
+
+Linux includes the recording controls in video. Hide is available only with a
+working tray restoration path; the HUD states when it is unavailable. Screenshots
+during recording, region/window targeting and click/keystroke overlays are not
+supported on Wayland. Window placement after remapping is compositor-controlled.
+
+```sh
+/usr/bin/python3 apps/native/wayland_recording_host_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe \
+  --wlr-backend "$backend" --output /tmp/native-wayland-recording-new
+```
+
+Use a new disposable output directory and the video fixture's pinned backend.
+The dark/light real-window smoke uses compositor geometry and real pointer input,
+checks countdown/unmapping, exactly frozen paused time, pause-free MP4 duration,
+and independently decoded pixels beneath the pre-capture windows. It closes the
+countdown, sends a public-portal cancellation, terminates the active backend,
+and checks stable playable recovery bytes after a clean timed app exit.
+CI retains its logs/media/screenshots. This is software-rendered Sway with
+non-interactive fixture consent, not physical GNOME/KDE, audio/cursor, mixed-DPI
+or stock-portal permission UX acceptance. macOS/Windows/direct-X11 paths remain
+on their existing engines; no Tauri cutover or native release follows.
 
 ### Native Wayland portal screenshots
 
