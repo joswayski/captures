@@ -1,21 +1,15 @@
 name: Install latest Preview
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/install-latest-release.yml"
-      - "scripts/install-latest-release.mjs"
-      - "scripts/install-latest-release.test.mjs"
-      - "scripts/preview-release.mjs"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Supersede stale PR runs; manual runs are never cancelled.
+# Manual runs only; they are never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   discover:

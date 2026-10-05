@@ -1,7 +1,9 @@
 name: Native wgpu workbench
 
+# Runs on main only; pull requests get no CI. Use "Run workflow" to test a branch.
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - 'apps/native/**'
       - 'crates/captures-settings*/**'
@@ -19,14 +21,17 @@ on:
       - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
       - 'apps/desktop/assets/icon.svg'
       - '.github/workflows/native-wgpu.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: write
 
+# The running build always finishes and only the newest waiting push runs next
+# (GitHub replaces older pending runs in the group).
 concurrency:
-  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # Unit tests, lints and the Wayland drag probe. The release builds below run

@@ -1,10 +1,13 @@
 name: CI
 
+# Pull requests and main get no CI from this workflow: the Captures Preview
+# release (release.yml) runs the same checks on every main push. Use "Run
+# workflow" to run it on a branch.
 on:
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
