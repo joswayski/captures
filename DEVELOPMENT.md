@@ -34,6 +34,29 @@ and injected-vault contract tests; never use staging Compose (real SES/R2).
 Custom origins require an injected vault via `AccountClient::new`; the real OS
 vault is bound to the canonical API and cannot be paired with a mock/staging URL.
 
+For the unconnected upload worker, construct `SharingCoordinator::new(&mut account,
+AssociationStore::new(native_profile_root))` without network or file access.
+`open(artifact_id)` explicitly checks the current account and remote list but never
+uploads. Resolve a stable original History file and call `upload` only after the
+user confirms; pass a cancellation flag and progress callback. The coordinator
+streams bounded chunks directly to presigned object-store URLs without bearer or
+cookies. It persists per-account/per-profile artifact associations, part ETags and
+ready state atomically. `configure_share` is a separate explicit operation; only
+its successful response supplies a usable share ID. `Patch::Keep` omits a field,
+`Patch::Clear` sends null and `Patch::Set` sends a value. `trash`/`restore` preserve
+the association; restore never revives an old share. A failed share configuration
+can be retried without re-upload. Before create, the coordinator persists a UUID
+and immutable metadata, then uses `PUT /api/asset-uploads/{UUID}` from the accounts
+API (#613/#806). Retry `upload` after a lost response or repaired local storage:
+the same key recovers the same asset even across process restart. Conflict (409)
+and tombstone (410) retain the key rather than silently creating a replacement.
+Legacy checkpoints without a key remain blocked for explicit `recover_created`
+reconciliation; never clear their marker or guess an ID. The host must serialize
+access to the profile and retain its accepted
+upload worker after the preview closes. Only disposable loopback fixtures and
+fake vaults were exercised; no real SES/R2, physical vault, AppKit, Windows, X11
+or Wayland sharing UI has been exercised.
+
 `OsVault` uses a separate `es.captur.native.account` credential in macOS Keychain,
 Windows Credential Manager, or Linux Secret Service (with encrypted D-Bus transport),
 not settings files or the installed Tauri identity. Missing credentials mean signed
