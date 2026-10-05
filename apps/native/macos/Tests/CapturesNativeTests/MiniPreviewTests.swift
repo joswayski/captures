@@ -742,7 +742,9 @@ final class MiniPreviewTests: XCTestCase {
 
     func testSecondDustDismissalBeforeSettleKeepsTheTopCardInItsPresentationSlot() throws {
         _ = NSApplication.shared
-        guard !NativeMotion.reduceMotion else { throw XCTSkip("The motion scenario requires Reduce Motion off") }
+        let motionPreference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = motionPreference }
         let controller = MiniPreviewController(tokens: tokens, imageLoader: { path in
             let colors = ["top.png": NSColor.systemBlue, "middle.png": NSColor.systemOrange,
                           "bottom.png": NSColor.systemPurple]
@@ -789,7 +791,9 @@ final class MiniPreviewTests: XCTestCase {
 
     func testZeroPresentationRetargetsBothHeldSlotsForEitherAnchor() throws {
         _ = NSApplication.shared
-        guard !NativeMotion.reduceMotion else { throw XCTSkip("The motion scenario requires Reduce Motion off") }
+        let motionPreference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = motionPreference }
         for topAnchor in [false, true] {
             let panel = fixturePanel(ids: ["top", "middle", "bottom"], images: [
                 "top": solidImage(.systemBlue), "middle": solidImage(.systemOrange),

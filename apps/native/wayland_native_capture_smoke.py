@@ -103,16 +103,29 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                 events = [json.loads(line) for line in (profile / "host.log").read_text().splitlines()
                           if line.startswith("{") and line.endswith("}")]
                 return [event["detail"] for event in events if event["event"] == name]
+            button_frame = None
             def button():
+                nonlocal button_frame
                 data = layouts("portal-screenshot-layout")
-                # Ignore a cached layout from before Sway's resize configure.
-                return (data[-1]["button"] if data and data[-1]["enabled"]
-                        and data[-1]["viewport_size"] == [880, 640] else None)
+                history = next((node for node in windows(env) if node["name"] == "Capture History"), None)
+                # Sway can choose another size after remapping. Match the
+                # actual compositor size and wait through queued configures.
+                if not (data and data[-1]["enabled"] and history and
+                        data[-1]["viewport_size"] == [history["rect"]["width"], history["rect"]["height"]]):
+                    button_frame = None
+                    return None
+                signature = (history["rect"], data[-1])
+                if button_frame is None or button_frame[0] != signature:
+                    button_frame = (signature, time.monotonic())
+                if time.monotonic() - button_frame[1] >= .5:
+                    return data[-1]["button"], history["rect"]
             def card_action(artifact_id, action):
                 data = [item for item in layouts("history-action-layout")
                         if item["id"] == artifact_id and item["action"] == action]
                 return data[-1] if data else None
             def focus_history():
+                nonlocal button_frame
+                button_frame = None
                 history = next(node for node in windows(env) if node["name"] == "Capture History")
                 # Wayland does not promise the old position after unmapping.
                 # Arrange the private scene for input and readable review captures.
@@ -122,9 +135,8 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                 time.sleep(.5)
                 return next(node for node in windows(env) if node["name"] == "Capture History")
             history = focus_history()
-            x1, y1, x2, y2 = wait(button, "enabled screenshot button")
+            (x1, y1, x2, y2), rect = wait(button, "enabled screenshot button")
             shot("before")
-            rect = history["rect"]
             before = set((profile / "history").glob("*/metadata.json"))
             assert len(before) == 1, "The editor import must be ready before capturing"
             click(int(rect["x"] + (x1 + x2) / 2), int(rect["y"] + (y1 + y2) / 2))
@@ -176,8 +188,7 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
             if mode == "real":
                 # Exercise the restored surfaces again, not merely their map state.
                 before_repeat = set((profile / "history").glob("*/metadata.json"))
-                x1, y1, x2, y2 = wait(button, "enabled repeated screenshot")
-                rect = history["rect"]
+                (x1, y1, x2, y2), rect = wait(button, "enabled repeated screenshot")
                 click(int(rect["x"] + (x1 + x2) / 2), int(rect["y"] + (y1 + y2) / 2))
                 entries = wait(lambda: set((profile / "history").glob("*/metadata.json")) - before_repeat,
                                "repeated portal screenshot saved")
@@ -220,8 +231,7 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                                            env=env, stdout=subprocess.PIPE)
                 ready(fixture)
                 history = focus_history()
-                x1, y1, x2, y2 = wait(button, "enabled recovered screenshot")
-                rect = history["rect"]
+                (x1, y1, x2, y2), rect = wait(button, "enabled recovered screenshot")
                 click(int(rect["x"] + (x1 + x2) / 2), int(rect["y"] + (y1 + y2) / 2))
                 entries = wait(lambda: set((profile / "history").glob("*/metadata.json")) - before,
                                "screenshot after recovery")

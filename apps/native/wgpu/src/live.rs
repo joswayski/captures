@@ -1190,6 +1190,10 @@ impl MiniPreviews {
             settles,
             &preview_motion::settle_tween(),
         ) {
+            crate::diagnostics::event("preview-exit", || {
+                serde_json::json!({"id":artifact_id, "kind":format!("{kind:?}"),
+                    "started_ms":now, "delay_ms":delay_ms, "settles":settles})
+            });
             self.exiting.insert(
                 artifact_id.to_owned(),
                 ExitingCard {
@@ -6704,8 +6708,13 @@ impl Live {
             }
         }
         // The Close streak's stepped horizontal blurs, once per exit.
-        for exiting in self.previews.exiting.values_mut() {
-            if exiting.streak.is_empty()
+        for (id, exiting) in &mut self.previews.exiting {
+            if self
+                .previews
+                .exits
+                .exiting(id)
+                .is_some_and(|exit| exit.kind == captures_app::preview_motion::ExitKind::Dismiss)
+                && exiting.streak.is_empty()
                 && let Some(media) = &exiting.media
             {
                 exiting.streak = crate::mini_preview::streak_blur_images(media)

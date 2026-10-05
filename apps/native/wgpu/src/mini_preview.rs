@@ -1861,6 +1861,18 @@ fn control(
     let response = ui.interact(rect, id, egui::Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let visible = reveal || response.has_focus();
+    // egui resolves input against the previous painted rect. Settling may
+    // move this card away in the consuming pass; retain a revealed control's
+    // gesture without making never-revealed or disabled controls actionable.
+    let gesture_id = id.with("gesture-eligible");
+    let was_eligible = ui.data(|data| data.get_temp::<bool>(gesture_id).unwrap_or(false));
+    let eligible = enabled && (visible || was_eligible);
+    ui.data_mut(|data| {
+        data.insert_temp(
+            gesture_id,
+            enabled && (visible || (was_eligible && response.is_pointer_button_down_on())),
+        )
+    });
     let hover_id = id.with("icon-hover");
     let icon_hover = if visible && enabled {
         crate::motion::eased_bool(
@@ -1980,7 +1992,7 @@ fn control(
         );
         crate::glass_tooltip::preview_icon(ui, tokens, rect, label, above, progress);
     }
-    visible && enabled && response.clicked()
+    eligible && response.clicked()
 }
 
 /// Shipping `thumbnail-action-pop`, timed from when `icon` replaced the
@@ -2508,6 +2520,68 @@ mod tests {
             );
             assert!(bounds.iter().all(|bounds| rect.contains_rect(*bounds)));
             output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn revealed_control_accepts_a_release_consumed_as_its_card_moves() {
+        for batched in [false, true] {
+            for (revealed, enabled, expected) in [
+                (true, true, true),
+                (false, true, false),
+                (true, false, false),
+            ] {
+                let ctx = egui::Context::default();
+                let tokens = crate::tokens::load()["dark-mustard"].clone();
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(340., 600.));
+                let rect = egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(28., 28.));
+                let point = rect.center();
+                let frame = |events, shifted, visible, enabled| {
+                    ctx.begin_pass(raw(screen, events));
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("moving-delete"),
+                        egui::UiBuilder::new().max_rect(screen),
+                    );
+                    let clicked = control(
+                        &mut ui,
+                        &tokens,
+                        if shifted {
+                            rect.translate(egui::vec2(0., 184.))
+                        } else {
+                            rect
+                        },
+                        ("delete", "middle"),
+                        "Delete",
+                        Icon::Trash,
+                        visible,
+                        enabled,
+                        false,
+                        Some((false, true)),
+                    );
+                    ctx.end_pass().textures_delta.clear();
+                    clicked
+                };
+                frame(moved(point), false, revealed, true);
+                frame(moved(point), false, revealed, true);
+                let mut events = pointer(point, true);
+                if batched {
+                    events.extend(pointer(point, false));
+                } else {
+                    assert!(!frame(events, false, revealed, true));
+                    events = pointer(point, false);
+                }
+                assert_eq!(
+                    frame(events, true, false, enabled),
+                    expected,
+                    "batched={batched}, revealed={revealed}, enabled={enabled}"
+                );
+                // Gesture eligibility must not survive an idle hidden frame.
+                frame(moved(point), true, false, true);
+                let mut hidden_click = pointer(point, true);
+                hidden_click.extend(pointer(point, false));
+                assert!(!frame(hidden_click, false, false, true));
+            }
         }
     }
 
