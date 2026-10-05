@@ -76,6 +76,16 @@ jobs:
           sudo apt-get install -y swaybg pipewire xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-wlr grim
           cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_screenshot_probe
           /usr/bin/python3 apps/native/wayland_screenshot_smoke.py --binary apps/native/wgpu/target/debug/wayland_screenshot_probe
+      - name: Acquire changing Wayland video through a portal-granted PipeWire remote
+        if: runner.os == 'Linux'
+        env:
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: |
+          sudo apt-get install -y meson ninja-build libinih-dev libdrm-dev libsystemd-dev wayland-protocols wireplumber python3-gi-cairo gir1.2-gtk-3.0
+          backend="$(apps/native/build_wayland_portal_fixture.sh "$RUNNER_TEMP/wayland-portal-fixture")"
+          cargo +1.95.0 test --locked --target-dir apps/native/wgpu/target -p captures-recording-xcap --lib portal::
+          cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_video_probe
+          /usr/bin/python3 apps/native/wayland_video_smoke.py --binary apps/native/wgpu/target/debug/wayland_video_probe --wlr-backend "$backend"
       - name: Transfer original files to an independent Wayland client
         if: runner.os == 'Linux'
         run: |
