@@ -3283,7 +3283,12 @@ final class LiveCaptureController: NSObject {
                                completion: (() -> Void)? = nil) {
         guard !editorTerminationPending else { completion?(); return }
         run({ [settingsPath] in
-            try outputDirectory ?? CapturePreferences.load(path: settingsPath).directory
+            if artifact.isRecording {
+                let preferences = try CapturePreferences.load(path: settingsPath)
+                return (outputDirectory ?? preferences.directory, Optional(preferences.recording))
+            }
+            return (try outputDirectory ?? CapturePreferences.load(path: settingsPath).directory,
+                    Optional<RecordingPreferences>.none)
         }) {
             [weak self] result in
             guard let self else { return }
@@ -3293,7 +3298,7 @@ final class LiveCaptureController: NSObject {
                 || self.selectedIndex.flatMap({ self.artifacts.indices.contains($0)
                 ? self.artifacts[$0].id : nil }) == artifact.id else { return }
             switch result {
-            case .success(let outputDirectory):
+            case .success(let (outputDirectory, recordingPreferences)):
                 if artifact.isRecording {
                     if self.recordingEditor == nil {
                         self.recordingEditor = RecordingEditorController(
@@ -3311,6 +3316,7 @@ final class LiveCaptureController: NSObject {
                     self.recordingEditor?.present(artifact: artifact,
                                                   historyRoot: self.historyRoot,
                                                   outputDirectory: outputDirectory,
+                                                  recordingPreferences: recordingPreferences,
                                                   completion: completion.map { finished in
                         { [weak self] accepted in
                             if !accepted {

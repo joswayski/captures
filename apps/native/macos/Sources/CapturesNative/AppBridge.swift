@@ -90,6 +90,8 @@ struct CapturePreferences {
 
 struct RecordingPreferences: Equatable {
     let framesPerSecond: Int
+    let exportFormat: String
+    let gifFramesPerSecond: Int
     let maxResolution: String
     let countdown: Int
     let showCursor: Bool
@@ -105,6 +107,8 @@ struct RecordingPreferences: Equatable {
 
     init(_ value: [String: Any]) throws {
         let framesPerSecond = value["video_fps"] as? Int ?? 60
+        let exportFormat = value["video_format"] as? String ?? "mp4"
+        let gifFramesPerSecond = value["gif_fps"] as? Int ?? 15
         let maxResolution = value["video_max_resolution"] as? String ?? "original"
         let countdown = value["countdown_seconds"] as? Int ?? 3
         let showCursor = value["show_cursor"] as? Bool ?? true
@@ -115,11 +119,13 @@ struct RecordingPreferences: Equatable {
         let gifMaxWidth = value["gif_max_width"] as? Int ?? 800
         let gifMaxColors = value["gif_max_colors"] as? Int ?? 256
         guard [15, 30, 60].contains(framesPerSecond),
+              ["mp4", "gif", "webm"].contains(exportFormat), (8...30).contains(gifFramesPerSecond),
               ["original", "p1080", "p720"].contains(maxResolution),
               (0...10).contains(countdown), gifMaxWidth >= 320,
               (64...256).contains(gifMaxColors)
         else { throw SettingsStoreError.invalidResponse }
         self.framesPerSecond = framesPerSecond; self.maxResolution = maxResolution
+        self.exportFormat = exportFormat; self.gifFramesPerSecond = gifFramesPerSecond
         self.countdown = countdown; self.showCursor = showCursor
         self.highlightClicks = highlightClicks; self.captureSystemAudio = captureSystemAudio
         microphoneDeviceID = value["microphone_device_id"] as? String

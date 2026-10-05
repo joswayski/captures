@@ -198,7 +198,13 @@ the selector/countdown, and a completed still follows normal History, mini-previ
 and auto-copy behavior. AppKit/Windows apply capture exclusion; X11 hides the HUD and
 guide from the still but cannot exclude the selector from ongoing recording pixels.
 Both hosts open recordings in the native recording editor, which saves MP4 and
-GIF. Unsigned development packages can include the existing pinned media tools,
+GIF. New editor windows honor the saved export format, GIF frame rate and maximum
+width, including custom valid values. GIF sources stay GIF; the MP4 preference
+preserves an opened WebM's format. WebM remains explicitly unavailable in bundled
+tools; choose MP4 or GIF to export it. Refocusing an existing editor retains its
+edits. Capture still records a video master, and GIF palettes follow editor quality,
+not the recording palette preference.
+Unsigned development packages can include the existing pinned media tools,
 corresponding source and licenses; see [staging](../../DEVELOPMENT.md#native-development-open-with).
 History **Save file**
 copies original video/GIF bytes to the configured output folder without encoding

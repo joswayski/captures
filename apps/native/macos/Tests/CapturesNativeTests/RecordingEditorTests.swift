@@ -4,6 +4,88 @@ import XCTest
 @testable import CapturesNative
 
 final class RecordingEditorTests: XCTestCase {
+    func testPersistedGifDefaultsApplyToExportsAndRenderCustomValues() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                sourceWidth: 1600, sourceHeight: 900, originalSavePath: "/Exports/Clip.mp4"))
+            let controller = RecordingEditorController(
+                tokens: Tokens.variants["\(appearance)-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            let preferences = try RecordingPreferences(["video_format": "gif", "video_fps": 60,
+                "gif_fps": 27, "gif_max_width": 704, "gif_max_colors": 96])
+            controller.present(artifact: recordingArtifact(savedPath: "/Exports/Clip.mp4"),
+                historyRoot: "/History", outputDirectory: "/Elsewhere",
+                recordingPreferences: preferences)
+            XCTAssertEqual(try popup("Recording export format", in: controller.root).titleOfSelectedItem, ".gif")
+            XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem, "27 FPS")
+            XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem, "704 px")
+            XCTAssertEqual(try field("Saved filename", in: controller.root).stringValue, "Clip-edited")
+            XCTAssertTrue(controller.savingCopy)
+            worker.requestResult = .success(try presentation(revision: 1,
+                sourceWidth: 1600, sourceHeight: 900,
+                output: NativeRecordingDimensions(width: 704, height: 396),
+                exportFormat: "gif", exportQuality: "highest", framesPerSecond: 27))
+            controller.applyPendingEdits()
+            let request = try XCTUnwrap(worker.requests.last)
+            let export = try XCTUnwrap(request["export"] as? [String: Any])
+            let edit = try XCTUnwrap(request["edit"] as? [String: Any])
+            XCTAssertEqual(export["format"] as? String, "gif")
+            XCTAssertEqual((export["frames_per_second"] as? NSNumber)?.intValue, 27)
+            XCTAssertEqual((export["gif_max_colors"] as? NSNumber)?.intValue, 256,
+                "shipping derives palette size from quality, not capture defaults")
+            XCTAssertEqual((edit["output_width"] as? NSNumber)?.intValue, 704)
+            XCTAssertEqual((edit["output_height"] as? NSNumber)?.intValue, 396)
+            try render(controller.root, name: "recording-editor-preferred-gif-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(controller.root, name: "recording-editor-preferred-gif-minimum-\(appearance)")
+
+            choose(try popup("GIF frame rate", in: controller.root), "12 FPS")
+            choose(try popup("GIF maximum width", in: controller.root), "480 px")
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                outputDirectory: "/Exports", recordingPreferences: preferences)
+            XCTAssertEqual(worker.openCount, 1, "refocus does not reopen or overwrite edits")
+            XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem, "12 FPS")
+            XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem, "480 px")
+        }
+    }
+
+    func testPreferredWebMPreservesGifSourcesAndReportsUnavailableForVideo() throws {
+        _ = NSApplication.shared
+        for (mime, path, expected) in [("video/mp4", "/Exports/Clip.mp4", ".webm"),
+                                       ("video/webm", "/Exports/Clip.webm", ".webm"),
+                                       ("image/gif", "/Exports/Clip.gif", ".gif")] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                sourceMime: mime, originalSavePath: path))
+            let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            let preferences = try RecordingPreferences(["video_format": "webm", "gif_fps": 12,
+                                                        "gif_max_width": 480])
+            controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
+                outputDirectory: "/Exports", recordingPreferences: preferences)
+            XCTAssertEqual(try popup("Recording export format", in: controller.root).titleOfSelectedItem, expected)
+            if expected == ".webm" {
+                XCTAssertTrue(controller.savingCopy)
+                XCTAssertFalse(controller.dirty, "WebM retains the accepted MP4 preview")
+                try button("Save new copy", in: controller.root).performClick(nil)
+                XCTAssertTrue(worker.saves.isEmpty)
+                XCTAssertTrue(labels(in: controller.root).contains(RecordingEditorCopy.liveTiming.webmExportError))
+            } else {
+                XCTAssertFalse(controller.savingCopy, "same-format GIF can replace its original after acceptance")
+                XCTAssertTrue(controller.dirty)
+                XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem, "12 FPS")
+                XCTAssertEqual(try popup("GIF maximum width", in: controller.root).titleOfSelectedItem, "480 px")
+            }
+        }
+        XCTAssertEqual(RecordingEditorCopy.initialOutputFormat(mimeType: "video/webm",
+            preferredFormat: "mp4"), "webm")
+        let recording = try RecordingPreferences(["video_format": "gif", "gif_fps": 27])
+        XCTAssertEqual(recording.framesPerSecond, 60, "capture remains a video master")
+        for bad in [["video_format": "avi"], ["gif_fps": 7], ["gif_fps": 31]] as [[String: Any]] {
+            XCTAssertThrowsError(try RecordingPreferences(bad))
+        }
+    }
+
     func testReplaceOriginalSavesWithoutConfirmationCancelFailureAndRebase() throws {
         _ = NSApplication.shared
         let path = "/Exports/original.mp4"
@@ -4271,6 +4353,7 @@ final class RecordingEditorTests: XCTestCase {
     private func presentation(artifactID: String = "recording-id",
                               start: UInt64 = 0, end: UInt64? = nil,
                               position: UInt64 = 0, revision: UInt64 = 0,
+                              sourceMime: String = "video/mp4",
                               sourceWidth: Int = 320, sourceHeight: Int = 180,
                               sourceSizeBytes: UInt64 = 1_024,
                               previewWidth: Int = 16, previewHeight: Int = 9,
@@ -4305,7 +4388,7 @@ final class RecordingEditorTests: XCTestCase {
         let colorsValue: Any = gifDefaultsAbsent ? NSNull() : exportFormat == "gif"
             ? NSNumber(value: gifMaxColors ?? defaultGifColors) : NSNull()
         let snapshot = try XCTUnwrap(NativeRecordingEditorSnapshot([
-            "artifact_id": artifactID, "source": ["kind": "video", "mime_type": "video/mp4",
+            "artifact_id": artifactID, "source": ["kind": "video", "mime_type": sourceMime,
                 "width": sourceWidth, "height": sourceHeight,
                 "duration_ms": 2_000, "size_bytes": sourceSizeBytes],
             "edit": ["trim_start_ms": start, "trim_end_ms": endValue,
