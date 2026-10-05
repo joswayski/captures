@@ -179,6 +179,23 @@ receipt, cleanup directory and log; a post-commit old backup may be incomplete.
 This helper does not import installed history/settings, register an app, preserve
 OS permission identity, publish a channel or enable the Update now button.
 
+After stopping **all** app processes and excluding new launches, recover the same
+explicit development-package root (it may be missing after an interrupted rename):
+
+```sh
+target/debug/native_update_helper \
+  --recover-stopped-development-package "$ABSOLUTE_NATIVE_PACKAGE_ROOT" \
+  --all-app-processes-stopped
+```
+
+`--all-app-processes-stopped` is the operator's assertion, not process detection.
+Recovery never kills/launches an app, contacts a release endpoint or imports a
+profile. It validates receipts and full package hashes, then restores an
+unconfirmed backup or finishes already-committed cleanup. Links, conflicts and
+changed files remain untouched for manual repair. JSON reports `recovery_complete`
+or `no_pending_replacement`; success does not always mean rollback. Do not combine
+this mode with acquisition flags. The persistent empty sibling lock file remains.
+
 Runnable signed-package regressions cover partial/wrong/oversized/replaced-file
 acknowledgements, late health, a clean root exit leaving a live child, timeouts,
 prelaunch cancellation/profile rejection, exclusion of recovery during handoff,

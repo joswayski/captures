@@ -1,11 +1,11 @@
 //! Explicit stopped-development-package replacement, never a shipping updater.
 use std::{fs, path::PathBuf, time::Duration};
 
-use captures_app::updater::{Renderer, Target, UpdateClient};
+use captures_app::updater::{Renderer, Target, UpdateClient, recover_installation};
 use captures_media::CancelToken;
 use serde_json::json;
 
-const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH --empty-test-profile ABSOLUTE_PATH [--health-timeout-seconds 1..120]";
+const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH --empty-test-profile ABSOLUTE_PATH [--health-timeout-seconds 1..120]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1)) {
@@ -14,7 +14,31 @@ fn main() {
     }
 }
 
-fn run(mut arguments: impl Iterator<Item = String>) -> Result<(), String> {
+fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut arguments = arguments.peekable();
+    if arguments
+        .peek()
+        .is_some_and(|flag| flag == "--recover-stopped-development-package")
+    {
+        arguments.next();
+        let destination = PathBuf::from(arguments.next().ok_or(USAGE)?);
+        if !destination.is_absolute()
+            || arguments.next().as_deref() != Some("--all-app-processes-stopped")
+            || arguments.next().is_some()
+        {
+            return Err(USAGE.into());
+        }
+        // This is an operator assertion, not process-tree detection. Never
+        // kill a process or infer quiescence from the original root's exit.
+        // Do not canonicalize the final component: the core rejects links and
+        // can restore a missing destination at an interrupted rename boundary.
+        let changed = recover_installation(&destination).map_err(|error| error.to_string())?;
+        println!(
+            "{}",
+            json!({"state":if changed { "recovery_complete" } else { "no_pending_replacement" }, "changed":changed})
+        );
+        return Ok(());
+    }
     let mut endpoint = None;
     let mut key = None;
     let mut version = None;
@@ -147,5 +171,69 @@ mod tests {
                 .into_iter())
             .is_err()
         );
+    }
+
+    #[test]
+    fn recovery_requires_exact_mode_absolute_destination_and_stopped_process_assertion() {
+        for args in [
+            vec!["--recover-stopped-development-package"],
+            vec!["--recover-stopped-development-package", "/package"],
+            vec![
+                "--recover-stopped-development-package",
+                "relative",
+                "--all-app-processes-stopped",
+            ],
+            vec![
+                "--recover-stopped-development-package",
+                "/package",
+                "--root-process-exited",
+            ],
+            vec![
+                "--recover-stopped-development-package",
+                "/package",
+                "--all-app-processes-stopped",
+                "--manifest-url",
+                "https://example.invalid",
+            ],
+        ] {
+            assert!(run(args.into_iter().map(String::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn recovery_without_pending_work_preserves_files_and_never_needs_a_release_endpoint() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("development package é");
+        fs::create_dir(&package).unwrap();
+        fs::write(
+            package.join("sentinel"),
+            b"preserve this asymmetric content",
+        )
+        .unwrap();
+        let args = |destination: &std::path::Path| {
+            [
+                "--recover-stopped-development-package".into(),
+                destination.to_string_lossy().into_owned(),
+                "--all-app-processes-stopped".into(),
+            ]
+            .into_iter()
+        };
+        run(args(&package)).unwrap();
+        assert_eq!(
+            fs::read(package.join("sentinel")).unwrap(),
+            b"preserve this asymmetric content"
+        );
+        // Missing package is legitimate after the first activation rename.
+        run(args(&root.path().join("missing-development-package"))).unwrap();
+        #[cfg(unix)]
+        {
+            let link = root.path().join("package-link");
+            std::os::unix::fs::symlink(&package, &link).unwrap();
+            assert!(run(args(&link)).is_err());
+            assert_eq!(
+                fs::read(package.join("sentinel")).unwrap(),
+                b"preserve this asymmetric content"
+            );
+        }
     }
 }
