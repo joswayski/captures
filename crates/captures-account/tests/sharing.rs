@@ -71,6 +71,10 @@ impl Server {
                     thread::sleep(Duration::from_millis(2));
                     continue;
                 };
+                // Accepted sockets inherit the listener's non-blocking mode on Windows and
+                // macOS (not Linux); a partial request would then fail with WouldBlock and
+                // the dropped connection would surface to the client as Offline.
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
