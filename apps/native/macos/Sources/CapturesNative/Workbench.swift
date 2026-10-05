@@ -883,6 +883,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var table: NSTableView?
     private var preferencesController: PreferencesController?
     private var feedbackController: FeedbackController?
+    private var sharingController: SharingController?
     private var liveController: LiveCaptureController?
     private var pendingOpenImages: [String] = []
     private var miniPreviews: MiniPreviewController?
@@ -975,6 +976,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         miniPreviews.copyArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.copy(artifact) }
         miniPreviews.saveArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.save(artifact) }
         miniPreviews.openArtifact = { [weak self] artifact in self?.openPreview(artifact) }
+        miniPreviews.shareArtifact = { [weak self] artifact in self?.showSharing(artifact) }
         miniPreviews.trashArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.trash(artifact) }
         miniPreviews.prepareDrag = { [weak miniPreviewActions] artifact, completion in
             miniPreviewActions?.prepareDrag(artifact, completion: completion)
@@ -1095,10 +1097,18 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             guard let self else { return }
             let finished: (Bool) -> Void = { [weak self] accepted in
                 guard let self, self.terminationPending else { return }
-                if accepted { self.finishTermination() }
-                else { self.terminating = false }
-                self.terminationPending = false
-                sender.reply(toApplicationShouldTerminate: accepted)
+                guard accepted else {
+                    self.terminating = false; self.terminationPending = false
+                    sender.reply(toApplicationShouldTerminate: false); return
+                }
+                self.nativeInstance?.stopAccepting()
+                let drained = { [weak self] in
+                    guard let self else { return }
+                    self.finishTermination(); self.terminationPending = false
+                    sender.reply(toApplicationShouldTerminate: true)
+                }
+                if let sharing = self.sharingController { sharing.model.shutdown(completion: drained) }
+                else { drained() }
             }
             if let liveController = self.liveController {
                 liveController.prepareEditorForTermination(completion: finished)
@@ -1171,6 +1181,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         if scene == "onboarding" { render(); return }
         preferencesController?.restyle()
         feedbackController?.restyle(tokens)
+        sharingController?.restyle(tokens)
         renderPermissionSheet()
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
@@ -1414,6 +1425,19 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     /// Starts a fresh live host with the same profile and quits this one.
     /// `failed` runs when spawning fails and this process kept its instance lock.
     private func relaunch(failed: @escaping (String) -> Void) {
+        if let sharing = sharingController {
+            // Never release profile ownership while accepted sharing can write.
+            terminating = true
+            sharing.model.shutdown { [weak self] in
+                guard let self else { return }
+                self.sharingController = nil
+                // A Quit arriving during this drain must not spawn a new host.
+                guard !self.terminationPending else { return }
+                self.terminating = false
+                self.relaunch(failed: failed)
+            }
+            return
+        }
         preferencesController?.flush()
         LiveCaptureController.flush()
         do { try crashDiagnostics?.markClean() }
@@ -1484,6 +1508,17 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             renderSetup()
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000,
                 detail: scene)
+            return
+        }
+        if scene == "sharing" {
+            if sharingController == nil {
+                window.styleMask.insert(.resizable)
+                window.setContentSize(NSSize(width: 480, height: 720))
+                sharingController = SharingController(tokens: tokens, fixtureWindow: window)
+            }
+            sharingController?.restyle(tokens)
+            content = sharingController?.root
+            Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
         }
         content = Surface(frame: NSRect(origin: .zero,
@@ -1558,6 +1593,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             liveController?.workspaceHidden = { [weak self] hidden in
                 self?.setCompanionWindowsHidden(hidden)
             }
+            liveController?.showSharing = { [weak self] artifact in self?.showSharing(artifact) }
             renderedLiveStyleRevision = liveStyleRevision
             drainOpenImages()
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
@@ -1617,6 +1653,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.resolvedTokens = self.makeTokens()
                     self.liveStyleRevision += 1
                     self.feedbackController?.restyle(self.tokens)
+                    self.sharingController?.restyle(self.tokens)
                 }
                 let chosen = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 self.window.appearance = chosen
@@ -1699,6 +1736,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     /// A capture hides History; hide Preferences with it so neither shows in
     /// the capture, and restore both when the capture ends.
     private func setCompanionWindowsHidden(_ hidden: Bool) {
+        sharingController?.setCaptureHidden(hidden)
         if hidden {
             for kind in [AppWindowKind.preferences, .setup] {
                 guard let companion = appWindows.window(kind), companion.isVisible,
@@ -1718,7 +1756,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     /// The live document windows (and their sheets) whose key state matters
     /// to capture shortcuts.
     private func isDocumentWindow(_ candidate: NSWindow) -> Bool {
-        candidate === window || candidate.sheetParent === window || appWindows.kind(of: candidate) != nil
+        if let sharingWindow = sharingController?.window,
+           candidate === sharingWindow || candidate.sheetParent === sharingWindow { return true }
+        return candidate === window || candidate.sheetParent === window || appWindows.kind(of: candidate) != nil
     }
 
     static func sceneTitle(_ name: String) -> String {
@@ -1768,6 +1808,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func openPreview(_ artifact: CaptureArtifact) {
         if permissionSheet != nil || liveController?.externalOpenPending == true { return }
         liveController?.openPreview(artifact)
+    }
+
+    private func showSharing(_ artifact: CaptureArtifact) {
+        guard options.live, onboardingReady, !terminating, !captureBusy, permissionSheet == nil,
+              let liveController, liveController.historyIdle, let root = liveController.nativeProfileRoot else { return }
+        if sharingController == nil { sharingController = SharingController(tokens: tokens, root: root) }
+        sharingController?.restyle(tokens)
+        sharingController?.present(artifact)
     }
 
     private func installStatusItem() {

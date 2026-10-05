@@ -26,13 +26,14 @@ private final class MiniPreviewImageView: NSView {
 }
 
 enum MiniPreviewButtonKind: CaseIterable {
-    case close, trash, edit, copy, save, folder, collapse, clear, check
+    case close, trash, edit, share, copy, save, folder, collapse, clear, check
 
     var iconName: String {
         switch self {
         case .close, .clear: return "close"
         case .trash: return "trash"
         case .edit: return "edit"
+        case .share: return "share"
         case .copy: return "copy"
         case .save: return "save"
         case .folder: return "folder"
@@ -547,7 +548,8 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
          width: Int, height: Int, sizeBytes: UInt64 = 0, saved: Bool, rightAnchor: Bool,
          copy: @escaping () -> Void, save: @escaping () -> Void,
          open: @escaping () -> Void, trash: @escaping () -> Void,
-         dismiss: @escaping () -> Void, discard: @escaping () -> Void) {
+         dismiss: @escaping () -> Void, discard: @escaping () -> Void,
+         share: @escaping () -> Void = {}) {
         self.artifactID = artifactID; self.tokens = tokens
         self.mirrored = rightAnchor
         self.saved = saved
@@ -623,6 +625,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         // The present pill widens away from the inner corner.
         edit.growsFromTrailingEdge = !mirrored
         editButton = edit
+        // Opposite the persistent clipboard chip, below the corner controls.
+        let shareControl = addButton("Share capture", .share, x: inset, y: bounds.height - 36, action: share)
+        shareControl.tooltipText = "Share capture"
         let centerX = (bounds.width - 140) / 2
         let centerTop = (bounds.height - 64 - gap) / 2
         copyButton = addButton("Copy", .copy, x: centerX, y: centerTop, width: 140, action: copy)
@@ -1375,6 +1380,7 @@ final class MiniPreviewView: NSView {
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          discard: @escaping (String) -> Void = { _ in },
+         share: @escaping (String) -> Void = { _ in },
          setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
@@ -1411,7 +1417,7 @@ final class MiniPreviewView: NSView {
                 sizeBytes: resource.artifact.sizeBytes,
                 saved: resource.artifact.savedPath != nil, rightAnchor: rightAnchor,
                 copy: { copy(id) }, save: { save(id) }, open: { open(id) },
-                trash: { trash(id) }, dismiss: { dismiss(id) }, discard: { discard(id) })
+                trash: { trash(id) }, dismiss: { dismiss(id) }, discard: { discard(id) }, share: { share(id) })
             card.isHidden = false
             card.setCompact(collapsed, depth: layout.depth)
             card.setAccessibilityElement(layout.interactive)
@@ -1698,7 +1704,7 @@ final class MiniPreviewView: NSView {
 
     /// Shipping DOM order: the collapsed pile's expand control, the stack
     /// toolbar (Clear all, Minimize), the overflow cues, then each card and
-    /// its controls (Close, Delete, Edit, Copy, Save file or Show in Folder).
+    /// its controls (Close, Delete, Edit, Share, Copy, Save file or Show in Folder).
     /// Focus starts on the first expanded card, else the expand control.
     func installKeyViewLoop(in window: NSWindow) {
         var order = ([pileExpandButton, clearButton, collapseButton] as [NSView?]).compactMap { $0 }
@@ -2127,13 +2133,14 @@ final class MiniPreviewPanel: NSPanel {
          save: @escaping (String) -> Void, open: @escaping (String) -> Void,
          trash: @escaping (String) -> Void, dismiss: @escaping (String) -> Void,
          discard: @escaping (String) -> Void = { _ in },
+         share: @escaping (String) -> Void = { _ in },
          setCollapsed: @escaping (Bool) -> Void,
          clearAll: @escaping () -> Void, move: @escaping (NSPoint) -> Void = { _ in }) {
         previewView = MiniPreviewView(geometry: geometry, contentHeight: contentHeight,
             resources: resources, ids: ids,
             layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens, pileGravity: pileGravity,
-            copy: copy, save: save, open: open, trash: trash, dismiss: dismiss, discard: discard,
+            copy: copy, save: save, open: open, trash: trash, dismiss: dismiss, discard: discard, share: share,
             setCollapsed: setCollapsed, clearAll: clearAll, move: move)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
@@ -2216,6 +2223,7 @@ final class MiniPreviewController {
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
+    var shareArtifact: ArtifactAction = { _ in }
     var trashArtifact: ArtifactAction = { _ in }
     var prepareDrag: (CaptureArtifact, @escaping (String?) -> Void) -> Void = { _, completion in
         completion(nil)
@@ -2720,6 +2728,8 @@ final class MiniPreviewController {
                                      screenFrame: screen.frame)
         let gravity = NativePreviewLayout.gravity(monitor: monitor, count: ids.count,
             origin: stackOrigin, placement: settings.placement)
+        let sourceArtifacts = resources.mapValues(\.artifact)
+        let sourceGenerations = cardGenerations
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
             contentHeight: stack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts,
@@ -2731,6 +2741,11 @@ final class MiniPreviewController {
             trash: { [weak self] in self?.perform(\.trashArtifact, artifactID: $0) },
             dismiss: { [weak self] in self?.dismiss($0) },
             discard: { [weak self] in self?.dismiss($0, exit: .dust) },
+            share: { [weak self] id in
+                guard let self, let artifact = sourceArtifacts[id], self.contains(artifact),
+                      self.cardGenerations[id] == sourceGenerations[id], self.panel?.isVisible == true else { return }
+                self.shareArtifact(artifact)
+            },
             setCollapsed: { [weak self] in self?.setCollapsed($0) },
             clearAll: { [weak self] in self?.clearAll() },
             move: { [weak self] in self?.moveStack(to: $0) })
@@ -2741,8 +2756,6 @@ final class MiniPreviewController {
                   prepared.previewPath == artifact.previewPath else { continue }
             next.previewView.setPreparedDragPath(prepared.path, for: id)
         }
-        let sourceArtifacts = resources.mapValues(\.artifact)
-        let sourceGenerations = cardGenerations
         next.previewView.setDragEnded { [weak self] id, point, operation in
             guard let self, let source = sourceArtifacts[id], self.contains(source),
                   self.cardGenerations[id] == sourceGenerations[id] else { return }

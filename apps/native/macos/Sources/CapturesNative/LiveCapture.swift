@@ -300,6 +300,7 @@ final class LiveCaptureController: NSObject {
     private var toolbarDivider: Surface!
     private var deleteAllButton: HistoryButton!
     private var deleteAllCancelButton: HistoryButton!
+    private var shareSelectedButton: CaptureButton!
     private var historyLoaded = false
     /// Shared card presentation and bounded thumbnail residency, by artifact ID.
     private var cards: [String: HistoryCard] = [:]
@@ -340,6 +341,8 @@ final class LiveCaptureController: NSObject {
     /// Called with true when a capture hides this window and false when the
     /// capture ends, so the host can hide its other windows too.
     var workspaceHidden: ((Bool) -> Void)?
+    var showSharing: ((CaptureArtifact) -> Void)? { didSet { layoutHeaderActions() } }
+    var nativeProfileRoot: String? { historyRoot.isEmpty ? nil : historyRoot }
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
          transport: AppTransport = AppBridge(), recoveryWorker: RecordingRecoveryWorking = RecordingRecoveryWorker(),
@@ -634,6 +637,13 @@ final class LiveCaptureController: NSObject {
         }
         deleteAllCancelButton.setAccessibilityLabel(copy.cancelLabel)
         root.addSubview(deleteAllCancelButton); root.addSubview(deleteAllButton)
+        shareSelectedButton = CaptureButton("Share selected capture…", frame: .zero, tokens: tokens) { [weak self] in
+            guard let self, !self.historyBusy, self.cardBusy == nil, let index = self.selectedIndex,
+                  self.artifacts.indices.contains(index) else { return }
+            self.showSharing?(self.artifacts[index])
+        }
+        shareSelectedButton.icon = .shipping("share")
+        root.addSubview(shareSelectedButton)
 
         // Shipping `.history-error`: danger text on a `danger-surface` card.
         statusBackground = Surface(frame: .zero)
@@ -851,6 +861,13 @@ final class LiveCaptureController: NSObject {
             headerBottom = max(80 + ledeHeight, deleteAllButton.isHidden ? 0 : 70 + height)
         }
 
+        shareSelectedButton.isHidden = !historyLoaded || selectedIndex == nil || showSharing == nil
+        shareSelectedButton.isEnabled = !busy && cardBusy == nil
+        if !shareSelectedButton.isHidden {
+            shareSelectedButton.frame = NSRect(x: left, y: headerBottom + tokens.number("s-5"),
+                width: min(right - left, width(shareSelectedButton.title) + 15 + gap + 2 * tokens.number("s-5")), height: height)
+            headerBottom = shareSelectedButton.frame.maxY
+        }
         let top = headerBottom + tokens.number("s-6")
         if top != contentTop {
             contentTop = top

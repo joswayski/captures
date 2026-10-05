@@ -3,7 +3,8 @@
 These are implementation stages of the [native rewrite](../../docs/native-rewrite.md),
 **not replacement downloads**. The existing Tauri Preview is unchanged.
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
-No WebView, React, JavaScript runtime, Rust sidecar or network service is used.
+No WebView, React, JavaScript runtime or Rust sidecar is used. Local capture
+does not require a network service; optional sharing uses the account API.
 Fixture launches do not request screen access. The opt-in capture workspace below
 connects the existing Rust capture engine in process. The
 [shared wgpu candidate](wgpu/README.md) adds Windows/Linux fixture windows and
@@ -19,6 +20,24 @@ and the included [TESTING.md](TESTING.md). Use a new export folder and quit the
 shipping app first. macOS CI archives are ad-hoc signed, Windows unsigned and
 Linux X11-only; these artifacts do not close signing, updater, migration or
 physical-platform acceptance gates.
+
+## Native sharing controls
+
+Both hosts connect mini-preview Share and selected History to the shared Rust
+account/upload worker. AppKit uses an opaque C handle and safe presentation
+events; bearer tokens, challenge IDs and snapshot paths do not cross into Swift.
+Opening/sign-in never upload. Password/expiry, progress/cancel/retry, link
+management and confirmed cloud Trash/Restore are explicit actions. Closing the
+window retains accepted work; Quit and permission recovery drain it before
+releasing the isolated profile. Capture hides Share regardless of preview inclusion.
+
+AppKit `--scene sharing` renders disabled controls without a worker. Set
+`CAPTURES_NATIVE_SHARE_FIXTURE` to `otp`, `vault`, `shared`, `uploading`, `trash`
+or `error`; live transport ignores fixture state. Tests collect light/dark and
+minimum-size renders through `CAPTURES_TEST_ARTIFACTS`. AppKit build/render
+verification and physical macOS/Windows/X11/Wayland vault/object-store acceptance
+remain open. The account service is still disabled and undeployed; these controls
+do not activate it or change the shipping Preview.
 
 ## Persisted native Preferences
 

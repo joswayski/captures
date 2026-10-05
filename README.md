@@ -761,13 +761,15 @@ Preview controls, History actions and screenshot-editor tools use shared shippin
 icon paths on both native hosts, rather than platform-specific approximations.
 The inspector follows the shipping sections, controls, labels and spacing in the
 shipping 320 px sidebar column on both hosts.
-The experimental wgpu host connects mini-preview **Share capture** and History's
+Both experimental native hosts connect mini-preview **Share capture** and History's
 **Share selected capture…** to native email-code sign-in, OS credential storage,
 upload progress/cancel/retry, and password/expiry/link management. Opening a popup
-never uploads. Its independent Rust worker retains the selected original bytes
+never uploads. Their shared Rust worker retains the selected original bytes
 through sign-in and preview dismissal; completed uploads are not duplicated when
-link configuration retries. AppKit controls and physical platform acceptance
-remain open in the [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--required-not-implemented).
+link configuration retries. Closing Share retains work; Quit drains the worker
+before releasing the development profile. AppKit build/render verification and
+physical platform acceptance remain open in the
+[sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--acceptance-open).
 The account API is still in development and disabled; these native development
 controls do not enable hosted sharing in the shipping app or deploy its service.
 Both hosts can copy the full-resolution edited image without saving a file or draft;

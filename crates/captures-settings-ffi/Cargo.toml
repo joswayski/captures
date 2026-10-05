@@ -9,6 +9,7 @@ rust-version.workspace = true
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+captures-account = { path = "../captures-account" }
 captures-app = { path = "../captures-app" }
 captures-capture = { path = "../captures-capture" }
 captures-feedback = { path = "../captures-feedback" }

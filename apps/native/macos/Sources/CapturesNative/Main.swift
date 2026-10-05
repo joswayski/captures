@@ -64,9 +64,9 @@ struct Options {
             default: throw Usage.invalid
             }
         }
-        guard ["preferences", "history", "hud", "preview", "region", "window", "update", "idle"].contains(scene),
+        guard ["preferences", "history", "hud", "preview", "sharing", "region", "window", "update", "idle"].contains(scene),
             (updateState == nil && updateTray == nil) || scene == "update",
-            !(scene == "update" && (live || exercise)),
+            !(["update", "sharing"].contains(scene) && (live || exercise)),
             ["light", "dark", "system"].contains(appearance), Self.themes.contains(theme),
             !(live && (exercise || referenceChips)), historyRoot == nil || live,
             openMedia.isEmpty || live
@@ -107,7 +107,7 @@ struct Options {
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch Options.Usage.invalid {
-            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|region|window|update|idle] [--update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date] [--update-tray top|bottom|none] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|sharing|region|window|update|idle] [--update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date] [--update-tray top|bottom|none] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
             exit(1)
         } catch {
             FileHandle.standardError.write(Data("Captures could not start: \(error.localizedDescription)\n".utf8))

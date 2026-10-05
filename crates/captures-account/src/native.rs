@@ -382,3 +382,44 @@ fn copy_original(
     snapshot.flush().map_err(|_| sharing::Error::Storage)?;
     Ok(snapshot)
 }
+
+/// Stable, non-secret presentation copy shared by native hosts.
+pub fn error_text(error: &sharing::Error) -> &'static str {
+    use crate::Error as A;
+    use sharing::Error;
+    match error {
+        Error::Account(A::InvalidSession) => {
+            "Session expired. Sign in again; the selected capture and settings are retained."
+        }
+        Error::Account(A::Vault(_)) => {
+            "Credential vault unavailable or locked. Unlock it and retry."
+        }
+        Error::Account(A::InvalidCode { .. }) => {
+            "Invalid or expired code. Try again or request another code."
+        }
+        Error::Account(A::InvalidInput) | Error::InvalidInput => {
+            "Check your email, code, password and expiry."
+        }
+        Error::Offline | Error::Account(A::Offline) => {
+            "Offline. Your capture and upload checkpoint are retained. Retry when connected."
+        }
+        Error::Unavailable | Error::Account(A::Unavailable) => {
+            "Sharing service is unavailable. Nothing uploads automatically; retry later."
+        }
+        Error::Cancelled => "Upload cancelled. Acknowledged parts are retained for explicit retry.",
+        Error::MissingFile => "Original file is missing. No thumbnail is uploaded in its place.",
+        Error::ChangedFile => {
+            "This capture differs from the existing upload. Save a new copy to share a different artifact."
+        }
+        Error::Storage => {
+            "Couldn’t retain sharing state locally. Check disk space and permissions, then retry."
+        }
+        Error::Conflict | Error::Gone | Error::CreateUncertain => {
+            "Existing upload needs reconciliation. Captures will not create a duplicate."
+        }
+        Error::NotFound => "Cloud file not found. Refresh or check the signed-in account.",
+        Error::Protocol | Error::Account(A::MalformedResponse) => {
+            "Sharing returned an unexpected response. No link is shown; refresh or retry."
+        }
+    }
+}

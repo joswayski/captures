@@ -18,6 +18,7 @@ mod recording_recovery;
 mod recording_timeline;
 mod region;
 mod selection;
+mod sharing;
 mod shortcuts;
 mod tray_notice;
 mod update_notice;

@@ -1743,7 +1743,7 @@ targeting/cursor/click highlights and pointer polling; Linux cannot exclude the
 recording HUD from captures. Test X11 and Wayland separately. Unsupported actions
 must be explicit, not silently successful.
 
-## Mini-preview sharing integration — required, not implemented
+## Mini-preview sharing integration — acceptance open
 
 The primary desktop cloud flow is capture → mini-preview Share icon → native
 upload/share-settings popup. Track this as a separate cross-platform slice even
@@ -1752,7 +1752,7 @@ feature. API/web implementation: [#613](https://github.com/joswayski/captures/pu
 Do not ship a decorative Share action or substitute a website handoff for the
 native flow. Local capture remains signed-out and never uploads automatically.
 
-The wgpu host now connects mini-preview Share and a selected-History action to
+Both hosts connect mini-preview Share and a selected-History action to
 native controls. The shared `captures-account::native::Worker` owns the session,
 OTP challenge and a private temporary exact-byte snapshot independently of the
 popup/preview. Open/sign-in/refresh never upload; Upload is explicit. Completion
@@ -1772,9 +1772,18 @@ copy uses its distinct History ID. Actions/status/links remain in a fixed footer
 while settings scroll. Wayland opens this window from History without inventing
 preview coordinates and unmaps it alongside other windows during portal capture.
 
+AppKit submits/polls commands through an opaque C ABI; only safe presentation
+state crosses back to Swift, not bearer/challenge/snapshot paths. Its retained
+controller hides during capture and survives preview/window closure. Quit and
+permission-recovery relaunch join the worker before releasing profile ownership.
+The isolated `--scene sharing` fixture disables every action and cannot run live.
+Seven Swift regression tests cover original-media selection, busy pinning, patch
+semantics, retry-save, lifecycle and light/dark normal/minimum-size renders;
+execution/render inspection on macOS remains pending for this slice.
+
 This is connected development behavior, not acceptance of the checklist below.
-AppKit launch/presentation remains unimplemented. Tests use disposable loopback
-HTTP/fake vaults and software-rendered UI; real SES/R2/vaults and physical
+Tests use disposable loopback HTTP/fake vaults and software-rendered UI;
+real SES/R2/vaults and physical
 macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate.
 
 - [ ] Launch from the selected mini-preview artifact with the Lucide Share icon
@@ -1786,8 +1795,9 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   plaintext preferences. Canceling sign-in leaves the local capture untouched.
   The `captures-account` worker covers explicit request/verify,
   account lookup, bearer persistence/retry, invalidation and logout with platform
-  vault adapters. wgpu controls and retention are connected; AppKit controls and
-  physical-vault acceptance remain open; this does not check the gate.
+  vault adapters. Both hosts' controls and retention are connected; AppKit
+  build/render verification and physical-vault acceptance remain open; this does
+  not check the gate.
 - [ ] The popup previews the selected file and offers link access, optional
   password and expiry before explicit Upload and share. No upload merely from
   opening the popup. Existing API semantics are anyone-with-link plus optional
@@ -1801,7 +1811,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   and durably persists account-scoped create keys. Lost create responses and failed
   post-create association writes replay the same key after restart; conflicts and
   tombstones never silently create replacements. Legacy keyless checkpoints still
-  require explicit reconciliation. AppKit launch, real object-store and
+  require explicit reconciliation. AppKit verification, real object-store and
   physical-platform acceptance remain open.
 - [ ] Reopening manages the existing remote asset/share rather than duplicating
   the upload. Persist the local-artifact/remote-asset association. Show shared date,
@@ -1809,7 +1819,8 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
   sharing actions. Stopping denies subsequent access; enabling again rotates the
   link. Cloud Trash retains bytes and restore does not revive old links.
   Account/profile-scoped local associations and server share patch semantics are
-  implemented in shared Rust and wgpu; AppKit controls and physical verification are open.
+  implemented in shared Rust and both hosts; AppKit build/render and physical
+  verification are open.
 - [ ] Integrate both AppKit and wgpu through thin host launch/presentation seams;
   coordinate MiniPreview/Workbench and mini_preview/live changes with the rewrite
   integration owner. Do not fork the auth/upload rules into platform hosts.
@@ -1822,7 +1833,7 @@ macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate
 
 | Platform | Sharing coordinator implementation / verification |
 | --- | --- |
-| macOS | Shared worker/coordinator and Keychain adapter; AppKit controls unimplemented, wgpu code shared; physical vault/object-store acceptance open |
+| macOS | Shared worker/coordinator, Keychain adapter and AppKit controls connected; Swift build/tests/render inspection pending; physical vault/object-store acceptance open |
 | Windows | Shared worker and wgpu controls connected with Credential Manager adapter; host compilation/runtime and physical vault/object-store acceptance unverified here |
 | X11 | wgpu controls connected; disposable shared-worker HTTP/recovery and native UI tests, software renders; physical Secret Service/object-store acceptance open |
 | Wayland | wgpu History entry point and compositor-controlled child window; shared worker tested, physical Secret Service/compositor/object-store acceptance open |
