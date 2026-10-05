@@ -1042,6 +1042,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String,
+                 recordingPreferences: RecordingPreferences? = nil,
                  completion: ((Bool) -> Void)? = nil) {
         if artifactID == artifact.id, presentation != nil {
             window.makeKeyAndOrderFront(nil)
@@ -1056,7 +1057,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 guard let self else { completion?(false); return }
                 self.switchAfterPlayback = nil
                 self.present(artifact: artifact, historyRoot: historyRoot,
-                             outputDirectory: outputDirectory, completion: completion)
+                             outputDirectory: outputDirectory,
+                             recordingPreferences: recordingPreferences, completion: completion)
             }
             return
         }
@@ -1080,6 +1082,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackPositionMilliseconds = nil; playbackReachedEOF = false; playbackFramePresented = false
         playbackLoopEnabled = false; playbackLoopControl = nil; playbackLoop.state = .off
         playbackSoundEnabled = true; playbackAudioEnabled = nil; playbackSound.state = .on
+        // Custom persisted choices belong to this open, not the next artifact.
+        let gifMenus = RecordingEditorCopy.menus(gif: true, baseWidth: 320, baseHeight: 180)
+        for (control, key) in [(gifFrameRate, "gif_frame_rates"),
+                               (gifMaximumWidthControl, "gif_maximum_widths")] {
+            if let choices = gifMenus[key] {
+                control.removeAllItems()
+                control.addItems(withTitles: choices.map { $0.label })
+            }
+        }
         gifFramesPerSecond = 15; gifFrameRate.selectItem(withTitle: "15 FPS")
         gifMaximumWidth = 800; gifMaximumWidthControl.selectItem(withTitle: "800 px")
         if gifMaximumWidthControl.item(withTitle: "Original") != nil {
@@ -1125,6 +1136,25 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 self.busy = false
                 self.originalPath = value.originalSavePath
                 self.publish(value, initialize: true)
+                if let preferences = recordingPreferences {
+                    self.gifFramesPerSecond = UInt16(preferences.gifFramesPerSecond)
+                    let fpsTitle = "\(self.gifFramesPerSecond) FPS"
+                    if self.gifFrameRate.item(withTitle: fpsTitle) == nil {
+                        self.gifFrameRate.addItem(withTitle: fpsTitle)
+                    }
+                    self.gifFrameRate.selectItem(withTitle: fpsTitle)
+                    self.gifMaximumWidth = UInt32(preferences.gifMaxWidth)
+                    let widthTitle = "\(self.gifMaximumWidth) px"
+                    if self.gifMaximumWidthControl.item(withTitle: widthTitle) == nil {
+                        self.gifMaximumWidthControl.addItem(withTitle: widthTitle)
+                    }
+                    self.gifMaximumWidthControl.selectItem(withTitle: widthTitle)
+                    let initialFormat = RecordingEditorCopy.initialOutputFormat(
+                        mimeType: value.snapshot.source["mime_type"] as? String ?? "video/mp4",
+                        preferredFormat: preferences.exportFormat)
+                    self.format.selectItem(withTitle: ".\(initialFormat)")
+                    self.formatChanged()
+                }
                 // Without a replaceable original (a reference or a History-only
                 // recording), Save as new file is locked on with its `-edited`
                 // name, as shipping does for a format change.
@@ -2987,10 +3017,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private var eligibleOriginalPath: String? {
-        guard !webmSelected, let path = originalPath, !path.isEmpty,
-              let format = presentation?.snapshot.saveExport["format"] as? String,
-              ["mp4", "gif"].contains(format),
-              URL(fileURLWithPath: path).pathExtension.lowercased() == format else { return nil }
+        guard !webmSelected, presentation != nil, let path = originalPath, !path.isEmpty else { return nil }
+        // Copy/replace follows the selected format even while its initial
+        // preferences are being applied. Save still waits for acceptance.
+        let selectedFormat = format.indexOfSelectedItem == 1 ? "gif" : "mp4"
+        guard URL(fileURLWithPath: path).pathExtension.lowercased() == selectedFormat else { return nil }
         return path
     }
 

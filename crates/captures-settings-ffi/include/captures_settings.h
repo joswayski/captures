@@ -847,7 +847,8 @@ bool captures_recording_timeline_trim_update_v1(CapturesRecordingTimelineTrimDra
 
 /* UI-thread-safe pure recording editor copy shared with the wgpu host, ported
  * from the shipping Tauri editor. JSON operations: title {mime_type} ->
- * {title}; trim_summary {start_ms, end_ms, duration_ms} -> {range, selected};
+ * {title}; initial_output_format {mime_type, preferred_format: "mp4"|"gif"|"webm"}
+ * -> {format}; trim_summary {start_ms, end_ms, duration_ms} -> {range, selected};
  * time {ms, duration_ms} -> {label}; file_size {bytes} -> {label}; estimate
  * {estimating?, webm?, maximum?, maximum_bytes?, estimate_bytes?,
  * estimate_exact?, original_bytes?} -> {label, muted, delta: null|{percent,

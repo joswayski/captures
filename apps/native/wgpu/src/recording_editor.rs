@@ -29,6 +29,7 @@ use captures_media::{
     ExportFormat, ExportProgress, ExportSpec, MediaMetadata, QualityPreset,
 };
 use captures_recording::MaxResolution;
+use captures_settings::{RecordingSettings, VideoFormat};
 use eframe::egui;
 use image::RgbaImage;
 
@@ -252,6 +253,8 @@ struct View {
     artifact_id: String,
     directory: PathBuf,
     stem: String,
+    /// Consumed once after the worker opens the source, never on later edits.
+    opening_preferences: Option<RecordingSettings>,
     gif: bool,
     /// Shipping offers WebM, which its bundled FFmpeg cannot encode. The
     /// accepted preview keeps the MP4 settings; Save reports shipping's error.
@@ -528,15 +531,16 @@ impl View {
             && self.replace_supported()
     }
 
-    /// The accepted output can replace the saved original: a same-format
+    /// The selected output can replace the saved original: a same-format
     /// MP4/GIF with a known path (shipping's `formatRequiresCopy` is false).
+    /// Save itself still waits for these settings to be accepted.
     fn replace_supported(&self) -> bool {
         !self.requires_reopen
             && !self.webm
             && self.presented.as_ref().is_some_and(|p| {
-                let extension = match (p.source.mime_type.as_str(), p.export.format) {
-                    ("video/mp4", ExportFormat::Mp4) => "mp4",
-                    ("image/gif", ExportFormat::Gif) => "gif",
+                let extension = match (p.source.mime_type.as_str(), self.gif) {
+                    ("video/mp4", false) => "mp4",
+                    ("image/gif", true) => "gif",
                     _ => return false,
                 };
                 self.original_path.as_ref().is_some_and(|path| {
@@ -969,6 +973,19 @@ impl View {
                 self.directory = self.source_directory.clone();
                 self.stem = self.source_stem.clone();
                 self.receive(ctx, Event::Presented(Ok(presented)));
+                if let Some(preferences) = self.opening_preferences.take() {
+                    let p = self.presented.as_ref().unwrap();
+                    let format = recording_editor_ui::initial_output_format(
+                        &p.source.mime_type,
+                        preferences.video_format,
+                    );
+                    self.gif_frames_per_second = Some(preferences.gif_fps);
+                    self.gif_maximum_width = Some(preferences.gif_max_width);
+                    self.set_format(format == VideoFormat::Gif, format == VideoFormat::WebM);
+                    if self.gif {
+                        self.quality = recording_editor_ui::DEFAULT_COMPRESS_PRESET;
+                    }
+                }
                 // Without a replaceable original (a reference or a History-only
                 // recording), Save as new file is locked on with its `-edited`
                 // name, as shipping does for a format change.
@@ -1400,6 +1417,7 @@ impl Editor {
         history_root: PathBuf,
         artifact_id: String,
         directory: PathBuf,
+        preferences: RecordingSettings,
     ) -> Self {
         let viewport = egui::ViewportId::from_hash_of(("recording-editor", &artifact_id));
         let artifact_id_for_view = artifact_id.clone();
@@ -1569,6 +1587,7 @@ impl Editor {
                 preview_loop,
                 artifact_id: artifact_id_for_view,
                 directory,
+                opening_preferences: Some(preferences),
                 ..View::default()
             })),
             playback_frame,
@@ -3719,6 +3738,15 @@ fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
             columns[1].spacing_mut().item_spacing.y = tokens.number("s-3");
             field_label(&mut columns[0], tokens, "Frame rate");
             let mut fps = view.gif_frames_per_second.unwrap_or(15);
+            let mut rates = recording_editor_ui::GIF_FRAME_RATES.to_vec();
+            if !rates.contains(&fps) {
+                rates.push(fps);
+                rates.sort_unstable();
+            }
+            let choices: Vec<_> = rates
+                .into_iter()
+                .map(|value| (value, format!("{value} FPS"), ""))
+                .collect();
             let width = columns[0].available_width();
             if select(
                 &mut columns[0],
@@ -3726,13 +3754,21 @@ fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
                 "Frame rate",
                 width,
                 &mut fps,
-                &recording_editor_ui::GIF_FRAME_RATES
-                    .map(|value| (value, format!("{value} FPS"), "")),
+                &choices,
             ) {
                 view.gif_frames_per_second = Some(fps);
             }
             field_label(&mut columns[1], tokens, "Maximum width");
             let mut maximum = view.gif_maximum_width.unwrap_or(800);
+            let mut widths = recording_editor_ui::GIF_MAXIMUM_WIDTHS.to_vec();
+            if !widths.contains(&maximum) {
+                widths.push(maximum);
+                widths.sort_unstable();
+            }
+            let choices: Vec<_> = widths
+                .into_iter()
+                .map(|value| (value, format!("{value} px"), ""))
+                .collect();
             let width = columns[1].available_width();
             if select(
                 &mut columns[1],
@@ -3740,8 +3776,7 @@ fn show_gif_card(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
                 "Maximum width",
                 width,
                 &mut maximum,
-                &recording_editor_ui::GIF_MAXIMUM_WIDTHS
-                    .map(|value| (value, format!("{value} px"), "")),
+                &choices,
             ) {
                 view.gif_maximum_width = Some(maximum);
             }
@@ -4375,6 +4410,105 @@ mod tests {
         recording_editor_ui::SaveDefaults {
             directory: directory.into(),
             stem: stem.into(),
+        }
+    }
+
+    #[test]
+    fn opening_preferences_follow_source_format_and_only_initialize_once() {
+        for (mime, preferred, expected, copy) in [
+            ("video/mp4", VideoFormat::Gif, VideoFormat::Gif, true),
+            ("video/mp4", VideoFormat::WebM, VideoFormat::WebM, true),
+            ("image/gif", VideoFormat::WebM, VideoFormat::Gif, false),
+            ("video/webm", VideoFormat::Mp4, VideoFormat::WebM, true),
+            ("video/mp4", VideoFormat::Mp4, VideoFormat::Mp4, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut presented = opened().presented.unwrap();
+            presented.source.mime_type = mime.into();
+            presented.source.width = 1600;
+            presented.source.height = 900;
+            let extension = mime.split('/').nth(1).unwrap();
+            let mut view = View {
+                opening_preferences: Some(RecordingSettings {
+                    video_format: preferred,
+                    gif_fps: 27,
+                    gif_max_width: 704,
+                    gif_max_colors: 96,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            view.receive(
+                &ctx,
+                Event::Opened(
+                    presented,
+                    Some(format!("/Captures/clip.{extension}").into()),
+                    defaults("/Captures", "clip"),
+                ),
+            );
+            assert_eq!(
+                (view.gif, view.webm),
+                (expected == VideoFormat::Gif, expected == VideoFormat::WebM)
+            );
+            assert_eq!(view.saving_copy(), copy, "{mime} / {preferred:?}");
+            assert_eq!(view.gif_frames_per_second, Some(27));
+            assert_eq!(view.gif_maximum_width, Some(704));
+            assert!(view.opening_preferences.is_none());
+            if expected == VideoFormat::Gif {
+                assert_eq!(view.quality, QualityPreset::Highest);
+                assert_eq!(view.export_spec().frames_per_second, Some(27));
+                assert_eq!(
+                    view.export_spec().gif_max_colors,
+                    Some(256),
+                    "shipping derives the palette from quality, not capture defaults"
+                );
+                let edit = view.staged_edit(view.presented.as_ref().unwrap());
+                assert_eq!(
+                    (edit.output_width, edit.output_height),
+                    (Some(704), Some(396))
+                );
+                assert!(view.unapplied() && !view.can_save());
+            } else {
+                assert!(!view.unapplied());
+            }
+            if expected == VideoFormat::WebM {
+                let (tx, jobs) = mpsc::channel();
+                view.save(&tx);
+                assert_eq!(
+                    view.error.as_deref(),
+                    Some(recording_editor_ui::WEBM_EXPORT_ERROR)
+                );
+                assert!(jobs.try_recv().is_err());
+            }
+            // Worker acceptance/seek must not reset a later user choice to 27/704.
+            view.gif = true;
+            view.webm = false;
+            view.gif_frames_per_second = Some(12);
+            view.gif_maximum_width = Some(480);
+            let mut accepted = opened().presented.unwrap();
+            accepted.export.format = ExportFormat::Gif;
+            accepted.export.frames_per_second = Some(12);
+            view.receive(&ctx, Event::Presented(Ok(accepted)));
+            assert_eq!(view.gif_frames_per_second, Some(12));
+            assert_eq!(view.gif_maximum_width, Some(480));
+        }
+    }
+
+    #[test]
+    fn custom_gif_defaults_have_visible_select_labels() {
+        let tokens = crate::tokens::load().into_iter().next().unwrap().1;
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        view.gif = true;
+        view.gif_frames_per_second = Some(27);
+        view.gif_maximum_width = Some(704);
+        let (output, _) = probe_frame(&ctx, &tokens, &mut view, egui::vec2(960., 1100.), vec![]);
+        for label in ["27 FPS", "704 px"] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == label)),
+                "{label}"
+            );
         }
     }
 

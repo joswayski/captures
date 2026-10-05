@@ -16,6 +16,10 @@ enum Request {
     Title {
         mime_type: String,
     },
+    InitialOutputFormat {
+        mime_type: String,
+        preferred_format: captures_settings::VideoFormat,
+    },
     TrimSummary {
         start_ms: u64,
         end_ms: u64,
@@ -78,6 +82,12 @@ fn respond(bytes: &[u8]) -> Result<Value, String> {
             Request::Title { mime_type } => {
                 json!({"title": recording_editor_ui::title(&mime_type)})
             }
+            Request::InitialOutputFormat {
+                mime_type,
+                preferred_format,
+            } => json!({"format": recording_editor_ui::initial_output_format(
+                &mime_type, preferred_format
+            )}),
             Request::TrimSummary {
                 start_ms,
                 end_ms,
@@ -197,6 +207,26 @@ mod tests {
         let value = serde_json::from_slice(unsafe { CStr::from_ptr(pointer) }.to_bytes()).unwrap();
         unsafe { crate::captures_settings_free_v1(pointer) };
         value
+    }
+
+    #[test]
+    fn initial_format_bridge_preserves_gif_and_rejects_unknown_preferences() {
+        for (mime, preferred, expected) in [
+            ("video/mp4", "gif", "gif"),
+            ("video/mp4", "webm", "webm"),
+            ("image/gif", "webm", "gif"),
+            ("video/webm", "mp4", "webm"),
+        ] {
+            let value = call(json!({"operation":"initial_output_format",
+                "mime_type":mime,"preferred_format":preferred}));
+            assert_eq!(value["ok"], true);
+            assert_eq!(value["result"]["format"], expected);
+        }
+        assert_eq!(
+            call(json!({"operation":"initial_output_format",
+            "mime_type":"video/mp4","preferred_format":"avi"}))["ok"],
+            false
+        );
     }
 
     #[test]

@@ -469,6 +469,9 @@ jobs:
       - name: Exercise GIF maximum width and MP4 sizing on private X11
         if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --gif-width --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-gif-width-$APPEARANCE"
+      - name: Exercise persisted recording export defaults on private X11
+        if: matrix.suite == 'recording' && matrix.shard == 2
+        run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --export-preferences --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-export-preferences-$APPEARANCE"
       - name: Exercise accepted file-size limits and export retries on private X11
         if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --maximum-size --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-maximum-size-$APPEARANCE"

@@ -17,6 +17,25 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Both recording-editor hosts now initialize new windows from persisted export
+format, GIF FPS and maximum width. The shared shipping policy retains GIF sources,
+uses explicit GIF/WebM preferences for video, and preserves a WebM source when the
+preference is MP4. WebM keeps its unavailable-export state; explicit conversion to
+MP4/GIF remains available. Refocus and subsequent worker results do not reapply
+defaults over edits. Custom valid defaults such as 27 FPS and 704 px have visible
+menu labels. GIF palettes still follow editor quality; capture still makes a video
+master. Dark/light private-X11 smokes independently probe 81 frames at 704×396,
+then 36 frames at 480×270 after user changes, decoded colors and unchanged source
+bytes. Normal/minimum renders were inspected. The mixed GIF/MP4/WebM/still import
+regression explicitly chooses MP4 for its conversion checks.
+
+| Platform | Recording export-defaults slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Implemented through the shared C ABI; XCTest covers defaults, custom values, refocus and format precedence; macOS execution pending, no physical verification in this orb |
+| Windows | Implemented through the shared wgpu editor; Windows compilation/runtime and physical acceptance unverified for this slice |
+| X11 | Verified on disposable software-rendered X11 in both appearances, including real exports and mixed-file regression; physical acceptance open |
+| Wayland | Implemented through the same wgpu editor; shared tests pass, compositor/physical export-defaults acceptance unverified |
+
 The Linux screenshot portal acquisition slice now runs without X11 enumeration,
 subscribes before requesting, verifies response handle/owner, closes cancelled or
 timed-out requests, and never falls back to direct capture after cancellation.

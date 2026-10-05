@@ -1682,6 +1682,8 @@ pub struct Live {
     /// A hidden editor must finish its draft before this capture opens again.
     pending_editor_opens: HashMap<String, (PathBuf, captures_capture::CaptureMode)>,
     recording_editors: HashMap<String, crate::recording_editor::Editor>,
+    /// Latest Preferences snapshot, used only when opening a new editor.
+    recording_editor_preferences: Result<captures_settings::RecordingSettings, String>,
     recovery: crate::recording_recovery::Recovery,
     recovery_selection: u64,
     history_filter: HistoryFilter,
@@ -2071,6 +2073,7 @@ impl Live {
             editors: HashMap::new(),
             pending_editor_opens: HashMap::new(),
             recording_editors: HashMap::new(),
+            recording_editor_preferences: Err("Recording preferences are still loading.".into()),
             history_filter: HistoryFilter::All,
             selection: Selection::default(),
             history_cards: HashMap::new(),
@@ -2278,16 +2281,43 @@ impl Live {
             .focus(ctx);
     }
 
+    pub fn set_recording_editor_preferences(
+        &mut self,
+        preferences: Result<captures_settings::RecordingSettings, String>,
+    ) {
+        self.recording_editor_preferences = preferences;
+    }
+
     fn open_recording_editor(
         &mut self,
         ctx: &egui::Context,
         id: String,
         output_directory: PathBuf,
     ) {
+        // Refocusing an existing editor never replaces its staged edits with
+        // newly saved application defaults.
+        if let Some(editor) = self.recording_editors.get(&id) {
+            editor.focus(ctx);
+            return;
+        }
+        let preferences = match &self.recording_editor_preferences {
+            Ok(preferences) => preferences.clone(),
+            Err(error) => {
+                self.error = Some(format!("Could not load recording preferences: {error}"));
+                self.media_open_failed = true;
+                return;
+            }
+        };
         self.recording_editors
             .entry(id.clone())
             .or_insert_with(|| {
-                crate::recording_editor::Editor::open(ctx, self.root.clone(), id, output_directory)
+                crate::recording_editor::Editor::open(
+                    ctx,
+                    self.root.clone(),
+                    id,
+                    output_directory,
+                    preferences,
+                )
             })
             .focus(ctx);
     }

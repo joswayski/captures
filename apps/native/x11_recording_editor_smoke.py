@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--gif-frame-rate", action="store_true", help="Exercise staged GIF cadence and real exported frame counts")
     parser.add_argument("--gif-quality", action="store_true", help="Exercise quality-dependent GIF palette output")
     parser.add_argument("--gif-width", action="store_true", help="Exercise GIF width caps without compounding accepted dimensions")
+    parser.add_argument("--export-preferences", action="store_true", help="Open on persisted GIF defaults, export custom cadence/width and retain user changes")
     parser.add_argument("--maximum-size", action="store_true", help="Exercise accepted size caps, encoder retries and immutable publication")
     args = parser.parse_args()
     if args.sound:
@@ -311,7 +312,10 @@ def main():
     def choose(window, name, item):
         """Open a select and click an item, matched by label prefix."""
         press(window, name)
-        click(window, *center(window, f"{name}/{item}", prefix=True))
+        # Popup placement resolves after its first measured layout. Compute
+        # the row only after idle, not before click()'s additional wait.
+        idle(window)
+        raw_press(window, f"{name}/{item}", prefix=True)
 
     def set_destination(window, path):
         # The footer edits the file stem; its folder and format add the rest.
@@ -337,9 +341,9 @@ def main():
             run("xdotool", "key", key, "sleep", ".12")
         run("xdotool", "sleep", ".3")
 
-    def raw_press(window, name):
+    def raw_press(window, name, prefix=False):
         """Click without waiting for idle, e.g. to cancel running work."""
-        x, y = center(window, name)
+        x, y = center(window, name, prefix)
         run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
             "mousemove", "--sync", "--window", window, str(x), str(y), "sleep", ".3",
             "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
@@ -411,7 +415,7 @@ def main():
 
         def exported():
             return [path for path in exports.iterdir() if path != source]
-        source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality or args.comparison else (1600, 900) if args.preview_scale or args.gif_width else (640, 1440) if args.presets else (320, 180)
+        source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality or args.comparison else (1600, 900) if args.preview_scale or args.gif_width or args.export_preferences else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
         segment_seconds = 12 if args.estimate_delta else 2 if args.playback or args.sound else 1
         audio_inputs = []
@@ -458,6 +462,11 @@ def main():
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False}))
+        if args.export_preferences:
+            value = json.loads(settings.read_text())
+            value["recording"] = {"video_format": "gif", "video_fps": 60,
+                                  "gif_fps": 27, "gif_max_width": 704, "gif_max_colors": 96}
+            settings.write_text(json.dumps(value))
         if args.thumbnails or args.graphical_crop or args.maximum_size or args.comparison or args.replace_original:
             # Delay only the requested frame/export command to exercise
             # cancellation without racing a tiny fixture. Pixels still use FFmpeg.
@@ -575,6 +584,10 @@ def main():
             # focus preserved the edit, rather than only reusing a window ID.
             # References save beside their original, as in shipping.
             settle(editor)
+            # GIF now opens in its source format. Explicitly choose the MP4
+            # conversion this existing alias/trim regression exercises.
+            choose(editor, "Format", ".mp4")
+            settle(editor)
             save_folder["path"] = output
             trimmed = output / "external-gif-trim.mp4"
             set_destination(editor, trimmed)
@@ -593,8 +606,8 @@ def main():
             wait(lambda: app.poll() is not None, "mixed batch quit")
             assert app.returncode == 0
 
-            # A closed canonical reference must reload the same ID. Its default
-            # Preserve MP4 export must encode MP4, not rename/copy WebM bytes.
+            # A closed canonical reference must reload the same ID. Explicit
+            # MP4 conversion must encode MP4, not rename/copy WebM bytes.
             webm_id = next(value["id"] for value in entries if value["saved_path"] == str(webm))
             switch_layout_log("reopened")
             app = spawn("reopened", app_command + ["--open-media", str(webm)])
@@ -612,6 +625,8 @@ def main():
             assert "Replace original" not in controls(editor)
             assert "Save new copy" in controls(editor)
             shot(editor, "external-reference-replace-disabled")
+            choose(editor, "Format", ".mp4")
+            settle(editor)
             destination = output / "webm-as-mp4.mp4"
             set_destination(editor, destination)
             save_copy(editor)
@@ -679,6 +694,57 @@ def main():
                 assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
         shot(editor, "original")
+        if args.export_preferences:
+            run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            settle(editor)
+            # Never choose GIF or set 27/704: the persisted defaults must reach
+            # the real encode without user intervention.
+            assert "Frame rate" in controls(editor), "saved GIF format opens the GIF card"
+            press(editor, "Frame rate")
+            assert "Frame rate/27 FPS" in controls(editor), "custom persisted cadence is selectable"
+            shot(editor, "preferred-cadence-menu")
+            run("xdotool", "key", "Escape")
+            press(editor, "Maximum width")
+            assert "Maximum width/704 px" in controls(editor), "custom persisted width is selectable"
+            shot(editor, "preferred-width-menu")
+            run("xdotool", "key", "Escape")
+            shot(editor, "preferred-gif-normal")
+            results = {}
+            for name, width, height, frames in [("preferred", 704, 396, 81), ("changed", 480, 270, 36)]:
+                if name == "changed":
+                    choose(editor, "Frame rate", "12 FPS")
+                    choose(editor, "Maximum width", "480 px")
+                    settle(editor)
+                destination = exports / f"{name}.gif"
+                set_destination(editor, destination)
+                save_copy(editor)
+                wait(destination.exists, f"{name} GIF saved")
+                idle(editor)
+                stream = json.loads(run("ffprobe", "-v", "error", "-count_frames",
+                    "-select_streams", "v:0", "-show_entries", "stream=width,height,nb_read_frames,duration",
+                    "-of", "json", str(destination)))["streams"][0]
+                assert (stream["width"], stream["height"], int(stream["nb_read_frames"])) == (width, height, frames), stream
+                assert abs(float(stream["duration"]) - 3) <= .06, stream
+                dominant(destination, 1, 1.2)
+                dominant(destination, 2, 2.2)
+                results[name] = stream
+                if name == "preferred":
+                    run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+                    visible_rect(editor, "Frame rate", whole_control=True)
+                    shot(editor, "preferred-gif-minimum")
+                    run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            close(editor)
+            wait(lambda: not windows("Captures Editor"), "saved preferred GIF editor closes")
+            close(root)
+            wait(lambda: app.poll() is not None, "export-preferences quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "exports": results, "checks": ["persisted-format", "custom-cadence-label", "custom-width-label",
+                    "81-frames-704x396", "user-change-36-frames-480x270", "duration-pixels",
+                    "normal-minimum-render", "immutable-source-history", "clean-close"]}, indent=2) + "\n")
+            print("PASS export preferences: saved GIF defaults produced 81 frames at 704x396; user changes produced 36 at 480x270; source unchanged")
+            return
         if args.replace_original:
             recovery = artifact / "media.mp4"
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
