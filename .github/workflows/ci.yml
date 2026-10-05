@@ -7,6 +7,10 @@ concurrency:
   group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   frontend:
     name: Frontend checks
@@ -22,6 +26,18 @@ jobs:
       - run: npm run check
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Stop the rest of this run after a failure
+        # One failed job already fails the run; cancel the other jobs instead of
+        # letting them hold runners (and block newer pushes) until they finish.
+        if: failure()
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
+            || echo "::warning::Could not cancel the rest of this run"
 
   accounts:
     name: Account database and API image
@@ -48,6 +64,18 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: docker build -f apps/api/Dockerfile -t captures-api:test .
+      - name: Stop the rest of this run after a failure
+        # One failed job already fails the run; cancel the other jobs instead of
+        # letting them hold runners (and block newer pushes) until they finish.
+        if: failure()
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
+            || echo "::warning::Could not cancel the rest of this run"
 
   rust:
     name: Rust checks (${{ matrix.os }})
@@ -112,6 +140,18 @@ jobs:
           cargo test -p captures-recording-platform
           private_x11_records_pause_resume_pixels_and_cancelled_start -- --ignored
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Stop the rest of this run after a failure
+        # One failed job already fails the run; cancel the other jobs instead of
+        # letting them hold runners (and block newer pushes) until they finish.
+        if: failure()
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
+            || echo "::warning::Could not cancel the rest of this run"
 
   macos-app:
     name: macOS app bundle
@@ -150,6 +190,18 @@ jobs:
         with:
           name: captures-macos-app
           path: target/release/bundle/macos/Captures.app
+      - name: Stop the rest of this run after a failure
+        # One failed job already fails the run; cancel the other jobs instead of
+        # letting them hold runners (and block newer pushes) until they finish.
+        if: failure()
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
+            || echo "::warning::Could not cancel the rest of this run"
 
   cross-platform-app:
     name: Desktop app (${{ matrix.platform }})
@@ -230,3 +282,15 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_path }}
           if-no-files-found: error
+      - name: Stop the rest of this run after a failure
+        # One failed job already fails the run; cancel the other jobs instead of
+        # letting them hold runners (and block newer pushes) until they finish.
+        if: failure()
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
+            || echo "::warning::Could not cancel the rest of this run"
