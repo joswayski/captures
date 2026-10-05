@@ -38,13 +38,18 @@ regressions. macOS CI exposed one remaining custom-cadence error: accepting 27 F
 filtered it through the preset-only list and restaged 15 FPS, making clean defaults
 dirty. AppKit now retains every valid 8–30 FPS cadence and its menu label across
 preview and seek results. Tests cover clean custom 9/27/29 FPS opens, repeated
-worker publication, no duplicate menu entries and closing without discard. Execution
-of this correction awaits the next macOS CI run; no physical verification is claimed.
+worker publication, no duplicate menu entries and closing without discard.
+[macOS CI](https://github.com/joswayski/captures/actions/runs/37381655729) passed
+570 XCTest cases (6 existing skips, 0 failures), including the correction.
+Normal/minimum light/dark renders were inspected: Save remains enabled for the
+accepted export defaults. The fake-worker preview remains a processing placeholder;
+the menu assertions, not those renders, verify custom FPS. No physical verification
+is claimed.
 
 | Platform | Recording export-defaults slice implementation / verification |
 | --- | --- |
-| AppKit/macOS | Implemented through the shared C ABI; macOS CI executed the earlier regressions and exposed the custom-FPS reset now corrected; correction execution pending, no physical verification in this orb |
-| Windows | Implemented through the shared wgpu editor; Windows compilation/runtime and physical acceptance unverified for this slice |
+| AppKit/macOS | Implemented through the shared C ABI; macOS CI passes the custom-FPS and clean-baseline regressions; normal/minimum light/dark renders inspected, no physical verification in this orb |
+| Windows | Implemented through the shared wgpu editor; Windows CI builds/shared tests and native-window smoke pass; real custom-default exports and physical acceptance unverified |
 | X11 | Verified on disposable software-rendered X11 in both appearances, including real exports and mixed-file regression; physical acceptance open |
 | Wayland | Implemented through the same wgpu editor; shared tests pass, compositor/physical export-defaults acceptance unverified |
 
@@ -1903,6 +1908,40 @@ separate release work.
 This slice does not close distribution or Notices/updates acceptance. Installed-app
 handoff/recovery, OS installers/signing, channel publication and installed-data
 backup/migration remain open. Tauri still ships; no release or cutover is activated.
+
+### Explicit offline profile import: source preserved, no installed cutover
+
+The shared `profile_import` backend and `native_profile_import` CLI copy explicit
+shipping settings/local-data paths into a new development profile. No host invokes
+them or discovers an installed path. A private source snapshot retains all selected
+bytes/empty directories; schema migration runs only on a second working copy.
+Settings, retained History, screenshot drafts/assets/fonts and recording recovery
+map to the native layout. The copied editor draft opens with independently expected
+asymmetric cropped pixels. Native export paths and saved-file associations are
+isolated; login/onboarding/permission/restart state resets for the new identity.
+No external exports or account/credential stores are imported.
+
+The operator must stop all app processes/writers and exclude new launches; the CLI
+assertion never detects or stops them. Bounded streaming hashes recheck sources
+before the final directory rename. Locks exclude concurrent imports. Existing
+destinations, source changes, links/special files, cancellation, newer/invalid
+schemas, missing media, reference-only recordings and unfinished publication
+intents leave no partial published profile or overwrite. Original shipping data
+remains the rollback path. The retained snapshot uses roughly another source-size
+copy; forced termination may leave owned sibling scratch, not a partial profile.
+This does not establish power-loss durability, reference-media reconciliation,
+installed updater/profile handoff or OS permission identity.
+
+| Platform | Offline profile import implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared backend/explicit CLI and native layout implemented; portable import/CLI cases added to native macOS CI; execution and physical acceptance pending |
+| Windows | Same backend/CLI/layout; portable import/CLI cases added to native Windows CI; execution and physical acceptance pending |
+| X11 | Disposable offline imports verify exact source/snapshot preservation, real shared-editor draft pixels, settings migration, cancellation/conflicts/locks and unsafe-source rejection; host/physical acceptance open |
+| Wayland | Same window-independent backend/native layout; compositor-specific handoff and physical acceptance unverified |
+
+[Invocation, limits and rollback](../apps/native/README.md#explicit-offline-development-profile-import)
+remain explicitly development-only. The signed startup helper still requires a
+new empty profile; no automatic installed-data migration or native channel exists.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
