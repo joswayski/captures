@@ -30,6 +30,46 @@ pub fn locate() -> MediaToolchain {
     )
 }
 
+/// The exact pair installed in a native package. Update health must not accept
+/// development overrides, checkout sidecars, siblings, or commands from PATH.
+pub fn verify_bundled() -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Could not locate the packaged executable: {error}"))?;
+    verify_bundled_at(&executable, &target()).map_err(|error| error.to_string())
+}
+
+fn target() -> String {
+    format!(
+        "{}-{}",
+        std::env::consts::ARCH,
+        match std::env::consts::OS {
+            "macos" => "apple-darwin",
+            "windows" => "pc-windows-msvc",
+            _ => "unknown-linux-gnu",
+        }
+    )
+}
+
+fn verify_bundled_at(
+    executable: &Path,
+    target: &str,
+) -> Result<(), captures_media::MediaToolError> {
+    let suffix = if target.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    let binaries = executable
+        .parent()
+        .unwrap_or(Path::new(""))
+        .join("binaries");
+    MediaToolchain::new(
+        binaries.join(format!("ffmpeg-{target}{suffix}")),
+        binaries.join(format!("ffprobe-{target}{suffix}")),
+    )
+    .verify()
+}
+
 fn executable_file(path: &Path) -> bool {
     let Ok(metadata) = path.metadata() else {
         return false;
@@ -208,6 +248,37 @@ mod tests {
                 root.path()
             ),
             PathBuf::from("ffmpeg")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn health_verification_uses_only_the_nested_packaged_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("Captures");
+        let target = "x86_64-unknown-linux-gnu";
+        for name in ["ffmpeg", "ffprobe"] {
+            let packaged = root
+                .path()
+                .join("binaries")
+                .join(format!("{name}-{target}"));
+            std::fs::create_dir_all(packaged.parent().unwrap()).unwrap();
+            std::fs::write(&packaged, b"#!/bin/sh\nexit 0\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&packaged, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(verify_bundled_at(&executable, target).is_ok());
+        std::fs::remove_file(
+            root.path()
+                .join("binaries")
+                .join(format!("ffmpeg-{target}")),
+        )
+        .unwrap();
+        let sibling = root.path().join(format!("ffmpeg-{target}"));
+        tool(&sibling);
+        assert!(
+            verify_bundled_at(&executable, target).is_err(),
+            "a sibling fallback must not satisfy update health"
         );
     }
 }

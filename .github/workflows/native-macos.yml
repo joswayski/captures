@@ -117,9 +117,10 @@ jobs:
       - run: bash apps/native/macos/build.sh
         env:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
-      - name: Verify signed native update acquisition without installing
+      - name: Verify signed development update handoff and helper CLI
         run: |
           cargo test --release --locked -p captures-app --lib updater::
+          cargo test --release --locked -p captures-app --bin native_update_helper
       - name: Forward native media between AppKit processes
         run: python3 apps/native/instance_smoke.py --binary apps/native/macos/.build/release/CapturesNative --output "$RUNNER_TEMP/native-preferences/instance"
       - name: Open media through a disposable native app bundle

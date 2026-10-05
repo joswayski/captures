@@ -5,12 +5,15 @@
 //! artifact URL, byte count and SHA-256. Downloads remain private temporary files
 //! until all checks succeed. Staging validates packages in private temporary
 //! directories. Explicit replacement retains the previous development package
-//! until confirmation, with interruption recovery. Nothing registers, launches,
-//! activates a channel or changes a profile; no host calls replacement yet.
+//! until confirmation, with interruption recovery. An opt-in external helper can
+//! launch it with a new disposable profile and confirm its private readiness.
+//! No GUI calls replacement, registers it, activates a channel or imports data.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
+mod health;
 mod installation;
 mod staging;
-pub use installation::{PendingInstallation, recover_installation};
+pub use health::HealthAcknowledgement;
+pub use installation::{LaunchFailure, PendingInstallation, recover_installation};
 pub use staging::StagedUpdate;
 
 use std::{
@@ -63,6 +66,26 @@ impl Target {
             Self::MacX64 => "x86_64-apple-darwin",
             Self::WindowsX64 => "x86_64-pc-windows-msvc",
             Self::LinuxX64 => "x86_64-unknown-linux-gnu",
+        }
+    }
+
+    pub fn current_host() -> Option<Self> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => Some(Self::MacArm64),
+            ("macos", "x86_64") => Some(Self::MacX64),
+            ("windows", "x86_64") => Some(Self::WindowsX64),
+            ("linux", "x86_64") => Some(Self::LinuxX64),
+            _ => None,
+        }
+    }
+
+    fn package_executable(self) -> &'static str {
+        match self {
+            Self::MacArm64 | Self::MacX64 => {
+                "Captures Native Development.app/Contents/MacOS/CapturesNative"
+            }
+            Self::WindowsX64 => "CapturesNative.exe",
+            Self::LinuxX64 => "captures-native",
         }
     }
 }

@@ -466,7 +466,7 @@ struct NativeMediaTools {
     }
 }
 
-private extension ProcessInfo {
+extension ProcessInfo {
     var machineHardwareName: String {
         var info = utsname(); uname(&info)
         return withUnsafePointer(to: &info.machine) {

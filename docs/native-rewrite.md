@@ -1846,7 +1846,7 @@ This closes neither signed OS distribution nor the Notices/updates gate. Install
 replacement/relaunch, rollback, channel publication and installed-data migration
 remain separate work.
 
-### Development-package replacement: shared transaction, no host integration
+### Development-package replacement and opt-in health handoff
 
 `StagedUpdate::replace` now validates an explicitly selected stopped development
 package, rehashes/re-extracts signed bytes beside it and retains the entire previous
@@ -1858,23 +1858,40 @@ storage before deleting it, retaining the decision across partial deletion.
 Changed files, links/junctions and invalid receipts are preserved for manual recovery.
 
 The API requires a trusted parent, profiles outside the package and an updater
-process outside it, with all app processes stopped. No host or diagnostic invokes
-replacement; no helper, automatic health/relaunch, registration, channel or profile
-migration is enabled. Preparation before receipt publication may leave harmless
+process outside it, with all app processes stopped. No GUI invokes replacement.
+The explicit `native_update_helper` can acquire/stage signed bytes, replace a stopped
+development package and launch it with a new empty disposable profile. AppKit and
+wgpu acknowledge only as primary after workspace initialization/render submission,
+successful settings load and verification of the exact packaged media tools; no
+PATH/environment/checkout fallback can satisfy readiness. The helper retains the
+operation lock until confirmation and keeps the new GUI running on success.
+There is no installed-data import, registration or enabled update channel.
+Preparation before receipt publication may leave harmless
 scratch requiring manual cleanup. Process-interruption recovery does not establish
 cross-platform power-loss durability. [API limits](../apps/native/README.md#development-package-replacement-and-interruption-recovery)
-also document the persistent empty lock file.
+also document the persistent empty lock file and helper usage.
+
+**Startup failure retains the unconfirmed transaction/old package.** Root
+exit or termination, even orderly/successful, cannot prove descendant quiescence;
+there is no automatic post-launch rollback. Late readiness cannot reverse failure.
+Root liveness/cancellation are rechecked after rehashing before confirmation commits.
+Post-commit cleanup failure can leave an incomplete old backup; recovery finishes
+the committed cleanup instead of restoring it.
+Stop all app processes and exclude other launches before explicit recovery. Helper
+restart refuses an existing transaction rather than automatically rolling it back.
+Process-tree containment, installed-profile handoff and permission identity remain
+separate release work.
 
 | Platform | Replacement slice implementation / verification |
 | --- | --- |
-| AppKit/macOS | Shared Rust package-root transaction and current-target checks; same-target inert package fixtures included in existing macOS updater CI; helper, OS signing/permission identity and physical acceptance open |
-| Windows | Same transaction and OS file lock; Windows-only locked-directory rename-failure regression included in existing updater CI; helper, relaunch and physical acceptance open |
-| X11 | Signed inert Linux package replacement/confirmation, all rename/cleanup states, tamper/cancel/conflicts and exact rollback checked in the orb; no GUI/capture changes |
-| Wayland | Identical window-independent transaction; no compositor behavior changed or accepted |
+| AppKit/macOS | Shared transaction/helper and primary/settings/render/packaged-tools readiness implemented; runnable signed-host fixtures and Swift ordering/termination tests included in existing CI, not executed on macOS in this orb; signing/permission identity and physical acceptance open |
+| Windows | Same helper/transaction and wgpu readiness; runnable signed-host fixtures and locked-directory rename-failure regression included in existing CI; not executed on Windows in this orb; installed relaunch/physical acceptance open |
+| X11 | Runnable signed Linux packages verify partial/wrong/oversized/replaced/late health, live children after clean root exit/timeout, backup retention and handoff locks; real wgpu signed loopback handoff succeeds, broken packaged tools retain backup, settings failure/secondary launch cannot acknowledge; private X11/software rendering only |
+| Wayland | Identical helper/readiness code and window-independent transaction; live Wayland handoff not exercised or accepted |
 
-This backend does not close distribution or Notices/updates acceptance. Executable
-handoff, health/relaunch integration, OS installers/signing, channel publication
-and installed-data backup/migration remain open.
+This slice does not close distribution or Notices/updates acceptance. Installed-app
+handoff/recovery, OS installers/signing, channel publication and installed-data
+backup/migration remain open. Tauri still ships; no release or cutover is activated.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

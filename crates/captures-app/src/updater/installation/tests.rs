@@ -566,3 +566,287 @@ fn locked_destination_rename_failure_leaves_the_old_package_and_cleans_scratch()
     fixture.replace().rollback().unwrap();
     fixture.old();
 }
+
+mod handoff {
+    use super::*;
+    use crate::updater::staging::tests::package_fixture_with_binary;
+    use std::{
+        process::{Child, Command},
+        sync::OnceLock,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    // A real same-target executable inside a signed real-packager archive. It
+    // implements only the private wire, never calls the code under test, and
+    // keeps a child alive after root exit to distinguish exit from quiescence.
+    fn binary() -> &'static [u8] {
+        static BINARY: OnceLock<Vec<u8>> = OnceLock::new();
+        BINARY.get_or_init(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("host.rs");
+            let output = directory.path().join(if cfg!(windows) { "host.exe" } else { "host" });
+            fs::write(&source, r#"
+use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
+fn wait(path: PathBuf) {
+    while !path.exists() { thread::sleep(Duration::from_millis(5)); }
+}
+fn main() {
+    let args: Vec<_> = env::args().collect();
+    if args[1] == "--descendant" {
+        let profile = PathBuf::from(&args[2]);
+        let mut counter = 0;
+        while !profile.join("stop-descendant").exists() {
+            counter += 1;
+            fs::write(profile.join("heartbeat"), counter.to_string()).unwrap();
+            thread::sleep(Duration::from_millis(5));
+        }
+        fs::write(profile.join("descendant-done"), b"done").unwrap();
+        return;
+    }
+    let value = |key| PathBuf::from(&args[args.iter().position(|arg| arg == key).unwrap() + 1]);
+    let profile = value("--history-root").parent().unwrap().to_owned();
+    assert_eq!(fs::canonicalize(env::current_dir().unwrap()).unwrap(), fs::canonicalize(&profile).unwrap());
+    assert_eq!(env::var("CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER").unwrap(), "1");
+    let file = value("--native-update-ready-file");
+    let token = &args[args.iter().position(|arg| arg == "--native-update-ready-token").unwrap() + 1];
+    let bytes = format!("{token}\n");
+    let mut descendant = None;
+    match profile.file_name().unwrap().to_str().unwrap() {
+        "partial" => {
+            fs::write(&file, &bytes.as_bytes()[..9]).unwrap();
+            fs::write(profile.join("partial-written"), b"ready").unwrap();
+            wait(profile.join("complete"));
+            fs::write(&file, &bytes).unwrap();
+        }
+        "wrong" => { fs::write(&file, b"not-the-attempt-token\n").unwrap(); }
+        "oversize" => { fs::write(&file, format!("{bytes}x")).unwrap(); }
+        "replaced-file" => {
+            let other = file.with_extension("other");
+            fs::write(&other, &bytes).unwrap();
+            fs::remove_file(&file).unwrap();
+            fs::rename(other, &file).unwrap();
+        }
+        "late" => {
+            wait(profile.join("complete"));
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, &bytes).unwrap();
+            fs::write(profile.join("late-written"), b"ready").unwrap();
+        }
+        "exit-descendant" | "timeout-descendant" => {
+            descendant = Some(Command::new(env::current_exe().unwrap())
+                .arg("--descendant").arg(&profile).spawn().unwrap());
+            wait(profile.join("heartbeat"));
+            if profile.file_name().unwrap() == "exit-descendant" { return; }
+        }
+        _ => unreachable!(),
+    }
+    wait(profile.join("stop"));
+    if let Some(mut child) = descendant { child.wait().unwrap(); }
+}
+"#).unwrap();
+            let mut compiler = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+            compiler.arg("--edition=2021").arg(&source).arg("-o").arg(&output);
+            if cfg!(windows) { compiler.args(["-C", "linker=rust-lld"]); }
+            let result = compiler.output().unwrap();
+            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+            fs::read(output).unwrap()
+        })
+    }
+
+    fn fixture(mode: &str) -> (Fixture, PathBuf) {
+        let mut fixture = Fixture::new();
+        fixture.body = package_fixture_with_binary(fixture.target, "normal", binary());
+        let profile = fixture.directory.path().join(mode);
+        fs::create_dir(&profile).unwrap();
+        (fixture, profile)
+    }
+
+    fn until(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "missing fixture event {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    struct Running(Child, PathBuf);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = fs::write(self.1.join("stop-descendant"), []);
+            let _ = fs::write(self.1.join("stop"), []);
+            let _ = self.0.wait();
+        }
+    }
+
+    fn retained(fixture: &Fixture, transaction: &Path) {
+        assert!(transaction.join("receipt.json").is_file());
+        assert!(!transaction.join("confirmed").exists());
+        assert_eq!(
+            fs::read(transaction.join("previous").join(&fixture.executable)).unwrap(),
+            OLD_BINARY
+        );
+        assert_eq!(
+            fs::read(fixture.destination.join(&fixture.executable)).unwrap(),
+            binary()
+        );
+        fixture.profile();
+    }
+
+    #[test]
+    fn partial_health_keeps_the_lock_and_backup_until_exact_acknowledgement() {
+        let (fixture, profile) = fixture("partial");
+        let pending = fixture.replace();
+        let transaction = pending.paths.transaction.clone();
+        let launched_profile = profile.clone();
+        let launch = thread::spawn(move || {
+            pending.launch(
+                &launched_profile,
+                Duration::from_secs(10),
+                &CancelToken::default(),
+            )
+        });
+        until(&profile.join("partial-written"));
+        assert!(!launch.is_finished(), "a token prefix is not readiness");
+        retained(&fixture, &transaction);
+        assert!(
+            recover_installation(&fixture.destination).is_err(),
+            "handoff must exclude recovery"
+        );
+        fs::write(profile.join("complete"), []).unwrap();
+        let _running = Running(launch.join().unwrap().unwrap(), profile);
+        assert!(!transaction.exists());
+        assert!(!recover_installation(&fixture.destination).unwrap());
+        assert_eq!(
+            fs::read(fixture.destination.join(&fixture.executable)).unwrap(),
+            binary()
+        );
+        fixture.profile();
+    }
+
+    #[test]
+    fn invalid_or_replaced_acknowledgements_never_confirm_or_rollback() {
+        for mode in ["wrong", "oversize", "replaced-file"] {
+            let (fixture, profile) = fixture(mode);
+            let pending = fixture.replace();
+            let transaction = pending.paths.transaction.clone();
+            let failure = pending
+                .launch(
+                    &profile,
+                    Duration::from_millis(500),
+                    &CancelToken::default(),
+                )
+                .unwrap_err();
+            let running = Running(failure.process.unwrap(), profile);
+            retained(&fixture, &transaction);
+            drop(running);
+            // The known fixture process has no descendants and is now stopped.
+            assert!(recover_installation(&fixture.destination).unwrap());
+            fixture.old();
+        }
+    }
+
+    #[test]
+    fn late_health_after_terminal_timeout_cannot_confirm() {
+        let (fixture, profile) = fixture("late");
+        let pending = fixture.replace();
+        let transaction = pending.paths.transaction.clone();
+        let failure = pending
+            .launch(
+                &profile,
+                Duration::from_millis(500),
+                &CancelToken::default(),
+            )
+            .unwrap_err();
+        let _running = Running(failure.process.unwrap(), profile.clone());
+        fs::write(profile.join("complete"), []).unwrap();
+        until(&profile.join("late-written"));
+        retained(&fixture, &transaction);
+    }
+
+    #[test]
+    fn successful_root_exit_and_timeout_with_live_descendants_retain_the_backup() {
+        for mode in ["exit-descendant", "timeout-descendant"] {
+            let (fixture, profile) = fixture(mode);
+            let pending = fixture.replace();
+            let transaction = pending.paths.transaction.clone();
+            let failure = pending
+                .launch(&profile, Duration::from_secs(1), &CancelToken::default())
+                .unwrap_err();
+            let mut running = Running(failure.process.unwrap(), profile.clone());
+            until(&profile.join("heartbeat"));
+            if mode == "exit-descendant" {
+                assert!(
+                    running.0.wait().unwrap().success(),
+                    "even a clean root exit is not quiescence"
+                );
+            }
+            let before = fs::read(profile.join("heartbeat")).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while fs::read(profile.join("heartbeat")).unwrap() == before {
+                assert!(Instant::now() < deadline, "descendant must remain live");
+                thread::sleep(Duration::from_millis(5));
+            }
+            retained(&fixture, &transaction);
+            drop(running);
+            until(&profile.join("descendant-done"));
+        }
+    }
+
+    #[test]
+    fn invalid_profiles_deadlines_and_prelaunch_cancel_preserve_recovery() {
+        for mode in ["occupied", "inside-package", "zero-deadline", "cancel"] {
+            let fixture = Fixture::new();
+            let pending = fixture.replace();
+            let mut profile = fixture.directory.path().join("empty-test");
+            fs::create_dir(&profile).unwrap();
+            let cancel = CancelToken::default();
+            let mut deadline = Duration::from_secs(1);
+            match mode {
+                "occupied" => fs::write(profile.join("capture"), b"preserve me").unwrap(),
+                "inside-package" => profile = fixture.destination.clone(),
+                "zero-deadline" => deadline = Duration::ZERO,
+                "cancel" => cancel.cancel(),
+                _ => unreachable!(),
+            }
+            let failure = pending.launch(&profile, deadline, &cancel).unwrap_err();
+            assert!(failure.process.is_none());
+            fixture.new_package();
+            assert!(recover_installation(&fixture.destination).unwrap());
+            fixture.old();
+            if mode == "occupied" {
+                assert_eq!(fs::read(profile.join("capture")).unwrap(), b"preserve me");
+            }
+        }
+    }
+
+    #[test]
+    fn health_veto_after_rehash_preserves_unconfirmed_backup() {
+        let fixture = Fixture::new();
+        let pending = fixture.replace();
+        let _lock = pending.paths.lock().unwrap();
+        let mut checked = false;
+        assert!(
+            pending
+                .confirm_locked(|| {
+                    checked = true;
+                    Err(Error::Installation("host exited during rehash"))
+                })
+                .is_err()
+        );
+        assert!(checked);
+        assert!(!pending.paths.confirmed().unwrap());
+        assert_eq!(
+            fs::read(pending.paths.previous().join(&fixture.executable)).unwrap(),
+            OLD_BINARY
+        );
+        fixture.new_package();
+        drop(_lock);
+        pending.rollback().unwrap();
+        fixture.old();
+    }
+}

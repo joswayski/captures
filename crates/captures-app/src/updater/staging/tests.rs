@@ -8,7 +8,17 @@ const EXECUTABLE: &[u8] = b"asymmetric native bytes\0\xff";
 // Use the real Python packager, not the extraction code, for layout/hash fixtures.
 // The media bodies are inert test bytes, not playable/runnable distribution files.
 pub(in crate::updater) fn package_fixture(target: Target, scenario: &str) -> Vec<u8> {
+    package_fixture_with_binary(target, scenario, EXECUTABLE)
+}
+
+pub(in crate::updater) fn package_fixture_with_binary(
+    target: Target,
+    scenario: &str,
+    executable: &[u8],
+) -> Vec<u8> {
     let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input-binary");
+    fs::write(&input, executable).unwrap();
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -22,7 +32,7 @@ target, scenario = sys.argv[3:5]
 platform = 'macos' if 'apple' in target else 'windows' if 'windows' in target else 'linux'
 spec = importlib.util.spec_from_file_location('package', repo / 'apps/native/package.py')
 package = importlib.util.module_from_spec(spec); spec.loader.exec_module(package)
-binary = root / 'binary'; binary.write_bytes(b'asymmetric native bytes\x00\xff')
+binary = root / 'binary'; binary.write_bytes(pathlib.Path(sys.argv[5]).read_bytes())
 resources = root / 'resources'; resources.mkdir(); (resources / 'tokens.json').write_text('{}')
 output = root / ('native é ' + platform)
 _, executable = package.stage(platform, binary, output, resources)
@@ -63,7 +73,7 @@ else:
         for item, body in entries:
             if item.isfile(): item.mode = 0o755 if item.name.endswith('/captures-native') or '/binaries/' in item.name else 0o644
             writer.addfile(item, io.BytesIO(body) if body is not None else None)
-"#]).arg(repository).arg(root.path()).arg(target.as_str()).arg(scenario).output().unwrap();
+"#]).arg(repository).arg(root.path()).arg(target.as_str()).arg(scenario).arg(input).output().unwrap();
     assert!(
         result.status.success(),
         "{}",

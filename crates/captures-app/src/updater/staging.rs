@@ -530,15 +530,15 @@ pub(super) fn validate_package(
     executables: &HashSet<PathBuf>,
     cancel: &CancelToken,
 ) -> Result<PathBuf, Error> {
-    let (platform, binary, resources) = match target {
+    let (platform, resources) = match target {
         Target::MacArm64 | Target::MacX64 => (
             "macos",
-            "Captures Native Development.app/Contents/MacOS/CapturesNative",
             "Captures Native Development.app/Contents/Resources",
         ),
-        Target::WindowsX64 => ("windows", "CapturesNative.exe", ""),
-        Target::LinuxX64 => ("linux", "captures-native", ""),
+        Target::WindowsX64 => ("windows", ""),
+        Target::LinuxX64 => ("linux", ""),
     };
+    let binary = target.package_executable();
     let build: BuildInfo = serde_json::from_slice(&metadata(&package.join("BUILD_INFO.json"))?)
         .map_err(|_| Error::Package)?;
     if !build.development

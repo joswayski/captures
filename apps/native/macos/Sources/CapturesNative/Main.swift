@@ -13,6 +13,8 @@ struct Options {
     var openMedia: [String] = []
     var quitAfter: Double?
     var settingsFile: String?
+    var nativeUpdateReadyFile: String?
+    var nativeUpdateReadyToken: String?
     var screenshot: String?
     /// Workbench update notice fixture (stub status source; no updater).
     var updateState: String?
@@ -22,6 +24,7 @@ struct Options {
 
     init(_ arguments: [String], bundled: Bool = false) throws {
         live = bundled
+        var explicitLive = false
         var iterator = arguments.makeIterator()
         while let argument = iterator.next() {
             switch argument {
@@ -38,7 +41,7 @@ struct Options {
                 historyCount = count
             case "--reference-chips": referenceChips = true
             case "--exercise": exercise = true
-            case "--live": live = true
+            case "--live": live = true; explicitLive = true
             case "--history-root":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 historyRoot = value
@@ -49,6 +52,12 @@ struct Options {
             case "--settings-file":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 settingsFile = value
+            case "--native-update-ready-file":
+                guard nativeUpdateReadyFile == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                nativeUpdateReadyFile = value
+            case "--native-update-ready-token":
+                guard nativeUpdateReadyToken == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                nativeUpdateReadyToken = value
             case "--screenshot":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 screenshot = value
@@ -71,6 +80,18 @@ struct Options {
             !(live && (exercise || referenceChips)), historyRoot == nil || live,
             openMedia.isEmpty || live
         else { throw Usage.invalid }
+        let hasHealth = nativeUpdateReadyFile != nil || nativeUpdateReadyToken != nil
+        if hasHealth {
+            let tokenPattern = #"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"#
+            guard explicitLive, let file = nativeUpdateReadyFile, file.hasPrefix("/"),
+                  let token = nativeUpdateReadyToken,
+                  token.range(of: tokenPattern, options: .regularExpression) == (token.startIndex..<token.endIndex),
+                  let historyRoot, historyRoot.hasPrefix("/"),
+                  let settingsFile, settingsFile.hasPrefix("/"),
+                  !exercise, !referenceChips, openMedia.isEmpty,
+                  updateState == nil, updateTray == nil, scene == "preferences", screenshot == nil
+            else { throw Usage.invalid }
+        }
     }
     enum Usage: Error { case invalid }
 }
@@ -107,7 +128,7 @@ struct Options {
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch Options.Usage.invalid {
-            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|sharing|region|window|update|idle] [--update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date] [--update-tray top|bottom|none] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--settings-file PATH] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--settings-file PATH] [--native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|sharing|region|window|update|idle] [--update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date] [--update-tray top|bottom|none] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
             exit(1)
         } catch {
             FileHandle.standardError.write(Data("Captures could not start: \(error.localizedDescription)\n".utf8))

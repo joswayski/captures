@@ -12,6 +12,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
   --capture-controls-recording --hud-state unmuted|muted|busy|no-microphone|saving|failed\n\
   --settings-file PATH\n\
+  --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (health launches only)\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
 
@@ -120,6 +121,7 @@ pub struct Options {
     /// Open Capture History at launch, as its tray item or Preferences button
     /// would, instead of shipping's launch Preferences window.
     pub open_history: bool,
+    pub native_update_health: Option<captures_app::updater::HealthAcknowledgement>,
 }
 
 impl Options {
@@ -148,7 +150,10 @@ impl Options {
             update_tray: None,
             open_preferences: false,
             open_history: false,
+            native_update_health: None,
         };
+        let mut native_update_ready_file = None;
+        let mut native_update_ready_token = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -258,6 +263,21 @@ impl Options {
                 "--settings-file" => {
                     options.settings_file = Some(args.next().ok_or("Missing settings path")?.into())
                 }
+                "--native-update-ready-file" => {
+                    if native_update_ready_file.is_some() {
+                        return Err("Duplicate update ready file".into());
+                    }
+                    native_update_ready_file = Some(PathBuf::from(
+                        args.next().ok_or("Missing update ready file")?,
+                    ));
+                }
+                "--native-update-ready-token" => {
+                    if native_update_ready_token.is_some() {
+                        return Err("Duplicate update ready token".into());
+                    }
+                    native_update_ready_token =
+                        Some(args.next().ok_or("Missing update ready token")?);
+                }
                 _ => return Err(format!("Unknown option {arg}")),
             }
         }
@@ -318,6 +338,38 @@ impl Options {
                 return Err("Quit deadline must be after the screenshot deadline".into());
             }
         }
+        match (native_update_ready_file, native_update_ready_token) {
+            (None, None) => {}
+            (Some(file), Some(token)) => {
+                let explicit_paths = options
+                    .history_root
+                    .as_ref()
+                    .zip(options.settings_file.as_ref())
+                    .is_some_and(|(history, settings)| {
+                        history.is_absolute() && settings.is_absolute()
+                    });
+                if !options.live
+                    || !explicit_paths
+                    || options.exercise
+                    || options.floating
+                    || options.scene != Scene::Preferences
+                    || !options.open_media.is_empty()
+                    || options.update_state.is_some()
+                    || options.update_tray.is_some()
+                    || options.screenshot.is_some()
+                {
+                    return Err("Native update readiness requires plain --live with explicit absolute --history-root and --settings-file".into());
+                }
+                options.native_update_health = Some(
+                    captures_app::updater::HealthAcknowledgement::new(file, token)
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+            _ => return Err(
+                "--native-update-ready-file and --native-update-ready-token must appear together"
+                    .into(),
+            ),
+        }
         Ok(options)
     }
 }
@@ -333,6 +385,64 @@ mod tests {
     fn live_previews_accept_explicit_reduced_motion() {
         let options = parse(&["--live", "--reduced-motion"]).unwrap();
         assert!(options.live && options.reduced_motion);
+    }
+
+    #[test]
+    fn native_update_health_requires_a_plain_explicit_live_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let ready = root.path().join("ready");
+        let history = root.path().join("history");
+        let settings = root.path().join("settings.json");
+        let token = "73147c85-13e0-4a67-b129-5e7ead486dc1";
+        let args = || {
+            vec![
+                "--live".into(),
+                "--history-root".into(),
+                history.to_string_lossy().into_owned(),
+                "--settings-file".into(),
+                settings.to_string_lossy().into_owned(),
+                "--native-update-ready-file".into(),
+                ready.to_string_lossy().into_owned(),
+                "--native-update-ready-token".into(),
+                token.into(),
+            ]
+        };
+        assert!(
+            Options::parse(args())
+                .unwrap()
+                .native_update_health
+                .is_some()
+        );
+        for extra in [
+            vec!["--exercise"],
+            vec!["--floating", "--scene", "hud"],
+            vec!["--open-media", "/tmp/image.png"],
+            vec!["--scene", "update", "--update-state", "available"],
+        ] {
+            let mut invalid = args();
+            invalid.extend(extra.into_iter().map(String::from));
+            assert!(Options::parse(invalid).is_err());
+        }
+        let mut missing_token = args();
+        missing_token.truncate(missing_token.len() - 2);
+        assert!(Options::parse(missing_token).is_err());
+        let mut invalid_token = args();
+        *invalid_token.last_mut().unwrap() = token.to_uppercase();
+        assert!(Options::parse(invalid_token).is_err());
+        assert!(
+            parse(&[
+                "--live",
+                "--history-root",
+                "relative",
+                "--settings-file",
+                "/tmp/settings",
+                "--native-update-ready-file",
+                "/tmp/ready",
+                "--native-update-ready-token",
+                token,
+            ])
+            .is_err()
+        );
     }
 
     #[test]
