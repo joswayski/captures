@@ -49,6 +49,7 @@ struct State {
     ambiguous_create: bool,
     deleted: bool,
     share_id: usize,
+    hold_object: Option<Arc<AtomicBool>>,
 }
 struct Server {
     url: String,
@@ -188,6 +189,12 @@ impl Server {
                     )
                 } else if line.starts_with("PUT /object?") {
                     state.parts.push((line.clone(), body));
+                    if let Some(gate) = &state.hold_object {
+                        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                        while gate.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                            thread::sleep(Duration::from_millis(2));
+                        }
+                    }
                     if state.redirect_object_once {
                         state.redirect_object_once = false;
                         (
@@ -267,6 +274,19 @@ impl Server {
                 } else if line.starts_with("POST /api/assets/asset1/restore ") {
                     state.deleted = false;
                     ("200 OK", asset(false, 0), "")
+                } else if line.starts_with("POST /api/auth/email/request ") {
+                    (
+                        "202 Accepted",
+                        r#"{"challengeId":"otp-challenge"}"#.into(),
+                        "",
+                    )
+                } else if line.starts_with("POST /api/auth/email/verify ") {
+                    (
+                        "200 OK",
+                        r#"{"user":{"id":"owner1","email":"a@example.com"},"token":"opaqueTOKEN"}"#
+                            .into(),
+                        "",
+                    )
                 } else {
                     panic!("unexpected request path: {line}");
                 };
@@ -950,4 +970,236 @@ fn unauthorized_share_invalidates_account_without_exposing_a_link() {
     );
     drop(flow);
     assert_eq!(account.me(), Err(AccountError::InvalidSession));
+}
+
+fn worker_reply(worker: &captures_account::native::Worker) -> captures_account::native::State {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(captures_account::native::Event::Finished(state)) = worker.try_recv() {
+            return state;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "sharing worker did not settle"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn worker_selection(path: PathBuf) -> captures_account::native::Selection {
+    captures_account::native::Selection {
+        artifact_id: "artifact1".into(),
+        path,
+        name: "original.png".into(),
+        content_type: "image/png".into(),
+    }
+}
+
+#[test]
+fn native_worker_pins_original_then_retries_configuration_without_reupload() {
+    use captures_account::native::{Command, Worker};
+    let server = Server::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original.png");
+    fs::write(&path, b"ABCDE").unwrap();
+    let worker = Worker::with_client(dir.path().into(), client(&server.url), Arc::new(|| {}));
+    worker.send(Command::Open(worker_selection(path.clone())));
+    assert!(worker_reply(&worker).error.is_none());
+    assert_eq!(
+        server.state.lock().unwrap().create,
+        0,
+        "opening never uploads"
+    );
+    fs::remove_file(&path).unwrap(); // The preview/history no longer owns the bytes.
+    server.state.lock().unwrap().fail_share_once = true;
+    worker.send(Command::Upload(SharePatch::default()));
+    let failed = worker_reply(&worker);
+    assert_eq!(failed.error, Some(Error::Unavailable));
+    assert!(matches!(failed.opened, Opened::Asset(a) if a.share.is_none()));
+    worker.send(Command::Upload(SharePatch::default()));
+    let ready = worker_reply(&worker);
+    assert!(ready.error.is_none());
+    assert!(matches!(ready.opened, Opened::Asset(a) if a.share.as_ref().unwrap().id == "share1"));
+    worker.send(Command::Open(worker_selection(path)));
+    assert!(
+        worker_reply(&worker).error.is_none(),
+        "ready share reopens without a local source"
+    );
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.create, 1);
+    assert_eq!(
+        state
+            .parts
+            .iter()
+            .map(|(_, b)| b.as_slice())
+            .collect::<Vec<_>>(),
+        [b"ABC".as_slice(), b"DE".as_slice()]
+    );
+    assert_eq!(state.completed.len(), 1);
+    assert_eq!(state.shares.len(), 2);
+    drop(state);
+    drop(worker);
+    let worker = Worker::with_client(dir.path().into(), client(&server.url), Arc::new(|| {}));
+    worker.send(Command::Open(worker_selection(
+        dir.path().join("missing.png"),
+    )));
+    assert!(
+        worker_reply(&worker).error.is_none(),
+        "a fresh worker manages a Ready asset without any original or snapshot"
+    );
+    assert_eq!(server.state.lock().unwrap().create, 1);
+}
+
+#[test]
+fn native_worker_pins_bytes_before_a_locked_vault_can_outlive_the_original() {
+    use captures_account::native::{Auth, Command, Worker};
+    struct Locked {
+        source: PathBuf,
+        first: AtomicBool,
+    }
+    impl Vault for Locked {
+        fn load(&self) -> Result<Option<String>, VaultError> {
+            if self.first.swap(false, Ordering::Relaxed) {
+                fs::remove_file(&self.source).unwrap();
+                Err(VaultError::Inaccessible)
+            } else {
+                Ok(Some("opaqueTOKEN".into()))
+            }
+        }
+        fn save(&self, _: &str) -> Result<(), VaultError> {
+            unreachable!()
+        }
+        fn delete(&self) -> Result<(), VaultError> {
+            Ok(())
+        }
+    }
+    let server = Server::new();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("original.png");
+    fs::write(&source, b"ABCDE").unwrap();
+    let account = AccountClient::new(
+        &server.url,
+        Locked {
+            source: source.clone(),
+            first: AtomicBool::new(true),
+        },
+    )
+    .unwrap();
+    let worker = Worker::with_client(dir.path().into(), account, Arc::new(|| {}));
+    worker.send(Command::Open(worker_selection(source)));
+    let failed = worker_reply(&worker);
+    assert!(matches!(failed.auth, Auth::Unavailable));
+    assert_eq!(
+        failed.error,
+        Some(Error::Account(AccountError::Vault(
+            VaultError::Inaccessible
+        )))
+    );
+    assert!(server.state.lock().unwrap().requests.is_empty());
+    worker.send(Command::Refresh);
+    assert!(worker_reply(&worker).error.is_none());
+    worker.send(Command::Upload(SharePatch::default()));
+    assert!(worker_reply(&worker).error.is_none());
+    assert_eq!(
+        server
+            .state
+            .lock()
+            .unwrap()
+            .parts
+            .iter()
+            .map(|(_, b)| b.clone())
+            .collect::<Vec<_>>(),
+        [b"ABC".to_vec(), b"DE".to_vec()]
+    );
+}
+
+#[test]
+fn native_worker_cancel_during_http_retains_the_same_asset_for_explicit_retry() {
+    use captures_account::native::{Command, Event, Worker};
+    let server = Server::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original.png");
+    fs::write(&path, b"ABCDE").unwrap();
+    let gate = Arc::new(AtomicBool::new(true));
+    server.state.lock().unwrap().hold_object = Some(gate.clone());
+    let worker = Worker::with_client(dir.path().into(), client(&server.url), Arc::new(|| {}));
+    worker.send(Command::Open(worker_selection(path)));
+    assert!(worker_reply(&worker).error.is_none());
+    worker.send(Command::Upload(SharePatch::default()));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(
+            worker.try_recv(),
+            Some(Event::Progress { read: 3, total: 5 })
+        ) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(2));
+    }
+    worker.cancel();
+    gate.store(false, Ordering::Release);
+    assert_eq!(worker_reply(&worker).error, Some(Error::Cancelled));
+    assert!(server.state.lock().unwrap().shares.is_empty());
+    worker.send(Command::Upload(SharePatch::default()));
+    assert!(worker_reply(&worker).error.is_none());
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.create, 1);
+    assert_eq!(state.completed.len(), 1);
+    assert_eq!(state.shares.len(), 1);
+}
+
+#[test]
+fn native_worker_sign_in_save_retry_never_reverifies_or_uploads() {
+    use captures_account::native::{Auth, Command, Worker};
+    struct SignedOut(Arc<AtomicBool>);
+    impl Vault for SignedOut {
+        fn load(&self) -> Result<Option<String>, VaultError> {
+            Ok(None)
+        }
+        fn save(&self, _: &str) -> Result<(), VaultError> {
+            if self.0.swap(false, Ordering::Relaxed) {
+                Err(VaultError::Inaccessible)
+            } else {
+                Ok(())
+            }
+        }
+        fn delete(&self) -> Result<(), VaultError> {
+            Ok(())
+        }
+    }
+    let server = Server::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original.png");
+    fs::write(&path, b"ABCDE").unwrap();
+    let account =
+        AccountClient::new(&server.url, SignedOut(Arc::new(AtomicBool::new(true)))).unwrap();
+    let worker = Worker::with_client(dir.path().into(), account, Arc::new(|| {}));
+    let selected = worker_selection(path.clone());
+    worker.send(Command::Open(selected.clone()));
+    assert!(matches!(worker_reply(&worker).auth, Auth::SignedOut));
+    assert!(server.state.lock().unwrap().requests.is_empty());
+    worker.send(Command::RequestCode("a@example.com".into()));
+    assert!(matches!(worker_reply(&worker).auth, Auth::CodeSent));
+    worker.send(Command::Open(selected)); // Closing/reopening preserves OTP challenge.
+    assert!(matches!(worker_reply(&worker).auth, Auth::CodeSent));
+    worker.send(Command::Verify("ABC234".into()));
+    assert!(matches!(worker_reply(&worker).auth, Auth::SaveRequired));
+    worker.send(Command::Refresh);
+    assert!(matches!(worker_reply(&worker).auth, Auth::SaveRequired));
+    worker.send(Command::RetrySave);
+    assert!(matches!(worker_reply(&worker).auth, Auth::SignedIn(_)));
+    fs::remove_file(path).unwrap();
+    worker.send(Command::Upload(SharePatch::default()));
+    assert!(worker_reply(&worker).error.is_none());
+    let state = server.state.lock().unwrap();
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|(line, _, _)| line.starts_with("POST /api/auth/email/verify "))
+            .count(),
+        1
+    );
+    assert_eq!(state.create, 1);
 }

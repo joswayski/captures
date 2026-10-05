@@ -1752,6 +1752,31 @@ feature. API/web implementation: [#613](https://github.com/joswayski/captures/pu
 Do not ship a decorative Share action or substitute a website handoff for the
 native flow. Local capture remains signed-out and never uploads automatically.
 
+The wgpu host now connects mini-preview Share and a selected-History action to
+native controls. The shared `captures-account::native::Worker` owns the session,
+OTP challenge and a private temporary exact-byte snapshot independently of the
+popup/preview. Open/sign-in/refresh never upload; Upload is explicit. Completion
+and configuration retry reuse the same account/profile/artifact association.
+Closure retains settings and accepted work; Quit cancels cooperatively and joins
+the worker. HTTP waits are bounded, but an OS vault prompt may require dismissal.
+Temporary snapshots are removed on normal selection replacement/shutdown; a crash
+may leave a private temporary file for OS cleanup. Restart retry still needs the
+original local file unless the remote asset is already complete.
+
+The popup exposes email/code, retry-save without reverification, sign-out,
+anyone-with-link access, editable/removable password and RFC3339 expiry,
+progress/cancel/retry, shared date/Copy/Open, Stop sharing and confirmed cloud
+Trash/Restore. No usable link appears during a mutation or after a failure.
+Busy selection is pinned; stale mini-preview generations are rejected. Save new
+copy uses its distinct History ID. Actions/status/links remain in a fixed footer
+while settings scroll. Wayland opens this window from History without inventing
+preview coordinates and unmaps it alongside other windows during portal capture.
+
+This is connected development behavior, not acceptance of the checklist below.
+AppKit launch/presentation remains unimplemented. Tests use disposable loopback
+HTTP/fake vaults and software-rendered UI; real SES/R2/vaults and physical
+macOS/Windows/GNOME/KDE remain unverified. API activation/deployment is separate.
+
 - [ ] Launch from the selected mini-preview artifact with the Lucide Share icon
   and an accessible name. Preserve its identity: an editor's Save new copy is a
   different local artifact, not an implicit replacement for the original upload.
@@ -1759,10 +1784,10 @@ native flow. Local capture remains signed-out and never uploads automatically.
   artifact/settings through sign-in. Shared Rust owns account/session state and
   uses explicit bearer transport; OS credential vaults persist tokens, never
   plaintext preferences. Canceling sign-in leaves the local capture untouched.
-  The unconnected `captures-account` prerequisite covers explicit request/verify,
+  The `captures-account` worker covers explicit request/verify,
   account lookup, bearer persistence/retry, invalidation and logout with platform
-  vault adapters. Host controls, artifact retention and physical-vault acceptance
-  are still open on macOS, Windows, X11 and Wayland; this does not check the gate.
+  vault adapters. wgpu controls and retention are connected; AppKit controls and
+  physical-vault acceptance remain open; this does not check the gate.
 - [ ] The popup previews the selected file and offers link access, optional
   password and expiry before explicit Upload and share. No upload merely from
   opening the popup. Existing API semantics are anyone-with-link plus optional
@@ -1772,11 +1797,11 @@ native flow. Local capture remains signed-out and never uploads automatically.
   multipart R2 contract, with progress, cancellation, expiry-aware part retry and
   failure recovery. Never show a usable share link before upload completion and
   successful share configuration; configuration failure must not re-upload bytes.
-  The unconnected shared coordinator streams bounded file parts, persists ETags,
+  The shared coordinator streams bounded file parts, persists ETags,
   and durably persists account-scoped create keys. Lost create responses and failed
   post-create association writes replay the same key after restart; conflicts and
   tombstones never silently create replacements. Legacy keyless checkpoints still
-  require explicit reconciliation. Host launch, lifecycle, real object-store and
+  require explicit reconciliation. AppKit launch, real object-store and
   physical-platform acceptance remain open.
 - [ ] Reopening manages the existing remote asset/share rather than duplicating
   the upload. Persist the local-artifact/remote-asset association. Show shared date,
@@ -1784,7 +1809,7 @@ native flow. Local capture remains signed-out and never uploads automatically.
   sharing actions. Stopping denies subsequent access; enabling again rotates the
   link. Cloud Trash retains bytes and restore does not revive old links.
   Account/profile-scoped local associations and server share patch semantics are
-  implemented in shared Rust only; native controls and physical verification are open.
+  implemented in shared Rust and wgpu; AppKit controls and physical verification are open.
 - [ ] Integrate both AppKit and wgpu through thin host launch/presentation seams;
   coordinate MiniPreview/Workbench and mini_preview/live changes with the rewrite
   integration owner. Do not fork the auth/upload rules into platform hosts.
@@ -1797,10 +1822,10 @@ native flow. Local capture remains signed-out and never uploads automatically.
 
 | Platform | Sharing coordinator implementation / verification |
 | --- | --- |
-| macOS | Shared Rust coordinator and Keychain adapter exist; host controls and physical vault/object-store acceptance remain open |
-| Windows | Shared Rust coordinator and Credential Manager adapter exist; host controls and physical vault/object-store acceptance remain open |
-| X11 | Shared Rust HTTP/recovery tests pass with disposable loopback servers and a fake vault; native controls and real Secret Service/object-store acceptance remain open |
-| Wayland | Same shared Rust coordinator; no host sharing controls or physical Secret Service/compositor/object-store acceptance claimed |
+| macOS | Shared worker/coordinator and Keychain adapter; AppKit controls unimplemented, wgpu code shared; physical vault/object-store acceptance open |
+| Windows | Shared worker and wgpu controls connected with Credential Manager adapter; host compilation/runtime and physical vault/object-store acceptance unverified here |
+| X11 | wgpu controls connected; disposable shared-worker HTTP/recovery and native UI tests, software renders; physical Secret Service/object-store acceptance open |
+| Wayland | wgpu History entry point and compositor-controlled child window; shared worker tested, physical Secret Service/compositor/object-store acceptance open |
 
 ## Architecture and ownership
 

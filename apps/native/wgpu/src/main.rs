@@ -32,6 +32,7 @@ mod reveal;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod root_repaint;
 mod selector;
+mod sharing;
 mod shortcut_input;
 mod startup_notice;
 mod tokens;
@@ -462,6 +463,8 @@ fn main() -> eframe::Result {
         [430., 102.]
     } else if floating {
         [640., 620.]
+    } else if options.scene == Scene::Sharing {
+        [480., 720.]
     } else if options.scene == Scene::CaptureControls && options.capture_controls_recording {
         [1280., 900.]
     } else {
@@ -469,6 +472,8 @@ fn main() -> eframe::Result {
     };
     let minimum_size = if options.live {
         captures_app::app_windows::HISTORY.min_size()
+    } else if options.scene == Scene::Sharing {
+        [380., 520.]
     } else if options.scene == Scene::CaptureControls {
         [640., 480.]
     } else {

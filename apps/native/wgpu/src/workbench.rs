@@ -1239,6 +1239,7 @@ impl Workbench {
             Scene::History => self.history_end = !self.history_end,
             Scene::Hud => self.paused = !self.paused,
             Scene::Preview => self.dissolve(ctx, self.cycle.is_multiple_of(2)),
+            Scene::Sharing => {}
             Scene::Editor => {
                 self.zoom = if self.cycle.is_multiple_of(2) {
                     1.5
@@ -1891,7 +1892,7 @@ impl eframe::App for Workbench {
         if !self.options.floating
             && !matches!(
                 self.options.scene,
-                Scene::CaptureControls | Scene::Region | Scene::Window
+                Scene::CaptureControls | Scene::Region | Scene::Window | Scene::Sharing
             )
         {
             let preferences = self.options.scene == Scene::Preferences;
@@ -1939,7 +1940,11 @@ impl eframe::App for Workbench {
                 if self.options.floating
                     || matches!(
                         self.options.scene,
-                        Scene::CaptureControls | Scene::Region | Scene::Window | Scene::Preferences
+                        Scene::CaptureControls
+                            | Scene::Region
+                            | Scene::Window
+                            | Scene::Preferences
+                            | Scene::Sharing
                     )
                 {
                     0
@@ -1951,7 +1956,11 @@ impl eframe::App for Workbench {
             if !self.options.floating
                 && !matches!(
                     self.options.scene,
-                    Scene::Preferences | Scene::CaptureControls | Scene::Region | Scene::Window
+                    Scene::Preferences
+                        | Scene::CaptureControls
+                        | Scene::Region
+                        | Scene::Window
+                        | Scene::Sharing
                 )
             {
                 ui.heading(self.options.scene.title());
@@ -1984,6 +1993,7 @@ impl eframe::App for Workbench {
                 Scene::History => self.history(ui, &t),
                 Scene::Hud => self.hud(ui, &t),
                 Scene::Preview => self.preview(ui, &t),
+                Scene::Sharing => crate::sharing::Window::fixture(ui, &t),
                 Scene::Editor => self.editor(ui, &t),
                 Scene::CaptureControls => {
                     let texture = self.texture(ui.ctx(), false);
@@ -2387,7 +2397,7 @@ fn shortcut_routing_state(
     )
 }
 
-fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
+pub(crate) fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
     // Asymmetric synthetic content, same layout as the AppKit fixture. No file
     // reads, screen capture, personal images, or per-frame texture allocation.
     let mut pixels = Vec::with_capacity(width * height);
