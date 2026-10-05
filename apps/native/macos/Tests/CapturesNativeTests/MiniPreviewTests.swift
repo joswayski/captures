@@ -976,7 +976,7 @@ final class MiniPreviewTests: XCTestCase {
             let bitmap = try render(panel)
             XCTAssertEqual(try XCTUnwrap(pixelColor(in: bitmap, of: panel, x: 10, y: 10)).alphaComponent, 0,
                            accuracy: 0.01, "stack padding remains transparent")
-            let newestSampleY = name == "bottom-expanded" ? 436 : 90
+            let newestSampleY: CGFloat = name == "bottom-expanded" ? 436 : 90
             let frontPixel = try XCTUnwrap(pixelColor(in: bitmap, of: panel, x: 170, y: newestSampleY))
             XCTAssertGreaterThan(frontPixel.alphaComponent, 0.9)
             XCTAssertGreaterThan(frontPixel.blueComponent, frontPixel.redComponent,
