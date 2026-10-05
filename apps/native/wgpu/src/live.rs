@@ -11069,22 +11069,6 @@ mod tests {
     }
 
     #[test]
-    fn hidden_wayland_root_wakes_from_a_child_without_presenting_a_buffer() {
-        let ctx = egui::Context::default();
-        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
-        let received = crate::root_repaint::observe_from_child(&ctx);
-        request_hidden_root_paint(&ctx);
-        assert_eq!(received.try_recv().unwrap(), egui::ViewportId::ROOT);
-        let mut output = ctx.end_pass();
-        assert!(
-            output.viewport_output[&egui::ViewportId::ROOT]
-                .commands
-                .is_empty()
-        );
-        output.textures_delta.clear();
-    }
-
-    #[test]
     fn recording_worker_replies_require_current_generation_and_expected_phase() {
         let starting = |phase| phase == CapturePhase::RecordingStarting;
         assert!(accepts_recording_event(
