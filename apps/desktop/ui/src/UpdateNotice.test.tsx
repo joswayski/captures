@@ -351,6 +351,34 @@ describe("UpdateNotice", () => {
     window.history.replaceState({}, "", "/");
   });
 
+  it("moves the caret, removes it for a hidden icon, and restores it without focusing", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_update_status") return available;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const { container } = render(<UpdateNotice />);
+    expect(await screen.findByRole("dialog", { name: "Update available" })).toBeInTheDocument();
+    const registration = vi.mocked(listen).mock.calls.find(([event]) => event === "notice-caret");
+    expect(registration).toBeDefined();
+    const notify = registration![1];
+    const notice = container.querySelector(".tray-notice") as HTMLElement;
+    for (const x of [184, 307]) {
+      act(() => notify({ event: "notice-caret", id: 1, payload: { edge: "top", x } }));
+      expect(notice).toHaveAttribute("data-caret", "top");
+      expect(notice.style.getPropertyValue("--tray-caret-x")).toBe(`${x}px`);
+    }
+    act(() => notify({ event: "notice-caret", id: 2, payload: { edge: "none", x: 0 } }));
+    expect(notice).not.toHaveAttribute("data-caret");
+    expect(notice.style.getPropertyValue("--tray-caret-x")).toBe("");
+    expect(container.querySelector(".tray-notice-caret")).not.toBeInTheDocument();
+    act(() => notify({ event: "notice-caret", id: 3, payload: { edge: "top", x: 252 } }));
+    expect(notice).toHaveAttribute("data-caret", "top");
+    expect(notice.style.getPropertyValue("--tray-caret-x")).toBe("252px");
+    expect(container.querySelector(".tray-notice-caret")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update now" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "Later" })).not.toHaveFocus();
+  });
+
   it("does not focus an action when an update is available", async () => {
     vi.mocked(invoke).mockResolvedValue(available);
 

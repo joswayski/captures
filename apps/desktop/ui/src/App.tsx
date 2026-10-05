@@ -441,9 +441,11 @@ function useTrayNoticeCaret() {
   useEffect(() => {
     let active = true;
     const cleanup = createCleanupRegistry();
-    void listen<TrayNoticeCaret>("notice-caret", ({ payload }) => {
+    void listen<{ edge: "top" | "bottom" | "none"; x: number }>("notice-caret", ({ payload }) => {
       if (active && (payload.edge === "top" || payload.edge === "bottom")) {
-        setCaret(payload);
+        setCaret({ edge: payload.edge, x: payload.x });
+      } else if (active && payload.edge === "none") {
+        setCaret(null);
       }
     }).then((unlisten) => {
       cleanup.add(unlisten);
