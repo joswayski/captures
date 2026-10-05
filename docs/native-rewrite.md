@@ -1697,6 +1697,31 @@ input. AppKit has XCTest coverage and compiles in macOS CI only. macOS, Windows
 and Wayland presentation, placement at a real tray icon, focus and accessibility
 are unverified. The Notices/updates gate stays open.
 
+### Signed native update acquisition: backend and opt-in diagnostic only
+
+Shared `captures_app::updater` now authenticates byte-exact Minisign v1 manifests,
+selects the matching native development identity/renderer/platform, rejects equal
+or older semantic versions and verifies streamed artifact size/SHA-256 in private
+temporary files. Signature, metadata and download limits, HTTPS/redirect policy,
+progress, cancellation and failed-download cleanup are covered by real signatures
+and loopback tests. `native_update_probe` can check or verify a supplied development
+endpoint without a window, installation or relaunch. No production key/endpoint
+is configured and no release/service is activated. The existing update-notice
+source remains a fixture; Preferences and tray update actions remain disabled.
+[Protocol and diagnostic usage](../apps/native/README.md#native-update-acquisition-diagnostic)
+describe the limits, including I/O-boundary cancellation and its request timeout.
+
+| Platform | Acquisition slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared Rust backend accepts ARM64/x64 AppKit identity; dedicated Rust fixture tests added to macOS CI; native UI/installer integration and physical verification open |
+| Windows | Same Rust backend and host-target diagnostic; fixture tests added to Windows CI; installer/relaunch and physical verification open |
+| X11 | Rust signature, target/version, byte-exact download, cancellation and cleanup tests run in Linux orb; no GUI/capture changes |
+| Wayland | Same backend has no X11/window dependency; no compositor-specific behavior added or accepted |
+
+This is acquisition, not a complete updater. Safe archive extraction, native
+installation/relaunch, signed channel publication, freshness/rollback policy,
+installed-data migration and end-to-end cross-platform acceptance remain open.
+
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
 integration, physical cross-platform acceptance, and renderer/distribution/cutover.

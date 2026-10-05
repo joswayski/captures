@@ -446,7 +446,10 @@ notice offers Save file, then Show in Folder after saving a permanent copy. Dism
 or letting it expire preserves History and exports; failed saves can be retried.
 Both native workbenches also render the Preview update notice (release notes,
 download progress, restart countdown and errors) from a simulated status source.
-Native builds cannot check for, download or install updates yet.
+Native app update actions remain unavailable. A separate opt-in
+[development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
+checks signed native manifests and verifies temporary downloads; it never installs
+or replaces an app, and no native update channel is enabled.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.

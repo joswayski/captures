@@ -65,6 +65,11 @@ jobs:
       - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
       - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Verify signed native update acquisition without installing
+        env:
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: |
+          cargo +1.95.0 test --locked --target-dir apps/native/wgpu/target -p captures-app --lib updater::
       - name: Acquire exact Wayland pixels through the desktop screenshot portal
         if: runner.os == 'Linux'
         run: |

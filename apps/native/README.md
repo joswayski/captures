@@ -21,6 +21,60 @@ shipping app first. macOS CI archives are ad-hoc signed, Windows unsigned and
 Linux X11-only; these artifacts do not close signing, updater, migration or
 physical-platform acceptance gates.
 
+## Native update acquisition diagnostic
+
+`captures_app::updater` implements shared signed-manifest checks and bounded,
+streamed downloads without Tauri. It is **not an enabled updater**: Preferences,
+tray actions and the update-notice fixture remain unchanged. There is no bundled
+native signing key, release endpoint, installer, restart or rollback yet.
+`native_update_probe` creates no window, changes no installed/profile data and
+removes its temporary download on normal exit. It requires an explicit endpoint,
+standard two-line Minisign public key file, renderer and current version:
+
+```sh
+cargo +1.95.0 run --manifest-path apps/native/wgpu/Cargo.toml --bin native_update_probe -- \
+  --manifest-url "$NATIVE_TEST_MANIFEST_URL" --public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
+  --renderer wgpu --current-version 0.1.0
+# Add --download-directory EXISTING_DIRECTORY to acquire and verify bytes only.
+```
+
+The manifest is UTF-8 JSON, at most 256 KiB. `<manifest path>.minisig` contains a
+standard detached **prehashed** Minisign signature, not Tauri's outer base64.
+Verify/sign the exact bytes; whitespace or reserialization changes the signature.
+The signed v1 shape is:
+
+```json
+{
+  "schema": 1,
+  "identity": "es.captur.native-development",
+  "renderer": "wgpu",
+  "version": "2026.10.50",
+  "notes": "Development fixture only.",
+  "artifacts": {
+    "x86_64-unknown-linux-gnu": {
+      "url": "https://example.invalid/native-development.tar.gz",
+      "size": 23,
+      "sha256": "d2820340a902904952ed3ce50313a4867f8717eadfbbc24378a863d52d2009cf"
+    }
+  }
+}
+```
+
+This example is illustrative, not a download or signed release. Replace every
+artifact value with the actual native package's URL, byte count and SHA-256 before
+signing. `appkit` accepts macOS ARM64/x64 targets; `wgpu` additionally accepts
+Windows x64 and Linux x64. Renderer and current host target must match. Equal,
+older and build-metadata-only versions do not offer a download. HTTPS is required;
+HTTP is allowed only for loopback diagnostics. Metadata redirects are rejected;
+artifact redirects are bounded and may not downgrade to non-loopback HTTP.
+The signature is bounded to 8 KiB and artifacts to 1 GiB. Cancellation checks occur
+at I/O boundaries; a blocked HTTP request can take up to its 60-second timeout.
+Tampering, truncated/oversized bytes, wrong signatures/identities/targets and
+cancelled downloads never produce a verified file. Tests use disposable in-memory
+keys and private loopback data, not release keys or public services. Signature and
+version checks do not establish channel freshness, installed-data migration,
+archive extraction safety, OS signing or physical-platform acceptance.
+
 ## Native sharing controls
 
 Both hosts connect mini-preview Share and selected History to the shared Rust
