@@ -18,10 +18,13 @@ captures-settings = { path = "../captures-settings" }
 chrono.workspace = true
 global-hotkey = "0.8"
 image.workspace = true
+minisign-verify = "0.2"
 moxcms = "0.8"
 png = "0.18"
 tiff = "0.11"
 file-id = "0.2.3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
@@ -34,6 +37,7 @@ zune-jpeg = "0.5"
 
 [dev-dependencies]
 jpeg-encoder = "0.6"
+minisign = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
