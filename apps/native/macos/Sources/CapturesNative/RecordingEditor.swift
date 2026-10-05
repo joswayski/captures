@@ -2176,9 +2176,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         if format.indexOfSelectedItem == 1 {
             let accepted = (acceptedExport["frames_per_second"] as? NSNumber)?.uint16Value
-            let supported: [UInt16] = [8, 10, 12, 15, 20, 24, 30]
-            gifFramesPerSecond = accepted.flatMap { supported.contains($0) ? $0 : nil } ?? 15
-            gifFrameRate.selectItem(withTitle: "\(gifFramesPerSecond) FPS")
+            // Persisted preferences allow every cadence from 8 through 30,
+            // not just the preset menu entries. Keep accepted custom values
+            // across preview/seek results, as when the defaults first load.
+            gifFramesPerSecond = accepted.flatMap { (8...30).contains($0) ? $0 : nil } ?? 15
+            let fpsTitle = "\(gifFramesPerSecond) FPS"
+            if gifFrameRate.item(withTitle: fpsTitle) == nil {
+                gifFrameRate.addItem(withTitle: fpsTitle)
+            }
+            gifFrameRate.selectItem(withTitle: fpsTitle)
             if initialize && editOutputDimensions(value.snapshot.edit) == nil {
                 if gifMaximumWidthControl.item(withTitle: "Original") == nil {
                     gifMaximumWidthControl.insertItem(withTitle: "Original", at: 0)

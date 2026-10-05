@@ -39,6 +39,8 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertEqual((edit["output_width"] as? NSNumber)?.intValue, 704)
             XCTAssertEqual((edit["output_height"] as? NSNumber)?.intValue, 396)
             XCTAssertFalse(controller.dirty, "accepting defaults must not make them dirty")
+            XCTAssertEqual(try popup("GIF frame rate", in: controller.root).titleOfSelectedItem, "27 FPS")
+            XCTAssertFalse(controller.canApplyEdits, "the accepted custom cadence must not restage 15 FPS")
             try render(controller.root, name: "recording-editor-preferred-gif-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "recording-editor-preferred-gif-minimum-\(appearance)")
@@ -62,6 +64,37 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertFalse(controller.dirty, "successful save rebases the clean state")
             choose(try popup("GIF frame rate", in: controller.root), "27 FPS")
             XCTAssertTrue(controller.dirty, "opening defaults differ from the later saved state")
+        }
+    }
+
+    func testAcceptedCustomGifCadenceSurvivesOpenSeekAndCleanClose() throws {
+        _ = NSApplication.shared
+        for fps in [UInt16(9), 27, 29] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(
+                sourceMime: "image/gif", exportFormat: "gif", framesPerSecond: fps))
+            var discardCalls = 0
+            let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!,
+                worker: worker, confirmDiscard: { discardCalls += 1; return false })
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                outputDirectory: "/Exports")
+            let cadence = try popup("GIF frame rate", in: controller.root)
+            XCTAssertEqual(cadence.titleOfSelectedItem, "\(fps) FPS")
+            XCTAssertFalse(controller.dirty)
+            XCTAssertFalse(controller.canApplyEdits)
+            worker.requestResult = .success(try presentation(position: 733, revision: 1,
+                sourceMime: "image/gif", exportFormat: "gif", framesPerSecond: fps))
+            let seek = try slider("Recording frame position", in: controller.root)
+            XCTAssertTrue(seek.isEnabled)
+            seek.doubleValue = 733; _ = seek.sendAction(seek.action, to: seek.target)
+            XCTAssertEqual(worker.requests.last?["operation"] as? String, "seek")
+            XCTAssertEqual(cadence.titleOfSelectedItem, "\(fps) FPS")
+            XCTAssertEqual(cadence.itemTitles.filter { $0 == "\(fps) FPS" }.count, 1)
+            XCTAssertFalse(controller.dirty, "seek must preserve the clean custom cadence")
+            XCTAssertFalse(controller.canApplyEdits)
+            XCTAssertTrue(controller.windowShouldClose(controller.window))
+            XCTAssertEqual(discardCalls, 0)
+            XCTAssertEqual(worker.closeCount, 1)
         }
     }
 
