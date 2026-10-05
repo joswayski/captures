@@ -209,12 +209,17 @@ Create a GitHub environment named `release`, restrict its deployment branches to
 | --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` | Dedicated Tauri updater private key |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for that updater key |
-| `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application `.p12` |
-| `APPLE_CERTIFICATE_PASSWORD` | Export password for the `.p12` |
-| `KEYCHAIN_PASSWORD` | Temporary CI keychain password |
-| `APPLE_API_ISSUER` | App Store Connect API issuer ID |
-| `APPLE_API_KEY` | App Store Connect API key ID |
-| `APPLE_API_PRIVATE_KEY` | Contents of the App Store Connect `.p8` private key |
+
+The Apple Developer ID certificate and App Store Connect key are not GitHub
+secrets. Like caper and dbm, the macOS package job assumes the
+`production-captures-release-signer` AWS role (trusted for this repository's
+`release` environment) and reads the `apple` section of the
+`production/signing/release` secret in AWS Secrets Manager:
+`developer_id_p12_base64`, `developer_id_p12_password`,
+`app_store_connect_key_id`, `app_store_connect_issuer_id` and
+`app_store_connect_private_key`. The keychain password is generated per run.
+joswayski/infrastructure's `docs/release-signing.md` covers storing and
+rotating them.
 
 Commit only the updater public key. Keep the updater private key, its password, and the App Store Connect private key in encrypted offline backups. Losing the updater private key means existing installations cannot verify a replacement key or receive another in-app update.
 
@@ -232,7 +237,7 @@ Direct distribution outside the Mac App Store requires a Developer ID Applicatio
 2. Create a **Developer ID Application** certificate in the Apple Developer portal, install it in the login keychain, and export the identity and private key as a password-protected `.p12`.
 3. Create an App Store Connect **Team API key** with Developer access. Save its issuer ID, key ID, and downloaded `.p8`; Apple permits the private key to be downloaded only once.
 4. Back up the `.p12`, `.p8`, Tauri updater private key, passwords, and recovery information in encrypted offline storage.
-5. Add the Apple values to the `release` environment using the exact secret names above.
+5. Store the Apple values in AWS Secrets Manager as described in joswayski/infrastructure `docs/release-signing.md`.
 6. Confirm the workflow signs, notarizes, and staples the app and DMG, then validate them on a clean supported Mac without using a Gatekeeper bypass.
 
 Before publishing, verify the signature, Gatekeeper assessment, and stapled ticket:

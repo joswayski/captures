@@ -332,6 +332,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+      # Reads Apple signing material from AWS Secrets Manager (macOS only).
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -429,21 +431,52 @@ jobs:
       - name: Prepare the release-only version
         if: runner.os != 'macOS'
         run: node scripts/prepare-release-build.mjs "${{ needs.prepare.outputs.app_version }}"
+      # Apple signing material is shared by every app's release in AWS Secrets
+      # Manager (joswayski/infrastructure docs/release-signing.md), like caper
+      # and dbm, instead of per-repository GitHub secrets.
+      - name: Use the release signing role
+        if: runner.os == 'macOS'
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: arn:aws:iam::395451633568:role/production-captures-release-signer
+          aws-region: us-east-1
+      - name: Load the Developer ID certificate and App Store Connect key
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          secret="$RUNNER_TEMP/apple.json"
+          aws secretsmanager get-secret-value --secret-id production/signing/release \
+            --query SecretString --output text | jq -e '.apple | objects' > "$secret"
+          jq -e 'all(.developer_id_p12_base64, .developer_id_p12_password, .app_store_connect_key_id,
+            .app_store_connect_issuer_id, .app_store_connect_private_key; type == "string" and length > 0)' \
+            "$secret" > /dev/null
+          keychain_password="$(openssl rand -hex 24)"
+          for value in "$(jq -r .developer_id_p12_base64 "$secret")" \
+                       "$(jq -r .developer_id_p12_password "$secret")" "$keychain_password"; do
+            echo "::add-mask::$value"
+          done
+          jq -r .app_store_connect_private_key "$secret" | while IFS= read -r line; do
+            [[ -n "$line" ]] && echo "::add-mask::$line"
+          done
+          delimiter="APPLE_KEY_$(openssl rand -hex 8)"
+          {
+            echo "APPLE_CERTIFICATE=$(jq -r .developer_id_p12_base64 "$secret")"
+            echo "APPLE_CERTIFICATE_PASSWORD=$(jq -r .developer_id_p12_password "$secret")"
+            echo "KEYCHAIN_PASSWORD=$keychain_password"
+            echo "APPLE_API_ISSUER=$(jq -r .app_store_connect_issuer_id "$secret")"
+            echo "APPLE_API_KEY=$(jq -r .app_store_connect_key_id "$secret")"
+            echo "APPLE_API_PRIVATE_KEY<<$delimiter"
+            jq -r .app_store_connect_private_key "$secret"
+            echo "$delimiter"
+          } >> "$GITHUB_ENV"
+          rm -f "$secret"
       - name: Prepare the release-only version and Apple credentials
         if: runner.os == 'macOS'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: node scripts/prepare-release-build.mjs "${{ needs.prepare.outputs.app_version }}"
       - name: Import and verify the Developer ID certificate
         if: runner.os == 'macOS'
-        env:
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
