@@ -5,6 +5,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Retained account/sharing worker. Construct only after explicit Share, using
+ * the elected native profile root. No vault/network I/O until a command.
+ * Serialize nonblocking request calls on the owning UI thread. open takes
+ * {artifact_id,path,name,content_type}; poll returns {events:[progress|finished]}.
+ * request_code {email}, verify {code}, retry_save, refresh, logout, upload
+ * {patch?}, configure {enabled,patch?}, trash, restore, cancel. Patch fields
+ * password/expiresAt: omitted keeps, null clears, string sets. No endpoint
+ * override. Replies never expose bearer/challenge/snapshot/vault contents.
+ * Envelopes/free rules match other JSON ABIs. Keep the handle through popup
+ * closure. Free once, off the UI thread, before releasing profile ownership;
+ * it cancels/joins HTTP/vault work. No concurrent requests or later handle use. */
+typedef struct CapturesSharing CapturesSharing;
+CapturesSharing *captures_sharing_create_v1(const char *root);
+char *captures_sharing_request_v1(CapturesSharing *handle, const char *request_json);
+void captures_sharing_free_v1(CapturesSharing *handle);
+
 /* Worker-only feedback, except copy: it returns the shared form copy and limits
  * (captures_app::feedback) without I/O, so hosts may read it on any thread.
  * context returns {app_version, os, os_version, arch, system_label} without

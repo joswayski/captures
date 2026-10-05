@@ -58,11 +58,29 @@ pub enum Patch<T> {
     Clear,
     Set(T),
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SharePatch {
+    #[serde(default = "keep_patch", deserialize_with = "read_patch")]
     pub password: Patch<String>,
     /// RFC3339 timestamp in the future. The API validates exact expiry.
+    #[serde(default = "keep_patch", deserialize_with = "read_patch")]
     pub expires_at: Patch<String>,
 }
+
+fn keep_patch() -> Patch<String> {
+    Patch::Keep
+}
+
+fn read_patch<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Patch<String>, D::Error> {
+    Ok(match Option::<String>::deserialize(deserializer)? {
+        None => Patch::Clear,
+        Some(value) => Patch::Set(value),
+    })
+}
+
 impl Default for SharePatch {
     fn default() -> Self {
         Self {
@@ -72,7 +90,7 @@ impl Default for SharePatch {
     }
 }
 
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareInfo {
     pub id: String,
@@ -81,7 +99,7 @@ pub struct ShareInfo {
     pub shared_at: String,
 }
 
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetInfo {
     pub id: String,

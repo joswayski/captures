@@ -19,8 +19,8 @@ migrations and tests, and [`apps/web/README.md`](apps/web/README.md#optional-acc
 for the account placeholder. Sign-in is unavailable. `npm run check` verifies
 that account requests fail closed and the built public website still works.
 
-The wgpu development host connects `captures-account::native::Worker` to its
-native sharing popup; AppKit presentation remains open. The worker owns the
+Both native development hosts connect `captures-account::native::Worker` to
+their sharing windows; AppKit uses an opaque, nonblocking C ABI. The worker owns the
 selected original bytes, OTP challenge and account session across popup/preview
 closure. Opening or signing in never uploads. At the lower-level client boundary,
 construct `AccountClient::production()` on a serialized worker without
@@ -57,8 +57,16 @@ Legacy checkpoints without a key remain blocked for explicit `recover_created`
 reconciliation; never clear their marker or guess an ID. The host must serialize
 access to the profile and retain its accepted upload worker after the preview
 closes. Disposable loopback fixtures/fake vaults, wgpu UI/accessibility tests and
-software-rendered X11 fixtures have been exercised. Real SES/R2, physical vaults,
-AppKit and physical Windows/X11/Wayland acceptance remain open.
+software-rendered X11 fixtures have been exercised. AppKit tests cover command
+selection, retained forms, capture hiding and minimum-size light/dark fixtures;
+their macOS execution/render inspection remains pending for this slice. Real
+SES/R2, physical vaults and physical macOS/Windows/X11/Wayland acceptance remain open.
+
+On macOS, `--scene sharing` is a disabled render fixture (not `--live` or
+`--exercise`). Set `CAPTURES_NATIVE_SHARE_FIXTURE` to `otp`, `vault`, `shared`,
+`uploading`, `trash` or `error` for nondefault states. `CAPTURES_TEST_ARTIFACTS`
+collects XCTest light/dark, normal/minimum-size sharing renders. Neither fixture
+switch changes the live API/vault or permits sign-in, uploads, Copy/Open or Cancel.
 
 `OsVault` uses a separate `es.captur.native.account` credential in macOS Keychain,
 Windows Credential Manager, or Linux Secret Service (with encrypted D-Bus transport),
