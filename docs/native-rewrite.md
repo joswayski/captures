@@ -34,11 +34,16 @@ require Save or discard. Refocus does not reset that baseline, and a successful 
 rebases it. Private-X11 recovery closes the unedited GIF editor normally in both
 appearances; the export-defaults smoke closes/reopens without Save or discard, then
 checks the discard guard after an actual user change. AppKit has matching XCTest
-regressions; their execution awaits macOS CI.
+regressions. macOS CI exposed one remaining custom-cadence error: accepting 27 FPS
+filtered it through the preset-only list and restaged 15 FPS, making clean defaults
+dirty. AppKit now retains every valid 8–30 FPS cadence and its menu label across
+preview and seek results. Tests cover clean custom 9/27/29 FPS opens, repeated
+worker publication, no duplicate menu entries and closing without discard. Execution
+of this correction awaits the next macOS CI run; no physical verification is claimed.
 
 | Platform | Recording export-defaults slice implementation / verification |
 | --- | --- |
-| AppKit/macOS | Implemented through the shared C ABI; XCTest covers defaults, custom values, refocus and format precedence; macOS execution pending, no physical verification in this orb |
+| AppKit/macOS | Implemented through the shared C ABI; macOS CI executed the earlier regressions and exposed the custom-FPS reset now corrected; correction execution pending, no physical verification in this orb |
 | Windows | Implemented through the shared wgpu editor; Windows compilation/runtime and physical acceptance unverified for this slice |
 | X11 | Verified on disposable software-rendered X11 in both appearances, including real exports and mixed-file regression; physical acceptance open |
 | Wayland | Implemented through the same wgpu editor; shared tests pass, compositor/physical export-defaults acceptance unverified |
