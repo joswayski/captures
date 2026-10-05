@@ -156,8 +156,8 @@ impl Workbench {
         }
         if options.scene == Scene::Idle && cc.winit_window().and_then(|w| w.is_visible()).is_none()
         {
-            // winit's Wayland root cannot be hidden with set_visible. Do not
-            // report a visible, resident window as a successful hidden workload.
+            // Do not report a visible, resident window as hidden when its
+            // backend cannot acknowledge mapping state.
             emit(
                 "unsupported",
                 json!({"capability": "hidden-idle",
@@ -226,7 +226,7 @@ impl Workbench {
             preferences_state.refresh_motion_preference();
             preferences_state.watch_motion_preference(&cc.egui_ctx);
         }
-        if options.live && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        if options.live {
             preferences_state.connect_login_item(
                 options
                     .history_root
@@ -447,18 +447,7 @@ impl Workbench {
         );
         if launch == Some(app_windows::InteractiveLaunch::Preferences) && !self.options.open_history
         {
-            if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
-                == Some(true)
-            {
-                self.show_root(ctx);
-            }
             self.preferences.open(ctx);
-        }
-        if self.launched_with_media
-            && ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
-                == Some(true)
-        {
-            self.show_root(ctx);
         }
         if onboarding_complete && self.options.open_history {
             self.show_root(ctx);
@@ -513,15 +502,10 @@ impl Workbench {
             return;
         }
         if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+            && action != TrayAction::Quit
+            && self.live.as_ref().is_some_and(Live::is_capturing)
         {
-            if action != TrayAction::Quit && self.live.as_ref().is_some_and(Live::is_capturing) {
-                return;
-            }
-            if matches!(action, TrayAction::Preferences | TrayAction::SendFeedback) {
-                // A new child needs a root UI pass. Do not present an unmapped
-                // Wayland root merely to bootstrap it: show History normally.
-                self.show_root(ctx);
-            }
+            return;
         }
         match action {
             TrayAction::NewCapture
@@ -631,15 +615,22 @@ impl Workbench {
                         frame.winit_window().map(AsRef::as_ref),
                         self.tray.as_ref().and_then(Tray::rect),
                     ),
-                    captures_app::shortcuts::shortcut_display_tokens(
-                        &shortcut,
-                        crate::preferences::shortcut_platform(),
-                    ),
+                    if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                        == Some(true)
+                    {
+                        // Native Wayland global shortcuts are not registered.
+                        Vec::new()
+                    } else {
+                        captures_app::shortcuts::shortcut_display_tokens(
+                            &shortcut,
+                            crate::preferences::shortcut_platform(),
+                        )
+                    },
                     self.startup_notice_generation,
                     visible_for,
                     now,
                 ));
-                crate::live::request_hidden_root_paint(ctx);
+                crate::live::request_hidden_root_ui(ctx);
                 ctx.request_repaint();
             }
         }
@@ -798,11 +789,6 @@ impl Workbench {
                         "instance-request",
                         || json!({"paths":request.paths.len()}),
                     );
-                    if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
-                        == Some(true)
-                    {
-                        self.show_root(ctx);
-                    }
                     self.options.open_media.extend(request.paths);
                 }
                 Ok(None) => break,

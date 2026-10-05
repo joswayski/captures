@@ -209,9 +209,10 @@ queries and explicitly changes a per-user, per-History-root entry. A saved
 `launch_at_login` value does not enable it; fixture launches never register.
 The entry runs the current executable with `--live --scene idle`, the canonical
 `--history-root` and an absolute `--settings-file`. It starts hidden and preserves
-tray/menu-bar and relaunch recovery. On X11, a missing tray host exposes the root
-instead of leaving an unreachable process. Wayland hidden startup is unsupported
-and the toggle is unavailable there. Actual desktop sign-in remains unverified.
+tray/menu-bar and relaunch recovery. On X11 and Wayland, a missing or lost tray
+host exposes History instead of leaving an unreachable process. Wayland
+Preferences, Feedback and media bootstrap without mapping History. Actual desktop
+sign-in and physical compositor focus/notice placement remain unverified.
 
 The profile ID is the first 24 hexadecimal characters of the canonical History
 path's SHA-256. These development entries are separate from Tauri:
@@ -219,7 +220,7 @@ path's SHA-256. These development entries are separate from Tauri:
 - macOS: `~/Library/LaunchAgents/dev.captures.native.ID.plist` (`RunAtLoad`).
 - Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value
   `CapturesNative-ID`.
-- Linux/X11: `$XDG_CONFIG_HOME/autostart/captures-native-ID.desktop` (or
+- Linux/X11/Wayland: `$XDG_CONFIG_HOME/autostart/captures-native-ID.desktop` (or
   `~/.config/autostart/…` when XDG_CONFIG_HOME is not absolute/set).
 
 Turn the control Off **before moving or deleting the binary**. Query and removal
@@ -236,6 +237,11 @@ Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --lifecycle --login-item-
 --binary PATH --output NEW_DIRECTORY` for disposable XDG registration, real GIO
 launch, hidden startup/focus, relaunch and disable in light/dark appearances.
 This is private-X11/software-rendering evidence, not physical logon acceptance.
+Run `/usr/bin/python3 apps/native/wayland_lifecycle_smoke.py --binary PATH
+--injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe`
+for private headless-Sway/real-SNI startup, child windows, relaunch, explicit
+disposable login registration and tray-loss recovery. See the
+[wgpu setup](apps/native/wgpu/README.md#native-wayland-resident-lifecycle).
 
 Fresh `--live` development profiles show setup before capture or external-media
 import. Use a new `--settings-file` and `--history-root` to exercise it without

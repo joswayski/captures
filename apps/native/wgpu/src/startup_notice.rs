@@ -194,7 +194,12 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> bool {
         text,
     );
     let small = FontId::proportional(tokens.number("text-sm"));
-    let hint = painter.layout_no_wrap(STARTUP_NOTICE_HINT.to_owned(), small.clone(), subtle);
+    let hint = if notice.keys.is_empty() {
+        "Open History from the tray menu"
+    } else {
+        STARTUP_NOTICE_HINT
+    };
+    let hint = painter.layout_no_wrap(hint.to_owned(), small.clone(), subtle);
     let chip_pad = egui::vec2(tokens.number("s-1") + 1., 1.);
     let chips: Vec<_> = notice
         .keys
@@ -363,6 +368,18 @@ mod tests {
             })
             .count();
         assert_eq!(chips, 3);
+    }
+
+    #[test]
+    fn absent_global_shortcut_points_to_history_instead() {
+        let (_, shapes) = render(&notice(None, &[]), Vec::new());
+        assert_eq!(
+            texts(&shapes),
+            [
+                "Captures is ready to use",
+                "Open History from the tray menu"
+            ]
+        );
     }
 
     #[test]

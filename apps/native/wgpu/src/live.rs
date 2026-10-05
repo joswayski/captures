@@ -1617,6 +1617,16 @@ pub(crate) fn request_hidden_root_paint(ctx: &egui::Context) {
     request_hidden_viewport_paint(ctx, egui::ViewportId::ROOT);
 }
 
+/// Declare a new child in a root UI pass. The private renderer runs this pass
+/// without presenting an unmapped Wayland root; worker wakes remain logic-only.
+pub(crate) fn request_hidden_root_ui(ctx: &egui::Context) {
+    ctx.send_viewport_cmd_to(
+        egui::ViewportId::ROOT,
+        egui::ViewportCommand::RequestPaintWhileHidden,
+    );
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
+}
+
 #[cfg(target_os = "linux")]
 struct PortalScreenshot {
     flow: captures_app::capture_flow::PortalCapture,
@@ -11024,21 +11034,22 @@ mod tests {
 
     #[test]
     fn hidden_root_bootstrap_requests_one_ui_pass_without_showing_root() {
-        let ctx = egui::Context::default();
-        let first = ctx.run_logic(&egui::RawInput::default(), request_hidden_root_paint);
-        let commands = first
-            .viewport_commands
-            .get(&egui::ViewportId::ROOT)
-            .expect("hidden-paint command targets root");
-        assert_eq!(commands, &[egui::ViewportCommand::RequestPaintWhileHidden]);
-        assert!(
-            !commands
-                .iter()
-                .any(|command| matches!(command, egui::ViewportCommand::Visible(_)))
-        );
+        for wayland in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), wayland));
+            let received = crate::root_repaint::observe_from_child(&ctx);
+            request_hidden_root_ui(&ctx);
+            assert_eq!(received.try_recv().unwrap(), egui::ViewportId::ROOT);
+            let mut first = ctx.end_pass();
+            assert_eq!(
+                first.viewport_output[&egui::ViewportId::ROOT].commands,
+                [egui::ViewportCommand::RequestPaintWhileHidden]
+            );
+            first.textures_delta.clear();
 
-        let next = ctx.run_logic(&egui::RawInput::default(), |_| {});
-        assert!(next.viewport_commands.is_empty());
+            let next = ctx.run_logic(&egui::RawInput::default(), |_| {});
+            assert!(next.viewport_commands.is_empty());
+        }
     }
 
     #[test]

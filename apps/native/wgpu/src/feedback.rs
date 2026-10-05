@@ -65,19 +65,27 @@ pub struct Feedback {
 }
 
 impl Feedback {
-    /// Callers run inside a root pass (tray action or the About card), which
-    /// registers the window; an already open window is focused instead.
+    /// Register the child independently of History; focus an already open window.
     pub fn open(&mut self, ctx: &egui::Context) {
+        self.open_with_context(ctx, captures_feedback::native::context);
+    }
+
+    fn open_with_context(
+        &mut self,
+        ctx: &egui::Context,
+        context: impl FnOnce() -> FeedbackContext + Send + 'static,
+    ) {
         if self.open {
             ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Focus);
         }
         self.open = true;
+        crate::live::request_hidden_root_ui(ctx);
         if self.context.is_none() && self.context_rx.is_none() {
             let (tx, rx) = mpsc::channel();
             self.context_rx = Some(rx);
             let wake_ctx = ctx.clone();
             thread::spawn(move || {
-                let _ = tx.send(captures_feedback::native::context());
+                let _ = tx.send(context());
                 wake(&wake_ctx);
             });
         }
@@ -814,10 +822,31 @@ mod tests {
     fn context_and_submission_workers_wake_root_while_an_editor_is_active() {
         for load_context in [true, false] {
             let ctx = egui::Context::default();
-            let wakes = crate::root_repaint::observe_from_child(&ctx);
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
+            let mut wakes = crate::root_repaint::observe_from_child(&ctx);
             let mut form = Feedback::default();
             if load_context {
-                form.open(&ctx);
+                let (release, wait) = mpsc::channel();
+                form.open_with_context(&ctx, move || {
+                    wait.recv().unwrap();
+                    captures_feedback::native::context()
+                });
+                assert_eq!(wakes.try_recv().unwrap(), egui::ViewportId::ROOT);
+                form.poll();
+                assert!(
+                    form.context.is_none(),
+                    "bootstrap does not wait for context"
+                );
+                let mut bootstrap = ctx.end_pass();
+                assert_eq!(
+                    bootstrap.viewport_output[&egui::ViewportId::ROOT].commands,
+                    [egui::ViewportCommand::RequestPaintWhileHidden]
+                );
+                bootstrap.textures_delta.clear();
+                // Finish the bootstrap frame before releasing the worker: a
+                // worker that forgets to wake ROOT must fail this second phase.
+                wakes = crate::root_repaint::observe_from_child(&ctx);
+                release.send(()).unwrap();
             } else {
                 form.context = Some(captures_feedback::native::context());
                 form.message = "Explicit test feedback".into();

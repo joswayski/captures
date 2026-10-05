@@ -38,7 +38,7 @@ preview Restore is disabled with a limitation tooltip. Both appearances exercise
 the real History Edit action. No monitor identity/origin is invented; no mini
 preview is placed. The compositor may reposition windows after remapping.
 Native region/window selection, countdown,
-global shortcuts, hidden startup, preview placement and recording remain open.
+global shortcuts, preview placement and recording remain open.
 
 | Platform | This slice's implementation / verification |
 | --- | --- |
@@ -46,6 +46,22 @@ global shortcuts, hidden startup, preview placement and recording remain open.
 | Windows | Existing path unchanged; probe reports unsupported; no physical-host verification |
 | X11 | Existing acquisition path retained; private-X11 capture regression exercises the patched renderer; diagnostic rejects DISPLAY rather than falling back |
 | Wayland | Portal screenshots connected to History and exercised on disposable headless Sway; physical GNOME/KDE acceptance and broader capture/recording parity remain open |
+
+The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
+when a tray exists. Preferences, Feedback and media bootstrap independently;
+empty/GIO relaunch reaches Preferences without flashing History. Missing/lost tray
+hosts expose History and restore normal close-to-quit. Development login
+registration is explicit and OS-authoritative on Wayland as on X11. The private
+renderer consumes hidden-root UI requests without presenting a buffer; ordinary
+worker wakes remain logic-only. Root and child rendering share pending texture
+deltas so an unmapped root's allocation precedes immediate-child partial updates.
+
+| Platform | Resident follow-up implementation / verification |
+| --- | --- |
+| AppKit/macOS | AppKit unchanged; wgpu shares texture/bootstrap changes; macOS runtime/physical acceptance unverified here |
+| Windows | Shared child-bootstrap and texture-queue changes; runtime/physical acceptance unverified here |
+| X11 | Shared bootstrap path exercised by private capture, History, resident and login regressions |
+| Wayland | Disposable headless Sway with real SNI tray verifies quiet/interactive/media launch, child-only UI, relaunch, explicit private login registration, tray loss/absence and normal Quit; physical compositor, sign-in, focus/notice placement and resources remain open |
 
 Both screenshot-editor hosts now expose only shipping's Tiny, Smaller, Balanced,
 High and Highest compression presets (55/70/85/92/98), with no numeric quality
@@ -410,8 +426,9 @@ The coordinated Preferences/Feedback follow-up tracks shipping PR #926. General
 is first and contains **Start Captures on login**, with the shipping background
 sign-in description and a separate native development-profile identity. Existing
 macOS/Windows/X11 registration remains opt-in and OS-authoritative; Wayland hidden
-startup stays gated. Native Updates keeps the actual crate version and **Native
-development** on the left, a fixed 160-point disabled action and **Updates
+startup is connected by the resident follow-up above. Native Updates keeps the
+actual crate version and **Native development** on the left, a fixed 160-point
+disabled action and **Updates
 unavailable** beneath it on the right, including compact windows. It does not
 simulate checks, results or last-checked times. Feedback shows Included
 automatically immediately below its header, before Category/Message/Contact.
