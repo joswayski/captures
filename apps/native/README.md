@@ -29,7 +29,8 @@ streamed downloads and temporary package staging without Tauri. It is **not an
 enabled updater**: Preferences, tray actions and the update-notice fixture remain
 unchanged. There is no bundled native signing key, release endpoint or installed-app
 updater. The explicit development-package helper below can replace and launch only
-a selected stopped development package with a new disposable test profile.
+a selected stopped development package with a new empty or explicitly imported
+development profile; it never reuses an installed profile.
 `native_update_probe` creates no window, changes no installed/profile data and
 removes its download and staged files on normal exit. It requires an explicit
 endpoint, standard two-line Minisign public key file, renderer and current version:
@@ -152,6 +153,30 @@ target/debug/native_update_helper \
 # On Windows: target/debug/native_update_helper.exe. On macOS: --renderer appkit.
 ```
 
+Alternatively, import explicit shipping settings/data while launching the signed
+replacement. Stop **all** shipping/native app processes and source writers, exclude
+new launches, and select a **nonexistent** development profile outside the source
+data and package/transaction/cleanup trees:
+
+```sh
+target/debug/native_update_helper \
+  --manifest-url "$NATIVE_TEST_MANIFEST_URL" --public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
+  --renderer wgpu --current-version 2026.10.51 \
+  --stopped-development-package "$ABSOLUTE_NATIVE_PACKAGE_ROOT" \
+  --new-development-profile "$ABSOLUTE_NEW_NATIVE_PROFILE" \
+  --source-settings-file "$ABSOLUTE_SHIPPING_SETTINGS_JSON" \
+  --source-data-directory "$ABSOLUTE_SHIPPING_LOCAL_DATA_DIRECTORY" \
+  --all-app-processes-stopped --health-timeout-seconds 60
+```
+
+The two profile modes are exclusive. Import uses the [offline copy contract](#explicit-offline-development-profile-import),
+including storage limits, a byte-preserving source snapshot, export isolation and
+fresh setup for the new identity. Sources cannot overlap package/transaction/cleanup
+trees. The package operation lock remains held during import and startup.
+Completing import alone never confirms the replacement: it must pass the same
+exact-token, packaged-tools and live-root health checks as the empty-profile mode.
+An import failure leaves the replacement unconfirmed and does not launch a host.
+
 The helper acquires/stages signed bytes, activates the replacement and launches
 the packaged executable directly. It disables system-shortcut takeover and passes
 only the new history/settings paths. AppKit and wgpu acknowledge only as the elected
@@ -176,8 +201,12 @@ pending transaction rather than silently recovering it. Confirmation/cleanup
 failure can leave an acknowledged host running and confirmation already committed:
 recovery then finishes cleanup rather than restoring the old package. Inspect the
 receipt, cleanup directory and log; a post-commit old backup may be incomplete.
-This helper does not import installed history/settings, register an app, preserve
-OS permission identity, publish a channel or enable the Update now button.
+Published imported profiles survive startup failure and package recovery; recovery
+never restores/deletes profile data. Retain the unchanged shipping sources and
+snapshot, and use another new destination for a repeated import attempt. Do not
+copy development data back over an installed profile.
+This helper does not update installed copies, discover installed data, register an
+app, preserve OS permission identity, publish a channel or enable Update now.
 
 After stopping **all** app processes and excluding new launches, recover the same
 explicit development-package root (it may be missing after an interrupted rename):
@@ -199,7 +228,8 @@ this mode with acquisition flags. The persistent empty sibling lock file remains
 Runnable signed-package regressions cover partial/wrong/oversized/replaced-file
 acknowledgements, late health, a clean root exit leaving a live child, timeouts,
 prelaunch cancellation/profile rejection, exclusion of recovery during handoff,
-and exact backup retention. Host tests cover settings/render/tool readiness and
+exact backup retention, source/snapshot preservation and imported-profile retention
+after failed health and recovery. Host tests cover settings/render/tool readiness and
 termination. Linux X11/software-rendered handoff is tested in the orb; macOS,
 Windows and live Wayland acceptance remain unverified.
 
@@ -242,9 +272,11 @@ Launch either development host manually with `--live --history-root
 "$ABSOLUTE_NEW_NATIVE_PROFILE/history" --settings-file
 "$ABSOLUTE_NEW_NATIVE_PROFILE/settings.json"`. Setup must run for the new identity.
 Rollback means quitting native and returning to the unchanged shipping profile;
-do not copy a snapshot over installed data. The signed update helper still accepts
-only a new empty test profile. Automatic handoff, reference-only-media reconciliation,
-OS permission identity and physical macOS/Windows/X11/Wayland acceptance remain open.
+do not copy a snapshot over installed data. The signed [development helper](#opt-in-development-helper-and-startup-health)
+can instead import to another nonexistent profile before startup; it cannot reuse
+this already-published destination. Installed-app handoff, reference-only-media
+reconciliation, OS permission identity and physical macOS/Windows/X11/Wayland
+acceptance remain open.
 
 ## Native sharing controls
 

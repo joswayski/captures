@@ -6,8 +6,9 @@
 //! until all checks succeed. Staging validates packages in private temporary
 //! directories. Explicit replacement retains the previous development package
 //! until confirmation, with interruption recovery. An opt-in external helper can
-//! launch it with a new disposable profile and confirm its private readiness.
-//! No GUI calls replacement, registers it, activates a channel or imports data.
+//! launch it with a new empty or explicitly imported disposable profile and
+//! confirm its private readiness. No GUI calls replacement, discovers installed
+//! data, registers it or activates a channel.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
 mod health;
 mod installation;
@@ -130,6 +131,8 @@ pub enum Error {
     Cancelled,
     #[error("Native update file operation failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Native development profile import failed: {0}")]
+    ProfileImport(#[from] crate::profile_import::Error),
 }
 
 #[derive(Deserialize)]

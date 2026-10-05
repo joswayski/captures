@@ -1940,8 +1940,44 @@ installed updater/profile handoff or OS permission identity.
 | Wayland | Same window-independent backend/native layout; compositor-specific handoff and physical acceptance unverified |
 
 [Invocation, limits and rollback](../apps/native/README.md#explicit-offline-development-profile-import)
-remain explicitly development-only. The signed startup helper still requires a
-new empty profile; no automatic installed-data migration or native channel exists.
+remain explicitly development-only. The signed startup helper can now prepare a
+new imported profile as described below; no automatic installed-data migration or
+native channel exists.
+
+### Imported development-profile startup handoff
+
+`PendingInstallation::launch_importing` and the explicit development helper now
+connect the offline importer to signed-package startup. The original empty-profile
+mode is unchanged. Import mode requires explicit shipping settings/data, a
+nonexistent destination and the operator's stopped-process assertion. Sources and
+the new profile cannot overlap package/transaction/cleanup trees. The package lock
+remains held during import and the existing exact-token/live-root health protocol;
+copy completion, partial readiness and late acknowledgements cannot confirm it.
+
+Sources and their retained snapshot stay byte-exact. The working copy has isolated
+exports, migrated settings and fresh setup for the native identity. Import failure
+never launches a host or publishes partial data. A published copy survives startup
+failure and explicit package recovery: recovery restores package bytes, not profile
+data. No installed path is discovered or reused, and a repeated import requires
+another new profile. The unchanged shipping app/profile remains the rollback path.
+
+Runnable signed-host regressions cover partial health with the lock/backup retained,
+successful confirmation, invalid-health recovery preserving the imported copy,
+unsafe sources/destinations and cancellation. CLI cases enforce exclusive complete
+profile modes and reject unsafe paths before acquisition.
+
+| Platform | Imported development handoff implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared importer/helper and existing AppKit startup protocol implemented; runnable handoff/import/CLI regressions included in native CI; execution and physical permission/signing acceptance pending |
+| Windows | Same shared helper and wgpu startup protocol; runnable regressions included in native CI; execution and physical installed acceptance pending |
+| X11 | Runnable signed-host regressions pass; real local-build wgpu signed loopback handoff verifies fresh setup, source/snapshot hashes and retained History/recovery; broken packaged tools retain backup and exact explicit recovery preserves the copied profile; software X11 only |
+| Wayland | Same window-independent importer/helper and existing wgpu health protocol; live compositor handoff and physical acceptance unverified |
+
+The real-host fixture repackages the orb-built executable with packaged media tools;
+the CI Linux executable requires a newer glibc than this orb. It is not a test of
+that unmodified CI archive. Installed replacement, process-tree containment,
+OS permission identity, signing/channel activation and physical parity remain open.
+Tauri still ships; no release, deployment or cutover occurred.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
