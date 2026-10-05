@@ -1,6 +1,7 @@
 //! Replacement of an explicitly selected, stopped development package.
 //! The caller owns the trusted parent directory and must keep profiles outside
-//! the package. No execution, OS registration or production installation occurs.
+//! the package. Only explicit development handoff launches a host; no registration
+//! or production installation occurs.
 use super::{Error, ReleaseInfo, StagedUpdate, Target, check_cancel, decode_hash, staging};
 use captures_media::CancelToken;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,9 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
+
+mod launch;
+pub use launch::LaunchFailure;
 
 /// An activated development package whose previous package is still retained.
 /// Drop deliberately does nothing: another process can recover an interruption.
@@ -30,11 +34,21 @@ impl PendingInstallation {
     /// This does not launch or perform a health check on the new executable.
     pub fn confirm(self) -> Result<(), Error> {
         let _lock = self.paths.lock()?;
+        self.confirm_locked(|| Ok(()))
+    }
+
+    fn confirm_locked(
+        &self,
+        before_commit: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let receipt = self.paths.receipt()?;
         require_id(&receipt, Some(self.id))?;
         require_fingerprint(&self.paths.package, receipt.target, &receipt.new_hash)?;
         if !self.paths.confirmed()? {
             require_fingerprint(&self.paths.previous(), receipt.target, &receipt.old_hash)?;
+            // Rehashing large packages can take time after acknowledgement.
+            // Let the handoff veto confirmation immediately before its marker.
+            before_commit()?;
             let mut marker = tempfile::NamedTempFile::new_in(&self.paths.transaction)?;
             marker.write_all(b"confirmed\n")?;
             marker.as_file().sync_all()?;
@@ -357,13 +371,7 @@ fn require_id(receipt: &Receipt, expected: Option<uuid::Uuid>) -> Result<(), Err
 }
 
 fn require_host_target(target: Target) -> Result<(), Error> {
-    if matches!(
-        (target, std::env::consts::OS, std::env::consts::ARCH),
-        (Target::MacArm64, "macos", "aarch64")
-            | (Target::MacX64, "macos", "x86_64")
-            | (Target::WindowsX64, "windows", "x86_64")
-            | (Target::LinuxX64, "linux", "x86_64")
-    ) {
+    if Target::current_host() == Some(target) {
         Ok(())
     } else {
         Err(Error::Target)

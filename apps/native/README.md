@@ -27,9 +27,9 @@ gates.
 `captures_app::updater` implements shared signed-manifest checks and bounded,
 streamed downloads and temporary package staging without Tauri. It is **not an
 enabled updater**: Preferences, tray actions and the update-notice fixture remain
-unchanged. There is no bundled native signing key, release endpoint, installer
-helper or restart yet. The explicit development-package replacement API below
-adds rollback, but no host or diagnostic calls it.
+unchanged. There is no bundled native signing key, release endpoint or installed-app
+updater. The explicit development-package helper below can replace and launch only
+a selected stopped development package with a new disposable test profile.
 `native_update_probe` creates no window, changes no installed/profile data and
 removes its download and staged files on normal exit. It requires an explicit
 endpoint, standard two-line Minisign public key file, renderer and current version:
@@ -116,9 +116,9 @@ recursive deletion, so partial deletion does not destroy recovery's decision.
 
 This API requires the exact absolute destination path, the current host target,
 a trusted parent directory, all app processes stopped, the caller running outside
-the package, and all profile/export data outside it. It never launches either
-version or runs a health check: the future helper must receive a successful
-health acknowledgement before confirming. Changed files, invalid receipts,
+the package, and all profile/export data outside it. Replacement itself never
+launches either version; `PendingInstallation::launch` adds the opt-in health
+handoff described below. Changed files, invalid receipts,
 links/junctions and unfamiliar packages are preserved for manual recovery.
 Interruption before the preparation receipt is published can leave scratch that
 requires manual cleanup; it has not moved the old app. A persistent empty sibling
@@ -129,8 +129,62 @@ Tests use real Python-packaged, signed **inert** binaries/sidecars and disposabl
 profiles. They cover each rename/cleanup boundary, exact old/new content,
 tampering, cancellation, locks, stale handles and conflicting files. The existing
 macOS/Windows updater CI jobs include these tests; physical installed-app,
-permission-identity and crash/relaunch acceptance remain open. No GUI, diagnostic,
+permission-identity and crash/relaunch acceptance remain open. No GUI update action,
 channel, registration or installed-data migration is enabled by this backend.
+
+### Opt-in development helper and startup health
+
+Build `native_update_helper` in the shared workspace and run it **outside** the
+package. Quit every native app process first and prevent other launches until the
+handoff finishes. Supply your own signed test endpoint/key and the package **root**
+(not the executable or macOS `.app`). Create a new empty profile directory outside
+the package, transaction and cleanup trees; existing profiles are rejected.
+
+```sh
+cargo build -p captures-app --bin native_update_helper
+# Every path below must be explicit; no installed location or profile is inferred.
+target/debug/native_update_helper \
+  --manifest-url "$NATIVE_TEST_MANIFEST_URL" --public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
+  --renderer wgpu --current-version 2026.10.51 \
+  --stopped-development-package "$ABSOLUTE_NATIVE_PACKAGE_ROOT" \
+  --empty-test-profile "$ABSOLUTE_NEW_EMPTY_PROFILE" \
+  --health-timeout-seconds 60
+# On Windows: target/debug/native_update_helper.exe. On macOS: --renderer appkit.
+```
+
+The helper acquires/stages signed bytes, activates the replacement and launches
+the packaged executable directly. It disables system-shortcut takeover and passes
+only the new history/settings paths. AppKit and wgpu acknowledge only as the elected
+primary, after workspace initialization/render submission, a successful settings
+load and verification of the exact packaged `binaries/ffmpeg-<target>` and FFprobe.
+Readiness never substitutes PATH, environment overrides or checkout tools, and
+requests no capture permission. The private, attempt-specific file contains exactly
+one canonical lowercase UUIDv4 followed by a newline; replacing its path, partial
+bytes, another token or a late response cannot confirm the update. This checks
+startup, not physical frame presentation, accessibility or capture acceptance.
+
+On success, JSON reports `confirmed` and the process ID; the new GUI stays running
+with diagnostics in the new profile's `startup.log`. The operation lock remains
+held through acknowledgement and confirmation, with root liveness/cancellation
+rechecked after rehashing immediately before committing confirmation. **Startup
+failure retains the transaction and old package; no automatic post-launch rollback.**
+An exited/killed root process, even with successful exit status, does not prove
+all descendants stopped. Failure JSON reports `handoff_failed`, the root process
+ID if started, and manual recovery. Stop **every** app process and exclude other
+launches before explicit `recover_installation`; restarting the helper refuses a
+pending transaction rather than silently recovering it. Confirmation/cleanup
+failure can leave an acknowledged host running and confirmation already committed:
+recovery then finishes cleanup rather than restoring the old package. Inspect the
+receipt, cleanup directory and log; a post-commit old backup may be incomplete.
+This helper does not import installed history/settings, register an app, preserve
+OS permission identity, publish a channel or enable the Update now button.
+
+Runnable signed-package regressions cover partial/wrong/oversized/replaced-file
+acknowledgements, late health, a clean root exit leaving a live child, timeouts,
+prelaunch cancellation/profile rejection, exclusion of recovery during handoff,
+and exact backup retention. Host tests cover settings/render/tool readiness and
+termination. Linux X11/software-rendered handoff is tested in the orb; macOS,
+Windows and live Wayland acceptance remain unverified.
 
 ## Native sharing controls
 

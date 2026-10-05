@@ -905,6 +905,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var captureBusy = false
     private var terminating = false
     private var terminationPending = false
+    private var updateHealth: UpdateHealthCoordinator?
     private var onboardingReady = false
     private var onboardingWasPresented = false
     private var onboardingController: OnboardingController?
@@ -945,6 +946,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         theme = options.theme
         historyCount = options.historyCount
         super.init()
+        if let file = options.nativeUpdateReadyFile, let token = options.nativeUpdateReadyToken,
+           let acknowledgement = try? UpdateHealthAcknowledgement(file: file, token: token) {
+            updateHealth = UpdateHealthCoordinator(acknowledgement: acknowledgement) {
+                let tools = try NativeMediaTools.packaged()
+                try tools.verify()
+            }
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1091,6 +1099,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard !terminationPending else { return .terminateLater }
         terminationPending = true
         terminating = true
+        updateHealth?.cancel()
         // Reply only after returning .terminateLater, even with no live editor.
         // The main queue must keep running to submit Save queued during Copy.
         DispatchQueue.main.async { [weak self] in
@@ -1252,6 +1261,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.customTheme = settings["custom_theme"] as? [String: Any] ?? [:]
                     self.resolvedTokens = self.makeTokens()
                     self.render()
+                    if let setup = self.appWindows.window(.setup), let health = self.updateHealth {
+                        setup.contentView?.layoutSubtreeIfNeeded()
+                        setup.displayIfNeeded()
+                        health.workspaceDidRender()
+                    }
+                    self.updateHealth?.settingsDidLoad()
                 }
                 controller.check()
             }

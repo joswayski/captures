@@ -455,7 +455,9 @@ Native app update actions remain unavailable. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
 checks signed native manifests, verifies downloads and can validate unpacked native
 packages in temporary storage. It never installs or replaces an app, and no native
-update channel is enabled.
+update channel is enabled. An explicit [development helper](apps/native/README.md#opt-in-development-helper-and-startup-health)
+can replace a stopped development package and test startup with a new empty
+profile; it does not update installed copies or import their data.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.

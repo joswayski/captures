@@ -119,14 +119,34 @@ pub struct Workbench {
     update_notice: crate::update_notice::FixtureHost,
     crash: Option<Arc<captures_app::crash::Session>>,
     crash_review_pending: bool,
+    update_health: Option<UpdateHealth>,
     // Keep election alive until every other host field has been destroyed.
     instance: Option<captures_app::instance::Instance>,
+}
+
+struct UpdateHealth {
+    acknowledgement: captures_app::updater::HealthAcknowledgement,
+    tools: Receiver<Result<(), String>>,
+}
+
+impl UpdateHealth {
+    fn acknowledge_if_ready(
+        &self,
+        settings: Result<captures_settings::AppSettings, String>,
+        ui_presented: bool,
+        quitting: bool,
+    ) -> bool {
+        if quitting || !ui_presented || settings.is_err() {
+            return false;
+        }
+        matches!(self.tools.try_recv(), Ok(Ok(()))) && self.acknowledgement.acknowledge().is_ok()
+    }
 }
 
 impl Workbench {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        options: Options,
+        mut options: Options,
         shortcut_input: shortcut_input::Bridge,
         shortcuts: ShortcutOwner,
         paste_input: crate::clipboard_input::PasteInput,
@@ -279,6 +299,16 @@ impl Workbench {
         );
         let launched_with_media = !options.open_media.is_empty();
         let (startup_notice_tx, startup_notice_rx) = mpsc::channel();
+        let update_acknowledgement = options.native_update_health.take();
+        let update_health = update_acknowledgement.as_ref().map(|_| {
+            let (tx, tools) = mpsc::channel();
+            let wake = cc.egui_ctx.clone();
+            thread::spawn(move || {
+                let _ = tx.send(crate::media_tools::verify_bundled());
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+            });
+            tools
+        });
         let this = Self {
             options,
             variants: tokens::load(),
@@ -345,6 +375,12 @@ impl Workbench {
             update_notice,
             crash,
             crash_review_pending,
+            update_health: update_acknowledgement.zip(update_health).map(
+                |(acknowledgement, tools)| UpdateHealth {
+                    acknowledgement,
+                    tools,
+                },
+            ),
         };
         this.schedule(&cc.egui_ctx);
         this
@@ -1736,6 +1772,15 @@ impl eframe::App for Workbench {
         {
             self.exercise(ctx);
         }
+        if self.update_health.as_ref().is_some_and(|health| {
+            health.acknowledge_if_ready(
+                self.preferences_state.snapshot(),
+                self.frames > 0,
+                self.quitting,
+            )
+        }) {
+            self.update_health = None;
+        }
         self.schedule(ctx);
     }
 
@@ -2428,6 +2473,59 @@ pub(crate) fn fixture_image([width, height]: [usize; 2]) -> egui::ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn health_fixture(
+        tool_result: Result<(), String>,
+    ) -> (tempfile::TempDir, std::path::PathBuf, UpdateHealth) {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("ready");
+        std::fs::write(&file, []).unwrap();
+        let acknowledgement = captures_app::updater::HealthAcknowledgement::new(
+            file.clone(),
+            "73147c85-13e0-4a67-b129-5e7ead486dc1".into(),
+        )
+        .unwrap();
+        let (tx, tools) = mpsc::channel();
+        tx.send(tool_result).unwrap();
+        (
+            directory,
+            file,
+            UpdateHealth {
+                acknowledgement,
+                tools,
+            },
+        )
+    }
+
+    #[test]
+    fn update_health_waits_for_settings_tools_and_a_completed_ui_pass() {
+        let (_directory, file, health) = health_fixture(Ok(()));
+        assert!(!health.acknowledge_if_ready(Err("settings loading".into()), false, false));
+        assert!(std::fs::read(&file).unwrap().is_empty());
+        assert!(!health.acknowledge_if_ready(Ok(Default::default()), false, false));
+        assert!(std::fs::read(&file).unwrap().is_empty());
+        assert!(health.acknowledge_if_ready(Ok(Default::default()), true, false));
+        assert_eq!(
+            std::fs::read(file).unwrap(),
+            b"73147c85-13e0-4a67-b129-5e7ead486dc1\n"
+        );
+    }
+
+    #[test]
+    fn update_health_never_acknowledges_failed_settings_tools_or_quitting() {
+        let (_directory, file, health) = health_fixture(Ok(()));
+        assert!(!health.acknowledge_if_ready(Err("settings failed".into()), true, false));
+        assert!(std::fs::read(file).unwrap().is_empty());
+
+        let (_directory, file, health) = health_fixture(Err("ffmpeg failed".into()));
+        assert!(!health.acknowledge_if_ready(Ok(Default::default()), true, false));
+        assert!(std::fs::read(file).unwrap().is_empty());
+
+        let (_directory, file, health) = health_fixture(Ok(()));
+        assert!(!health.acknowledge_if_ready(Ok(Default::default()), true, true));
+        assert!(std::fs::read(file).unwrap().is_empty());
+    }
+
     #[test]
     fn filtered_history_preserves_original_ids_and_boundaries() {
         assert_eq!(history_rows(8, HistoryFilter::Screenshots), vec![1, 4, 7]);
