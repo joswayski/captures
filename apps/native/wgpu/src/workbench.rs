@@ -1362,11 +1362,7 @@ impl Workbench {
                 .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
                 == Some(true)
             {
-                view::note(
-                    ui,
-                    t,
-                    "Wayland screenshots use your desktop portal. Native region/window selection and recording are not available yet.",
-                );
+                view::note(ui, t, view::WAYLAND_NOTE);
             }
             if let Some(error) = &error {
                 view::error_block(
@@ -1461,12 +1457,12 @@ fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t:
                     }
                     None => {}
                 }
-                if ui.ctx().data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true) {
-                    crate::onboarding::note(
-                        ui,
-                        t,
-                        "Wayland screenshots use your desktop portal. Native region/window selection and recording are not available yet.",
-                    );
+                if ui
+                    .ctx()
+                    .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                    == Some(true)
+                {
+                    crate::onboarding::note(ui, t, crate::onboarding::WAYLAND_NOTE);
                 }
             }
             ui.add_space(t.number("s-3"));
