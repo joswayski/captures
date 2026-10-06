@@ -782,9 +782,27 @@ def main():
             decoded("restored-accepted-red", 0)
             idle(editor)
             shot(editor, "scrub-restored-accepted")
+            movie = spawn("playing-seek-video", ["ffmpeg", "-y", "-v", "error", "-f", "x11grab",
+                "-draw_mouse", "1", "-framerate", "15", "-video_size", "980x940",
+                "-i", f"{env['DISPLAY']}+70,40", "-c:v", "libx264", "-preset", "ultrafast",
+                "-crf", "23", "-pix_fmt", "yuv420p", str(output / "playing-seek.mp4")])
+            raw_press(editor, "Play preview")
+            decoded("playing-before-seek-green", 1)
+            pointer(.1)
+            run("xdotool", "mousedown", "1")
+            decoded("playing-seek-red-held", 0)
+            # No second Play press: advancing to green while still held proves
+            # the latest accepted seek resumes the user's playback intent.
+            decoded("playing-seek-resumed-green-held", 1)
             pointer(.82)
-            run("xdotool", "mousedown", "1", "mouseup", "1")
-            decoded("blue-after-playback", 2)
+            decoded("playing-seek-blue-held", 2)
+            run("xdotool", "mouseup", "1", "mousemove", "--window", editor,
+                str(play_x), str(play_y), "sleep", ".05", "mousedown", "1", "sleep", ".08", "mouseup", "1")
+            idle(editor)
+            decoded("playing-seek-paused-blue", 2)
+            movie.send_signal(signal.SIGINT)
+            movie.wait(timeout=10)
+            assert (output / "playing-seek.mp4").stat().st_size > 0
             idle(editor)
             shot(editor, "scrub-normal")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
@@ -804,9 +822,10 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "checks": ["decode-before-release", "held-red-green-blue", "failure-preserves-frame",
-                    "failure-ends-gesture", "fresh-press-retry", "paused-playback-accepted-track-seek", "minimum-track-input",
+                    "failure-ends-gesture", "fresh-press-retry", "paused-playback-accepted-track-seek",
+                    "playing-track-seek", "playing-held-seek-resumes", "playing-seek-pause", "minimum-track-input",
                     "source-history-immutable", "no-exports", "clean-close-quit"]}, indent=2) + "\n")
-            print("PASS timeline scrub: held red/green/blue decoded frames, failure/retry, accepted-frame restore after playback, minimum input, immutable source/History and clean quit")
+            print("PASS timeline scrub: held decoded frames, failure/retry, accepted-frame restore, playing track seek/resume/pause, minimum input, immutable source/History and clean quit")
             return
         if args.export_preferences:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")

@@ -1132,6 +1132,86 @@ final class RecordingEditorTests: XCTestCase {
             "the duplicate-seek shortcut still restores the accepted pixels after playback")
     }
 
+    func testPlayingTrackSeekCoalescesThroughTeardownAndResumesTheLatestFrame() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400))
+        worker.deferPlayback = true; worker.deferRequest = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+        let play = try button("Play", in: controller.root)
+        let loop = try checkbox("Loop recording preview", in: controller.root)
+        loop.performClick(nil); play.performClick(nil)
+        XCTAssertTrue(timeline.seekEnabled); XCTAssertFalse(timeline.editingEnabled)
+        func pointer(_ type: NSEvent.EventType, _ fraction: CGFloat) throws -> NSEvent {
+            let point = timeline.convert(NSPoint(x: 10 + (timeline.bounds.width - 20) * fraction,
+                y: timeline.bounds.midY), to: nil)
+            return try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: controller.window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        }
+        timeline.mouseDown(with: try pointer(.leftMouseDown, 0.425))
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.7))
+        XCTAssertTrue(worker.requests.isEmpty, "seek waits for the playing decoder to stop")
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [1400])
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.4))
+        worker.completeRequest(.success(try presentation(position: 1400, revision: 1)))
+        XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [1400, 800])
+        XCTAssertEqual(worker.playbackStarts, [400], "an obsolete completion does not resume")
+        worker.completeRequest(.success(try presentation(position: 800, revision: 2)))
+        XCTAssertEqual(worker.playbackStarts, [400, 800], "the latest accepted position resumes, even while held")
+        XCTAssertEqual(worker.playbackSoundSelections, [true, true])
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackLoop).isEnabled)
+        XCTAssertEqual(play.title, "Pause")
+        XCTAssertTrue(timeline.scrubbing && timeline.seekEnabled)
+        timeline.mouseUp(with: try pointer(.leftMouseUp, 0.4))
+        XCTAssertFalse(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled,
+                       "release does not interrupt resumed playback")
+        XCTAssertEqual(worker.requests.count, 2)
+        XCTAssertFalse(controller.dirty)
+    }
+
+    func testPlayingSeekDoesNotResumeAfterFocusLossCloseQuitOrFailure() throws {
+        _ = NSApplication.shared
+        for stop in ["focus", "close", "quit", "playback-error", "seek-error", "focus-seeking", "quit-seeking"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400))
+            worker.deferPlayback = true; worker.deferRequest = true
+            let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                worker: worker, requestTermination: {})
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+            let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+            try button("Play", in: controller.root).performClick(nil)
+            timeline.onSeek?(1400)
+            switch stop {
+            case "focus": controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+            case "close": XCTAssertFalse(controller.windowShouldClose(controller.window))
+            case "quit": XCTAssertFalse(controller.prepareForTermination())
+            default: break
+            }
+            if stop == "playback-error" {
+                worker.completePlayback(.failure(AppBridgeError.backend("source removed")))
+            } else {
+                worker.completePlayback(.success(.cancelled))
+            }
+            if stop == "seek-error" {
+                XCTAssertEqual(worker.requests.count, 1)
+                worker.completeRequest(.failure(AppBridgeError.backend("decode failed")))
+            } else if stop.hasSuffix("-seeking") {
+                XCTAssertEqual(worker.requests.count, 1)
+                if stop == "focus-seeking" {
+                    controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+                } else { XCTAssertFalse(controller.prepareForTermination()) }
+                worker.completeRequest(.success(try presentation(position: 1400, revision: 1)))
+            } else { XCTAssertTrue(worker.requests.isEmpty, "\(stop) cancels the queued seek") }
+            XCTAssertEqual(worker.playbackStarts, [400], "\(stop) cannot restart playback")
+            XCTAssertFalse(controller.dirty)
+        }
+    }
+
     func testPauseBeforeDelayedPlaybackStartRetainsAcceptedDisplayedPosition() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(

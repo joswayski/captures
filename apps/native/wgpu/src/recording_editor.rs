@@ -220,6 +220,8 @@ struct View {
     loading_thumbnails: bool,
     thumbnail_error: Option<String>,
     playing: bool,
+    /// A timeline seek quiesces playback, then resumes at its latest target.
+    resume_after_seek: bool,
     preview_loop: Arc<AtomicBool>,
     /// Shipping previews through a `<video>` without `muted`, so Sound is on
     /// until the user turns it off.
@@ -869,7 +871,16 @@ impl View {
         self.send(tx, Job::Play(position, !self.preview_muted, cancel));
     }
 
-    fn pause_playback(&self) {
+    fn pause_playback(&mut self) {
+        if (self.resume_after_seek || self.playing)
+            && matches!(
+                self.queued,
+                Some(Job::Apply(RecordingEditorRequest::Seek { .. }))
+            )
+        {
+            self.queued = None;
+        }
+        self.resume_after_seek = false;
         if self.playing
             && let Some(cancel) = &self.cancel
         {
@@ -913,6 +924,20 @@ impl View {
             _ => None,
         };
         if self.busy {
+            if seeking.is_some()
+                && self.playing
+                && !self.close_after_work
+                && (self.resume_after_seek
+                    || self
+                        .cancel
+                        .as_ref()
+                        .is_some_and(|cancel| !cancel.is_cancelled()))
+            {
+                self.pause_playback();
+                self.resume_after_seek = true;
+                self.queued = Some(job);
+                return;
+            }
             if seeking.is_some() && self.seek_pending() {
                 // Returning to the in-flight position discards the older queued
                 // target. Never accumulate one decoder job per pointer sample.
@@ -1093,6 +1118,7 @@ impl View {
                     }
                     Err(error) => {
                         if seeking {
+                            self.resume_after_seek = false;
                             self.queued = None;
                             self.scrub = None;
                         }
@@ -1362,6 +1388,9 @@ impl View {
                         );
                     }
                     Err(error) => {
+                        self.resume_after_seek = false;
+                        self.queued = None;
+                        self.scrub = None;
                         self.playback_position_ms = None;
                         self.playback_ended = false;
                         if let Some(p) = &self.presented {
@@ -1388,13 +1417,13 @@ impl View {
     }
 
     fn request_close(&mut self) {
+        self.pause_playback();
         self.trim_gesture = None;
         self.scrub = None;
         self.crop_gesture = None;
         self.comparison = None;
         if self.playing {
             self.close_after_work = true;
-            self.pause_playback();
         } else if self.busy && self.estimating && self.queued.is_none() {
             // Closing supersedes a background estimate.
             self.close_after_work = true;
@@ -1662,6 +1691,8 @@ impl Editor {
                 && let Some(job) = view.queued.take()
             {
                 view.send(&self.tx, job);
+            } else if !view.busy && std::mem::take(&mut view.resume_after_seek) {
+                view.request_playback(&self.tx);
             }
             if (opening || replaced) && view.presented.is_some() {
                 view.request_thumbnails(&self.tx);
@@ -2504,7 +2535,13 @@ fn show_trim_timeline(
     // Clicking the track scrubs the accepted still, as the shipping track
     // seeks its video. Only seeks may supersede a seek; trim/edit/save stay gated.
     let scrub_enabled = available
-        && (!view.blocked() || view.seek_pending())
+        && (!view.blocked()
+            || view.seek_pending()
+            || (view.playing
+                && view
+                    .cancel
+                    .as_ref()
+                    .is_some_and(|cancel| !cancel.is_cancelled())))
         && !view.unapplied()
         && view.presented.is_some();
     let handle_rects = handles(view.start_ms, view.end_ms);
@@ -2625,15 +2662,11 @@ fn show_trim_timeline(
                     ..
                 } => {
                     view.trim_gesture = None;
-                    if view.scrub.take().is_some() {
-                        seek = Some(view.position_ms);
-                    }
+                    view.scrub = None;
                 }
                 egui::Event::PointerGone => {
                     view.trim_gesture = None;
-                    if view.scrub.take().is_some() {
-                        seek = Some(view.position_ms);
-                    }
+                    view.scrub = None;
                 }
                 egui::Event::Key {
                     key: egui::Key::Escape,
@@ -3294,7 +3327,9 @@ fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
     let system_audio = p.edit.audio.source_has_system_audio;
     let microphone_audio = p.edit.audio.source_has_microphone_audio;
     ui.add_enabled_ui(
-        (!view.blocked() || view.seek_pending()) && !view.picker && !view.confirm_close,
+        (!view.blocked() || view.seek_pending() || view.playing)
+            && !view.picker
+            && !view.confirm_close,
         |ui| show_timeline_card(ui, tokens, view, tx, duration),
     );
     ui.add_enabled_ui(
@@ -3719,7 +3754,7 @@ fn show_timeline_card(
             let height = recording_editor_ui::TIMELINE_TRACK_HEIGHT + 6.;
             let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
             if let Some(position) = show_trim_timeline(ui, tokens, view, duration, row)
-                && (view.seek_pending() || view.playback_position_ms.is_some() || view.presented.as_ref().is_some_and(|p| p.position_ms != position))
+                && (view.playing || view.seek_pending() || view.playback_position_ms.is_some() || view.presented.as_ref().is_some_and(|p| p.position_ms != position))
             {
                 view.send(tx, Job::Apply(RecordingEditorRequest::Seek { position_ms: position }));
             }
@@ -6217,7 +6252,10 @@ mod tests {
                     Some(1550),
                     "an uncovered track starts seeking on press"
                 );
-                assert_eq!(released, Some(1550), "an uncovered track click seeks");
+                assert_eq!(
+                    released, None,
+                    "release ends the gesture without seeking again"
+                );
             }
             assert!(view.scrub.is_none() && view.trim_gesture.is_none());
         }
@@ -6535,10 +6573,7 @@ mod tests {
         assert!(view.playing && view.busy && !view.dirty());
         view.request_playback(&tx);
         view.request_estimate(&tx);
-        view.send(
-            &tx,
-            Job::Apply(RecordingEditorRequest::Seek { position_ms: 1800 }),
-        );
+        view.send(&tx, Job::Thumbnails(CancelToken::default()));
         assert!(
             jobs.try_recv().is_err(),
             "playback owns the serialized worker"
@@ -6679,6 +6714,182 @@ mod tests {
             jobs.try_recv().is_err(),
             "release does not decode the accepted frame twice"
         );
+    }
+
+    #[test]
+    fn playing_track_seek_coalesces_through_teardown_and_resumes_the_latest_frame() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (tx, jobs) = mpsc::channel();
+        let (events, rx) = mpsc::channel();
+        let mut view = opened();
+        view.preview_loop.store(true, Ordering::Relaxed);
+        view.request_playback(&tx);
+        let Job::Play(700, true, cancel) = jobs.recv().unwrap() else {
+            panic!("play")
+        };
+        let size = egui::vec2(960., 1800.);
+        probe_frame_with(&ctx, &tokens, &mut view, &tx, &events, size, vec![]);
+        let controls = probe_frame_with(&ctx, &tokens, &mut view, &tx, &events, size, vec![]).1;
+        let track = probed(&controls, "Timeline track");
+        let point = |time: f32| {
+            egui::pos2(
+                track.left() + track.width() * time / 3100.,
+                track.center().y,
+            )
+        };
+        probe_frame_with(
+            &ctx,
+            &tokens,
+            &mut view,
+            &tx,
+            &events,
+            size,
+            vec![
+                egui::Event::PointerMoved(point(500.)),
+                trim_pointer(point(500.), true),
+            ],
+        );
+        assert!(
+            cancel.is_cancelled(),
+            "the playing track is an input target"
+        );
+        probe_frame_with(
+            &ctx,
+            &tokens,
+            &mut view,
+            &tx,
+            &events,
+            size,
+            vec![egui::Event::PointerMoved(point(2500.))],
+        );
+        assert!(
+            jobs.try_recv().is_err(),
+            "seek waits for the old decoder to stop"
+        );
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1800,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        assert_eq!(
+            view.position_ms, 2500,
+            "a late playback frame cannot rewind the requested target"
+        );
+        let editor = Editor {
+            viewport: egui::ViewportId::ROOT,
+            view: Arc::new(Mutex::new(view)),
+            playback_frame: Arc::new(Mutex::new(None)),
+            tx,
+            events,
+            rx,
+            worker: None,
+        };
+        editor
+            .events
+            .send(Event::PlaybackFinished(Ok(PlaybackEnd::Paused)))
+            .unwrap();
+        editor.receive(&ctx);
+        assert!(matches!(
+            jobs.recv().unwrap(),
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 2500 })
+        ));
+        editor.view.lock().unwrap().send(
+            &editor.tx,
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 950 }),
+        );
+        let mut accepted = opened().presented.unwrap();
+        accepted.position_ms = 2500;
+        editor
+            .events
+            .send(Event::Presented(Ok(accepted.clone())))
+            .unwrap();
+        editor.receive(&ctx);
+        assert!(matches!(
+            jobs.recv().unwrap(),
+            Job::Apply(RecordingEditorRequest::Seek { position_ms: 950 })
+        ));
+        accepted.position_ms = 950;
+        editor.events.send(Event::Presented(Ok(accepted))).unwrap();
+        editor.receive(&ctx);
+        let Job::Play(950, true, replay) = jobs.recv().unwrap() else {
+            panic!("resume only the latest accepted target, even while held")
+        };
+        let mut view = editor.view.lock().unwrap();
+        probe_frame_with(
+            &ctx,
+            &tokens,
+            &mut view,
+            &editor.tx,
+            &editor.events,
+            size,
+            vec![trim_pointer(point(950.), false)],
+        );
+        assert!(
+            !replay.is_cancelled() && jobs.try_recv().is_err(),
+            "release does not interrupt resumed playback"
+        );
+        assert!(view.playing && !view.dirty() && !view.history_changed);
+        assert!(view.preview_loop.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn playing_seek_does_not_resume_after_pause_close_quit_or_failure() {
+        let ctx = egui::Context::default();
+        for stop in ["pause", "close", "quit", "playback-error", "seek-error"] {
+            let (tx, jobs) = mpsc::channel();
+            let (events, rx) = mpsc::channel();
+            let mut view = opened();
+            view.request_playback(&tx);
+            jobs.recv().unwrap();
+            view.send(
+                &tx,
+                Job::Apply(RecordingEditorRequest::Seek { position_ms: 2100 }),
+            );
+            let editor = Editor {
+                viewport: egui::ViewportId::ROOT,
+                view: Arc::new(Mutex::new(view)),
+                playback_frame: Arc::new(Mutex::new(None)),
+                tx,
+                events,
+                rx,
+                worker: None,
+            };
+            match stop {
+                "pause" => editor.view.lock().unwrap().pause_playback(),
+                "close" => editor.view.lock().unwrap().request_close(),
+                "quit" => assert!(editor.flush(&ctx).is_err()),
+                _ => {}
+            }
+            editor
+                .events
+                .send(Event::PlaybackFinished(if stop == "playback-error" {
+                    Err("source removed".into())
+                } else {
+                    Ok(PlaybackEnd::Paused)
+                }))
+                .unwrap();
+            editor.receive(&ctx);
+            if stop == "seek-error" {
+                assert!(matches!(jobs.recv().unwrap(), Job::Apply(_)));
+                editor
+                    .events
+                    .send(Event::Presented(Err("decode failed".into())))
+                    .unwrap();
+                editor.receive(&ctx);
+            }
+            assert!(
+                jobs.try_recv().is_err(),
+                "{stop} must not dispatch or resume another job"
+            );
+            let view = editor.view.lock().unwrap();
+            assert!(!view.playing && !view.busy && !view.dirty());
+            assert_eq!(view.position_ms, 700);
+            assert_eq!(view.texture.as_ref().unwrap().size(), [4, 2]);
+            assert_eq!(view.closed, stop == "close");
+        }
     }
 
     #[test]

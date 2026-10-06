@@ -145,6 +145,7 @@ final class RecordingTrimTimeline: NSView {
     var onStage: ((NativeRecordingTimelineEdge, UInt64) -> Void)?
     /// The track seeks throughout a drag; hosts coalesce frame decoding.
     var onSeek: ((UInt64) -> Void)?
+    var onScrubEnd: (() -> Void)?
     var seekEnabled = false { didSet { if !seekEnabled { scrubbing = false } } }
     private(set) var scrubbing = false
     private var drag: NativeRecordingTimelineDrag?
@@ -322,7 +323,7 @@ final class RecordingTrimTimeline: NSView {
     override func mouseUp(with event: NSEvent) {
         guard scrubbing else { return }
         scrubbing = false
-        scrub(with: event)
+        onScrubEnd?()
     }
 
     private func scrub(with event: NSEvent) {
@@ -893,6 +894,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var cropAdjustmentPriorImage: NSImage?
     private var previewActualSize = false
     private var playbackStopActions: [() -> Void] = []
+    private var resumeAfterSeek = false
     private var closeAfterPlayback = false
     private var terminateAfterPlayback = false
     private var switchAfterPlayback: String?
@@ -1208,6 +1210,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     var activeArtifactID: String? { window.isVisible ? artifactID : nil }
 
     func prepareForTermination() -> Bool {
+        resumeAfterSeek = false; pendingSeek = nil
         if playbackState != .idle {
             if !terminateAfterPlayback {
                 terminateAfterPlayback = true
@@ -1233,6 +1236,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        resumeAfterSeek = false; pendingSeek = nil
         if playbackState != .idle {
             if !closeAfterPlayback {
                 closeAfterPlayback = true
@@ -1428,6 +1432,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             self.updateControls()
         }
         trimTimeline.onSeek = { [weak self] milliseconds in self?.seek(to: milliseconds) }
+        trimTimeline.onScrubEnd = { [weak self] in self?.updateControls() }
         trimPanel.addSubview(trimTimeline)
         thumbnailRetryButton = button("Retry", parent: trimPanel) { [weak self] in
             self?.generateThumbnails()
@@ -2407,6 +2412,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         estimateWork?.cancel(); estimateWork = nil; estimateWorkKey = nil
         estimateAttempt = nil; estimateCancel = nil; afterEstimate.removeAll()
         seekingPosition = nil; pendingSeek = nil
+        resumeAfterSeek = false
         editingText = false; savedFingerprint = nil
     }
 
@@ -2418,6 +2424,19 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     /// timeline drag (shipping scrubs its video from the track).
     private func seek(to position: UInt64) {
         invalidateComparison()
+        if playbackState != .idle {
+            guard !stagedDiffers, playbackState == .playing || resumeAfterSeek else { return }
+            pendingSeek = position
+            trimTimeline.setAcceptedPosition(position)
+            if playbackState == .playing {
+                pausePlayback(resumingAfterSeek: true) { [weak self] in
+                    guard let self, self.resumeAfterSeek, let latest = self.pendingSeek else { return }
+                    self.pendingSeek = nil
+                    self.seek(to: latest)
+                }
+            }
+            return
+        }
         if let seekingPosition {
             pendingSeek = position == seekingPosition ? nil : position
             trimTimeline.setAcceptedPosition(position)
@@ -2445,6 +2464,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         if !finishCropOnSuccess { restoreAcceptedPresentation() }
         guard position != presentation?.snapshot.positionMilliseconds || finishCropOnSuccess else {
             updateControls()
+            if resumeAfterSeek { resumeAfterSeek = false; startPlayback() }
             return
         }
         seekingPosition = position
@@ -2459,8 +2479,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     if success, let next {
                         self.seek(to: next)
                     } else if !success {
+                        self.resumeAfterSeek = false
                         self.trimTimeline.endDrag()
                         self.trimTimeline.setAcceptedPosition(self.presentation?.snapshot.positionMilliseconds)
+                    } else if self.resumeAfterSeek {
+                        self.resumeAfterSeek = false
+                        self.startPlayback()
                     }
                 })
     }
@@ -2556,7 +2580,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             }, frame: { [weak self] value in
                 guard let self, self.generation == current,
                       self.playbackCancel === cancel,
-                      self.playbackState != .idle else { return }
+                      self.playbackState == .playing, !cancel.isCancelled else { return }
                 self.playbackPositionMilliseconds = value.positionMilliseconds
                 self.playbackFramePresented = true
                 self.setPreviewImage(NSImage(cgImage: value.image,
@@ -2581,6 +2605,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     self.status.textColor = self.tokens.color("text-muted")
                     self.status.stringValue = "\(self.playbackStatusName) paused."
                 case .failure(let error):
+                    self.resumeAfterSeek = false; self.pendingSeek = nil
+                    self.trimTimeline.endDrag()
                     self.restoreAcceptedPresentation()
                     self.playbackAudioEnabled = nil
                     let mode = soundEnabled ? "Sound playback" : "Silent playback"
@@ -2593,7 +2619,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             })
     }
 
-    private func pausePlayback(after action: (() -> Void)? = nil) {
+    private func pausePlayback(resumingAfterSeek: Bool = false, after action: (() -> Void)? = nil) {
+        resumeAfterSeek = resumingAfterSeek
+        if !resumingAfterSeek, playbackState != .idle { pendingSeek = nil }
         if let action { playbackStopActions.append(action) }
         guard playbackState != .idle else {
             let actions = playbackStopActions; playbackStopActions.removeAll()
@@ -3624,8 +3652,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         monoOutput.isEnabled = available && !gif
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
         let seekPending = seekingPosition != nil || pendingSeek != nil
-        trimTimeline.seekEnabled = (available || seekPending) && valid && !stagedDiffers
-            && !cropAdjustmentActive && !pickerOpen && !requiresReopen && playbackState == .idle
+        let playbackSeek = playbackState == .playing || resumeAfterSeek
+        trimTimeline.seekEnabled = (available || seekPending || playbackSeek) && valid && !stagedDiffers
+            && !cropAdjustmentActive && !pickerOpen && !requiresReopen
+            && (playbackState == .idle || playbackSeek)
         if let requested = pendingSeek ?? seekingPosition {
             trimTimeline.setAcceptedPosition(requested)
         }

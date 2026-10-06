@@ -1526,16 +1526,31 @@ survives, including while a superseded estimate stops. An older result cannot
 rewind the requested playhead. Trim/edit/export remain gated until decoding settles;
 automatic comparison waits for release. Failure drops queued targets, ends the
 gesture and retains the last accepted frame. Scrubbing changes neither dirty state,
-source bytes nor History. This does not add live trim-handle preview or seeking
-during playback, and does not close recording-editor parity.
+source bytes nor History. This does not add live trim-handle preview or close
+recording-editor parity.
 The `--scrub` private-X11 check asserts red/green/blue decoded pixels before mouseup,
 missing-source failure, gesture teardown, fresh-press retry, minimum-size input,
 unchanged source/History and clean exit in dark/light, and records the held drag.
 Normal/minimum/error renders and the interaction recording were inspected.
 
-| Platform | Continuous paused track-scrub implementation / verification |
+The playing-track follow-up preserves Play intent across a timeline seek on both
+hosts. The old decoder must acknowledge teardown before seeking; targets coalesce
+through both teardown and frame decode, and only the latest accepted result resumes
+playback, including while the pointer remains held. Sound and Loop selections stay
+unchanged. Release ends the gesture without decoding or restarting again. Explicit
+Pause, focus loss/minimize, Close, Quit and playback/seek failure retire resume intent;
+late playback frames cannot overwrite a requested target. Failed seeks restore the
+accepted still and require a fresh gesture. Trim, numeric seek and other editing/
+export controls remain gated. This still does not add live trim-handle previews.
+Deferred-worker tests cover decoder ordering, coalescing, release and terminal paths.
+The dark/light `--scrub` fixture also checks a backwards playing seek from green to
+red, automatic progression back to green while still held, another held seek to blue
+and explicit Pause, with unchanged source/History and clean exit. Its active sequence
+is recorded separately from the earlier paused failure/retry sequence.
+
+| Platform | Paused/playing track-seek implementation / verification |
 | --- | --- |
-| AppKit/macOS | Implemented with coalesced C ABI requests and deferred-worker XCTest; execution and physical verification unavailable in this Linux orb |
+| AppKit/macOS | Coalesced C ABI requests and playing-seek XCTest added; prior paused/crop/save/motion regressions passed 582 XCTest cases (one skip) in [macOS CI](https://github.com/joswayski/captures/actions/runs/37490399955); this follow-up's execution and physical acceptance remain separate |
 | Windows | Implemented through the same wgpu editor; shared tests pass on Linux, Windows input/render verification remains open |
 | X11 | Dark/light private-X11 real input and FFmpeg pixels pass; physical input/accessibility acceptance open |
 | Wayland | Implemented through the same wgpu editor; this slice has no compositor input/render verification, physical acceptance open |
@@ -1547,7 +1562,8 @@ A single latest-frame slot bounds pending UI work; no timer remains after stop.
 Pause retains the last presented source position, EOF replays from accepted trim
 start, and failures restore the accepted still. Focus loss/minimize requests Pause;
 close cancels and waits for teardown before the normal unsaved-edit confirmation.
-Seek/edit/save/estimate remain gated while decoding. Loop preview defaults off;
+Numeric seek/trim/edit/save/estimate remain gated while decoding; the timeline track
+can supersede playback or a seek through the serialized worker. Loop preview defaults off;
 it can change while playing without changing accepted edits, estimates or History.
 Looping is gapless like shipping's `<video loop>`: one shared playback stream
 (`looping_playback`, FFI `playback_open_v3`) serves every lap. While a lap plays it
