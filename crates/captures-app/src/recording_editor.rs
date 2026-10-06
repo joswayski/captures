@@ -60,9 +60,22 @@ pub enum RecordingEditorRequest {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RecordingEditorRequestV2 {
     Snapshot,
-    UpdateEdit { edit: EditSpec },
-    UpdatePreview { edit: EditSpec, export: ExportSpec },
-    Seek { position_ms: u64 },
+    UpdateEdit {
+        edit: EditSpec,
+    },
+    UpdatePreview {
+        edit: EditSpec,
+        export: ExportSpec,
+    },
+    /// Accept an edited preview and its source-relative playhead together.
+    UpdatePreviewAt {
+        edit: EditSpec,
+        export: ExportSpec,
+        position_ms: u64,
+    },
+    Seek {
+        position_ms: u64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -265,6 +278,7 @@ enum SessionRequest {
         edit: EditSpec,
         preview_export: ExportSpec,
         save_export: ExportSpec,
+        position_ms: Option<u64>,
     },
     Seek {
         position_ms: u64,
@@ -646,6 +660,7 @@ impl RecordingEditorSession {
                     edit,
                     preview_export: export.clone(),
                     save_export: export,
+                    position_ms: None,
                 }
             }
             RecordingEditorRequest::Seek { position_ms } => SessionRequest::Seek { position_ms },
@@ -668,6 +683,22 @@ impl RecordingEditorSession {
                     edit,
                     preview_export,
                     save_export: export,
+                    position_ms: None,
+                }
+            }
+            RecordingEditorRequestV2::UpdatePreviewAt {
+                edit,
+                export,
+                position_ms,
+            } => {
+                validate_save_export_policy(&export)?;
+                let mut preview_export = export.clone();
+                preview_export.max_size_bytes = None;
+                SessionRequest::UpdatePreview {
+                    edit,
+                    preview_export,
+                    save_export: export,
+                    position_ms: Some(position_ms),
                 }
             }
             RecordingEditorRequestV2::Seek { position_ms } => SessionRequest::Seek { position_ms },
@@ -701,23 +732,26 @@ impl RecordingEditorSession {
                 mut edit,
                 preview_export,
                 save_export,
+                position_ms,
             } => {
                 set_source_audio(&mut edit, self.has_system_audio, self.has_microphone_audio);
                 validate_session_edit(&self.probe, &edit)?;
                 validate_export_spec(&self.probe, &edit, &save_export)
                     .map_err(|error| error.to_string())?;
+                let position_ms = position_ms.unwrap_or(self.position_ms);
                 let frame = extract_preview(
                     &self.tools,
                     &self.source_path,
                     &self.probe,
                     &edit,
                     &preview_export,
-                    self.position_ms,
+                    position_ms,
                     self.scratch.path(),
                 )?;
                 self.edit = edit;
                 self.preview_export = preview_export;
                 self.save_export = save_export;
+                self.position_ms = position_ms;
                 self.frame = Arc::new(frame);
                 self.revision = self.revision.saturating_add(1);
                 Ok(())
@@ -1445,7 +1479,7 @@ fn extract_source_frame(
     validate_position(probe, position_ms)?;
     let path = scratch.join(format!("source-frame-{}.png", uuid::Uuid::new_v4()));
     let result = tools
-        .extract_frame(source, position_ms, &path, cancel)
+        .extract_source_frame(source, position_ms, &path, cancel)
         .map_err(|error| error.to_string())
         .and_then(|()| decode_frame(&path))
         .and_then(|frame| {
@@ -1751,6 +1785,115 @@ mod tests {
             tools,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn preview_at_accepts_trim_and_position_atomically_without_writing_source() {
+        let Some((tools, ffmpeg)) = real_tools() else {
+            return;
+        };
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("red-then-blue.mp4");
+        assert!(
+            Command::new(ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=red:size=80x48:rate=10:duration=0.5",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=blue:size=80x48:rate=10:duration=1.5",
+                    "-filter_complex",
+                    "[0:v][1:v]concat=n=2:v=1:a=0",
+                    "-c:v",
+                    "mpeg4",
+                    "-q:v",
+                    "2",
+                    "-an",
+                ])
+                .arg(&source)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let history = data.path().join("history");
+        let mut session = open_session(tools, &source, &history);
+        let original = fs::read(&source).unwrap();
+        let metadata = history.join(&session.artifact_id).join("metadata.json");
+        let original_metadata = fs::read(&metadata).unwrap();
+        let request = serde_json::json!({
+            "operation":"update_preview_at", "position_ms":750,
+            "edit":{"trim_start_ms":300,"trim_end_ms":1600,
+                "crop":{"x":10,"y":4,"width":60,"height":40},
+                "output_width":30,"output_height":20},
+            "export":{"format":"mp4","quality":"preserve","max_size_bytes":123456}
+        });
+        assert!(
+            serde_json::from_value::<RecordingEditorRequest>(request.clone()).is_err(),
+            "v1 remains unchanged"
+        );
+        session
+            .execute_v2(serde_json::from_value(request.clone()).unwrap())
+            .unwrap();
+        assert_eq!(session.snapshot().position_ms, 750);
+        assert_eq!(session.snapshot().edit.trim_start_ms, 300);
+        assert_eq!(session.snapshot().edit.trim_end_ms, Some(1600));
+        assert_eq!(
+            session.snapshot_v2().save_export.max_size_bytes,
+            Some(123456)
+        );
+        assert_eq!(session.snapshot().preview_export.max_size_bytes, None);
+        assert_eq!(session.snapshot().revision, 1, "one atomic acceptance");
+        let frame = session.frame();
+        assert_eq!(frame.dimensions(), (30, 20));
+        let [red, green, blue, alpha] = frame.get_pixel(15, 10).0;
+        assert!(
+            blue > 220 && red < 30 && green < 30 && alpha == 255,
+            "the requested source position is blue, not the old red frame"
+        );
+        let accepted = serde_json::to_value(session.snapshot_v2()).unwrap();
+        for (position, start, end) in [(2000, 300, 1600), (900, 1600, 300)] {
+            let mut invalid = request.clone();
+            invalid["position_ms"] = position.into();
+            invalid["edit"]["trim_start_ms"] = start.into();
+            invalid["edit"]["trim_end_ms"] = end.into();
+            assert!(
+                session
+                    .execute_v2(serde_json::from_value(invalid).unwrap())
+                    .is_err()
+            );
+            assert_eq!(
+                serde_json::to_value(session.snapshot_v2()).unwrap(),
+                accepted
+            );
+            assert!(Arc::ptr_eq(&frame, &session.frame()));
+        }
+        let mut last = request;
+        last["position_ms"] = 1999.into();
+        last["edit"]["trim_end_ms"] = 2000.into();
+        session
+            .execute_v2(serde_json::from_value(last).unwrap())
+            .unwrap();
+        assert_eq!(session.snapshot().position_ms, 1999);
+        let [red, green, blue, _] = session.frame().get_pixel(15, 10).0;
+        assert!(blue > 220 && red < 30 && green < 30);
+        let uncropped = session.source_frame(&CancelToken::default()).unwrap();
+        assert_eq!(uncropped.dimensions(), (80, 48));
+        let [red, green, blue, _] = uncropped.get_pixel(40, 24).0;
+        assert!(
+            blue > 220 && red < 30 && green < 30,
+            "Adjust crop at the accepted end position must show the same final frame"
+        );
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::read(&metadata).unwrap(), original_metadata);
+        assert_eq!(
+            fs::read(history.join(&session.artifact_id).join("media.mp4")).unwrap(),
+            original
+        );
     }
 
     #[test]

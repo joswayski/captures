@@ -211,6 +211,8 @@ struct View {
     queued: Option<Job>,
     /// One frame decode at a time; queued holds only the latest scrub target.
     seeking: Option<u64>,
+    /// Atomic paused trim preview in flight; queued retains only newer intent.
+    trimming: Option<(EditKey, u64)>,
     saved_fingerprint: Option<SaveFingerprint>,
     preview_actual_size: bool,
     adjusting_crop: bool,
@@ -354,6 +356,38 @@ impl View {
                 self.queued,
                 Some(Job::Apply(RecordingEditorRequest::Seek { .. }))
             )
+    }
+
+    fn trim_pending(&self) -> bool {
+        self.trimming.is_some()
+            || matches!(
+                self.queued,
+                Some(Job::Apply(RecordingEditorRequest::UpdatePreviewAt { .. }))
+            )
+    }
+
+    fn preview_trim(&mut self, tx: &Sender<Job>, position: u64) {
+        let Some(p) = &self.presented else { return };
+        if self.playing
+            || self.resume_after_seek
+            || (self.maximum_size && self.maximum_bytes().is_none())
+        {
+            return;
+        }
+        let position_ms = position.min(p.source.duration_ms.unwrap_or(0).saturating_sub(1));
+        let edit = self.staged_edit(p);
+        let export = self.export_spec();
+        self.position_ms = position_ms;
+        self.apply_due = None;
+        self.apply_failed = None;
+        self.send(
+            tx,
+            Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+                edit,
+                export,
+                position_ms,
+            }),
+        );
     }
 
     fn save_fingerprint(&self) -> Option<SaveFingerprint> {
@@ -604,7 +638,12 @@ impl View {
     }
 
     fn request_estimate(&mut self, tx: &Sender<Job>) {
-        if self.busy || self.picker || self.confirm_close || self.estimate_key().is_none() {
+        if self.busy
+            || self.picker
+            || self.confirm_close
+            || self.trim_gesture.is_some()
+            || self.estimate_key().is_none()
+        {
             return;
         }
         let cancel = CancelToken::default();
@@ -624,6 +663,10 @@ impl View {
     /// Shipping's background estimate: 600 ms after the accepted settings
     /// settle, once per identity; newer edits cancel it.
     fn drive_estimate(&mut self, ctx: &egui::Context, tx: &Sender<Job>) {
+        if self.trim_gesture.is_some() {
+            self.estimate_due = None;
+            return;
+        }
         let Some(key) = self.estimate_key() else {
             self.estimate_due = None;
             return;
@@ -711,6 +754,7 @@ impl View {
     fn can_compare(&self) -> bool {
         !self.busy
             && self.scrub.is_none()
+            && self.trim_gesture.is_none()
             && !self.picker
             && !self.confirm_close
             && !self.webm
@@ -923,7 +967,19 @@ impl View {
             Job::Apply(RecordingEditorRequest::Seek { position_ms }) => Some(*position_ms),
             _ => None,
         };
+        let trimming = match &job {
+            Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+                edit,
+                export,
+                position_ms,
+            }) => Some(((edit.clone(), export.clone()), *position_ms)),
+            _ => None,
+        };
         if self.busy {
+            if trimming.is_some() && self.trim_pending() {
+                self.queued = (trimming != self.trimming).then_some(job);
+                return;
+            }
             if seeking.is_some()
                 && self.playing
                 && !self.close_after_work
@@ -948,13 +1004,17 @@ impl View {
             // as the worker stops it; everything else waits for the worker.
             if self.estimating && self.queued.is_none() && !matches!(job, Job::Estimate(_)) {
                 self.supersede_estimate();
-                self.trim_gesture = None;
+                if trimming.is_none() {
+                    self.trim_gesture = None;
+                }
                 self.crop_gesture = None;
                 self.queued = Some(job);
             }
             return;
         }
-        self.trim_gesture = None;
+        if trimming.is_none() {
+            self.trim_gesture = None;
+        }
         self.crop_gesture = None;
         let estimating = matches!(job, Job::Estimate(_));
         let comparing = if let Job::Compare(generation, _) = &job {
@@ -975,6 +1035,7 @@ impl View {
             Ok(()) => {
                 self.busy = true;
                 self.seeking = seeking;
+                self.trimming = trimming;
                 self.estimating = estimating;
                 self.comparing = comparing;
                 self.loading_thumbnails = loading_thumbnails;
@@ -1048,8 +1109,14 @@ impl View {
             Event::Presented(result) => {
                 self.busy = false;
                 let seeking = self.seeking.take().is_some();
+                let trimming = self.trimming.take();
+                let keep_trim =
+                    trimming.is_some() && (self.trim_gesture.is_some() || self.trim_pending());
                 self.comparison = None;
-                let applied = self.applying.take();
+                let applied = self
+                    .applying
+                    .take()
+                    .or_else(|| trimming.as_ref().map(|(key, _)| key.clone()));
                 match result {
                     Ok(p) => {
                         if self
@@ -1067,11 +1134,13 @@ impl View {
                         self.set_frame(ctx, &p.frame);
                         self.playback_position_ms = None;
                         self.playback_ended = false;
-                        self.start_ms = p.edit.trim_start_ms;
-                        self.end_ms = p
-                            .edit
-                            .trim_end_ms
-                            .unwrap_or(p.source.duration_ms.unwrap_or(0));
+                        if !keep_trim {
+                            self.start_ms = p.edit.trim_start_ms;
+                            self.end_ms = p
+                                .edit
+                                .trim_end_ms
+                                .unwrap_or(p.source.duration_ms.unwrap_or(0));
+                        }
                         self.crop = p.edit.crop;
                         // A preset's resolved pixels are not a custom size:
                         // retain the preset so later crop changes recompute it.
@@ -1083,7 +1152,9 @@ impl View {
                             self.output_size = p.edit.output_width.zip(p.edit.output_height);
                         }
                         self.audio = p.edit.audio.clone();
-                        if !seeking || (self.scrub.is_none() && !self.seek_pending()) {
+                        if !keep_trim
+                            && (!seeking || (self.scrub.is_none() && !self.seek_pending()))
+                        {
                             self.position_ms = p.position_ms;
                         }
                         self.gif = p.export.format == ExportFormat::Gif;
@@ -1122,7 +1193,17 @@ impl View {
                             self.queued = None;
                             self.scrub = None;
                         }
-                        self.apply_failed = applied;
+                        if trimming.is_some() {
+                            self.queued = None;
+                            self.trim_gesture = None;
+                            self.apply_due = None;
+                            self.apply_failed = self
+                                .presented
+                                .as_ref()
+                                .map(|p| (self.staged_edit(p), self.export_spec()));
+                        } else {
+                            self.apply_failed = applied;
+                        }
                         // A failed command restores the accepted still, rather
                         // than labelling transient playback pixels as accepted.
                         if let Some(p) = &self.presented {
@@ -2498,6 +2579,7 @@ fn show_trim_timeline(
     ui: &mut egui::Ui,
     tokens: &Tokens,
     view: &mut View,
+    tx: &Sender<Job>,
     duration: u64,
     rect: egui::Rect,
 ) -> Option<u64> {
@@ -2531,10 +2613,11 @@ fn show_trim_timeline(
         && view.end_ms <= duration
         && ui.input(|input| input.focused)
         && !egui::Popup::is_any_open(ui.ctx());
-    let enabled = available && !view.blocked();
+    let enabled = available && (!view.blocked() || view.trim_pending());
     // Clicking the track scrubs the accepted still, as the shipping track
-    // seeks its video. Only seeks may supersede a seek; trim/edit/save stay gated.
+    // seeks its video. A trim decode only accepts newer trim intent.
     let scrub_enabled = available
+        && !view.trim_pending()
         && (!view.blocked()
             || view.seek_pending()
             || (view.playing
@@ -2590,6 +2673,7 @@ fn show_trim_timeline(
         .map(|time| (time.round() as u64).min(duration.saturating_sub(1)))
     };
     let mut seek = None;
+    let mut preview_trim = None;
     if (enabled || scrub_enabled) && ui.ctx().current_pass_index() == 0 {
         for event in ui.input(|input| input.events.clone()) {
             match event {
@@ -2625,6 +2709,11 @@ fn show_trim_timeline(
                         ) {
                             responses[index].request_focus();
                             view.trim_gesture = Some(TrimGesture { edge, drag, track });
+                            preview_trim = Some(if index == 0 {
+                                view.start_ms
+                            } else {
+                                view.end_ms
+                            });
                         }
                     } else if scrub_enabled
                         && track.contains(pos)
@@ -2649,6 +2738,7 @@ fn show_trim_timeline(
                             TimelineTrimEdge::Start => view.start_ms = value,
                             TimelineTrimEdge::End => view.end_ms = value,
                         }
+                        preview_trim = Some(value);
                     } else if view.scrub.is_some()
                         && let Some(time) = time_at(pos.x)
                     {
@@ -2702,11 +2792,19 @@ fn show_trim_timeline(
                                 .clamp((view.start_ms + 1) as f64, duration as f64)
                                 as u64;
                         }
+                        preview_trim = Some(if index == 0 {
+                            view.start_ms
+                        } else {
+                            view.end_ms
+                        });
                     }
                 }
                 _ => {}
             }
         }
+    }
+    if let Some(position) = preview_trim {
+        view.preview_trim(tx, position);
     }
     let [start, end] = handles(view.start_ms, view.end_ms);
     let overhang = (rect.height() - track.height()).max(0.) / 2. + 3.;
@@ -3327,7 +3425,7 @@ fn show_page(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
     let system_audio = p.edit.audio.source_has_system_audio;
     let microphone_audio = p.edit.audio.source_has_microphone_audio;
     ui.add_enabled_ui(
-        (!view.blocked() || view.seek_pending() || view.playing)
+        (!view.blocked() || view.seek_pending() || view.trim_pending() || view.playing)
             && !view.picker
             && !view.confirm_close,
         |ui| show_timeline_card(ui, tokens, view, tx, duration),
@@ -3753,7 +3851,7 @@ fn show_timeline_card(
             ui.add_space(tokens.number("s-2"));
             let height = recording_editor_ui::TIMELINE_TRACK_HEIGHT + 6.;
             let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
-            if let Some(position) = show_trim_timeline(ui, tokens, view, duration, row)
+            if let Some(position) = show_trim_timeline(ui, tokens, view, tx, duration, row)
                 && (view.playing || view.seek_pending() || view.playback_position_ms.is_some() || view.presented.as_ref().is_some_and(|p| p.position_ms != position))
             {
                 view.send(tx, Job::Apply(RecordingEditorRequest::Seek { position_ms: position }));
@@ -6083,6 +6181,7 @@ mod tests {
     ) {
         let duration = view.presented.as_ref().unwrap().source.duration_ms.unwrap();
         let mut passes = 0;
+        let (tx, _jobs) = mpsc::channel();
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -6095,7 +6194,7 @@ mod tests {
             },
             |ui| {
                 passes += 1;
-                show_trim_timeline(ui, tokens, view, duration, rect);
+                show_trim_timeline(ui, tokens, view, &tx, duration, rect);
                 if ctx.current_pass_index() == 0 {
                     ctx.request_discard("trim input must run once");
                 }
@@ -6125,7 +6224,7 @@ mod tests {
     }
 
     #[test]
-    fn trim_pointer_stages_once_preserves_grab_offset_and_never_changes_accepted_frame() {
+    fn trim_pointer_preserves_grab_offset_and_accepted_frame_until_decode() {
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
         let ctx = egui::Context::default();
         let grip = tokens.number("s-6");
@@ -6184,13 +6283,13 @@ mod tests {
         );
         assert_eq!((view.start_ms, view.end_ms), (775, 3100));
         assert!(view.trim_gesture.is_none() && view.unapplied() && view.dirty());
-        assert_eq!(view.position_ms, 700);
+        assert_eq!(view.position_ms, 775);
         assert_eq!(view.presented.as_ref().unwrap().edit, EditSpec::default());
         assert!(Arc::ptr_eq(
             &accepted,
             &view.presented.as_ref().unwrap().frame
         ));
-        assert!(!view.busy && !view.history_changed);
+        assert!(view.busy && view.trim_pending() && !view.history_changed);
         assert_eq!(view.estimate_label(), "—");
     }
 
@@ -6210,6 +6309,7 @@ mod tests {
             let position = view.position_ms;
             let frame = |view: &mut View, events| {
                 let mut seek = None;
+                let (tx, _jobs) = mpsc::channel();
                 let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
@@ -6221,7 +6321,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        seek = seek.or(show_trim_timeline(ui, &tokens, view, duration, rect));
+                        seek = seek.or(show_trim_timeline(ui, &tokens, view, &tx, duration, rect));
                         if covered {
                             egui::Area::new(ui.scope_id().with("listbox"))
                                 .order(egui::Order::Foreground)
@@ -6297,6 +6397,8 @@ mod tests {
                 "pointer gone" => vec![egui::Event::PointerGone],
                 "busy" => {
                     view.busy = true;
+                    view.trimming = None;
+                    view.queued = None;
                     vec![]
                 }
                 "picker" => {
@@ -6498,6 +6600,40 @@ mod tests {
         view.receive(&ctx, Event::Estimated(Err("encoder failed".into())));
         assert_eq!(view.estimate_label(), "—");
         assert!(view.error.is_none() && view.status.is_none());
+    }
+
+    #[test]
+    fn settled_trim_keeps_background_estimate_and_comparison_from_ending_a_held_drag() {
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let track = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600., 24.));
+        view.trim_gesture = Some(TrimGesture {
+            edge: TimelineTrimEdge::Start,
+            drag: TimelineTrimDrag::begin(TimelineTrimEdge::Start, 0., 0., 3100., 3100.).unwrap(),
+            track,
+        });
+        view.estimate_attempt = None;
+        view.estimate_due = Some((view.estimate_key().unwrap(), Instant::now()));
+        let (tx, jobs) = mpsc::channel();
+        view.drive_estimate(&ctx, &tx);
+        assert!(
+            jobs.try_recv().is_err(),
+            "an expired estimate cannot interrupt held trim"
+        );
+        assert!(view.trim_gesture.is_some() && !view.busy);
+        assert!(
+            !view.can_compare(),
+            "a comparison must also wait for release"
+        );
+        view.trim_gesture = None;
+        assert!(view.can_compare());
+        view.drive_estimate(&ctx, &tx);
+        view.estimate_due.as_mut().unwrap().1 = Instant::now();
+        view.drive_estimate(&ctx, &tx);
+        assert!(
+            matches!(jobs.try_recv(), Ok(Job::Estimate(_))),
+            "release estimates the accepted range"
+        );
     }
 
     #[test]
@@ -8169,6 +8305,137 @@ mod tests {
         assert_eq!(view.error.as_deref(), Some("History unavailable"));
         view.request_close();
         assert!(view.closed);
+    }
+
+    #[test]
+    fn paused_trim_preview_keeps_latest_range_and_gesture_across_older_decode() {
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let ctx = egui::Context::default();
+        let mut view = opened();
+        let (tx, jobs) = mpsc::channel();
+        let (events, _) = mpsc::channel();
+        let render = |view: &mut View, input| {
+            probe_frame_with(
+                &ctx,
+                &tokens,
+                view,
+                &tx,
+                &events,
+                egui::vec2(960., 1800.),
+                input,
+            )
+            .1
+        };
+        render(&mut view, vec![]);
+        let controls = render(&mut view, vec![]);
+        let track = probed(&controls, "Timeline track");
+        let down = probed(&controls, "Trim start").center();
+        render(
+            &mut view,
+            vec![egui::Event::PointerMoved(down), trim_pointer(down, true)],
+        );
+        let Ok(Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+            edit, position_ms, ..
+        })) = jobs.try_recv()
+        else {
+            panic!("handle press must decode even without changing trim");
+        };
+        assert_eq!((edit.trim_start_ms, position_ms), (0, 0));
+        render(
+            &mut view,
+            vec![egui::Event::PointerMoved(down + egui::vec2(2.99, 0.))],
+        );
+        assert_eq!(view.start_ms, 0, "subthreshold move does not mutate trim");
+        let moved = down + egui::vec2(track.width() * 0.25, 0.);
+        render(&mut view, vec![egui::Event::PointerMoved(moved)]);
+        assert_eq!((view.start_ms, view.position_ms), (775, 775));
+        assert!(view.trim_gesture.is_some() && !view.can_save());
+        assert!(
+            jobs.try_recv().is_err(),
+            "only one decoder may own the session"
+        );
+        let mut decoded = view.presented.as_ref().unwrap().clone();
+        decoded.position_ms = 0;
+        decoded.revision += 1;
+        view.receive(&ctx, Event::Presented(Ok(decoded.clone())));
+        assert_eq!(
+            (view.start_ms, view.position_ms),
+            (775, 775),
+            "older reply cannot rewind intent"
+        );
+        assert!(view.trim_gesture.is_some());
+        let latest = view.queued.take().unwrap();
+        view.send(&tx, latest);
+        let Ok(Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+            edit,
+            export,
+            position_ms,
+        })) = jobs.try_recv()
+        else {
+            panic!("latest atomic trim request must follow completion");
+        };
+        assert_eq!((edit.trim_start_ms, position_ms), (775, 775));
+        decoded.edit = edit;
+        decoded.export = export;
+        decoded.position_ms = position_ms;
+        decoded.revision += 1;
+        view.receive(&ctx, Event::Presented(Ok(decoded)));
+        render(&mut view, vec![trim_pointer(moved, false)]);
+        assert!(!view.busy && !view.unapplied() && view.dirty());
+        assert!(view.trim_gesture.is_none() && !view.history_changed);
+        assert!(
+            jobs.try_recv().is_err(),
+            "release does not repeat accepted decoding"
+        );
+    }
+
+    #[test]
+    fn trim_end_boundary_and_failed_preview_restore_without_auto_retry() {
+        let ctx = egui::Context::default();
+        let (tx, jobs) = mpsc::channel();
+        let mut view = opened();
+        let accepted = view.presented.as_ref().unwrap().clone();
+        view.preview_trim(&tx, 3100);
+        assert!(matches!(
+            jobs.try_recv(),
+            Ok(Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+                position_ms: 3099,
+                ..
+            }))
+        ));
+        assert_eq!(view.end_ms, 3100, "trim retains its inclusive UI boundary");
+        view.start_ms = 425;
+        view.preview_trim(&tx, 425);
+        view.start_ms = 900;
+        view.preview_trim(&tx, 900);
+        view.receive(
+            &ctx,
+            Event::Presented(Err("injected trim decode failure".into())),
+        );
+        assert!(!view.trim_pending() && view.queued.is_none());
+        assert_eq!((view.start_ms, view.position_ms), (900, 700));
+        assert!(Arc::ptr_eq(
+            &accepted.frame,
+            &view.presented.as_ref().unwrap().frame
+        ));
+        assert!(view.apply_failed.is_some());
+        view.drive_apply(&ctx, &tx, false);
+        assert!(
+            jobs.try_recv().is_err(),
+            "failure must not silently apply the queued edit"
+        );
+        view.preview_trim(&tx, 900);
+        assert!(matches!(
+            jobs.try_recv(),
+            Ok(Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+                position_ms: 900,
+                ..
+            }))
+        ));
+        assert!(
+            view.apply_failed.is_none(),
+            "fresh handle gesture permits retry"
+        );
     }
 
     #[test]

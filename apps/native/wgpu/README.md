@@ -85,8 +85,12 @@ and unmuted; pause, mute and lifecycle changes clear the meter. Successful outpu
 poster and metadata. **Edit recording** opens a decoded-frame editor with staged
 graphical/numeric trim and crop, output size, audio settings and MP4/GIF
 save-new-copy. Trim grips share the shipping pointer geometry and support focused
-arrow/Page Up/Page Down keys. Dragging changes staged values, not decoded frames;
-Apply publishes the preview before seeking, estimating or saving. **Adjust crop**
+arrow/Page Up/Page Down keys. Paused handle press, thresholded dragging and keyboard
+nudges preview the edge live with one active decode and only the latest queued
+edit/position. Failure retains the accepted still and staged values, ends the
+gesture and requires fresh input to retry. Other edits and Save wait for decoding;
+background estimate/comparison waits for release. Playing trim handles stay gated.
+**Adjust crop**
 loads an independent full-source still at the accepted position; eight handles and
 interior move stage source-pixel coordinates with the current aspect lock. Arrow
 keys move one pixel (Shift: ten). **Done cropping** restores the previous display

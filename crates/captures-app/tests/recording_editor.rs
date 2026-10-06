@@ -554,10 +554,12 @@ fn replace_original_cancellation_during_candidate_frame_kills_child_and_keeps_st
         .unwrap_or_else(|| "ffmpeg".into())
         .to_string_lossy()
         .into_owned();
+    // Identify the candidate still by input and seek/output flags, not the
+    // decoder's private temporary PNG basename. Poster creation has no seek.
     fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\nif [ -e {enabled:?} ]; then\n  for arg in \"$@\"; do\n    case \"$arg\" in\n      *frame-*.png)\n        : > {marker:?}\n        while [ ! -e {release:?} ]; do :; done\n        ;;\n    esac\n  done\nfi\nexec {real_ffmpeg:?} \"$@\"\n",
+            "#!/bin/sh\nif [ -e {enabled:?} ]; then\n  candidate=0; still=0; seek=0\n  for arg in \"$@\"; do\n    case \"$arg\" in\n      */.captures-replace-*/staged.*) candidate=1 ;;\n      *.png) still=1 ;;\n      -ss) seek=1 ;;\n    esac\n  done\n  if [ $candidate = 1 ] && [ $still = 1 ] && [ $seek = 1 ]; then\n    : > {marker:?}\n    while [ ! -e {release:?} ]; do :; done\n  fi\nfi\nexec {real_ffmpeg:?} \"$@\"\n",
             enabled = enabled.to_string_lossy().as_ref(),
             marker = marker.to_string_lossy().as_ref(),
             release = release.to_string_lossy().as_ref(),

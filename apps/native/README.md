@@ -484,7 +484,20 @@ The private-X11 `x11_recording_editor_smoke.py --scrub` check independently samp
 changing red/green/blue preview pixels before release, failure/retry, minimum-size
 input and unchanged source/History bytes in dark/light. It records the held drag.
 AppKit has matching deferred-worker XCTest coverage; physical platform acceptance
-and live trim-handle preview remain open.
+remains open.
+Paused trim handles now preview their edge on press, throughout thresholded dragging
+and after keyboard nudges. One atomic request accepts the staged edit, Save policy
+and source position; only the latest waiting trim intent survives. Older replies
+cannot rewind the range/playhead or end a held gesture. Other edits and Save wait
+for decoding; background estimates and compression comparisons wait for release.
+Failure retains staged input and the accepted still, ends the gesture and requires
+a fresh gesture or edit to retry. The UI end can equal source duration; its preview
+uses duration minus one millisecond and holds the final decoded frame through the
+trailing MP4/GIF/VFR interval, including the uncropped Adjust crop view.
+`x11_recording_editor_smoke.py --timeline` exercises held green/blue/green pixels,
+end preview, failure/retry, keyboard/minimum-size input, MP4/GIF exports and unchanged
+source/History. Playing trim handles remain gated; physical input/accessibility and
+macOS/Windows/Wayland compositor acceptance are not established by private X11.
 Unsigned development packages can include the existing pinned media tools,
 corresponding source and licenses; see [staging](../../DEVELOPMENT.md#native-development-open-with).
 History **Save file**

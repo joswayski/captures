@@ -2340,7 +2340,7 @@ final class RecordingEditorTests: XCTestCase {
             trackLeft: 0, trackWidth: 1_000)), 2_437.5, accuracy: 0.000_001)
     }
 
-    func testTimelineDragStagesOnlyAndApplyPublishesOnce() throws {
+    func testTimelineDragPreviewsBeforeReleaseAndRetainsFractionalTime() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation())
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
@@ -2359,19 +2359,122 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(start.stringValue, "0")
         timeline.continueDrag(at: trackLeft + trackWidth * 0.125)
         XCTAssertEqual(start.stringValue, "250", "fractional shared time rounds only when staged")
-        XCTAssertTrue(worker.requests.isEmpty, "pointer movement stages values without decoding")
-        XCTAssertFalse(try slider("Recording frame position", in: controller.root).isEnabled)
-        XCTAssertFalse(controller.canEstimate)
-        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        XCTAssertEqual(worker.requests.count, 2, "press and thresholded movement preview their edge")
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "update_preview_at")
+        XCTAssertEqual(worker.requests.last?["position_ms"] as? UInt64, 250)
+        XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.canEstimate, "background work waits for the held gesture")
+        XCTAssertTrue(try button("Save new copy", in: controller.root).isEnabled)
         timeline.endDrag()
+        XCTAssertTrue(controller.canEstimate)
         timeline.continueDrag(at: trackLeft + trackWidth * 0.25)
         XCTAssertEqual(start.stringValue, "250", "lost capture retains the staged value and ends the gesture")
 
-        worker.requestResult = .success(try presentation(start: 250, revision: 1))
         controller.applyPendingEdits()
-        XCTAssertEqual(worker.requests.count, 1)
-        XCTAssertEqual(worker.requests.first?["operation"] as? String, "update_preview")
+        XCTAssertEqual(worker.requests.count, 2, "accepted trim is not applied a second time on release")
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
+    }
+
+    func testHeldTrimDefersEstimateAndComparisonUntilRelease() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(exportQuality: "tiny"))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+        XCTAssertTrue(timeline.beginDrag(edge: .start, at: 10))
+        XCTAssertFalse(controller.canEstimate)
+        XCTAssertFalse(controller.comparisonApplies)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        XCTAssertTrue(timeline.trimming && timeline.editingEnabled,
+            "settled trim must survive the estimate/comparison debounce")
+        XCTAssertEqual(worker.requests.count, 1)
+        timeline.continueDrag(at: 10 + (timeline.bounds.width - 20) * 0.25)
+        XCTAssertEqual(worker.requests.count, 2)
+        timeline.endDrag()
+        XCTAssertTrue(controller.canEstimate)
+        XCTAssertTrue(controller.comparisonApplies)
+    }
+
+    func testPausedTrimPreviewCoalescesWithoutRewindingRangeOrEndingDrag() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400))
+        worker.deferRequest = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+        let start = try field("Trim start milliseconds", in: controller.root)
+        let position = try slider("Recording frame position", in: controller.root)
+        let width = timeline.bounds.width - 20
+        XCTAssertTrue(timeline.beginDrag(edge: .start, at: 10))
+        XCTAssertEqual(worker.requests.first?["position_ms"] as? UInt64, 0, "press seeks without trim mutation")
+        timeline.continueDrag(at: 12.999)
+        XCTAssertEqual(start.stringValue, "0")
+        timeline.continueDrag(at: 10 + width * 0.25)
+        timeline.continueDrag(at: 10 + width * 0.4)
+        XCTAssertEqual(worker.requests.count, 1, "only one decode owns the session")
+        XCTAssertEqual(start.stringValue, "800")
+        XCTAssertTrue(timeline.editingEnabled && timeline.trimming)
+        XCTAssertFalse(start.isEnabled || position.isEnabled)
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        worker.completeRequest(.success(try presentation(position: 0, revision: 1)))
+        XCTAssertEqual(worker.requests.count, 2)
+        XCTAssertEqual(worker.requests.last?["position_ms"] as? UInt64, 800)
+        XCTAssertEqual(start.stringValue, "800", "older reply cannot overwrite newer intent")
+        XCTAssertEqual(position.doubleValue, 800)
+        XCTAssertTrue(timeline.trimming)
+        worker.completeRequest(.success(try presentation(start: 800, position: 800, revision: 2)))
+        let preview = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSImageView }.first)
+        let accepted = preview.image
+        timeline.continueDrag(at: 10 + width * 0.3)
+        timeline.continueDrag(at: 10 + width * 0.2)
+        XCTAssertEqual(worker.requests.count, 3, "the same held gesture continues after publication")
+        worker.completeRequest(.failure(AppBridgeError.backend("injected trim failure")))
+        XCTAssertEqual(start.stringValue, "400", "failed and queued staged input is retained")
+        XCTAssertEqual(position.doubleValue, 800, "failure restores the accepted playhead")
+        XCTAssertTrue(preview.image === accepted)
+        XCTAssertFalse(timeline.trimming)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(worker.requests.count, 3, "failure drops queued work and suppresses automatic retry")
+        XCTAssertTrue(timeline.beginDrag(edge: .start, at: 10 + width * 0.2))
+        XCTAssertEqual(worker.requests.count, 4, "fresh handle press retries the retained input")
+        worker.completeRequest(.success(try presentation(start: 400, position: 400, revision: 3)))
+        timeline.endDrag()
+        XCTAssertTrue(controller.dirty)
+    }
+
+    func testTrimEndPreviewIsSourceBoundedAndLatestIntentSurvivesEstimateAndQuitVeto() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        worker.deferRequest = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+        XCTAssertTrue(timeline.beginDrag(edge: .end, at: timeline.bounds.width - 10))
+        XCTAssertEqual(worker.requests.first?["position_ms"] as? UInt64, 1999)
+        XCTAssertEqual(timeline.endMilliseconds, 2000, "UI end still includes the full source")
+        timeline.nudge(edge: .end, direction: -1, page: true)
+        timeline.nudge(edge: .end, direction: 1, page: true)
+        worker.completeRequest(.success(try presentation(position: 1999, revision: 1)))
+        XCTAssertEqual(worker.requests.count, 1, "returning to active identity drops an older queued trim")
+        XCTAssertFalse(controller.dirty, "edge press/return alone does not dirty the editor")
+        timeline.endDrag()
+        worker.deferEstimate = true
+        controller.estimateSizeNow()
+        XCTAssertTrue(timeline.beginDrag(edge: .start, at: 10))
+        timeline.continueDrag(at: 10 + (timeline.bounds.width - 20) * 0.2)
+        timeline.continueDrag(at: 10 + (timeline.bounds.width - 20) * 0.45)
+        XCTAssertEqual(worker.requests.count, 1, "trim waits for cancelled estimate ownership")
+        XCTAssertFalse(controller.prepareForTermination(), "pending trim still vetoes normal Quit")
+        XCTAssertFalse(timeline.trimming)
+        worker.completeEstimate(.failure(AppBridgeError.backend("operation cancelled")))
+        XCTAssertEqual(worker.requests.count, 2)
+        XCTAssertEqual(worker.requests.last?["position_ms"] as? UInt64, 900)
+        worker.completeRequest(.success(try presentation(start: 900, position: 900, revision: 2)))
+        XCTAssertEqual(timeline.startMilliseconds, 900)
+        XCTAssertFalse(timeline.trimming, "completion never resurrects a gesture ended by Quit")
     }
 
     func testHeldTrackScrubDecodesAndCoalescesLatestThenPreservesFrameOnFailure() throws {
@@ -2476,7 +2579,9 @@ final class RecordingEditorTests: XCTestCase {
         try dispatchMouse(.leftMouseDragged, to: startHandle, in: controller, deltaX: 30)
         try dispatchMouse(.leftMouseUp, to: startHandle, in: controller, deltaX: 30)
         XCTAssertNotEqual(start.stringValue, originalStart)
-        XCTAssertTrue(worker.requests.isEmpty, "real pointer dispatch only stages the start handle")
+        XCTAssertTrue(worker.requests.allSatisfy { $0["operation"] as? String == "update_preview_at" })
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["trim_start_ms"] as? UInt64,
+                       UInt64(start.stringValue), "real pointer dispatch previews its staged start")
 
         let originalEnd = end.stringValue
         try dispatchMouse(.leftMouseDown, to: endHandle, in: controller)
@@ -2489,7 +2594,8 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(end.stringValue, stagedEnd,
                        "window deactivation drops capture without reverting the last stage")
         try dispatchMouse(.leftMouseUp, to: endHandle, in: controller, deltaX: -60)
-        XCTAssertTrue(worker.requests.isEmpty, "real pointer dispatch never seeks or decodes")
+        XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["trim_end_ms"] as? UInt64,
+                       UInt64(stagedEnd), "deactivation never resurrects the old drag")
     }
 
     func testTimelineFailureRetryDoesNotCoverRealHandleDispatchAtEitherSize() throws {
@@ -2544,7 +2650,8 @@ final class RecordingEditorTests: XCTestCase {
             try dispatchMouse(.leftMouseUp, to: endHandle, in: controller, deltaX: -8)
             XCTAssertNotEqual(end.stringValue, "1800")
         }
-        XCTAssertTrue(worker.requests.isEmpty, "thumbnail error trim dispatch only stages values")
+        XCTAssertFalse(worker.requests.isEmpty, "thumbnail failure does not block trim preview")
+        XCTAssertTrue(worker.requests.allSatisfy { $0["operation"] as? String == "update_preview_at" })
     }
 
     func testTimelineKeyboardStepsBoundsAndNumericSynchronization() throws {
@@ -5266,7 +5373,24 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
                  completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void) {
         requests.append(object)
         if deferRequest { pendingRequest = completion }
-        else { completion(requestResult ?? .success(initial)) }
+        else if let requestResult { completion(requestResult) }
+        else if object["operation"] as? String == "update_preview_at",
+                let edit = object["edit"] as? [String: Any],
+                let export = object["export"] as? [String: Any],
+                let position = object["position_ms"] as? NSNumber {
+            var previewExport = export; previewExport["max_size_bytes"] = NSNull()
+            let snapshot = initial.snapshot
+            let accepted = NativeRecordingEditorSnapshot([
+                "artifact_id": snapshot.artifactID, "source": snapshot.source,
+                "edit": edit, "preview_export": previewExport, "save_export": export,
+                "position_ms": position, "revision": snapshot.revision + 1,
+                "has_system_audio": snapshot.hasSystemAudio,
+                "has_microphone_audio": snapshot.hasMicrophoneAudio,
+                "dropped_frames": snapshot.droppedFrames,
+            ])!
+            completion(.success(RecordingEditorPresentation(snapshot: accepted, image: initial.image,
+                                                            originalSavePath: initial.originalSavePath)))
+        } else { completion(.success(initial)) }
     }
     func completeRequest(_ result: Result<RecordingEditorPresentation, Error>) {
         let completion = pendingRequest; pendingRequest = nil; completion?(result)
