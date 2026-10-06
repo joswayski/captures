@@ -175,9 +175,18 @@ unchanged paused time, cancellation/failure without History artifacts and pendin
 Quit with exactly one playable video. A transparent private cursor theme removes
 cursor timing from the pixel expectation, not from physical acceptance.
 macOS/Windows retain their direct child paths and remain unverified in this Linux orb.
-The X11 region-child regression passes. The broader display-child smoke saves its
-first still, then fails to present the New Capture busy-take dialog; the same failure
-reproduces on the pre-slice source. Shared/native gates pass; physical parity gates remain open.
+The shared shortcut dispatcher now retains distinct busy actions in arrival order,
+coalescing duplicates to at most seven entries. An ignored recording chord cannot
+swallow a later New Capture restore/error route. Idle and selector routes keep their
+single-action coalescing; suppression, registration and scope changes clear the queue.
+Each consumed action wakes the host again when more remain, since OS wakes may coalesce.
+The X11 full display-child smoke passes in dark/light, including the previously lost
+New Capture busy-take dialog, region/window pixels, selector recapture, countdown
+Escape, clipboard, unchanged take and decoded video. Its injected region drags now
+explicitly focus the selector and wait for the painted border before release, as the
+capture harness does; short-gesture latency and physical input acceptance remain open.
+The 24-case private-bus and 14-case Wayland shortcut-host regressions also pass.
+Shared/native gates pass; physical parity gates remain open.
 
 The real-window dark/light Sway smoke uses compositor rectangles and pointer input,
 checks countdown and workspace exclusion, exact paused elapsed time, independently

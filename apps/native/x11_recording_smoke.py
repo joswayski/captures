@@ -122,6 +122,14 @@ def main():
             "mousemove_relative", "--sync", "1", "0", "sleep", ".15", "mousedown", "1",
             "sleep", ".15", "mouseup", "1")
 
+    def selection_border_painted(selector):
+        # This fixture selects mustard: require its vertical region border,
+        # not guidance/hover pixels before the renderer observes a held drag.
+        pixels = run("import", "-window", selector, "-crop", "3x100+139+220",
+                     "-depth", "8", "rgb:-")
+        return sum(pixels[index] > 220 and pixels[index + 1] > 150
+                   and pixels[index + 2] < 95 for index in range(0, len(pixels), 3)) >= 80
+
     def error_line_pixels(window):
         # Shipping `.recording-hud-error`: signal-text pixels below the HUD card.
         pixels = run("import", "-window", window, "-crop", "398x18+16+76", "-depth", "8", "rgb:-")
@@ -184,17 +192,7 @@ def main():
             "mousemove", "--sync", "--window", selector, "140", "180",
             "sleep", ".5", "mousedown", "1", "sleep", ".8",
             "mousemove", "--sync", "--window", selector, "450", "350")
-
-        def selection_border_painted():
-            # This fixture selects mustard: require its vertical region border,
-            # not any repaint in the area (hover/guidance can change those pixels
-            # even when the renderer never observed the short held press).
-            pixels = run("import", "-window", selector, "-crop", "3x100+139+220",
-                         "-depth", "8", "rgb:-")
-            return sum(pixels[index] > 220 and pixels[index + 1] > 150
-                       and pixels[index + 2] < 95 for index in range(0, len(pixels), 3)) >= 80
-
-        wait(selection_border_painted, "painted region border while pointer remains held")
+        wait(lambda: selection_border_painted(selector), "painted region border while pointer remains held")
         # Let the software-rendered child consume release before switching its
         # target; otherwise the next target can consume the release instead.
         run("xdotool", "mouseup", "1", "sleep", "1.2")
@@ -796,6 +794,9 @@ pcm.!pulse {
             def painted_selector(title, description):
                 selector = wait(lambda: windows(title), description)[0]
                 assert not windows("Captures Recording Controls"), "controls leave before the selector"
+                # As in the capture smoke, focus before injecting a held drag;
+                # otherwise the WM may consume its press for activation.
+                run("xdotool", "windowfocus", "--sync", selector)
                 wait(lambda: int(run("import", "-window", selector, "-format", "%k", "info:")) > 16,
                      f"painted {description}")
                 time.sleep(.3)
@@ -847,14 +848,13 @@ pcm.!pulse {
             run("xdotool", "key", "ctrl+shift+F7")
             selector = painted_selector("Captures Region Selection", "region selector beside the take")
             shot(selector, "region-screenshot-selector-running")
-            for _ in range(10):
-                run("xdotool", "mousemove", "--sync", "140", "180", "sleep", ".2", "mousedown", "1",
-                    "sleep", ".3", "mousemove", "--sync", "450", "350", "sleep", ".2", "mouseup", "1")
-                time.sleep(.4)
-                if windows("Captures Screenshot Countdown"):
-                    break
-            else:
-                raise AssertionError("region screenshot beside the take was not confirmed")
+            run("xdotool", "windowfocus", "--sync", selector,
+                "mousemove", "--sync", "--window", selector, "140", "180",
+                "sleep", ".5", "mousedown", "1", "sleep", ".8",
+                "mousemove", "--sync", "--window", selector, "450", "350")
+            wait(lambda: selection_border_painted(selector), "held screenshot region border")
+            run("xdotool", "mouseup", "1")
+            wait(lambda: windows("Captures Screenshot Countdown"), "region screenshot countdown")
             metadata = wait(lambda: len(screenshots()) == 4 and screenshots()[-1],
                             "region screenshot publication")
             entry = json.loads(metadata.read_text())
