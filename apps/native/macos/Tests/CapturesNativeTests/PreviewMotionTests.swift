@@ -92,7 +92,9 @@ final class PreviewMotionTests: XCTestCase {
         defer { controller.close() }
         let view = try XCTUnwrap(controller.previewView)
         let oldest = try XCTUnwrap(view.card(for: "oldest"))
+        let layer = try XCTUnwrap(oldest.layer)
         let restY = oldest.frame.minY
+        let displayedY = layer.position.y
         let slot = try XCTUnwrap(view.card(for: "middle")).frame.minY - restY
 
         controller.dismiss("newest")
@@ -102,9 +104,15 @@ final class PreviewMotionTests: XCTestCase {
         XCTAssertEqual(view.renderedArtifactIDs, ["oldest", "middle", "newest"])
         XCTAssertEqual(view.exitingArtifactIDs, ["newest"])
         XCTAssertNil(view.card(for: "newest")?.hitTest(NSPoint(x: 20, y: 20)), "an exiting card ignores input")
-        XCTAssertEqual(oldest.frame.minY, restY, "survivors wait for the streak")
+        // The model already holds the destination; the backwards-filled
+        // animation holds the displayed position until the streak deadline.
+        XCTAssertEqual(oldest.frame.minY, restY + slot)
+        CATransaction.flush()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual((layer.presentation() ?? layer).position.y, displayedY, accuracy: 0.1,
+                       "survivors wait for the streak")
         // Bottom-anchored: older cards slide down into the hole.
-        try waitUntil { oldest.frame.minY == restY + slot }
+        try waitUntil { abs((layer.presentation() ?? layer).position.y - displayedY - slot) < 0.1 }
         try waitUntil { !controller.isTransitioning && controller.previewView !== view }
         XCTAssertEqual(controller.previewView?.renderedArtifactIDs, ["oldest", "middle"])
     }
