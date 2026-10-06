@@ -7,6 +7,7 @@
 //! canvas format shipping also flattens into.
 
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Cursor, Read},
     path::Path,
@@ -268,15 +269,68 @@ fn decode_svg(bytes: &[u8], not_loaded: &str) -> Result<RgbaImage, String> {
     if !absolute.into_iter().all(|value| value) && !inferred {
         return Err("SVG imports need absolute width and height, or one absolute dimension and a viewBox aspect ratio. Set their dimensions or convert to PNG first.".into());
     }
+    let mut ids = HashMap::new();
     for node in xml.descendants().filter(roxmltree::Node::is_element) {
         if node.ancestors().take(34).count() > 33 {
             return Err("This SVG is too deeply nested. Convert it to PNG first.".into());
         }
         if matches!(
             node.tag_name().name(),
-            "image" | "feImage" | "foreignObject" | "use"
+            "image" | "feImage" | "foreignObject"
         ) {
-            return Err("This SVG contains images, HTML content or reusable references. Convert it to PNG first.".into());
+            return Err(
+                "This SVG contains images or HTML content. Convert it to PNG first.".into(),
+            );
+        }
+        if let Some(id) = node.attribute("id") {
+            // Match usvg's first-ID-wins lookup, including duplicate IDs.
+            ids.entry(id).or_insert(node);
+        }
+    }
+    // usvg's source XML limit does not bound cloned <use> subtrees. Reject
+    // nested reuse and charge every occurrence before expansion/font loading.
+    let mut expanded_nodes = xml.descendants().count();
+    for node in xml.descendants().filter(|node| node.has_tag_name("use")) {
+        let href = node.attribute("href");
+        let xlink = node.attribute(("http://www.w3.org/1999/xlink", "href"));
+        if href.is_some() && xlink.is_some() && href != xlink {
+            return Err(
+                "This SVG has conflicting reuse references. Convert it to PNG first.".into(),
+            );
+        }
+        let target = href
+            .or(xlink)
+            .and_then(|href| href.strip_prefix('#'))
+            .filter(|id| !id.is_empty())
+            .and_then(|id| ids.get(id).copied())
+            .ok_or(
+                "This SVG has external or unresolved reuse references. Convert it to PNG first.",
+            )?;
+        let depth = node.ancestors().filter(roxmltree::Node::is_element).count();
+        for child in target.descendants() {
+            expanded_nodes += 1;
+            if expanded_nodes > 32_768 {
+                return Err("SVG imports are limited to 32,768 nodes including reused content. Convert it to PNG first.".into());
+            }
+            if child.has_tag_name("use") {
+                return Err(
+                    "This SVG contains nested reuse references. Convert it to PNG first.".into(),
+                );
+            }
+            if child.is_element()
+                && depth
+                    + child
+                        .ancestors()
+                        .take_while(|parent| *parent != target)
+                        .count()
+                    + 1
+                    > 32
+            {
+                return Err(
+                    "This SVG's reused content is too deeply nested. Convert it to PNG first."
+                        .into(),
+                );
+            }
         }
     }
     static FONTS: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
@@ -1069,6 +1123,126 @@ mod tests {
     }
 
     #[test]
+    fn svg_local_references_keep_transforms_and_straight_alpha() {
+        for reference in [
+            r##"href="#stamp""##,
+            r##"xlink:href="#stamp""##,
+            r##"href="#stamp" xlink:href="#stamp""##,
+        ] {
+            let svg = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="9" height="6">
+                <defs><g id="stamp">
+                  <rect x="1" y="2" width="1" height="1" fill="#0b49d3" opacity="0.5"/>
+                  <path d="M2 0H3V1H2Z" fill="#359711"/>
+                </g></defs>
+                <use {reference}/><use href="#stamp" transform="translate(4 1)"/>
+                </svg>"##
+            );
+            let pixels = decode_svg(svg.as_bytes(), "invalid").unwrap();
+            assert_eq!(pixels.dimensions(), (9, 6));
+            for y in 0..6 {
+                for x in 0..9 {
+                    let actual = pixels.get_pixel(x, y).0;
+                    match (x, y) {
+                        (1, 2) | (5, 3) => {
+                            for (actual, expected) in actual.into_iter().zip([11, 73, 211, 128]) {
+                                close(actual, expected, 1, "reused SVG straight alpha");
+                            }
+                        }
+                        (2, 0) | (6, 1) => assert_eq!(actual, [53, 151, 17, 255]),
+                        _ => assert_eq!(actual, [0, 0, 0, 0], "{reference}: {x},{y}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn svg_rejects_external_unresolved_conflicting_and_nested_references() {
+        for body in [
+            r#"<use/>"#,
+            r##"<use href="#"/>"##,
+            r##"<use href="#missing"/>"##,
+            r##"<use href="file.svg#stamp"/>"##,
+            r##"<use xlink:href="https://example.invalid/vector.svg#stamp"/>"##,
+            r#"<use href="data:image/svg+xml;base64,PHN2Zy8+"/>"#,
+            r##"<defs><path id="a"/><path id="b"/></defs><use href="#a" xlink:href="#b"/>"##,
+            r##"<defs><path id="a"/></defs><use href="#a" xlink:href="private.svg#a"/>"##,
+            r##"<defs><path id="a"/></defs><use href="private.svg#a" xlink:href="#a"/>"##,
+            r##"<defs><g id="a"><use href="#b"/></g><path id="b"/></defs><use href="#a"/>"##,
+            r##"<use id="a" href="#a"/>"##,
+            r##"<g id="a"><use href="#a"/></g>"##,
+            r##"<defs><use id="a" href="#b"/><use id="b" href="#a"/></defs><use href="#a"/>"##,
+        ] {
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3" height="4">{body}</svg>"#
+            );
+            assert!(
+                decode_svg(svg.as_bytes(), "invalid")
+                    .unwrap_err()
+                    .contains("Convert"),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn svg_local_reference_expansion_obeys_node_and_depth_limits() {
+        let nodes = |copies, duplicate| {
+            format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><defs><g id='stamp'>{}</g>{}</defs>{}</svg>",
+                "<path/>".repeat(1023),
+                if duplicate { "<path id='stamp'/>" } else { "" },
+                "<use href='#stamp'/>".repeat(copies),
+            )
+        };
+        // 1,024 nodes per copy, plus the source XML: 31,777 for 30 copies,
+        // 32,802 for 31. Charge occurrences, not just each unique target.
+        for (extra, valid) in [(991, true), (992, false)] {
+            // Exactly 32,768 expanded nodes remains accepted; one more fails.
+            let svg =
+                nodes(30, false).replace("</svg>", &format!("{}</svg>", "<path/>".repeat(extra)));
+            let result = decode_svg(svg.as_bytes(), "invalid");
+            if valid {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.unwrap_err().contains("32,768"));
+            }
+        }
+        for duplicate in [false, true] {
+            // usvg resolves duplicate IDs to the first element, not the tiny
+            // later path. A last-ID-wins preflight would undercount this case.
+            assert!(
+                decode_svg(nodes(31, duplicate).as_bytes(), "invalid")
+                    .unwrap_err()
+                    .contains("32,768"),
+                "duplicate ID: {duplicate}"
+            );
+        }
+        let definition = format!(
+            "<defs><g id='stamp'>{}{}</g></defs>",
+            "<g>".repeat(29),
+            "</g>".repeat(29),
+        );
+        for (reference, valid) in [
+            ("<use href='#stamp'/>", true),
+            ("<g><use href='#stamp'/></g>", false),
+        ] {
+            // The source definition fits 32 element levels in both cases.
+            // Its expanded copy fits at the root but not inside another group.
+            let svg = format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'>{definition}{reference}</svg>"
+            );
+            let result = decode_svg(svg.as_bytes(), "invalid");
+            if valid {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.unwrap_err().contains("nested"));
+            }
+        }
+    }
+
+    #[test]
     fn svg_resources_and_allocation_amplification_fail_before_rasterization() {
         let wrap = |body: &str| {
             format!(
@@ -1081,7 +1255,6 @@ mod tests {
             r#"<image xlink:href="https://example.invalid/image.png" width="3" height="4"/>"#,
             r#"<image href="data:image/svg+xml;base64,PHN2Zy8+" width="3" height="4"/>"#,
             r#"<foreignObject width="3" height="4"><div>HTML</div></foreignObject>"#,
-            r##"<defs><path id="repeat" d="M0 0H3V4Z"/></defs><use href="#repeat"/>"##,
             r#"<filter id="f"><feImage href="secret.png"/></filter>"#,
         ] {
             assert!(

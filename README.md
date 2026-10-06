@@ -672,9 +672,11 @@ SVG imports rasterize self-contained vectors/text with Captures' bundled fonts
 (other faces may substitute), with absolute width/height or one absolute dimension
 and a `viewBox` aspect ratio, up to 4 MiB and 4,194,304 pixels. Percentage dimensions,
 `viewBox`-only sizes and missing dimensions with `preserveAspectRatio="none"`
-require conversion to PNG first. SVGs containing
-images, HTML or reusable references require conversion to PNG first; no external
-files, network resources or system fonts are loaded. Broader SVG parity remains open.
+require conversion to PNG first. Non-nested document-local `<use>` references are
+supported within the 32,768-node and 32-level limits, including copied content.
+SVGs containing images, HTML, external/unresolved references or nested reuse
+require conversion to PNG first; no external files, network resources or system
+fonts are loaded. Broader SVG parity remains open.
 Export settings hold output size, save quality (Preserve, Compress or a maximum
 file size) and **Est. size**, which re-encodes automatically a moment after edits
 or option changes and shows the % change from the original; an encoded-output

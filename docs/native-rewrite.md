@@ -3372,15 +3372,19 @@ and missing dimensions with `preserveAspectRatio="none"` remain rejected because
 their browser defaults differ from resvg's standalone bounds.
 Cargo disables system fonts, raster-image and SVGZ defaults. XML rejects DTD
 entities and is bounded to 4 MiB, 32,768 nodes and 32 element levels; output is bounded
-to 4,194,304 pixels and the existing side limit. Image/feImage, foreignObject and use
-references fail recoverably before resource resolution or expansion, rather than
-silently publishing partial content. Both image resolvers reject all resources.
+to 4,194,304 pixels and the existing side limit. Non-nested document-local `use`
+references accept `href`/`xlink:href`, preserving transforms and straight alpha.
+Preflight charges each copied subtree against the node and depth limits before
+usvg expansion; duplicate IDs use its first-ID-wins rule. Conflicting hrefs,
+external/unresolved references, nested reuse and cycles fail recoverably, as do
+image/feImage and foreignObject, rather than silently publishing partial content.
+Both image resolvers reject all resources.
 Broader SVG parity is explicitly unfinished. Shared tests independently check viewBox,
 offsets, alpha, generic font mapping and resource/size/depth/node failures; the ABI
 retains exact pixels after removing a Unicode-named source and returns owned errors.
 Private-X11 picker/pixel/Undo/Redo/detached-reopen checks include SVG in both appearances.
-The inferred-size follow-up retains independent 90×50 pixels with omitted height
-in that host suite; AppKit's omitted-width ABI XCTest retains its independent 3×4
+The inferred-size/local-reuse follow-ups retain independent 90×50 pixels with omitted height
+in that host suite; AppKit's omitted-width/local-reuse ABI XCTest retains its independent 3×4
 pixels. X11 runs dark/light normal/minimum and conversion-error states. AppKit
 XCTest covers the same asymmetric SVG and conversion error; its first compile
 is macOS CI, not physical acceptance. Windows and Wayland share the implementation

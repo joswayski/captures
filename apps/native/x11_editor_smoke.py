@@ -1181,9 +1181,11 @@ def main():
                 "-draw", "rectangle 31,19 79,49", "-strip", "BMP3:" + str(bmp))
             # Infer height from width/viewBox; browser and native pixels must stay 90×50.
             svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" viewBox="0 0 180 100">'
+                '<defs><g id="shapes">'
                 '<path d="M0 0H70V100H0Z" fill="#2d64bd"/>'
                 '<rect x="100" y="40" width="50" height="50" fill="white" opacity="0.5"/>'
-                '<text x="78" y="28" font-family="sans-serif" font-size="24" fill="#2d64bd">A7</text></svg>')
+                '<text x="78" y="28" font-family="sans-serif" font-size="24" fill="#2d64bd">A7</text>'
+                '</g></defs><use href="#shapes"/></svg>')
             source_bytes = {path: path.read_bytes() for path in [gif, bmp, svg]}
             chooser.selected = [gif, notes, bmp, svg]
             toolbar_click("import")
@@ -1227,7 +1229,7 @@ def main():
             assert save_layers(lambda values: len(values) == 4, "SVG redone") == imported
             unsupported_svg = output / "Resource.SVG"
             unsupported_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" height="50">'
-                '<image href="private.png" width="90" height="50"/></svg>')
+                '<use href="private.svg#shapes"/></svg>')
             chooser.selected = [unsupported_svg]
             toolbar_click("import")
             wait(lambda: chooser.pending, "unsupported SVG picker")
@@ -1261,7 +1263,8 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["gif-bmp-svg-picker-filters", "mixed-case-extensions", "unsupported-file-skipped",
                            "first-gif-frame-only", "transparent-gif-pixels", "asymmetric-bmp-pixels",
-                           "svg-inferred-height", "svg-viewbox-rasterization", "straight-svg-alpha", "svg-bundled-text",
+                           "svg-inferred-height", "svg-local-reference", "svg-viewbox-rasterization",
+                           "straight-svg-alpha", "svg-bundled-text", "external-svg-reference-rejected",
                            "unsupported-svg-preserves-document-and-undo",
                            "ordered-placement", "one-undo-step-per-file", "stable-redo",
                            "immutable-sources", "draft-reopens-after-source-removal", "original-unchanged"],
