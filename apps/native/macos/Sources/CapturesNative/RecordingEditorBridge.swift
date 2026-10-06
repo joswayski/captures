@@ -698,13 +698,22 @@ final class NativeRecordingEditorSession {
         return .savedWithoutHistory(path: path, warning: warning)
     }
 
-    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+    func replaceOriginal(destination: String? = nil, cancel: NativeRecordingEditorCancel,
                          progress: @escaping (RecordingEditorProgress) -> Void) throws
         -> RecordingReplaceResult {
         let sink = RecordingEditorProgressSink(progress)
-        let response = captures_recording_editor_replace_original_v1(
-            handle, cancel.handle, recordingEditorProgressCallback,
-            Unmanaged.passUnretained(sink).toOpaque())
+        let response: UnsafeMutablePointer<CChar>?
+        if let destination {
+            response = destination.withCString {
+                captures_recording_editor_replace_original_v2(
+                    handle, $0, cancel.handle, recordingEditorProgressCallback,
+                    Unmanaged.passUnretained(sink).toOpaque())
+            }
+        } else {
+            response = captures_recording_editor_replace_original_v1(
+                handle, cancel.handle, recordingEditorProgressCallback,
+                Unmanaged.passUnretained(sink).toOpaque())
+        }
         withExtendedLifetime(sink) {}
         guard let response else {
             throw RecordingReplaceError(message: "No replacement result was returned.",
@@ -766,7 +775,7 @@ protocol RecordingEditorWorking: AnyObject {
     func save(destination: String, export: [String: Any], cancel: NativeRecordingEditorCancel,
               progress: @escaping (RecordingEditorProgress) -> Void,
               completion: @escaping (Result<RecordingEditorSaveResult, Error>) -> Void)
-    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+    func replaceOriginal(destination: String, cancel: NativeRecordingEditorCancel,
                          progress: @escaping (RecordingEditorProgress) -> Void,
                          completion: @escaping (Result<RecordingReplaceResult, Error>) -> Void)
     func close()
@@ -923,7 +932,7 @@ final class RecordingEditorWorker: RecordingEditorWorking {
         }
     }
 
-    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+    func replaceOriginal(destination: String, cancel: NativeRecordingEditorCancel,
                          progress: @escaping (RecordingEditorProgress) -> Void,
                          completion: @escaping (Result<RecordingReplaceResult, Error>) -> Void) {
         let storage = storage
@@ -933,7 +942,7 @@ final class RecordingEditorWorker: RecordingEditorWorking {
                     throw RecordingReplaceError(message: "The recording editor is closed.",
                                                 requiresReopen: true)
                 }
-                return try session.replaceOriginal(cancel: cancel, progress: progress)
+                return try session.replaceOriginal(destination: destination, cancel: cancel, progress: progress)
             }
             DispatchQueue.main.async { completion(result) }
         }

@@ -2899,20 +2899,24 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             })
     }
 
-    /// Shipping's Save with "Save as new file" off: the original is replaced
-    /// at once, without a confirmation.
+    /// Shipping's Save with "Save as new file" off: same History identity,
+    /// at the chosen filename/folder, without a confirmation.
     private func replaceOriginal() {
         guard !busy, !pickerOpen, !requiresReopen,
               playbackState == .idle, !stagedDiffers, !cropAdjustmentActive,
-              let snapshot = presentation?.snapshot, let path = eligibleOriginalPath,
+              let snapshot = presentation?.snapshot, eligibleOriginalPath != nil,
               let cancel = NativeRecordingEditorCancel() else { return }
+        if let error = RecordingEditorCopy.filenameError(filenameField.stringValue) {
+            showError(error); return
+        }
+        let path = destinationPath
         let current = generation, revision = snapshot.revision
         busy = true; activeCancel = cancel; replacing = true
         progress.doubleValue = 0; progress.isHidden = false
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Preparing replacement…"
         updateControls()
-        worker.replaceOriginal(cancel: cancel, progress: { [weak self] value in
+        worker.replaceOriginal(destination: path, cancel: cancel, progress: { [weak self] value in
             guard let self, self.generation == current,
                   self.activeCancel === cancel else { return }
             self.progress.doubleValue = Double(value.completedPerMille)
@@ -2943,6 +2947,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 self.resolutionPreset = .original; self.customOutput = false
                 self.stagedCrop = nil; self.cropAspectUnlocked = false
                 self.savedEdit = nil; self.savedExport = nil
+                self.originalPath = replaced.path
+                self.sourceDirectory = self.destinationDirectory
+                self.sourceStem = self.filenameField.stringValue
                 self.publish(replaced.presentation, initialize: true)
                 // Shipping's save toast and Show in Folder follow the save,
                 // and Save stays disabled until anything changes.
@@ -3619,7 +3626,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         saveButton?.setAccessibilityLabel(copy ? "Save new copy" : "Replace original")
         saveButton?.toolTip = copy
             ? "Save as a new file and leave the original untouched."
-            : "Save the edits over \(eligibleOriginalPath ?? "the original") and its History item."
+            : "Save the edits to \(destinationPath) under the original History item."
         saveAsNewSwitch.state = copy ? .on : .off
         saveAsNewSwitch.isEnabled = available && eligibleOriginalPath != nil
         saveAsNewRow.toolTip = eligibleOriginalPath == nil

@@ -22,6 +22,7 @@ from gi.repository import GLib
 from Xlib import X, display, protocol
 
 from x11_capture_smoke import ScreenSaver
+from x11_editor_smoke import FileChooser
 
 
 def main():
@@ -163,7 +164,14 @@ def main():
 
     def type_value(value):
         run("xdotool", "key", "ctrl+a")
-        run("xdotool", "type", "--clearmodifiers", "--delay", "35", "--", str(value))
+        if str(value).isascii():
+            run("xdotool", "type", "--clearmodifiers", "--delay", "35", "--", str(value))
+        else:
+            # Xvfb's keymap cannot type arbitrary Unicode. Exercise the native
+            # text input through its clipboard path, then read it back below.
+            subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
+                input=str(value).encode(), check=True, timeout=5)
+            run("xdotool", "key", "ctrl+v", "sleep", ".5")
         # X11 accepting the key events is not the renderer accepting the text.
         # Sending Enter immediately can commit an older frame's value. Read
         # back the focused field before committing; never retry lost typing.
@@ -386,6 +394,9 @@ def main():
         bus = dbus.bus.BusConnection(address)
         name = dbus.service.BusName("org.freedesktop.ScreenSaver", bus=bus, do_not_queue=True)
         saver = ScreenSaver(name, "/org/freedesktop/ScreenSaver")
+        # Advertise the portal before the host starts, as the screenshot-editor
+        # fixture does; desktop clients may cache portal availability at startup.
+        chooser = FileChooser(bus, output / "Another folder") if args.replace_original else None
         loop = GLib.MainLoop()
         thread = threading.Thread(target=loop.run, daemon=True)
         thread.start()
@@ -823,7 +834,46 @@ def main():
             press(editor, "Seek")
             shot(editor, "replace-seek")
             dominant(output / "replace-seek.png", 2)
-            copy = exports / "after-replace.mp4"
+            # Same-identity Save must honor both the real folder picker and
+            # edited name with the switch off, preserving the former save.
+            moved = output / "Another folder"
+            moved.mkdir()
+            press(editor, "Change…")
+            wait(lambda: chooser.pending, "save-location folder picker")
+            title, options = chooser.calls[-1]
+            assert title == "Choose save location" and options.get("directory", False)
+            GLib.idle_add(chooser.respond, False)
+            idle(editor)
+            save_folder["path"] = moved
+            collision = moved / "Occupied.mp4"
+            collision.write_bytes(b"unrelated file")
+            set_destination(editor, collision)
+            press(editor, "Replace original")
+            idle(editor)
+            shot(editor, "replace-location-collision")
+            assert collision.read_bytes() == b"unrelated file"
+            assert source.read_bytes() == recovery.read_bytes() == new_bytes
+            assert json.loads(metadata.read_text())["saved_path"] == str(source)
+            renamed = moved / "Renamed µ.mp4"
+            set_destination(editor, renamed)
+            assert "Replace original" in controls(editor) and "Save new copy" not in controls(editor)
+            press(editor, "Replace original")
+            wait(renamed.exists, "renamed same-identity save")
+            idle(editor)
+            relocated = json.loads(metadata.read_text())
+            for key in ("id", "created_at", "target", "dropped_frames"):
+                assert relocated[key] == before[key]
+            assert relocated["saved_path"] == str(renamed)
+            assert source.read_bytes() == new_bytes == renamed.read_bytes() == recovery.read_bytes()
+            assert len(list(history.glob("*/metadata.json"))) == 1
+            shot(editor, "replace-location-adopted")
+            press(editor, "Save as new file")
+            press(editor, "Save as new file")
+            press(editor, "Replace original")
+            idle(editor)
+            assert json.loads(metadata.read_text())["saved_path"] == str(renamed), "repeat Save uses the adopted path"
+            assert source.read_bytes() == new_bytes == renamed.read_bytes() == recovery.read_bytes()
+            copy = moved / "after-replace.mp4"
             set_destination(editor, copy)
             save_copy(editor)
             wait(copy.exists, "same-session save after replacement")
@@ -849,8 +899,9 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "checks": ["no-confirmation", "live-edits-preserve-source", "in-flight-cancel", "cancel-cleanup",
-                    "same-id-history", "permanent-recovery-bytes", "asymmetric-crop-resize-pixels", "same-session-seek-save", "clean-close"]}, indent=2) + "\n")
-            print("PASS replacement: unconfirmed Save, cancel, source/History rebase, real edited pixels and same-session save")
+                    "same-id-history", "permanent-recovery-bytes", "asymmetric-crop-resize-pixels", "same-session-seek-save",
+                    "folder-picker", "rename-switch-off", "collision-refused", "old-save-intact", "new-path-adopted", "repeat-save", "clean-close"]}, indent=2) + "\n")
+            print("PASS replacement: unconfirmed Save, cancel, rename/folder/collision, source/History rebase, real edited pixels and same-session save")
             return
         if args.comparison:
             # Compress shows the before/after comparison automatically once

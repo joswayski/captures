@@ -198,6 +198,39 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertFalse(try button("Show in Folder", in: controller.root).isHidden)
     }
 
+    func testRenamedSameIdentitySaveAdoptsItsNameAndChecksInvalidNames() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(originalSavePath: "/Exports/Clip.mp4"))
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(savedPath: "/Exports/Clip.mp4"),
+                           historyRoot: "/History", outputDirectory: "/Elsewhere")
+        let filename = try field("Saved filename", in: controller.root)
+        let save = try button("Replace original", in: controller.root)
+        filename.stringValue = "bad/name"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification, object: filename))
+        save.performClick(nil)
+        XCTAssertTrue(worker.replaceDestinations.isEmpty, "invalid names never reach replacement")
+        filename.stringValue = "Renamed µ"
+        controller.controlTextDidChange(Notification(name: NSText.didChangeNotification, object: filename))
+        worker.replaceResult = .success(RecordingReplaceResult(path: "/Exports/Renamed µ.mp4",
+            presentation: try presentation(revision: 1)))
+        save.performClick(nil)
+        XCTAssertEqual(worker.replaceDestinations, ["/Exports/Renamed µ.mp4"])
+        XCTAssertFalse(controller.savingCopy)
+        XCTAssertFalse(save.isEnabled, "successful save is the clean baseline")
+        let copy = try saveAsNewSwitch(in: controller.root)
+        copy.performClick(nil)
+        XCTAssertEqual(filename.stringValue, "Renamed µ-edited", "new-copy suggestion follows the adopted name")
+        copy.performClick(nil)
+        XCTAssertEqual(filename.stringValue, "Renamed µ")
+        worker.replaceResult = .success(RecordingReplaceResult(path: "/Exports/Renamed µ.mp4",
+            presentation: try presentation(revision: 2)))
+        save.performClick(nil)
+        XCTAssertEqual(worker.replaceDestinations, ["/Exports/Renamed µ.mp4", "/Exports/Renamed µ.mp4"])
+        XCTAssertFalse(controller.dirty)
+    }
+
     func testShippingSaveNamesReplaceByDefaultAndWebMReportsTheShippingError() throws {
         _ = NSApplication.shared
         let path = "/Exports/Clip.mp4"
@@ -458,6 +491,19 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(afterSeek.snapshot.positionMilliseconds, 400)
         XCTAssertNotNil(try session.thumbnails(
             cancel: try XCTUnwrap(NativeRecordingEditorCancel())).image().dataProvider?.data)
+        let folder = fixture.root.appendingPathComponent("New folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let destination = folder.appendingPathComponent("Renamed µ.mp4")
+        let oldPermanent = try Data(contentsOf: permanent)
+        let renamed = try session.replaceOriginal(destination: destination.path,
+            cancel: try XCTUnwrap(NativeRecordingEditorCancel()), progress: { _ in })
+        XCTAssertEqual(renamed.path, destination.path)
+        XCTAssertEqual(renamed.presentation.snapshot.artifactID, fixture.id)
+        XCTAssertEqual(try Data(contentsOf: permanent), oldPermanent)
+        XCTAssertEqual(try Data(contentsOf: destination), try Data(contentsOf: fixture.source))
+        let savedMetadata = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: metadataPath)) as? [String: Any])
+        XCTAssertEqual(savedMetadata["saved_path"] as? String, destination.path)
     }
 
     func testAutomaticComparisonFollowsTheAcceptedStillAndRejectsStaleDelivery() throws {
@@ -5005,6 +5051,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var replaceResult: Result<RecordingReplaceResult, Error> =
         .failure(RecordingReplaceError(message: "replace unavailable", requiresReopen: false))
     var replaceCalls = 0
+    var replaceDestinations: [String] = []
     var deferReplace = false
     var closeCount = 0
     weak var observedSaveCancel: NativeRecordingEditorCancel?
@@ -5127,10 +5174,11 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     func completeSave(_ result: Result<RecordingEditorSaveResult, Error>) {
         let completion = pendingSave; pendingSave = nil; completion?(result)
     }
-    func replaceOriginal(cancel: NativeRecordingEditorCancel,
+    func replaceOriginal(destination: String, cancel: NativeRecordingEditorCancel,
                          progress: @escaping (RecordingEditorProgress) -> Void,
                          completion: @escaping (Result<RecordingReplaceResult, Error>) -> Void) {
         replaceCalls += 1; observedReplaceCancel = cancel
+        replaceDestinations.append(destination)
         if deferReplace { pendingReplace = completion }
         else { completion(replaceResult) }
     }

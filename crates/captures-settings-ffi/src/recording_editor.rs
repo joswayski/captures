@@ -792,6 +792,32 @@ pub unsafe extern "C" fn captures_recording_editor_replace_original_v1(
     progress: RecordingEditorProgress,
     context: *mut c_void,
 ) -> *mut c_char {
+    // SAFETY: identical lifetime/ownership contract; null keeps v1's path.
+    unsafe {
+        captures_recording_editor_replace_original_v2(
+            session,
+            ptr::null(),
+            cancel,
+            progress,
+            context,
+        )
+    }
+}
+
+/// Same-identity Save at an explicit path; null retains the original v1 path.
+/// A new filename must be absent and outside private History.
+///
+/// # Safety
+/// The v1 session/cancel/callback contract applies. Non-null destination is
+/// readable NUL-terminated UTF-8 until return. Free the owned response once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_recording_editor_replace_original_v2(
+    session: *mut RecordingEditorSession,
+    destination: *const c_char,
+    cancel: *const CancelToken,
+    progress: RecordingEditorProgress,
+    context: *mut c_void,
+) -> *mut c_char {
     let mut session = unsafe { session.as_mut() };
     let result = catch_unwind(AssertUnwindSafe(|| {
         let session = session
@@ -799,9 +825,14 @@ pub unsafe extern "C" fn captures_recording_editor_replace_original_v1(
             .ok_or_else(|| ("recording editor handle is null".to_string(), false))?;
         let cancel = unsafe { cancel.as_ref() }
             .ok_or_else(|| ("recording export cancel handle is null".to_string(), false))?;
-        let replaced = session
-            .replace_original(cancel, |event| emit_progress(progress, context, &event))
-            .map_err(|error| (error.message, error.requires_reopen))?;
+        let on_progress = |event| emit_progress(progress, context, &event);
+        let replaced = if destination.is_null() {
+            session.replace_original(cancel, on_progress)
+        } else {
+            let path = PathBuf::from(unsafe { text(destination) }.map_err(|error| (error, false))?);
+            session.replace_original_at(&path, cancel, on_progress)
+        }
+        .map_err(|error| (error.message, error.requires_reopen))?;
         Ok::<_, (String, bool)>(json!({"replacement":replaced,"snapshot":session.snapshot_v2()}))
     }));
     response(match result {
@@ -1517,6 +1548,35 @@ mod tests {
         assert_eq!(
             replaced["result"]["snapshot"]["save_export"]["max_size_bytes"],
             serde_json::Value::Null
+        );
+
+        let destination = data.path().join("Renamed µ.MP4");
+        let destination_text = CString::new(destination.to_str().unwrap()).unwrap();
+        let former = fs::read(&source).unwrap();
+        // SAFETY: serialized live session/token and borrowed UTF-8 outlive v2.
+        let renamed = unsafe {
+            json(captures_recording_editor_replace_original_v2(
+                session,
+                destination_text.as_ptr(),
+                cancel,
+                None,
+                ptr::null_mut(),
+            ))
+        };
+        assert_eq!(renamed["ok"], true, "{renamed}");
+        assert_eq!(
+            renamed["result"]["replacement"]["path"],
+            destination.to_str().unwrap()
+        );
+        assert_eq!(
+            renamed["result"]["replacement"]["artifact"]["entry"]["id"],
+            id
+        );
+        assert_eq!(renamed["result"]["snapshot"]["revision"], 3);
+        assert_eq!(fs::read(&source).unwrap(), former);
+        assert_eq!(
+            fs::read(&destination).unwrap(),
+            fs::read(history_root.join(&id).join("media.mp4")).unwrap()
         );
 
         // SAFETY: playback/generation are complete, so owners may be released.
