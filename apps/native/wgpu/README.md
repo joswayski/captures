@@ -200,16 +200,20 @@ blocked until composition ends. This first composing field uses the UI font and
 is unrotated; the document's pinned-font styled pixels remain authoritative.
 It is not Tauri's WYSIWYG input layout. Physical input, IME, accessibility,
 Windows and Wayland presentation still require acceptance.
-Import image opens a single-file PNG/JPEG/WebP/TIFF picker without blocking draft
-saves or close. The worker bounds and decodes the file, honors EXIF orientation,
+Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP picker without blocking draft
+saves or close. The worker bounds and decodes each file, honors EXIF orientation,
 then imports below the selected visible image using shared placement/expansion.
 Undo/redo and saved drafts own the imported pixels; the external file is never
 modified and is not needed after draft saving. Cancel and failed imports leave
-the document unchanged. Batch/drag-and-drop and other formats remain open.
-RGB/grayscale ICC imports convert to sRGB with straight alpha preserved; untagged
-images assume sRGB. Unsupported/malformed ICC profiles (including CMYK), PNG
-gamma/chromaticity-only metadata and CICP return recoverable errors asking for an
-sRGB conversion first. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
+the document unchanged. Canvas drops use the same queue. GIF imports freeze frame
+zero on its logical canvas, not the animation; Open still uses the recording editor.
+BMP supports row orientation, declared alpha and embedded RGB ICC profiles.
+Calibrated or linked BMP color descriptions require an sRGB conversion first;
+linked profiles never trigger filesystem/network reads. Legacy 32-bit BI_RGB is opaque.
+Supported ICC and PNG gamma/chromaticity/CICP metadata convert to sRGB with straight
+alpha preserved; untagged images assume sRGB. Unsupported/malformed profiles return
+recoverable errors. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
+AVIF, SVG and HEIC layer parity remains open.
 The bottom export bar's **Export settings** disclosure offers output size,
 Preserve/Compress/Maximum quality, custom PNG palette sizes and an optional hard
 byte limit; the format is the filename's suffix menu. **Est. size** re-encodes on a

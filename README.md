@@ -640,12 +640,15 @@ offsets. Changes apply as you make them; a burst in one field is one undo step a
 each toggle is its own. Hidden and locked annotations remain editable.
 Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
-**Add images** imports one or more PNG, JPEG, WebP or TIFF files: the first lands below
+**Add images** imports one or more PNG, JPEG, WebP, TIFF, GIF or BMP files: the first lands below
 the selected visible image, each later one below the previous, expanding the canvas
 when needed. Imports respect EXIF orientation, are undoable (one step per file),
 and keep their own draft pixels so reopening does not require the source file.
-Supported RGB/grayscale ICC profiles convert to sRGB; unsupported profiles and
-PNG gamma/chromaticity-only or CICP metadata require conversion to sRGB first.
+GIF imports use only the first frame; **Open** still treats GIFs as recordings.
+Supported ICC profiles and PNG gamma/chromaticity/CICP metadata convert to sRGB.
+The shared decoder rejects calibrated or externally linked BMP color descriptions
+with a conversion message; embedded BMP RGB profiles are supported. Legacy 32-bit
+BMPs without a declared alpha mask import as opaque.
 Export settings hold output size, save quality (Preserve, Compress or a maximum
 file size) and **Est. size**, which re-encodes automatically a moment after edits
 or option changes and shows the % change from the original; an encoded-output
@@ -727,7 +730,7 @@ Curve controls keep keyboard focus while edits run in the background. Consecutiv
 steps apply in order, with a separate undo step for each key or slider release.
 A selected layer that hangs past the canvas shows an
 **Expand canvas** action; hovering previews the grown canvas and one click grows it as
-a single undo step. Dropping PNG, JPEG, WebP or TIFF files on the canvas adds image
+a single undo step. Dropping PNG, JPEG, WebP, TIFF, GIF or BMP files on the canvas adds image
 layers where the placement guide shows (Place above/left/right/below, or stacked);
 each file is one undo step. As in shipping, the snapped edge and the hovered Expand
 canvas preview breathe with an accent bloom and streaming particles; with reduced

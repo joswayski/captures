@@ -79,7 +79,11 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
             matches!(
                 format,
                 ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP
-            ) || (import && *format == ImageFormat::Tiff)
+            ) || (import
+                && matches!(
+                    format,
+                    ImageFormat::Tiff | ImageFormat::Gif | ImageFormat::Bmp
+                ))
         })
         .ok_or_else(|| {
             if import {
@@ -112,6 +116,10 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
             .and_then(|mut decoder| decoder.image_ifd().find_tag(tiff::tags::Tag::IccProfile))
             .and_then(|tag| tag.map(|value| value.into_u8_vec()).transpose())
             .map_err(|error| color_error(error.to_string()))?
+    } else if format == ImageFormat::Bmp {
+        // image's BMP adapter ignores V4/V5 color metadata. Do not silently
+        // relabel profiled/calibrated samples as sRGB.
+        bmp_icc(&bytes)?
     } else {
         decoder
             .icc_profile()
@@ -181,6 +189,45 @@ const UNSUPPORTED_COLOR_SPACE: &str =
 
 fn color_error(error: String) -> String {
     format!("Cannot convert this image's color profile to sRGB: {error}")
+}
+
+/// BITMAPV4/V5 color descriptions, which image's decoder does not expose.
+/// Linked profiles never cause filesystem/network reads. Calibrated endpoints
+/// require conversion first; ordinary older DIBs have no color description.
+fn bmp_icc(bytes: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let invalid = || color_error("Invalid BMP color description.".into());
+    let header = bytes.get(14..).ok_or_else(invalid)?;
+    let word = |offset| {
+        header
+            .get(offset..offset + 4)
+            .map(|word| u32::from_le_bytes(word.try_into().expect("four bytes")))
+            .ok_or_else(invalid)
+    };
+    let size = word(0)?;
+    if size < 108 {
+        return Ok(None);
+    }
+    match word(56)? {
+        0x7352_4742 | 0x5769_6e20 => Ok(None), // LCS_sRGB / WINDOWS_COLOR_SPACE
+        0x4d42_4544 if size == 124 => {
+            // V5 offsets are relative to the DIB header, not the BMP file.
+            let offset = word(112)?;
+            if offset < size {
+                return Err(invalid());
+            }
+            let start = usize::try_from(offset)
+                .ok()
+                .and_then(|offset| offset.checked_add(14))
+                .ok_or_else(invalid)?;
+            let end = usize::try_from(word(116)?)
+                .ok()
+                .and_then(|length| start.checked_add(length))
+                .ok_or_else(invalid)?;
+            let profile = bytes.get(start..end).ok_or_else(invalid)?;
+            Ok(Some(profile.to_vec()))
+        }
+        _ => Err(UNSUPPORTED_COLOR_SPACE.into()),
+    }
 }
 
 fn transform(
@@ -765,6 +812,156 @@ mod tests {
             encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
         });
         assert_eq!(decode_bytes(&srgb_chunk).as_raw(), &samples);
+    }
+
+    #[test]
+    fn gif_import_owns_only_the_offset_first_frame_on_a_transparent_canvas() {
+        // 3×4 logical canvas, blue/black palette, blue then transparent at
+        // (1,2), followed by an opaque black second frame at (0,0). Background
+        // index 1 must not fill uncovered pixels. LZW codes: clear, 1, 0, end.
+        let bytes = b"GIF89a\x03\0\x04\0\x80\x01\0\0\0\0\x0b\x49\xd3\
+            \x21\xf9\x04\x01\0\0\0\0\x2c\x01\0\x02\0\x02\0\x01\0\0\x02\x02\x0c\x0a\0\
+            \x21\xf9\x04\0\0\0\0\0\x2c\0\0\0\0\x02\0\x01\0\0\x02\x02\x04\x0a\0\x3b";
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("animation.GIF");
+        fs::write(&path, bytes).unwrap();
+        let decoded = decode_import(&path).unwrap();
+        assert_eq!(decoded.dimensions(), (3, 4));
+        for y in 0..4 {
+            for x in 0..3 {
+                let expected = if (x, y) == (1, 2) {
+                    [11, 73, 211, 255]
+                } else {
+                    [0, 0, 0, 0]
+                };
+                assert_eq!(decoded.get_pixel(x, y).0, expected, "{x},{y}");
+            }
+        }
+        // Opening a GIF remains the separate recording workflow, not a still.
+        assert_eq!(
+            decode_opened_image(&path).unwrap_err(),
+            UNSUPPORTED_OPEN_MESSAGE
+        );
+        let mut oversized = bytes.to_vec();
+        oversized[6..8].copy_from_slice(&16_385u16.to_le_bytes());
+        fs::write(&path, oversized).unwrap();
+        assert!(
+            decode_import(&path)
+                .unwrap_err()
+                .contains("pixels per side")
+        );
+        fs::write(&path, &bytes[..25]).unwrap();
+        assert_eq!(
+            decode_import(&path).unwrap_err(),
+            "animation.GIF could not be loaded."
+        );
+    }
+
+    #[test]
+    fn bmp_import_preserves_declared_alpha_and_normalizes_row_orientation() {
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("layer.BMP");
+        let pixels = RgbaImage::from_raw(
+            2,
+            3,
+            vec![
+                11, 73, 211, 255, 31, 51, 91, 73, 53, 97, 17, 0, 107, 7, 61, 128, 41, 131, 83, 211,
+                149, 23, 193, 255,
+            ],
+        )
+        .unwrap();
+        pixels.save_with_format(&path, ImageFormat::Bmp).unwrap();
+        assert_eq!(decode_import(&path).unwrap(), pixels);
+        assert_eq!(
+            decode_opened_image(&path).unwrap_err(),
+            UNSUPPORTED_OPEN_MESSAGE
+        );
+
+        // Legacy 32-bit BI_RGB: its high byte is unused, not undeclared alpha.
+        // Three asymmetric rows distinguish row reversal from channel reversal.
+        for top_down in [false, true] {
+            let mut bytes = vec![0; 54];
+            bytes[..2].copy_from_slice(b"BM");
+            bytes[2..6].copy_from_slice(&78u32.to_le_bytes());
+            bytes[10..14].copy_from_slice(&54u32.to_le_bytes());
+            bytes[14..18].copy_from_slice(&40u32.to_le_bytes());
+            bytes[18..22].copy_from_slice(&2i32.to_le_bytes());
+            bytes[22..26].copy_from_slice(&(if top_down { -3i32 } else { 3 }).to_le_bytes());
+            bytes[26..28].copy_from_slice(&1u16.to_le_bytes());
+            bytes[28..30].copy_from_slice(&32u16.to_le_bytes());
+            for row in 0..3 {
+                let y = if top_down { row } else { 2 - row };
+                for x in 0..2 {
+                    let [r, g, b, a] = pixels.get_pixel(x, y).0;
+                    bytes.extend([b, g, r, a]);
+                }
+            }
+            fs::write(&path, bytes).unwrap();
+            let decoded = decode_import(&path).unwrap();
+            for (actual, expected) in decoded.pixels().zip(pixels.pixels()) {
+                assert_eq!(&actual.0[..3], &expected.0[..3]);
+                assert_eq!(actual.0[3], 255);
+            }
+        }
+    }
+
+    #[test]
+    fn bmp_embedded_icc_converts_samples_and_unusable_color_descriptions_fail() {
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("profile.bmp");
+        RgbaImage::from_raw(2, 1, vec![64, 128, 192, 73, 192, 32, 8, 0])
+            .unwrap()
+            .save_with_format(&path, ImageFormat::Bmp)
+            .unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        // Promote the encoder's 108-byte V4 DIB to V5. Keep the pixel offset
+        // valid and append a profile after pixels, addressed relative to byte 14.
+        bytes.splice(122..122, [0; 16]);
+        bytes[14..18].copy_from_slice(&124u32.to_le_bytes());
+        let pixel_offset = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) + 16;
+        bytes[10..14].copy_from_slice(&pixel_offset.to_le_bytes());
+        bytes[70..74].copy_from_slice(&0x4d42_4544u32.to_le_bytes());
+        let profile_offset = (bytes.len() - 14) as u32;
+        bytes[126..130].copy_from_slice(&profile_offset.to_le_bytes());
+        let mut linear = ColorProfile::new_srgb();
+        linear.cicp = None;
+        linear.red_trc = Some(ToneReprCurve::Parametric(vec![1.]));
+        linear.green_trc = linear.red_trc.clone();
+        linear.blue_trc = linear.red_trc.clone();
+        let profile = linear.encode().unwrap();
+        bytes[130..134].copy_from_slice(&(profile.len() as u32).to_le_bytes());
+        bytes.extend(profile);
+        let length = bytes.len() as u32;
+        bytes[2..6].copy_from_slice(&length.to_le_bytes());
+        fs::write(&path, &bytes).unwrap();
+        let decoded = decode_import(&path).unwrap();
+        for (actual, expected) in decoded
+            .as_raw()
+            .iter()
+            .zip([137u8, 188, 225, 73, 225, 99, 50, 0])
+        {
+            close(*actual, expected, 1, "BMP linear to sRGB, straight alpha");
+        }
+        for space in [0u32, 0x4c49_4e4b, 0xffff_ffff] {
+            let mut invalid = bytes.clone();
+            invalid[70..74].copy_from_slice(&space.to_le_bytes());
+            fs::write(&path, invalid).unwrap();
+            assert!(
+                decode_import(&path)
+                    .unwrap_err()
+                    .contains("Convert it to sRGB")
+            );
+        }
+        for (offset, value) in [(126, 123u32), (126, u32::MAX), (130, u32::MAX), (130, 0)] {
+            let mut invalid = bytes.clone();
+            invalid[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            fs::write(&path, invalid).unwrap();
+            assert!(decode_import(&path).unwrap_err().contains("color"));
+        }
+        let mut invalid = bytes;
+        invalid[14 + profile_offset as usize..].fill(0);
+        fs::write(&path, invalid).unwrap();
+        assert!(decode_import(&path).unwrap_err().contains("color"));
     }
 
     #[test]

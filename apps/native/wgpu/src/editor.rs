@@ -1527,8 +1527,8 @@ impl View {
             let selected = rfd::FileDialog::new()
                 .set_title("Import images")
                 .add_filter(
-                    "Images (PNG, JPEG, WebP, TIFF)",
-                    &["png", "jpg", "jpeg", "webp", "tif", "tiff"],
+                    "Images (PNG, JPEG, WebP, TIFF, GIF, BMP)",
+                    &["png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp"],
                 )
                 .pick_files();
             let _ = tx.send(selected);
@@ -12102,15 +12102,15 @@ mod tests {
         view.import_picker = Some(picked);
         selection
             .send(Some(vec![
-                PathBuf::from("first.png"),
+                PathBuf::from("first.GIF"),
                 PathBuf::from("notes.txt"),
-                PathBuf::from("second.JPG"),
+                PathBuf::from("second.BMP"),
             ]))
             .unwrap();
         assert!(view.receive_import(&jobs));
         assert!(
             matches!(queued.try_recv().unwrap(), Job::Import { path, point: None, .. }
-            if path == Path::new("first.png"))
+            if path == Path::new("first.GIF"))
         );
         assert!(view.pending && queued.try_recv().is_err());
         // Later images wait for the previous import, then stack below it.
@@ -12119,7 +12119,7 @@ mod tests {
         assert!(canvas::drain_drops(&mut view, &jobs));
         assert!(
             matches!(queued.try_recv().unwrap(), Job::Import { path, point: None, .. }
-            if path == Path::new("second.JPG"))
+            if path == Path::new("second.BMP"))
         );
         view.pending = false;
         assert!(!canvas::drain_drops(&mut view, &jobs) && view.drop.queue.is_empty());
@@ -12255,7 +12255,12 @@ mod tests {
         let pixels = RgbaImage::from_fn(7, 3, |x, y| {
             image::Rgba([x as u8 * 31, y as u8 * 71, 9, 128])
         });
-        for format in [ImageFormat::Png, ImageFormat::WebP, ImageFormat::Tiff] {
+        for format in [
+            ImageFormat::Png,
+            ImageFormat::WebP,
+            ImageFormat::Tiff,
+            ImageFormat::Bmp,
+        ] {
             pixels.save_with_format(&path, format).unwrap();
             assert_eq!(decode_import(&path).unwrap(), pixels, "{format:?}");
         }
@@ -13691,7 +13696,7 @@ mod tests {
             &ctx,
             &mut view,
             &tx,
-            drop(&["a.PNG", "skip.gif", "b.webp"]),
+            drop(&["a.GIF", "skip.txt", "b.BMP"]),
             preview,
         );
         assert_eq!(view.drop.queue.len(), 2);
@@ -13707,7 +13712,7 @@ mod tests {
                 selected_id,
                 point,
             } => {
-                assert_eq!(path, Path::new("a.PNG"));
+                assert_eq!(path, Path::new("a.GIF"));
                 assert_eq!(selected_id.as_deref(), Some(id.as_str()));
                 assert_eq!(point, Some(Point { x: 100., y: 2. }));
             }
@@ -13719,7 +13724,7 @@ mod tests {
         assert!(canvas::drain_drops(&mut view, &tx));
         assert!(matches!(
             rx.try_recv().unwrap(),
-            Job::Import { point: None, .. }
+            Job::Import { path, point: None, .. } if path == Path::new("b.BMP")
         ));
         // Closing drops any queued files.
         view.drop.queue.push_back(("c.png".into(), None));
