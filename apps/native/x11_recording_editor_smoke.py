@@ -430,7 +430,7 @@ def main():
             return [path for path in exports.iterdir() if path != source]
         source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality or args.comparison else (1600, 900) if args.preview_scale or args.gif_width or args.export_preferences else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
-        segment_seconds = 12 if args.estimate_delta else 2 if args.playback or args.sound else 1
+        segment_seconds = 12 if args.estimate_delta else 2 if args.playback or args.sound or args.scrub else 1
         audio_inputs = []
         audio_filters = ""
         audio_maps = []
@@ -723,7 +723,7 @@ def main():
                     run("import", "-window", editor, str(path))
                     rgb = run("convert", str(path), "-crop", f"1x1+{px}+{py}", "-depth", "8", "rgb:-")
                     return len(rgb) == 3 and rgb[channel] > 90 and all(rgb[channel] > rgb[i] + 40 for i in range(3) if i != channel)
-                wait(arrived, f"{name} decoded while held")
+                wait(arrived, f"{name} decoded")
             movie = spawn("scrub-video", ["ffmpeg", "-y", "-v", "error", "-f", "x11grab",
                 "-draw_mouse", "1", "-framerate", "15", "-video_size", "980x940",
                 "-i", f"{env['DISPLAY']}+70,40", "-c:v", "libx264", "-preset", "ultrafast",
@@ -764,6 +764,28 @@ def main():
             run("xdotool", "mousedown", "1", "mouseup", "1")
             decoded("blue-retried", 2)
             idle(editor)
+            pointer(.1)
+            run("xdotool", "mousedown", "1", "mouseup", "1")
+            decoded("accepted-red", 0)
+            idle(editor)
+            raw_press(editor, "Play preview")
+            decoded("playback-green", 1)
+            # Match the existing playback fixture: when already over Pause,
+            # do not wait for a new motion event before sending its press.
+            play_x, play_y = center(editor, "Play preview")
+            run("xdotool", "mousemove", "--window", editor, str(play_x), str(play_y), "sleep", ".05",
+                "mousedown", "1", "sleep", ".08", "mouseup", "1")
+            idle(editor)
+            decoded("paused-green", 1)
+            pointer(.1)
+            run("xdotool", "mousedown", "1", "mouseup", "1")
+            decoded("restored-accepted-red", 0)
+            idle(editor)
+            shot(editor, "scrub-restored-accepted")
+            pointer(.82)
+            run("xdotool", "mousedown", "1", "mouseup", "1")
+            decoded("blue-after-playback", 2)
+            idle(editor)
             shot(editor, "scrub-normal")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
             # Minimum-size timeline remains an input target; no numeric Seek.
@@ -782,9 +804,9 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "checks": ["decode-before-release", "held-red-green-blue", "failure-preserves-frame",
-                    "failure-ends-gesture", "fresh-press-retry", "minimum-track-input",
+                    "failure-ends-gesture", "fresh-press-retry", "paused-playback-accepted-track-seek", "minimum-track-input",
                     "source-history-immutable", "no-exports", "clean-close-quit"]}, indent=2) + "\n")
-            print("PASS timeline scrub: held red/green/blue decoded frames, failure/retry, minimum input, immutable source/History and clean quit")
+            print("PASS timeline scrub: held red/green/blue decoded frames, failure/retry, accepted-frame restore after playback, minimum input, immutable source/History and clean quit")
             return
         if args.export_preferences:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")

@@ -1112,6 +1112,20 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual((worker.requests.last?["position_ms"] as? NSNumber)?.uint64Value, 1_237,
                        "restoring the accepted still cannot replace a post-playback seek target")
         XCTAssertEqual(seek.doubleValue, 1_237)
+        let preview = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSImageView }.first)
+        let acceptedPixels = try pixels(try XCTUnwrap(preview.image?.cgImage(
+            forProposedRect: nil, context: nil, hints: nil)))
+        play.performClick(nil)
+        worker.sendPlaybackFrame(RecordingPlaybackImage(positionMilliseconds: 1_703,
+            image: try solidImage(red: 140, green: 25, blue: 60)))
+        play.performClick(nil); worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(seek.doubleValue, 1_703)
+        seek.doubleValue = 1_237; _ = seek.sendAction(seek.action, to: seek.target)
+        XCTAssertEqual(worker.requests.count, 2, "the accepted frame is already decoded")
+        XCTAssertEqual(seek.doubleValue, 1_237)
+        XCTAssertEqual(try pixels(try XCTUnwrap(preview.image?.cgImage(
+            forProposedRect: nil, context: nil, hints: nil))), acceptedPixels,
+            "the duplicate-seek shortcut still restores the accepted pixels after playback")
     }
 
     func testPauseBeforeDelayedPlaybackStartRetainsAcceptedDisplayedPosition() throws {
@@ -2053,11 +2067,16 @@ final class RecordingEditorTests: XCTestCase {
         try button("Adjust crop", in: controller.root).performClick(nil)
         worker.completeSource(.success(RecordingSourceImage(positionMilliseconds: 400,
             image: try solidImage(width: 320, height: 180, red: 40, green: 80, blue: 160))))
-        try button("Done cropping", in: controller.root).performClick(nil)
+        worker.requestResult = .success(try presentation(position: 400, revision: 1, crop: crop))
+        let samePosition = try slider("Recording frame position", in: controller.root)
+        samePosition.doubleValue = 400; _ = samePosition.sendAction(samePosition.action, to: samePosition.target)
+        XCTAssertEqual(worker.requests.count, 1, "same-position seek still finishes the source-crop view")
+        XCTAssertTrue(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first?.isHidden == true)
         XCTAssertEqual(worker.sourceCalls, 3)
 
         let seek = try slider("Recording frame position", in: controller.root)
-        worker.requestResult = .success(try presentation(position: 913, revision: 1, crop: crop))
+        worker.requestResult = .success(try presentation(position: 913, revision: 2, crop: crop))
         seek.doubleValue = 913; _ = seek.sendAction(seek.action, to: seek.target)
         worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 913,
             image: try solidImage(width: 320, height: 180, red: 70, green: 120, blue: 30)))
