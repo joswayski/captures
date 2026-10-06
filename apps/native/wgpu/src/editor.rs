@@ -1527,8 +1527,10 @@ impl View {
             let selected = rfd::FileDialog::new()
                 .set_title("Import images")
                 .add_filter(
-                    "Images (PNG, JPEG, WebP, TIFF, GIF, BMP)",
-                    &["png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp"],
+                    "Images (PNG, JPEG, WebP, TIFF, GIF, BMP, SVG)",
+                    &[
+                        "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "svg",
+                    ],
                 )
                 .pick_files();
             let _ = tx.send(selected);

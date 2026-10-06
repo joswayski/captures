@@ -1962,7 +1962,7 @@ impl ImportPlacement {
 /// Shipping drop toast before any placement is known.
 pub const DROP_IMAGE: &str = "Drop image";
 /// Error when a drop carries no image the native decoders accept.
-pub const DROP_UNSUPPORTED: &str = "Drop PNG, JPEG, WebP, TIFF, GIF, or BMP image files.";
+pub const DROP_UNSUPPORTED: &str = "Drop PNG, JPEG, WebP, TIFF, GIF, BMP, or SVG image files.";
 
 /// True for file names the native import decoders accept.
 #[must_use]
@@ -1972,7 +1972,7 @@ pub fn is_supported_image_path(path: &Path) -> bool {
         .is_some_and(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "gif" | "bmp"
+                "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "gif" | "bmp" | "svg"
             )
         })
 }

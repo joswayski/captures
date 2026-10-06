@@ -3724,6 +3724,42 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(convertedCMYK.data[3], 255)
     }
 
+    func testSvgImportUsesSharedBoundedStraightAlphaDecoder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("Vector é.SVG")
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="3" height="4" viewBox="0 0 6 8">
+          <rect x="2" y="4" width="2" height="2" fill="#0b49d3" opacity="0.5"/>
+          <path d="M4 0H6V2H4Z" fill="#359711"/>
+        </svg>
+        """
+        try Data(svg.utf8).write(to: url)
+        XCTAssertTrue(NativeEditorCanvas.isSupportedImage(url))
+        let decoded = try EditorImageDecoder.decode(url)
+        XCTAssertEqual(decoded.name, "Vector é")
+        XCTAssertEqual(decoded.width, 3); XCTAssertEqual(decoded.height, 4)
+        XCTAssertEqual(decoded.bytesPerRow, 12)
+        try FileManager.default.removeItem(at: url)
+        for y in 0..<4 {
+            for x in 0..<3 {
+                let actual = Array(decoded.data[((y * 3 + x) * 4)..<((y * 3 + x + 1) * 4)])
+                if x == 1 && y == 2 {
+                    for (actual, expected) in zip(actual, [11, 73, 211, 128]) {
+                        XCTAssertLessThanOrEqual(abs(Int(actual) - expected), 1)
+                    }
+                } else {
+                    XCTAssertEqual(actual, x == 2 && y == 0 ? [53, 151, 17, 255] : [0, 0, 0, 0])
+                }
+            }
+        }
+        try Data("<svg xmlns='http://www.w3.org/2000/svg' width='3' height='4'><image href='/tmp/private.png' width='3' height='4'/></svg>".utf8).write(to: url)
+        XCTAssertThrowsError(try EditorImageDecoder.decode(url)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Convert"))
+        }
+    }
+
     func testImageIOImportsOnlyTheOffsetGifFirstFrameWithLogicalCanvasTransparency() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

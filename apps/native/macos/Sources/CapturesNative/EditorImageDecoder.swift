@@ -1,12 +1,31 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import CCapturesSettings
 
 enum EditorImageDecoder {
     private static let maximumDimension = 16_384
     private static let maximumPixels = 100_000_000
 
     static func decode(_ url: URL) throws -> EditorDecodedImage {
+        if url.pathExtension.lowercased() == "svg" {
+            var response: UnsafeMutablePointer<CChar>?
+            let frame = url.path.withCString { captures_editor_decode_image_v1($0, &response) }
+            defer {
+                if let frame { captures_editor_frame_free_v1(frame) }
+                if let response { captures_settings_free_v1(response) }
+            }
+            guard let response else { throw AppBridgeError.invalidResponse }
+            _ = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+            var pixels = CapturesRegionPixels()
+            guard let frame, captures_editor_frame_pixels_v1(frame, &pixels),
+                  let data = pixels.data else { throw AppBridgeError.invalidResponse }
+            let name = url.deletingPathExtension().lastPathComponent
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return EditorDecodedImage(data: Data(bytes: data, count: pixels.length),
+                width: Int(pixels.width), height: Int(pixels.height), bytesPerRow: pixels.bytes_per_row,
+                name: name.isEmpty ? "Imported image" : name)
+        }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [
             kCGImageSourceShouldCache: false,
         ] as CFDictionary), CGImageSourceGetCount(source) > 0,

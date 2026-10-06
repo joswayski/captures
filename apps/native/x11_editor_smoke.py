@@ -129,7 +129,7 @@ def main():
     parser.add_argument("--external-image-only", action="store_true",
                         help="Open external images, preserve per-file errors and safely reopen drafts/sources")
     parser.add_argument("--import-formats-only", action="store_true",
-                        help="Import GIF first frames and BMP layers, undo/redo and reopen without sources")
+                        help="Import GIF first frames, BMP and SVG layers, undo/redo and reopen without sources")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -1169,6 +1169,7 @@ def main():
             resize_editor(1200, 701)
             gif = output / "First frame.GIF"
             bmp = output / "Asymmetric.BMP"
+            svg = output / "Vector.SVG"
             notes = output / "notes.txt"
             notes.write_text("not an image")
             # Only frame zero should become a layer; frame one is solid blue.
@@ -1178,35 +1179,66 @@ def main():
                 "(", "-size", "120x80", "xc:#2d64bd", ")", "-loop", "0", "-strip", str(gif))
             run("convert", "-size", "80x50", "xc:#ebbf48", "-fill", "#8e44ad",
                 "-draw", "rectangle 31,19 79,49", "-strip", "BMP3:" + str(bmp))
-            source_bytes = {path: path.read_bytes() for path in [gif, bmp]}
-            chooser.selected = [gif, notes, bmp]
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" height="50" viewBox="0 0 180 100">'
+                '<path d="M0 0H70V100H0Z" fill="#2d64bd"/>'
+                '<rect x="100" y="40" width="50" height="50" fill="white" opacity="0.5"/>'
+                '<text x="78" y="28" font-family="sans-serif" font-size="24" fill="#2d64bd">A7</text></svg>')
+            source_bytes = {path: path.read_bytes() for path in [gif, bmp, svg]}
+            chooser.selected = [gif, notes, bmp, svg]
             toolbar_click("import")
-            wait(lambda: chooser.pending, "GIF/BMP multi-select picker")
+            wait(lambda: chooser.pending, "GIF/BMP/SVG multi-select picker")
             title, options = chooser.calls[-1]
             assert title == "Import images" and options.get("multiple", False)
             filters = str(options["filters"])
-            assert "*.gif" in filters and "*.bmp" in filters, filters
+            assert all("*." + extension in filters for extension in ["gif", "bmp", "svg"]), filters
             GLib.idle_add(chooser.respond, False)
-            imported = save_layers(lambda values: len(values) == 3, "GIF and BMP imported in order")
-            assert [layer["name"] for layer in imported[1:]] == [gif.name, bmp.name]
-            assert [(layer["naturalWidth"], layer["naturalHeight"]) for layer in imported[1:]] == [(120, 80), (80, 50)]
-            assert imported[2]["y"] >= imported[1]["y"] + imported[1]["height"]
+            imported = save_layers(lambda values: len(values) == 4, "GIF, BMP and SVG imported in order")
+            assert [layer["name"] for layer in imported[1:]] == [gif.name, bmp.name, svg.name]
+            assert [(layer["naturalWidth"], layer["naturalHeight"]) for layer in imported[1:]] == [(120, 80), (80, 50), (90, 50)]
+            for previous, current in zip(imported[1:], imported[2:]):
+                assert current["y"] >= previous["y"] + previous["height"]
             asset_pixel(imported[1], 10, 10, (213, 62, 85, 255))
             asset_pixel(imported[1], 50, 20, (60, 179, 113, 255))
             asset_pixel(imported[1], 100, 10, (0, 0, 0, 0))
             asset_pixel(imported[2], 10, 10, (235, 191, 72, 255))
             asset_pixel(imported[2], 50, 30, (142, 68, 173, 255))
-            shot(editor, "gif-bmp-imported")
-            document_pixel("gif-bmp-imported", imported[1]["x"] + 10, imported[1]["y"] + 10, (213, 62, 85))
-            document_pixel("gif-bmp-imported", imported[2]["x"] + 50, imported[2]["y"] + 30, (142, 68, 173))
+            asset_pixel(imported[3], 10, 10, (45, 100, 189, 255))
+            asset_pixel(imported[3], 80, 10, (0, 0, 0, 0))
+            asset_pixel(imported[3], 60, 30, (255, 255, 255, 128))
+            svg_asset = draft.parent / "assets" / (imported[3]["src"].split(":", 1)[1] + ".png")
+            text_pixels = run("convert", str(svg_asset), "-crop", "35x16+38+0", "-depth", "8", "rgba:-")
+            assert any(text_pixels[3::4]), "bundled SVG text must not silently disappear"
+            shot(editor, "gif-bmp-svg-imported")
+            document_pixel("gif-bmp-svg-imported", imported[1]["x"] + 10, imported[1]["y"] + 10, (213, 62, 85))
+            document_pixel("gif-bmp-svg-imported", imported[2]["x"] + 50, imported[2]["y"] + 30, (142, 68, 173))
+            document_pixel("gif-bmp-svg-imported", imported[3]["x"] + 10, imported[3]["y"] + 10, (45, 100, 189))
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 3, "SVG undone independently")
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 2, "one file per Undo")
             toolbar_click("undo")
-            save_layers(lambda values: len(values) == 1, "both imports undone")
+            save_layers(lambda values: len(values) == 1, "all imports undone")
             toolbar_click("redo")
             save_layers(lambda values: len(values) == 2, "GIF redone")
             toolbar_click("redo")
-            assert save_layers(lambda values: len(values) == 3, "BMP redone") == imported
+            save_layers(lambda values: len(values) == 3, "BMP redone")
+            toolbar_click("redo")
+            assert save_layers(lambda values: len(values) == 4, "SVG redone") == imported
+            unsupported_svg = output / "Resource.SVG"
+            unsupported_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" height="50">'
+                '<image href="private.png" width="90" height="50"/></svg>')
+            chooser.selected = [unsupported_svg]
+            toolbar_click("import")
+            wait(lambda: chooser.pending, "unsupported SVG picker")
+            GLib.idle_add(chooser.respond, False)
+            assert save_layers(lambda values: values == imported,
+                               "rejected SVG leaves the document untouched") == imported
+            shot(editor, "svg-conversion-error")
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 3,
+                        "rejected SVG adds no undo step; last valid SVG undone")
+            toolbar_click("redo")
+            assert save_layers(lambda values: len(values) == 4, "valid SVG restored after rejection") == imported
             assert all(path.read_bytes() == before for path, before in source_bytes.items())
             for path in source_bytes:
                 path.unlink()
@@ -1216,21 +1248,24 @@ def main():
             assert layers() == imported, "reopened draft retains detached image assets"
             asset_pixel(imported[1], 50, 20, (60, 179, 113, 255))
             asset_pixel(imported[2], 50, 30, (142, 68, 173, 255))
-            shot(editor, "gif-bmp-reopened")
+            asset_pixel(imported[3], 60, 30, (255, 255, 255, 128))
+            shot(editor, "gif-bmp-svg-reopened")
             resize_editor(760, 540)
-            shot(editor, "gif-bmp-minimum")
+            shot(editor, "gif-bmp-svg-minimum")
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "import format suite quits")
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["gif-bmp-picker-filters", "mixed-case-extensions", "unsupported-file-skipped",
+                "checks": ["gif-bmp-svg-picker-filters", "mixed-case-extensions", "unsupported-file-skipped",
                            "first-gif-frame-only", "transparent-gif-pixels", "asymmetric-bmp-pixels",
+                           "svg-viewbox-rasterization", "straight-svg-alpha", "svg-bundled-text",
+                           "unsupported-svg-preserves-document-and-undo",
                            "ordered-placement", "one-undo-step-per-file", "stable-redo",
                            "immutable-sources", "draft-reopens-after-source-removal", "original-unchanged"],
             }, indent=2) + "\n")
-            print("PASS native GIF/BMP imports: picker, pixels, alpha, undo/redo and detached draft reopen")
+            print("PASS native GIF/BMP/SVG imports: picker, pixels, alpha, undo/redo and detached draft reopen")
             return
 
         if args.external_image_only:

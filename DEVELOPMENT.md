@@ -443,8 +443,10 @@ Use `--external-image-only` for multi-file startup, canonical aliases, retained
 errors, exact imported pixels, source preservation, saved-draft refusal/restoration
 and same-ID source reload after explicit discard.
 Use `--import-formats-only` for the real multi-select picker transport, GIF first-frame
-transparency, asymmetric BMP pixels, one Undo per import and draft reopening after
-removing both source files. Run it in both appearances; it also captures minimum size.
+transparency, asymmetric BMP pixels, SVG viewBox/text/straight alpha, one Undo per
+import and draft reopening after removing all source files. Run it in both
+appearances; it also captures minimum size. SVG resource/DTD/size/node/depth failures
+are shared Rust regressions; AppKit uses the same decoder through the retained-frame ABI.
 Use `apps/native/x11_recording_editor_smoke.py --external-media` with `--binary`,
 `--output` and `--appearance` for a mixed still/GIF/MP4/WebM batch, live edits
 through alias refocus, closed-source reopen, immutable sources and real WebM-to-MP4
