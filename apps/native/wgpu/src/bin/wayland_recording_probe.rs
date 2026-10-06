@@ -35,6 +35,7 @@ fn run() -> Result<(), String> {
     let mut cancel_after = None;
     let mut show_cursor = false;
     let mut scenario = "video".to_owned();
+    let mut target = RecordingTarget::PortalDisplay;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -50,6 +51,13 @@ fn run() -> Result<(), String> {
             }
             "--show-cursor" => show_cursor = value.parse().map_err(|_| "Invalid cursor flag")?,
             "--scenario" => scenario = value,
+            "--target" => {
+                target = match value.as_str() {
+                    "display" => RecordingTarget::PortalDisplay,
+                    "window" => RecordingTarget::PortalWindow,
+                    _ => return Err("Target must be display or window.".into()),
+                }
+            }
             _ => return Err(format!("Unknown argument {argument}")),
         }
     }
@@ -78,7 +86,7 @@ fn run() -> Result<(), String> {
         } else {
             RecordingKind::Video
         },
-        target: RecordingTarget::PortalDisplay,
+        target,
         frames_per_second: 15,
         max_resolution: MaxResolution::Original,
         countdown_seconds: 0,

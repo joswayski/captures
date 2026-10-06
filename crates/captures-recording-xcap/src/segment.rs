@@ -138,7 +138,7 @@ impl XcapRecordingSegment {
         options
             .validate()
             .map_err(|error| XcapRecordingError::Worker(error.to_owned()))?;
-        if options.target == RecordingTarget::PortalDisplay {
+        if options.target.is_portal() {
             return Err(XcapRecordingError::InvalidTarget);
         }
         if (options.show_cursor || options.highlight_clicks) && !pointer_features_available() {
@@ -240,7 +240,7 @@ impl XcapRecordingSegment {
         )
     }
 
-    /// Records only the portal-selected display. Cursor pixels come from the
+    /// Records only the portal-selected display/window. Cursor pixels come from the
     /// granted stream; no pointer polling, monitor enumeration or fallback.
     #[cfg(target_os = "linux")]
     pub fn start_portal(
@@ -251,10 +251,11 @@ impl XcapRecordingSegment {
         options
             .validate()
             .map_err(|error| XcapRecordingError::Worker(error.to_owned()))?;
-        if options.target != RecordingTarget::PortalDisplay {
+        if !options.target.is_portal() {
             return Err(XcapRecordingError::InvalidTarget);
         }
         let (source, receiver) = crate::PortalVideoSource::start(
+            &options.target,
             options.show_cursor,
             options.frames_per_second,
             cancelled,

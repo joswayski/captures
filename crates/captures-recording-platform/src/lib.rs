@@ -12,7 +12,7 @@ pub use recovery::{RecordingRecovery, RecoveryDraft, RecoveryOutcome, RecoveryPr
 use std::path::Path;
 
 use captures_capture::DisplayDescriptor;
-use captures_recording::{AudioDevice, RecordingOptions, RecordingTarget};
+use captures_recording::{AudioDevice, RecordingOptions};
 #[cfg(target_os = "macos")]
 pub use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -117,7 +117,7 @@ fn start_segment(
 ) -> Result<NativeRecordingSegment, StartFailure> {
     #[cfg(not(target_os = "linux"))]
     let _ = is_current;
-    if options.target == RecordingTarget::PortalDisplay {
+    if options.target.is_portal() {
         if display.is_some() {
             return Err(StartFailure::Failed(
                 "Portal recording must not use invented monitor geometry".into(),

@@ -15,6 +15,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn run() -> Result<(), String> {
+    use captures_recording::RecordingTarget;
     use captures_recording_xcap::PortalVideoSource;
     use std::{
         collections::BTreeSet,
@@ -34,6 +35,7 @@ fn run() -> Result<(), String> {
     let mut count = 3_u32;
     let mut cancel_after = None;
     let mut show_cursor = false;
+    let mut target = RecordingTarget::PortalDisplay;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -50,6 +52,13 @@ fn run() -> Result<(), String> {
             "--show-cursor" => {
                 show_cursor = value.parse().map_err(|_| "Cursor must be true or false")?
             }
+            "--target" => {
+                target = match value.as_str() {
+                    "display" => RecordingTarget::PortalDisplay,
+                    "window" => RecordingTarget::PortalWindow,
+                    _ => return Err("Target must be display or window.".into()),
+                }
+            }
             _ => return Err(format!("Unknown argument {argument}")),
         }
     }
@@ -59,8 +68,8 @@ fn run() -> Result<(), String> {
     let output = output.ok_or("usage: wayland_video_probe --output NEW.png [--frames N] [--cancel-after-ms N] [--show-cursor true|false]")?;
     let started = Instant::now();
     let cancelled = || cancel_after.is_some_and(|duration| started.elapsed() >= duration);
-    let (source, frames) =
-        PortalVideoSource::start(show_cursor, 30, &cancelled).map_err(|error| error.to_string())?;
+    let (source, frames) = PortalVideoSource::start(&target, show_cursor, 30, &cancelled)
+        .map_err(|error| error.to_string())?;
     let mut last = None;
     let mut corner_colors = BTreeSet::new();
     let mut deadline = Instant::now() + Duration::from_secs(5);

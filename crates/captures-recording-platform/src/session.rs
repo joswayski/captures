@@ -10,7 +10,7 @@ use captures_history::HistoryEntry;
 use captures_media::{CancelToken, MediaToolchain, RecordingAssemblyKind, RecordingSegmentInput};
 use captures_recording::{
     DraftStore, RecordingCoordinator, RecordingDraftManifest, RecordingKind, RecordingOptions,
-    RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState, RecordingTarget,
+    RecordingSegmentManifest, RecordingSessionSnapshot, RecordingState,
 };
 use serde::Serialize;
 
@@ -44,7 +44,7 @@ impl RecordingSession {
         display: impl Into<Option<DisplayDescriptor>>,
     ) -> Result<Self, String> {
         let display = display.into();
-        if options.target == RecordingTarget::PortalDisplay {
+        if options.target.is_portal() {
             if !cfg!(target_os = "linux") {
                 return Err("Portal recording is only supported on Linux".into());
             }
@@ -726,9 +726,17 @@ mod tests {
         let mut options = options(&display);
         assert!(RecordingSession::prepare(recovery.clone(), options.clone(), None).is_err());
         assert!(!recovery.exists());
-        options.target = RecordingTarget::PortalDisplay;
-        assert!(RecordingSession::prepare(recovery.clone(), options, display).is_err());
-        assert!(!recovery.exists());
+        for target in [
+            RecordingTarget::PortalDisplay,
+            RecordingTarget::PortalWindow,
+        ] {
+            options.target = target;
+            assert!(
+                RecordingSession::prepare(recovery.clone(), options.clone(), display.clone())
+                    .is_err()
+            );
+            assert!(!recovery.exists());
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -738,7 +746,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let recovery = root.path().join("recovery");
         let mut options = options(&display());
-        options.target = RecordingTarget::PortalDisplay;
+        options.target = RecordingTarget::PortalWindow;
         let mut session = RecordingSession::prepare(recovery.clone(), options, None).unwrap();
         let directory = session.directory().to_owned();
         let current = Cell::new(true);
@@ -747,7 +755,7 @@ mod tests {
                 false,
                 || current.get(),
                 |options, _, display, _, active| {
-                    assert_eq!(options.target, RecordingTarget::PortalDisplay);
+                    assert_eq!(options.target, RecordingTarget::PortalWindow);
                     assert!(display.is_none() && active());
                     current.set(false);
                     assert!(!active());

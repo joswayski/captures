@@ -2939,8 +2939,8 @@ impl Live {
         #[cfg(target_os = "linux")]
         if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
         {
-            if request == CaptureRequest::Recording(capture_controls::TargetMode::Display) {
-                self.launch_portal_recording(ctx, frame, settings);
+            if let CaptureRequest::Recording(mode) = request {
+                self.launch_portal_recording(ctx, frame, settings, mode);
             } else {
                 self.launch_portal_screenshot(ctx, frame, request, settings);
             }
@@ -3109,13 +3109,14 @@ impl Live {
         ctx: &egui::Context,
         frame: &eframe::Frame,
         settings: Result<AppSettings, String>,
+        mode: capture_controls::TargetMode,
     ) {
         if !self.can_start_capture() {
             self.capture_failed("Capture is unavailable until the current action finishes.".into());
             return;
         }
         let (settings, options) = match settings.and_then(|settings| {
-            portal_recording_options(&settings.recording).map(|options| (settings, options))
+            portal_recording_options(&settings.recording, mode).map(|options| (settings, options))
         }) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -3995,6 +3996,13 @@ impl Live {
                         generation,
                         history_root: self.root.clone(),
                     });
+                    if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
+                        println!(
+                            "{}",
+                            serde_json::json!({"event":"recording-stop-submit",
+                            "detail":{"generation":generation}})
+                        );
+                    }
                 }
                 SelectorMessage::DiscardRecording { generation }
                     if self.flow.as_ref().map(CaptureFlow::generation) == Some(generation)
@@ -5154,9 +5162,10 @@ impl Live {
             {
                 self.capture_waiting_for_hide = false;
                 if self.capture_phase == Some(CapturePhase::RecordingCountdown)
-                    && self.recording_snapshot.as_ref().is_some_and(|snapshot| {
-                        snapshot.options.target == RecordingTarget::PortalDisplay
-                    })
+                    && self
+                        .recording_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.options.target.is_portal())
                 {
                     let Some(flow) = &self.flow else { return };
                     if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
@@ -7949,7 +7958,9 @@ impl Live {
                         .send_viewport_cmd(egui::ViewportCommand::ContentProtected(
                             recording_controls_are_excluded(include_controls),
                         ));
-                    let notice = if cfg!(target_os = "linux") || include_controls {
+                    let notice = if snapshot.options.target == RecordingTarget::PortalWindow {
+                        "Capture is limited to the portal-selected window"
+                    } else if cfg!(target_os = "linux") || include_controls {
                         if hide_available {
                             "These controls will show in recordings · Use Hide controls to keep them out"
                         } else {
@@ -8665,14 +8676,17 @@ impl Live {
                 // Wayland may provide neither a tray host nor global shortcuts.
                 // Keep portal capture reachable from the native window.
                 ui.add_space(t.number("s-5"));
-                let (button, record) = ui.horizontal(|ui| {
+                let (button, record, record_window) = ui.horizontal(|ui| {
                     let button = ui.add_enabled_ui(self.can_launch_capture(), |ui| {
                         crate::preferences_widgets::button(ui, t, "Take screenshot…", true)
                     }).inner;
                     let record = ui.add_enabled_ui(self.can_launch_capture(), |ui| {
                         crate::preferences_widgets::button(ui, t, "Record display…", false)
                     }).inner;
-                    (button, record)
+                    let record_window = ui.add_enabled_ui(self.can_launch_capture(), |ui| {
+                        crate::preferences_widgets::button(ui, t, "Record window…", false)
+                    }).inner;
+                    (button, record, record_window)
                 }).inner;
                 if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
                     println!("{}", serde_json::json!({"event":"portal-screenshot-layout",
@@ -8683,6 +8697,10 @@ impl Live {
                         "detail":{"button":[record.rect.min.x, record.rect.min.y,
                             record.rect.max.x, record.rect.max.y], "enabled":record.enabled(),
                             "viewport_size":ui.input(|input| [input.content_rect().width(), input.content_rect().height()])}}));
+                    println!("{}", serde_json::json!({"event":"portal-window-recording-layout",
+                        "detail":{"button":[record_window.rect.min.x, record_window.rect.min.y,
+                            record_window.rect.max.x, record_window.rect.max.y], "enabled":record_window.enabled(),
+                            "viewport_size":ui.input(|input| [input.content_rect().width(), input.content_rect().height()])}}));
                 }
                 if button.clicked() {
                     self.request_capture(CaptureRequest::Display);
@@ -8692,12 +8710,28 @@ impl Live {
                     self.request_capture(CaptureRequest::Recording(capture_controls::TargetMode::Display));
                     ui.ctx().request_repaint();
                 }
-                ui.label(RichText::new("Desktop portal • Screenshots and display recording. Region/window selection and floating previews are unavailable.")
+                if record_window.clicked() {
+                    self.request_capture(CaptureRequest::Recording(capture_controls::TargetMode::Window));
+                    ui.ctx().request_repaint();
+                }
+                let notice = ui.label(RichText::new("Desktop portal • Window recording needs portal support. Region capture, window screenshots and floating previews are unavailable.")
                     .size(t.number("text-sm")).color(t.color("text-subtle")));
+                if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
+                    let clip = ui.clip_rect();
+                    println!("{}", serde_json::json!({"event":"portal-limitation-layout",
+                        "detail":{"rect":[notice.rect.min.x, notice.rect.min.y, notice.rect.max.x, notice.rect.max.y],
+                            "clip":[clip.min.x, clip.min.y, clip.max.x, clip.max.y],
+                            "viewport_size":ui.input(|input| [input.content_rect().width(), input.content_rect().height()])}}));
+                }
             }
             if self.can_hide == Some(false) {
                 ui.add_space(t.number("s-5"));
                 ui.colored_label(t.color("theme-signal"), "Display, region and window capture unavailable: this Wayland backend cannot hide and verify the root window.");
+            }
+            // Panels paint inside their previous measured height. Wrapping on
+            // resize needs a sizing pass before presenting the taller header.
+            if ui.min_rect().bottom() > ui.clip_rect().bottom() {
+                ui.ctx().request_discard("History header grew after wrapping");
             }
         });
         if share_selected && let Some(id) = self.selection.id.clone() {
@@ -9608,10 +9642,16 @@ fn recording_recovery_root(history_root: &Path) -> PathBuf {
 #[cfg(target_os = "linux")]
 fn portal_recording_options(
     settings: &captures_settings::RecordingSettings,
+    mode: capture_controls::TargetMode,
 ) -> Result<RecordingOptions, String> {
+    let target = match mode {
+        capture_controls::TargetMode::Display => RecordingTarget::PortalDisplay,
+        capture_controls::TargetMode::Window => RecordingTarget::PortalWindow,
+        capture_controls::TargetMode::Region => return Err("Region recording is unavailable through the desktop portal. Choose a display or window instead.".into()),
+    };
     let options = RecordingOptions {
         kind: RecordingKind::Video,
-        target: RecordingTarget::PortalDisplay,
+        target,
         frames_per_second: settings.video_fps,
         max_resolution: settings.video_max_resolution,
         countdown_seconds: settings.countdown_seconds,
@@ -11599,7 +11639,8 @@ mod tests {
             mono_audio: true,
             ..Default::default()
         };
-        let options = portal_recording_options(&settings).unwrap();
+        let options =
+            portal_recording_options(&settings, capture_controls::TargetMode::Display).unwrap();
         assert_eq!(options.kind, RecordingKind::Video);
         assert_eq!(options.frames_per_second, 15);
         assert_eq!(
@@ -11617,11 +11658,23 @@ mod tests {
             serde_json::to_value(options.target).unwrap(),
             serde_json::json!({"type":"portal_display"})
         );
+        let window =
+            portal_recording_options(&settings, capture_controls::TargetMode::Window).unwrap();
+        assert_eq!(window.target, RecordingTarget::PortalWindow);
+        assert_eq!(window.audio, options.audio);
+        assert_eq!(window.countdown_seconds, 5);
+        assert!(portal_recording_options(&settings, capture_controls::TargetMode::Region).is_err());
         settings.highlight_clicks = true;
-        assert!(portal_recording_options(&settings).is_err());
+        assert!(
+            portal_recording_options(&settings, capture_controls::TargetMode::Display).is_err()
+        );
+        assert!(portal_recording_options(&settings, capture_controls::TargetMode::Window).is_err());
         settings.highlight_clicks = false;
         settings.show_keystrokes = true;
-        assert!(portal_recording_options(&settings).is_err());
+        assert!(
+            portal_recording_options(&settings, capture_controls::TargetMode::Display).is_err()
+        );
+        assert!(portal_recording_options(&settings, capture_controls::TargetMode::Window).is_err());
     }
 
     #[test]

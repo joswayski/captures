@@ -193,12 +193,15 @@ It uses separate development data. On Wayland, **Take screenshot…** in native
 History uses the desktop portal without X11, unmaps Captures' windows before the
 request, and restores them afterward. Captures return to History, without floating
 previews or guessed monitor geometry. **Edit** opens the screenshot editor directly;
-floating-preview **Restore** is disabled. **Record display…** opens a native
-countdown, requests portal consent, and connects MP4 recording to the normal
+floating-preview **Restore** is disabled. **Record display…** and **Record window…**
+open a native countdown, request portal consent, and connect MP4 recording to the normal
 pause/resume, restart, Stop and Delete controls. Cancelling consent removes the
 empty take; losing the stream retains partial media for History recovery.
-Recording controls appear in the output; Hide requires a working tray restore path.
-Region/window selection and screenshots during recording remain unavailable.
+Display recordings include the controls; Hide requires a working tray restore path.
+Window recording requires a ScreenCast portal v3+ advertising window sources;
+only the chosen window is shared, and every new/resumed segment asks again.
+Unsupported backends report an error without falling back to display capture.
+Region capture, window screenshots and screenshots during recording remain unavailable.
 Portal policy controls consent and cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
 Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
@@ -847,13 +850,13 @@ the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
 Like the shipping app, native Capture History shows its header, filters and grid;
 captures start from the tray, shortcuts and New Capture menu. Wayland additionally
-offers **Take screenshot…** and **Record display…** because a tray or global shortcuts may be unavailable. A
+offers **Take screenshot…**, **Record display…** and **Record window…** because a tray or global shortcuts may be unavailable. A
 denied capture opens the native permission recovery: Restart & Retry on macOS, or a
 **Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.
-Wayland region/window selection remains unavailable. Physical
+Wayland region capture and window screenshots remain unavailable. Physical
 permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
 physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,

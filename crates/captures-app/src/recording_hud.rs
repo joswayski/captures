@@ -344,15 +344,20 @@ pub fn present(input: &Input) -> View {
 }
 
 /// Shipping `recordingErrorMessage`: drop transport prefixes and capitalize a
-/// leading article so engine errors read as sentences.
+/// leading article so engine errors read as sentences. Native portal diagnostics
+/// keep their wrappers in recovery data, not in the narrow HUD line.
 pub fn error_message(value: &str) -> String {
     let mut message = value.trim();
     loop {
         let lower = message.to_ascii_lowercase();
-        let Some(prefix) = ["error:", "background task failed:", "recording failed:"]
-            .into_iter()
-            .find(|prefix| lower.starts_with(prefix))
-        else {
+        let Some(prefix) = [
+            "error:",
+            "background task failed:",
+            "recording failed:",
+            "screen capture failed: desktop recording portal:",
+        ]
+        .into_iter()
+        .find(|prefix| lower.starts_with(prefix)) else {
             break;
         };
         message = message[prefix.len()..].trim_start();
@@ -614,6 +619,16 @@ mod tests {
         assert_eq!(
             error_message("  background task failed: an encoder crashed "),
             "An encoder crashed"
+        );
+        assert_eq!(
+            error_message(
+                "Error: screen capture failed: Desktop recording portal: the portal cannot share a window"
+            ),
+            "The portal cannot share a window"
+        );
+        assert_eq!(
+            error_message("screen capture failed: desktop recorder busy"),
+            "screen capture failed: desktop recorder busy"
         );
         assert_eq!(error_message("ERROR:   "), DEFAULT_ERROR);
         assert_eq!(error_message(""), DEFAULT_ERROR);
