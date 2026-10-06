@@ -225,12 +225,9 @@ fn decode_svg(bytes: &[u8], not_loaded: &str) -> Result<RgbaImage, String> {
     {
         return Err(not_loaded.to_owned());
     }
-    // Browser image sizing for relative/omitted dimensions differs from usvg's
-    // standalone defaults. Do not silently import a different natural size.
-    for attribute in ["width", "height"] {
-        let absolute = xml
-            .root_element()
-            .attribute(attribute)
+    let root = xml.root_element();
+    let absolute = ["width", "height"].map(|attribute| {
+        root.attribute(attribute)
             .and_then(|value| value.parse::<svgtypes::Length>().ok())
             .is_some_and(|length| {
                 length.number > 0.
@@ -244,10 +241,32 @@ fn decode_svg(bytes: &[u8], not_loaded: &str) -> Result<RgbaImage, String> {
                             | svgtypes::LengthUnit::Pt
                             | svgtypes::LengthUnit::Pc
                     )
-            });
-        if !absolute {
-            return Err("SVG imports need explicit absolute width and height. Set their dimensions or convert to PNG first.".into());
-        }
+            })
+    });
+    // One absolute side plus an intrinsic viewBox ratio has the same sizing in
+    // browsers and usvg. Percentages, viewBox-only and no-ratio defaults differ;
+    // keep those explicit errors rather than importing a different natural size.
+    let inferred = ((absolute[0] && root.attribute("height").is_none())
+        || (absolute[1] && root.attribute("width").is_none()))
+        && root
+            .attribute("viewBox")
+            .and_then(|value| value.parse::<svgtypes::ViewBox>().ok())
+            .is_some_and(|viewbox| {
+                viewbox.x.is_finite()
+                    && viewbox.y.is_finite()
+                    && viewbox.w.is_finite()
+                    && viewbox.h.is_finite()
+                    && viewbox.w > 0.
+                    && viewbox.h > 0.
+            })
+        && root
+            .attribute("preserveAspectRatio")
+            .and_then(|value| value.parse::<svgtypes::AspectRatio>().ok())
+            .unwrap_or_default()
+            .align
+            != svgtypes::Align::None;
+    if !absolute.into_iter().all(|value| value) && !inferred {
+        return Err("SVG imports need absolute width and height, or one absolute dimension and a viewBox aspect ratio. Set their dimensions or convert to PNG first.".into());
     }
     for node in xml.descendants().filter(roxmltree::Node::is_element) {
         if node.ancestors().take(34).count() > 33 {
@@ -990,6 +1009,63 @@ mod tests {
             sans,
             decode_svg(svg("monospace").as_bytes(), "invalid").unwrap()
         );
+    }
+
+    #[test]
+    fn svg_infers_one_missing_dimension_from_viewbox_without_changing_pixels() {
+        // Independently checked with HTMLImageElement.naturalWidth/Height in
+        // Chromium: infer the missing side from the viewBox, not 100 or 150px.
+        for (dimension, expected) in [
+            ("width='18'", (18, 24)),
+            ("height='20'", (15, 20)),
+            ("width='0.25in'", (24, 32)),
+        ] {
+            let svg = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" {dimension} viewBox="-3 -5 6 8">
+                <rect x="-1" y="-1" width="2" height="2" fill="#0b49d3" opacity="0.5"/>
+                <path d="M1 -5H3V-3H1Z" fill="#359711"/></svg>"##
+            );
+            let pixels = decode_svg(svg.as_bytes(), "invalid").unwrap();
+            assert_eq!(pixels.dimensions(), expected, "{dimension}");
+            assert_eq!(
+                pixels.get_pixel(expected.0 * 5 / 6, expected.1 / 8).0,
+                [53, 151, 17, 255],
+                "viewBox offset and scale"
+            );
+            for (actual, expected) in pixels
+                .get_pixel(expected.0 / 2, expected.1 * 5 / 8)
+                .0
+                .into_iter()
+                .zip([11, 73, 211, 128])
+            {
+                close(actual, expected, 1, "inferred SVG straight alpha");
+            }
+            assert_eq!(pixels.get_pixel(0, expected.1 - 1).0, [0, 0, 0, 0]);
+        }
+        for dimensions in [
+            "width='18' viewBox='0 0 6 0'",
+            "height='20' viewBox='0 0 0 8'",
+            "width='18' viewBox='0 0 6 8' preserveAspectRatio='none'",
+            "width='18' viewBox='0 0 6 8' preserveAspectRatio='defer none'",
+        ] {
+            let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' {dimensions}/>");
+            assert!(
+                decode_svg(svg.as_bytes(), "invalid").is_err(),
+                "{dimensions}"
+            );
+        }
+        for dimensions in [
+            "width='16385' viewBox='0 0 6 8'",
+            "height='2049' viewBox='0 0 8 8'",
+        ] {
+            let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' {dimensions}/>");
+            assert!(
+                decode_svg(svg.as_bytes(), "invalid")
+                    .unwrap_err()
+                    .contains("pixels"),
+                "inferred dimensions must obey allocation limits: {dimensions}"
+            );
+        }
     }
 
     #[test]
