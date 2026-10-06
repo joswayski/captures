@@ -17,6 +17,32 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Native Wayland shortcuts now use the public GlobalShortcuts portal with
+desktop-authoritative membership and trigger descriptions. Preferences exposes
+Pending/Bound/Unavailable, read-only rows, v2 Configure and explicit Retry.
+Denied/lost sessions do not fall back to X11 or restart consent automatically.
+Partial changes invalidate queued/held routing before ListShortcuts reconciliation.
+The 24-case private-bus suite includes directed spoof signals and failed/cancelled
+List requests. The 14-case private-Sway host suite covers dark/light normal/minimum
+UI, Configure/Retry, screenshot pixels, window-only failed recording cleanup and
+pending/event-heavy Quit. The same-role remap patch now rejects stale configures
+before SCTK ACK and stops rendering during drain; its immediate-hide/cancelled-remap
+pixel regression needs the fresh-configure compositor fix (Sway 1.9+).
+Sway 1.7 is unsupported; the pinned headless test fixture is not a desktop install.
+The hidden live root now declares children on its first UI pass even when settings
+load immediately; otherwise a quiet launch could consume the notice's one-shot
+paint request without creating it. Private-Sway lifecycle and real dark/light
+recording regressions pass. Isolated capture/recording smokes preserve the selected
+compositor PATH after dropping privileges instead of silently using old system Sway.
+Unsupported region/window screenshot modes remain unsupported even when granted.
+
+| Platform | Desktop-shortcuts slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing direct manager and local recorder retained; shared Linux adapter gated; no physical verification in this Linux orb |
+| Windows | Existing direct manager and local recorder retained; native Windows CI/physical verification remains separate |
+| X11 | Existing direct registrations retained; disposable real-key/tray shortcut-editing regression passes; physical acceptance open |
+| Wayland | Portal protocol and native private-Sway input/routing/presentation exercised; physical GNOME/KDE key delivery, consent, accessibility and mixed-DPI acceptance open |
+
 Both recording-editor hosts now initialize new windows from persisted export
 format, GIF FPS and maximum width. The shared shipping policy retains GIF sources,
 uses explicit GIF/WebM preferences for video, and preserves a WebM source when the

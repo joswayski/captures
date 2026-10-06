@@ -554,11 +554,11 @@ def main():
         command = [
             "sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
             'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" '
-            '--regid="$2" --init-groups env HOME="$3" "$4" "$5" --isolated '
+            '--regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated '
             '--binary "$6" --injector "$7" --wlr-backend "$8" --output "$9"',
             "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable,
             str(Path(__file__).resolve()), str(args.binary.resolve()), str(args.injector.resolve()),
-            str(args.wlr_backend.resolve()), str(args.output.resolve()),
+            str(args.wlr_backend.resolve()), str(args.output.resolve()), os.environ["PATH"],
         ]
         subprocess.run(command, check=True)
         return

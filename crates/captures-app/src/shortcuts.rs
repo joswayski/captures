@@ -1,5 +1,7 @@
 //! Event-loop-owned capture shortcuts. The process-wide dispatcher also
 //! serves temporary capture Escape; hosts wake on events, never poll a timer.
+#[cfg(target_os = "linux")]
+mod portal;
 mod recording;
 pub use recording::{
     ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
@@ -30,6 +32,19 @@ pub enum CaptureShortcut {
 }
 
 impl CaptureShortcut {
+    /// Stable desktop-portal action ID, independent of the chosen chord.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::NewCapture => "new_capture",
+            Self::Region => "region",
+            Self::Window => "window",
+            Self::Display => "display",
+            Self::RecordRegion => "record_region",
+            Self::RecordWindow => "record_window",
+            Self::RecordDisplay => "record_display",
+        }
+    }
+
     pub fn is_recording(self) -> bool {
         matches!(
             self,
@@ -168,6 +183,21 @@ struct Dispatcher {
     routes: Mutex<Routes>,
     wake: Box<dyn Fn() + Send + Sync>,
 }
+
+impl Dispatcher {
+    fn event(&self, event: GlobalHotKeyEvent) {
+        let wake = {
+            let mut routes = self.routes.lock().unwrap();
+            let blocked = !routes.restore_only
+                && !crate::capture_flow::shortcuts_allowed(routes.selector_generation);
+            routes.event(event.id, event.state, blocked)
+        };
+        if wake {
+            (self.wake)();
+        }
+    }
+}
+
 static DISPATCHER: Mutex<Option<Arc<Dispatcher>>> = Mutex::new(None);
 static INSTALL: Once = Once::new();
 
@@ -221,15 +251,7 @@ fn dispatch(event: GlobalHotKeyEvent) {
     }
     let dispatcher = DISPATCHER.lock().unwrap().clone();
     if let Some(dispatcher) = dispatcher {
-        let wake = {
-            let mut routes = dispatcher.routes.lock().unwrap();
-            let blocked = !routes.restore_only
-                && !crate::capture_flow::shortcuts_allowed(routes.selector_generation);
-            routes.event(event.id, event.state, blocked)
-        };
-        if wake {
-            (dispatcher.wake)();
-        }
+        dispatcher.event(event);
     }
 }
 
@@ -388,16 +410,49 @@ fn suspend_routes(
 /// callbacks only queue an action and call `wake`; invoke `next_action` on the
 /// host thread. Never construct it for fixture scenes: like shipping, it
 /// unbinds overlapping OS screenshot keys ([`crate::system_shortcuts`]) at
-/// startup and whenever the bindings change.
+/// startup and whenever direct bindings change. Wayland uses only the public
+/// desktop portal, whose returned bindings are authoritative.
 pub struct CaptureShortcuts {
-    manager: GlobalHotKeyManager,
+    backend: Backend,
     dispatcher: Arc<Dispatcher>,
     registered: Bindings,
     takeover: crate::system_shortcuts::Takeover,
     _event_loop_thread: PhantomData<Rc<()>>,
 }
 
+enum Backend {
+    Direct(GlobalHotKeyManager),
+    #[cfg(target_os = "linux")]
+    Portal(portal::Worker),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PortalShortcutStatus {
+    Pending,
+    Bound {
+        configurable: bool,
+        triggers: BTreeMap<String, String>,
+        configuration_error: Option<String>,
+    },
+    Unavailable(String),
+}
+
 impl CaptureShortcuts {
+    fn claim_dispatcher(
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Arc<Dispatcher>, String> {
+        let dispatcher = Arc::new(Dispatcher {
+            routes: Mutex::new(Routes::default()),
+            wake: Box::new(wake),
+        });
+        let mut owner = DISPATCHER.lock().unwrap();
+        if owner.is_some() {
+            return Err("Capture shortcuts already have a live owner".into());
+        }
+        *owner = Some(dispatcher.clone());
+        Ok(dispatcher)
+    }
+
     pub fn new(
         settings: &AppSettings,
         wake: impl Fn() + Send + Sync + 'static,
@@ -406,19 +461,9 @@ impl CaptureShortcuts {
         bindings(settings)?;
         install_dispatcher();
         let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
-        let dispatcher = Arc::new(Dispatcher {
-            routes: Mutex::new(Routes::default()),
-            wake: Box::new(wake),
-        });
-        {
-            let mut owner = DISPATCHER.lock().unwrap();
-            if owner.is_some() {
-                return Err("Capture shortcuts already have a live owner".into());
-            }
-            *owner = Some(dispatcher.clone());
-        }
+        let dispatcher = Self::claim_dispatcher(wake)?;
         let mut shortcuts = Self {
-            manager,
+            backend: Backend::Direct(manager),
             dispatcher,
             registered: Bindings::new(),
             takeover: crate::system_shortcuts::Takeover::default(),
@@ -429,9 +474,52 @@ impl CaptureShortcuts {
         Ok(shortcuts)
     }
 
+    /// Start asynchronous portal consent on a worker. Never register X11 keys
+    /// or take over OS shortcuts on this path, including denial and failure.
+    #[cfg(target_os = "linux")]
+    pub fn new_wayland(
+        settings: &AppSettings,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self, String> {
+        let desired = bindings(settings)?;
+        let dispatcher = Self::claim_dispatcher(wake)?;
+        let worker = portal::Worker::start(desired.clone(), dispatcher.clone());
+        let shortcuts = Self {
+            backend: Backend::Portal(worker),
+            dispatcher,
+            registered: desired,
+            takeover: crate::system_shortcuts::Takeover::default(),
+            _event_loop_thread: PhantomData,
+        };
+        shortcuts.set_enabled(true);
+        Ok(shortcuts)
+    }
+
+    pub fn portal_status(&self) -> Option<PortalShortcutStatus> {
+        match &self.backend {
+            Backend::Direct(_) => None,
+            #[cfg(target_os = "linux")]
+            Backend::Portal(worker) => Some(worker.status()),
+        }
+    }
+
+    /// Open the desktop's chooser; local settings do not overwrite its keys.
+    pub fn configure_portal(&self) -> Result<(), String> {
+        match &self.backend {
+            Backend::Direct(_) => Err("Desktop portal shortcuts are not active".into()),
+            #[cfg(target_os = "linux")]
+            Backend::Portal(worker) => worker.configure(),
+        }
+    }
+
     /// Add new chords before removing old ones. Parse/conflict failure retains
     /// the old mapping; OS rollback failure is reported, never silently ignored.
     pub fn update(&mut self, settings: &AppSettings) -> Result<(), String> {
+        let manager = match &self.backend {
+            Backend::Direct(manager) => manager,
+            #[cfg(target_os = "linux")]
+            Backend::Portal(_) => return Ok(()), // The chooser owns these bindings.
+        };
         let next = bindings(settings)?;
         let (enabled, suspended) = {
             let mut routes = self.dispatcher.routes.lock().unwrap();
@@ -445,7 +533,7 @@ impl CaptureShortcuts {
         };
         // Shipping frees overlapping system keys before claiming the chords.
         self.takeover = crate::system_shortcuts::take_over_current_os(settings);
-        let result = sync_bindings(&self.manager, &mut self.registered, &next, suspended);
+        let result = sync_bindings(manager, &mut self.registered, &next, suspended);
         sync_win_shift_s_takeover(&self.registered);
         let mut routes = self.dispatcher.routes.lock().unwrap();
         if result.is_ok() {
@@ -459,8 +547,22 @@ impl CaptureShortcuts {
     /// can receive existing chords. Keep desired bindings across edits, then
     /// restore them on blur. Failure leaves routing suspended and is retryable.
     pub fn set_suspended(&mut self, suspended: bool) -> Result<(), String> {
+        let manager = match &self.backend {
+            Backend::Direct(manager) => manager,
+            #[cfg(target_os = "linux")]
+            Backend::Portal(_) => {
+                // The portal has no temporary ungrab API. Its Preferences rows
+                // use the desktop chooser, not Captures' local chord recorder.
+                let mut routes = self.dispatcher.routes.lock().unwrap();
+                if routes.suspended != suspended {
+                    routes.clear();
+                    routes.suspended = suspended;
+                }
+                return Ok(());
+            }
+        };
         let result = suspend_routes(
-            &self.manager,
+            manager,
             &mut self.registered,
             &self.dispatcher.routes,
             suspended,
@@ -552,7 +654,13 @@ impl Drop for CaptureShortcuts {
         // queues connection shutdown rather than waiting for its worker to exit.
         // Do not hold a callback's mutex while waiting for the X11 worker.
         for binding in self.registered.values() {
-            let _ = self.manager.unregister(binding.key);
+            match &self.backend {
+                Backend::Direct(manager) => {
+                    let _ = manager.unregister(binding.key);
+                }
+                #[cfg(target_os = "linux")]
+                Backend::Portal(_) => {}
+            }
         }
     }
 }

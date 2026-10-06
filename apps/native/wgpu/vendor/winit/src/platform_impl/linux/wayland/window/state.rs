@@ -289,7 +289,7 @@ impl WindowState {
         subcompositor: &Option<Arc<SubcompositorState>>,
     ) -> bool {
         self.initially_configured = true;
-        if self.mapping == MappingState::Hidden || self.mapping == MappingState::Unmapping {
+        if matches!(self.mapping, MappingState::Draining | MappingState::Hidden | MappingState::Unmapping) {
             return false;
         }
 
@@ -619,12 +619,16 @@ impl WindowState {
     /// about compositor occlusion or minimization.
     #[inline]
     pub fn is_visible(&self) -> bool {
-        matches!(self.mapping, MappingState::Mapped | MappingState::Unmapping)
+        matches!(self.mapping, MappingState::Mapped | MappingState::Draining | MappingState::Unmapping)
     }
 
     #[inline]
     pub fn can_redraw(&self) -> bool {
         self.mapping == MappingState::Mapped
+    }
+
+    pub fn accepts_configure(&self) -> bool {
+        !matches!(self.mapping, MappingState::Unmapping | MappingState::Hidden)
     }
 
     pub fn set_initially_visible(&mut self, visible: bool) {
@@ -638,13 +642,17 @@ impl WindowState {
     /// Start an unmap/remap transition and return the generation requiring a display sync.
     pub fn set_visible(&mut self, visible: bool) -> Option<u64> {
         if visible {
-            if self.mapping == MappingState::Unmapping {
+            if matches!(self.mapping, MappingState::Draining | MappingState::Unmapping) {
                 // Consume every pre-unmap configure before accepting a remap configure.
                 self.show_after_unmap = true;
                 return None;
             }
             if self.mapping == MappingState::InitiallyHidden {
-                self.mapping = MappingState::Mapped;
+                self.mapping = if self.last_configure.is_some() {
+                    MappingState::Mapped
+                } else {
+                    MappingState::AwaitingConfigure
+                };
                 return None;
             }
             if matches!(self.mapping, MappingState::Mapped | MappingState::AwaitingConfigure) {
@@ -661,11 +669,9 @@ impl WindowState {
             }
             self.reload_min_max_hints();
             self.resize(self.size);
-            self.window.request_decoration_mode(Some(if self.decorate {
-                DecorationMode::Server
-            } else {
-                DecorationMode::Client
-            }));
+            // The separate decoration object retains its mode across unmap.
+            // Repeating set_mode is not part of the xdg_toplevel reset and
+            // can arrange a retired container on older compositors.
             if self.requested_maximized {
                 self.window.set_maximized();
             }
@@ -678,17 +684,34 @@ impl WindowState {
             None
         } else {
             self.show_after_unmap = false;
-            if matches!(self.mapping, MappingState::InitiallyHidden | MappingState::Hidden | MappingState::Unmapping) {
+            if self.mapping == MappingState::AwaitingConfigure {
+                // No content is allowed yet. Retain this bufferless handshake,
+                // accepting its configure without mapping, rather than unmapping
+                // an unconfigured surface and losing the fresh serial.
+                self.mapping = MappingState::InitiallyHidden;
+                return None;
+            }
+            if matches!(self.mapping, MappingState::InitiallyHidden | MappingState::Hidden | MappingState::Draining | MappingState::Unmapping) {
                 return None;
             }
             self.mapping_generation = self.mapping_generation.wrapping_add(1);
-            self.mapping = MappingState::Unmapping;
+            self.mapping = MappingState::Draining;
             self.frame_callback_state = FrameCallbackState::None;
-            let surface = self.window.wl_surface();
-            surface.attach(None, 0, 0);
-            surface.commit();
             Some(self.mapping_generation)
         }
+    }
+
+    /// Submit NULL only from the event queue that dispatches configure/ACK.
+    /// Off-thread callers cannot race an accepted SCTK ACK with this unmap.
+    pub fn unmap_after_drain(&mut self, generation: u64) -> bool {
+        if self.mapping != MappingState::Draining || self.mapping_generation != generation {
+            return false;
+        }
+        self.mapping = MappingState::Unmapping;
+        let surface = self.window.wl_surface();
+        surface.attach(None, 0, 0);
+        surface.commit();
+        true
     }
 
     pub fn unmap_processed(&mut self, generation: u64) {
@@ -1343,6 +1366,7 @@ pub enum FrameCallbackState {
 enum MappingState {
     AwaitingConfigure,
     Mapped,
+    Draining,
     Unmapping,
     Hidden,
     InitiallyHidden,

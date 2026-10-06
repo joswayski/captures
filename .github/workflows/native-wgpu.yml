@@ -103,6 +103,12 @@ jobs:
       - name: Exercise Wayland resident startup, child windows and real tray recovery
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/wayland_lifecycle_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe
+      - name: Verify desktop-authoritative Wayland shortcut protocol and native routing
+        if: runner.os == 'Linux'
+        run: |
+          cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_shortcuts_probe
+          /usr/bin/python3 apps/native/wayland_shortcuts_smoke.py --binary apps/native/wgpu/target/debug/wayland_shortcuts_probe
+          /usr/bin/python3 apps/native/wayland_shortcuts_host_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe --output "$RUNNER_TEMP/native-wayland-shortcuts"
       - name: Record from Wayland History and retain interrupted takes
         if: runner.os == 'Linux'
         run: |
@@ -117,6 +123,7 @@ jobs:
           name: native-wgpu-workbench-evidence-${{ matrix.os }}
           path: |
             native-wayland-capture
+            ${{ runner.temp }}/native-wayland-shortcuts
             ${{ runner.temp }}/native-wayland-recording
             ${{ runner.temp }}/native-preview-retarget
           if-no-files-found: ignore

@@ -12,7 +12,8 @@ use std::{
 use captures_app::capture_menu::{self, PreferenceTarget};
 use captures_app::preferences;
 use captures_app::shortcuts::{
-    ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
+    CaptureShortcut, PortalShortcutStatus, ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording,
+    record_shortcut, shortcut_display_tokens,
 };
 use captures_settings::{AppSettings, theme::normalize_hex_color};
 use eframe::egui::{self, RichText, Stroke};
@@ -59,6 +60,23 @@ impl ShortcutField {
     fn path(self) -> &'static [&'static str] {
         preferences::SHORTCUT_ROWS[self.index()].1
     }
+
+    fn action(self) -> CaptureShortcut {
+        match self {
+            Self::NewCapture => CaptureShortcut::NewCapture,
+            Self::Region => CaptureShortcut::Region,
+            Self::Window => CaptureShortcut::Window,
+            Self::Display => CaptureShortcut::Display,
+            Self::RecordRegion => CaptureShortcut::RecordRegion,
+            Self::RecordWindow => CaptureShortcut::RecordWindow,
+            Self::RecordDisplay => CaptureShortcut::RecordDisplay,
+        }
+    }
+}
+
+pub(crate) enum PortalShortcutCommand {
+    Configure,
+    Retry,
 }
 
 fn shortcut_scope_id(field: ShortcutField) -> egui::Id {
@@ -254,6 +272,8 @@ pub struct Preferences {
     shortcut_recorder: Option<ShortcutRecorder>,
     shortcut_input: shortcut_input::Bridge,
     shortcut_recording_changed: Option<Box<dyn Fn(bool)>>,
+    portal_shortcuts: Option<PortalShortcutStatus>,
+    portal_shortcut_command: Option<PortalShortcutCommand>,
     suppress_shortcut_commands: bool,
     shortcut_rects: BTreeMap<&'static str, [f32; 4]>,
     last_shortcut_probe: Option<Value>,
@@ -357,6 +377,8 @@ impl Preferences {
             shortcut_recorder: None,
             shortcut_input,
             shortcut_recording_changed: None,
+            portal_shortcuts: None,
+            portal_shortcut_command: None,
             suppress_shortcut_commands: false,
             shortcut_rects: BTreeMap::new(),
             last_shortcut_probe: None,
@@ -647,6 +669,25 @@ impl Preferences {
     /// Release OS grabs synchronously when a recorder starts, before the next key.
     pub fn set_shortcut_recording_changed(&mut self, changed: impl Fn(bool) + 'static) {
         self.shortcut_recording_changed = Some(Box::new(changed));
+    }
+
+    pub fn set_portal_shortcuts(&mut self, status: Option<PortalShortcutStatus>) -> bool {
+        if self.portal_shortcuts == status {
+            return false;
+        }
+        if status.is_some() {
+            self.cancel_shortcut_recording();
+        }
+        self.portal_shortcuts = status;
+        true
+    }
+
+    pub(crate) fn take_portal_shortcut_command(&mut self) -> Option<PortalShortcutCommand> {
+        self.portal_shortcut_command.take()
+    }
+
+    pub fn shortcut_configuration_error(&mut self, error: Option<String>) {
+        self.keyboard_settings_error = error;
     }
 
     pub fn set_presented(&mut self, presented: bool) {
@@ -946,6 +987,12 @@ impl Preferences {
                 "recording": self.shortcut_recorder.as_ref().map(|recorder| recorder.field.label()),
                 "save_error": self.save_error.is_some(),
                 "update_checks": self.update_checks.as_ref().map(|checker| checker.presentation()),
+                "desktop_shortcuts": self.portal_shortcuts.as_ref().map(|status| match status {
+                    PortalShortcutStatus::Pending => json!({"state": "pending", "enabled": false}),
+                    PortalShortcutStatus::Bound { configurable, configuration_error, .. } =>
+                        json!({"state": "bound", "enabled": *configurable, "configuration_error": configuration_error.is_some()}),
+                    PortalShortcutStatus::Unavailable(_) => json!({"state": "unavailable", "enabled": true}),
+                }),
             });
             if self.last_shortcut_probe.as_ref() != Some(&probe) {
                 crate::emit("preferences-shortcuts-layout", probe.clone());
@@ -1906,13 +1953,43 @@ impl Preferences {
 
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         let help = preferences::shortcut_help(shortcut_platform());
-        let mut intro = format!("{} {}", preferences::SECTIONS[3].description, help.intro);
+        let mut intro = if self.portal_shortcuts.is_some() {
+            "Your desktop manages these global shortcuts. It may choose different keys or leave actions unbound. Region capture and window screenshots remain unavailable on Wayland.".to_owned()
+        } else {
+            format!("{} {}", preferences::SECTIONS[3].description, help.intro)
+        };
         if !self.live {
             intro = format!("{intro} {}", preferences::FIXTURE_SHORTCUTS_NOTE);
         }
         self.card_described(ui, t, 3, &intro, |this, ui| {
             let live = this.live;
             let mut open = false;
+            if let Some(status) = this.portal_shortcuts.clone() {
+                let (body, action, enabled) = match &status {
+                    PortalShortcutStatus::Pending => ("Waiting for the desktop shortcut chooser.".to_owned(), "Connecting…", false),
+                    PortalShortcutStatus::Bound { configurable, .. } => (
+                        "Use your desktop's chooser to change the bindings below.".to_owned(),
+                        if *configurable { "Configure…" } else { "Desktop settings" }, *configurable),
+                    PortalShortcutStatus::Unavailable(error) => (error.clone(), "Retry", true),
+                };
+                this.row(ui, t, "Desktop shortcuts", &body, None,
+                    egui::vec2(140., t.number("h-md")), |this, ui| {
+                        let response = ui.add_enabled_ui(live && enabled, |ui| widgets::button(ui, t, action, false)).inner;
+                        this.shortcut_rects.insert("Desktop shortcuts", [response.rect.left(), response.rect.top(), response.rect.right(), response.rect.bottom()]);
+                        if response.clicked() {
+                            this.portal_shortcut_command = Some(match status {
+                                PortalShortcutStatus::Unavailable(_) => PortalShortcutCommand::Retry,
+                                _ => PortalShortcutCommand::Configure,
+                            });
+                        }
+                        if matches!(status, PortalShortcutStatus::Bound { configurable: false, .. }) {
+                            response.on_disabled_hover_text("This portal needs version 2 for in-app configuration. Use your desktop's shortcut settings.");
+                        }
+                    });
+                if let PortalShortcutStatus::Bound { configuration_error: Some(error), .. } = &status {
+                    ui.colored_label(t.color("danger-text"), RichText::new(error).size(t.number("text-xs")));
+                }
+            } else {
             this.row(
                 ui,
                 t,
@@ -1932,6 +2009,7 @@ impl Preferences {
             if open {
                 this.keyboard_settings_error =
                     preferences::open_keyboard_settings(shortcut_platform()).err();
+            }
             }
             if let Some(error) = &this.keyboard_settings_error {
                 ui.add_space(t.number("s-2"));
@@ -1954,6 +2032,36 @@ impl Preferences {
     }
 
     fn shortcut_row(&mut self, ui: &mut egui::Ui, t: &Tokens, field: ShortcutField) {
+        if let Some(status) = &self.portal_shortcuts {
+            let text = match status {
+                PortalShortcutStatus::Pending => "Waiting for desktop…".to_owned(),
+                PortalShortcutStatus::Unavailable(_) => "Unavailable".to_owned(),
+                PortalShortcutStatus::Bound { triggers, .. } => triggers
+                    .get(field.action().id())
+                    .cloned()
+                    .unwrap_or_else(|| "Not bound by desktop".to_owned()),
+            };
+            let width = (ui.available_width() * 0.45).clamp(180., 260.);
+            let galley = ui.painter().layout(
+                text,
+                egui::FontId::proportional(t.number("text-sm")),
+                t.color("text"),
+                width,
+            );
+            let height = t.number("h-md").max(galley.size().y);
+            self.row(
+                ui,
+                t,
+                field.label(),
+                "Desktop-managed",
+                None,
+                egui::vec2(width, height),
+                |_, ui| {
+                    ui.label(galley);
+                },
+            );
+            return;
+        }
         let recording = self
             .shortcut_recorder
             .as_ref()
@@ -2123,6 +2231,9 @@ impl Preferences {
     }
 
     fn start_shortcut_recording(&mut self, field: ShortcutField) {
+        if self.portal_shortcuts.is_some() {
+            return;
+        }
         self.shortcut_recorder = Some(ShortcutRecorder::new(field));
         self.shortcut_input.start();
         if let Some(changed) = &self.shortcut_recording_changed {
@@ -2929,6 +3040,109 @@ mod tests {
                     "{width}: status {status:?} right aligned with action {action:?} ({action_right})"
                 );
                 assert!(action_right < width);
+            }
+        }
+    }
+
+    #[test]
+    fn portal_mode_cancels_local_assignment_and_never_edits_requested_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx, dir.path().join("settings.json"), None, None);
+        let original = prefs.value.clone();
+        prefs.start_shortcut_recording(ShortcutField::Window);
+        assert!(prefs.shortcut_input.is_active());
+        assert!(prefs.set_portal_shortcuts(Some(PortalShortcutStatus::Pending)));
+        assert!(!prefs.shortcut_input.is_active() && !prefs.is_recording_shortcut());
+        assert!(!prefs.set_portal_shortcuts(Some(PortalShortcutStatus::Pending)));
+        for field in SHORTCUT_FIELDS {
+            prefs.start_shortcut_recording(field);
+            assert!(!prefs.is_recording_shortcut());
+        }
+        assert_eq!(prefs.value, original);
+        prefs.set_portal_shortcuts(None);
+        prefs.start_shortcut_recording(ShortcutField::Window);
+        assert!(
+            prefs.is_recording_shortcut(),
+            "direct hosts retain assignment"
+        );
+    }
+
+    #[test]
+    fn portal_rows_use_desktop_subset_and_fit_long_descriptions_without_overlap() {
+        let trigger = "Desktop-selected Control + Alt + Shift + the external keyboard's special screenshot key; not the requested chord";
+        for appearance in ["dark-mustard", "light-mustard"] {
+            let tokens = crate::tokens::load()[appearance].clone();
+            for width in [880., 560.] {
+                let dir = tempfile::tempdir().unwrap();
+                let ctx = egui::Context::default();
+                let mut prefs =
+                    Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+                prefs.compact = width <= 720.;
+                prefs.set_portal_shortcuts(Some(PortalShortcutStatus::Bound {
+                    configurable: true,
+                    triggers: [("display".into(), trigger.into())].into(),
+                    configuration_error: None,
+                }));
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 1500.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        prefs.shortcuts(ui, &tokens);
+                    },
+                );
+                output.textures_delta.clear();
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text(),
+                            text.galley.rect.translate(text.pos.to_vec2()),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    texts
+                        .iter()
+                        .filter(|(text, _)| text == &"Not bound by desktop")
+                        .count(),
+                    6
+                );
+                assert_eq!(
+                    texts
+                        .iter()
+                        .filter(|(text, _)| text == &"Desktop-managed")
+                        .count(),
+                    7
+                );
+                let trigger_rect = texts.iter().find(|(text, _)| text == &trigger).unwrap().1;
+                let next_row = texts
+                    .iter()
+                    .find(|(text, _)| text == &ShortcutField::RecordRegion.label())
+                    .unwrap()
+                    .1;
+                assert!(
+                    trigger_rect.bottom() < next_row.top(),
+                    "{appearance}/{width}: {trigger_rect:?} overlaps {next_row:?}"
+                );
+                assert!(
+                    trigger_rect.right() < width,
+                    "desktop text stays in its column"
+                );
+                assert!(prefs.shortcut_rects.contains_key("Desktop shortcuts"));
+                assert!(
+                    !prefs
+                        .shortcut_rects
+                        .contains_key(ShortcutField::Display.label()),
+                    "no local recorder"
+                );
             }
         }
     }

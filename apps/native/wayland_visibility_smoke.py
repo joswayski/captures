@@ -21,7 +21,7 @@ def line(process, prefix, timeout=5):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if select.select([process.stdout], [], [], deadline - time.monotonic())[0]:
-            value = process.stdout.readline().strip()
+            value = process.stdout.readline().decode().strip()
             if value.startswith(prefix):
                 return value
         if process.poll() is not None:
@@ -30,7 +30,7 @@ def line(process, prefix, timeout=5):
 
 
 def command(process, value):
-    process.stdin.write(value + "\n")
+    process.stdin.write((value + "\n").encode())
     process.stdin.flush()
 
 
@@ -94,7 +94,9 @@ for_window [title="visibility-initially-hidden"] floating enable, resize set 80 
                 time.sleep(.05)
             else:
                 raise RuntimeError("Sway socket timeout")
-            probe = subprocess.Popen([str(PROBE), "visibility"], env=env, text=True,
+            # Raw pipes keep select and readline on the same buffer; a text
+            # wrapper can prefetch the next response and falsely time out.
+            probe = subprocess.Popen([str(PROBE), "visibility"], env=env, bufsize=0,
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
             line(probe, "READY visibility-primary")
             line(probe, "READY visibility-initially-hidden")
@@ -118,6 +120,25 @@ for_window [title="visibility-initially-hidden"] floating enable, resize set 80 
             assert restored.count(PRIMARY) == 80 * 60, restored.count(PRIMARY)
             assert restored.count(BG) == 320 * 240 - 80 * 60
 
+            # Present and request hide within the same native callback, before
+            # dispatching buffer-induced configures. Also cancel each remap
+            # before its configure arrives; neither transition may ACK an old
+            # serial or attach a buffer without a fresh accepted configure.
+            for _ in range(20):
+                command(probe, "present-hide 0")
+                line(probe, "PRESENT-HIDE 0")
+                status(probe, 0, False)
+                command(probe, "show-hide 0")
+                line(probe, "SHOW-HIDE 0")
+                status(probe, 0, False)
+                assert capture(env, root / "immediate-hidden.png") == BG * (320 * 240)
+                command(probe, "show 0")
+                status(probe, 0, True)
+            settled_capture(env, root / "immediate-restored.png", lambda image: image.count(PRIMARY) == 80 * 60)
+            command(probe, "hide-show 0")
+            line(probe, "HIDE-SHOW 0")
+            status(probe, 0, True)
+
             command(probe, "show 1")
             status(probe, 1, True)
             both = settled_capture(env, root / "both.png", lambda image: image.count(PRIMARY) == 80 * 60 and image.count(SECONDARY) == 80 * 60)
@@ -126,9 +147,10 @@ for_window [title="visibility-initially-hidden"] floating enable, resize set 80 
                 command(probe, f"{action} 0")
             status(probe, 0, True)
             settled_capture(env, root / "rapid.png", lambda image: image.count(PRIMARY) == 80 * 60 and image.count(SECONDARY) == 80 * 60)
-            print("visibility smoke: repeated hide/show, hidden redraw, initial hidden, exact pixels PASS")
+            print("visibility smoke: immediate post-present hide, cancelled remap, repeated hide/show, hidden redraw, initial hidden, exact pixels PASS")
         except Exception:
             log.flush()
+            print(f"Sway exit status: {sway.poll()}; probe exit status: {probe.poll() if probe else None}")
             print((root / "sway.log").read_text())
             raise
         finally:

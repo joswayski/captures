@@ -685,6 +685,7 @@ dependencies = [
  "captures-session",
  "captures-settings",
  "chrono",
+ "dbus",
  "file-id",
  "flate2",
  "global-hotkey",
