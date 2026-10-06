@@ -57,7 +57,8 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
 
     store.SetPermission("screenshot", True, "screenshot", "", ["yes"])
     for mode, appearance in (("real", "dark"), ("real", "light"), ("cancel", "dark"),
-                             ("failure", "light"), ("lock", "dark"), ("quit", "light")):
+                             ("failure", "light"), ("lock", "dark"), ("quit", "light"),
+                             ("quit-countdown", "dark"), ("quit-countdown", "light")):
         if mode == "cancel":
             stop(front)
             wait(lambda: not bus.name_has_owner(DESKTOP), "real portal released its bus name")
@@ -71,14 +72,15 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
         fixture = None
         if mode != "real":
             fixture = subprocess.Popen([sys.executable, str(Path(__file__).with_name("wayland_screenshot_smoke.py")),
-                                        "--fixture", "wait" if mode in ("lock", "quit") else mode,
+                                        "--fixture", "wait" if mode in ("lock", "quit", "quit-countdown") else mode,
                                         "--uri", source.as_uri(), "--log", str(fixture_log)],
                                        env=env, stdout=subprocess.PIPE)
             ready(fixture)
         settings = profile / "settings.json"
         settings.write_text(json.dumps({"onboarding_completed": True, "settings_schema_version": 5,
                                        "appearance": appearance, "auto_copy_to_clipboard": False,
-                                       "launch_at_login": False, "screenshot_countdown_seconds": 0,
+                                       "launch_at_login": False,
+                                       "screenshot_countdown_seconds": 10 if mode == "quit-countdown" else 3,
                                        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
                                        "display_shortcut": "Ctrl+Shift+F9",
                                        "output_directory": str(profile / "exports")}))
@@ -86,7 +88,7 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
         app = subprocess.Popen([binary, "--live", "--open-history", "--open-preferences",
                                 "--open-media", str(source),
                                 "--settings-file", str(settings), "--history-root", str(profile / "history"),
-                                "--quit-after", "12" if mode == "quit" else "60"],
+                                "--quit-after", "8" if mode == "quit-countdown" else "20" if mode == "quit" else "60"],
                                env=env, stdout=log, stderr=log)
         try:
             def shown():
@@ -142,6 +144,32 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
             click(int(rect["x"] + (x1 + x2) / 2), int(rect["y"] + (y1 + y2) / 2))
             def requests():
                 return [json.loads(line) for line in fixture_log.read_text().splitlines()] if fixture_log.exists() else []
+            countdown = wait(lambda: next((node for node in windows(env)
+                                          if node["name"] == "Captures Screenshot Countdown"), None),
+                             "visible screenshot countdown")
+            wait(lambda: len(windows(env)) == 1, "countdown excludes all workspace windows")
+            time.sleep(.3)  # Inspect the settled countdown, not its entrance fade.
+            shot("countdown")
+            assert not requests(), "portal invoked before the configured delay"
+            assert set((profile / "history").glob("*/metadata.json")) == before
+            if mode == "quit-countdown":
+                assert app.wait(timeout=15) == 0, "Quit must cancel before portal submission"
+                assert not requests(), "Quit during countdown requested consent"
+                assert set((profile / "history").glob("*/metadata.json")) == before
+                assert source.read_bytes() == original
+                print(json.dumps({"native_host": appearance, "case": mode,
+                                  "countdown_quit_before_consent": True, "new_artifacts": 0}), flush=True)
+                continue
+            # Closing the actual focused countdown must restore all three
+            # windows and leave the process reusable without requesting consent.
+            subprocess.run(["swaymsg", f'[con_id={countdown["id"]}] kill'], env=env, check=True,
+                           stdout=subprocess.DEVNULL)
+            wait(shown, "cancelled countdown restored workspace")
+            assert not requests() and set((profile / "history").glob("*/metadata.json")) == before
+            history = focus_history()
+            (x1, y1, x2, y2), rect = wait(button, "retry after countdown cancellation")
+            clicked = time.monotonic()
+            click(int(rect["x"] + (x1 + x2) / 2), int(rect["y"] + (y1 + y2) / 2))
             if mode == "real":
                 entries = wait(lambda: set((profile / "history").glob("*/metadata.json")) - before,
                                "portal screenshot saved")
@@ -169,6 +197,8 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                         assert not windows(env), "forwarded media remapped capture-excluded windows"
                         assert app.wait(timeout=20) == 0, "deadline-driven normal quit failed"
                     wait(lambda: any(event["event"] == "close" for event in requests()), "pending Request.Close")
+            assert time.monotonic() - clicked >= 3, "configured delay was bypassed"
+            assert not any(node["name"] == "Captures Screenshot Countdown" for node in windows(env))
             if mode == "failure":
                 dialog = wait(lambda: next((node for node in windows(env) if node["name"] == "Captures"), None),
                               "portal failure dialog")
@@ -336,6 +366,7 @@ def main():
                           'seat seat0 hide_cursor 0\n'
                           'for_window [title="Capture History"] floating enable, resize set 880 640, move position 20 20\n'
                           'for_window [title="Preferences"] floating enable, resize set 600 560, move position 650 300\n'
+                          'for_window [title="Captures Screenshot Countdown"] floating enable\n'
                           'for_window [title="^Captures$"] floating enable\n')
         sway = subprocess.Popen(["sway", "--unsupported-gpu", "--config", str(config)], env=env, stdout=log, stderr=log)
         services.append(sway)

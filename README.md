@@ -203,8 +203,11 @@ only the chosen window is shared, and every new/resumed segment asks again.
 Unsupported backends report an error without falling back to display capture.
 While a take runs or is paused, the controls' Screenshot action requests a separate
 desktop-portal still without stopping the take. Captures' windows and HUD are
-hidden for the still; cancellation or failure preserves the recording. Turn off
-the screenshot countdown first. Region capture and window screenshots remain unavailable.
+hidden for the still; cancellation or failure preserves the recording. Screenshot
+commands honor the configured countdown in a compact, compositor-placed window;
+focused Escape or closing it cancels before consent. The countdown is excluded
+from the still, but can appear in an ongoing Wayland display recording, like the HUD.
+Region capture and window screenshots remain unavailable.
 Portal policy controls consent and cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
 Native Wayland global shortcuts use the desktop's GlobalShortcuts portal. The

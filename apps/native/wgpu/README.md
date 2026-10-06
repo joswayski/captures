@@ -450,7 +450,7 @@ In xdg-desktop-portal 1.16, version-1 Screenshot backends bypass its permission
 store check. The orb's wlr 0.7 backend is version 1 and returned success even with
 the disposable permission set to “no”; this is not a client fallback or proof of
 consent enforcement. The smoke reports the backend version/policy it exercised.
-Native window targeting, selectors, screenshot countdown and preview placement
+Native window targeting, selectors and preview placement
 remain gated. Portal still capture, display/window recording and desktop shortcuts
 are connected to the host as described in their sections.
 
@@ -609,7 +609,10 @@ Portal policy controls consent, image extent and cursor inclusion. There is no
 guessed named-monitor geometry and no mini preview; captures return to History.
 History **Edit** opens the normal screenshot editor directly on Wayland, without
 first placing a preview. **Restore** is disabled with a platform limitation tooltip.
-Nonzero screenshot countdown and region/window screenshots fail explicitly;
+Screenshot commands honor the configured delay in the shared fixed-glass,
+compositor-placed countdown. Focused Escape/close cancels before consent. The host
+keeps its hidden viewport alive until the native unmap acknowledgement, then
+removes it after portal completion. Region/window screenshots fail explicitly;
 display/window recording uses the controls path above.
 
 The recording HUD's Screenshot action (or a granted display screenshot shortcut)
@@ -619,7 +622,9 @@ windows including the HUD to unmap. Completion restores the controls through a
 hidden-root UI pass, retaining the take, elapsed clock and manual Hide state;
 the workspace stays out of the video. Cancellation/failure publishes no still
 and preserves the take. Pending child requests close on Quit before the accepted
-recording is finalized. Screenshot countdown must be off; the portal controls
+recording is finalized. Nonzero countdown works for these children too, preserving
+the paused clock and cancellation ownership. It is excluded from the still but
+can appear in an ongoing display take, like the HUD. The portal controls
 extent, cursor and consent, and the still goes to History without a floating preview.
 The dark/light recording-host fixture checks exact still pixels while active
 and paused, unchanged paused clocks, child cancellation/failure, and Quit with
@@ -643,6 +648,8 @@ python3 apps/native/wayland_visibility_smoke.py
 The host smoke uses the same disposable portal/Sway environment as the diagnostic.
 It verifies dark/light real and repeated captures against every independently
 expected desktop pixel with History, Preferences and screenshot editor excluded;
+cancelling a nonzero countdown restores all three windows and permits a retry.
+Normal Quit during the countdown requests no consent and publishes no still;
 cancellation/failure and simulated session lock write nothing, normal Quit closes
 the pending request, and second-instance media cannot remap excluded windows.
 It opens a captured screenshot through History **Edit** in both appearances and
