@@ -1524,10 +1524,39 @@ logical pixels of movement and keeps at least one millisecond selected. Far-out
 pointer glitches retain the last accepted sample; valid motion recovers from the
 original origin. Release, Escape, lost pointer/focus and layout changes end the
 gesture without rolling back staged values. Handles accept focused arrow keys
-(1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second). They never
-decode or publish media during drag: numeric values and the range update together,
-and, as in shipping, the edit applies live once the drag ends (see live edits below).
-Until the edited preview decodes, pending trim gates seek, estimation and save. The wgpu track now
+(1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second). Paused handles
+now preview their edge on press, during thresholded dragging and after keyboard
+nudges. One active decode and only the latest waiting full edit/export/position
+replace a pointer-event backlog. The additive V2 `update_preview_at` accepts that
+edit, Save policy, frame and source playhead atomically; V1 remains unchanged.
+Older replies can publish accepted pixels but cannot rewind newer range/playhead
+intent or end the held gesture. Other edits, track/numeric seek and Save wait for
+trim decoding; automatic estimates and compression comparison wait for release.
+Failure retains staged values and the accepted still/playhead, drops waiting trim
+and ends the gesture. Automatic retry stays suppressed until fresh input.
+The UI end remains source duration while decoding uses duration minus one
+millisecond. Source previews hold the final decoded frame through MP4/GIF/VFR's
+trailing presentation interval, including the uncropped Adjust crop view. Earlier
+seeks plus streaming final-frame padding preserve the requested time without a
+reverse buffer; cancellation/error leaves the prior destination intact. Encoded
+comparison's literal seek/fallback reporting is unchanged. Sparse inputs can need
+multiple seeks and a longer lookback; this is not constant-cost EOF decoding.
+Playing trim handles remain gated and recording-editor acceptance stays open.
+The private-X11 `--timeline` check samples held green/blue/green pixels before
+release, end preview, missing-source gesture teardown/fresh retry, keyboard and
+minimum-size input, MP4/GIF duration/colors, unchanged source/History and clean Quit.
+Shared tests cover final-frame pixels for MP4 and a sparse GIF with a 2.5-second
+last-frame interval, crop/resize and uncropped EOF, cancellation and immutable media.
+Deferred host tests cover older replies, latest intent and estimate/quit ordering.
+
+| Platform | Paused live trim implementation / verification |
+| --- | --- |
+| AppKit/macOS | Implemented through the shared V2 C ABI; deferred-worker XCTest cases added; no local Swift compiler or physical host in this orb |
+| Windows | Implemented through shared wgpu; local shared host tests, no physical Windows execution in this orb |
+| X11 | Real private-X11/software-GL trim fixture and ordinary scrub regression in both appearances; physical input/accessibility and mixed-DPI acceptance open |
+| Wayland | Implemented through shared wgpu; local shared tests, trim compositor/physical acceptance unverified |
+
+The wgpu track now
 displays the shared 12-frame full-source thumbnail strip, center-cropped vertically
 to the compact row. Excluded ranges are dimmed and grips retain the same hit regions.
 Generation runs once on the serialized worker after open, with independent cancel
@@ -1539,8 +1568,8 @@ survives, including while a superseded estimate stops. An older result cannot
 rewind the requested playhead. Trim/edit/export remain gated until decoding settles;
 automatic comparison waits for release. Failure drops queued targets, ends the
 gesture and retains the last accepted frame. Scrubbing changes neither dirty state,
-source bytes nor History. This does not add live trim-handle preview or close
-recording-editor parity.
+source bytes nor History. Paused trim handles use the separate atomic path above;
+recording-editor parity remains open.
 The `--scrub` private-X11 check asserts red/green/blue decoded pixels before mouseup,
 missing-source failure, gesture teardown, fresh-press retry, minimum-size input,
 unchanged source/History and clean exit in dark/light, and records the held drag.
@@ -1554,7 +1583,7 @@ unchanged. Release ends the gesture without decoding or restarting again. Explic
 Pause, focus loss/minimize, Close, Quit and playback/seek failure retire resume intent;
 late playback frames cannot overwrite a requested target. Failed seeks restore the
 accepted still and require a fresh gesture. Trim, numeric seek and other editing/
-export controls remain gated. This still does not add live trim-handle previews.
+export controls remain gated. Live trim preview is paused-only, as described above.
 Deferred-worker tests cover decoder ordering, coalescing, release and terminal paths.
 The dark/light `--scrub` fixture also checks a backwards playing seek from green to
 red, automatic progression back to green while still held, another held seek to blue

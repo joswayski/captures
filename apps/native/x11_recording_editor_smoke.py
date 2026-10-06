@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--estimate-delta", action="store_true", help="Render exact and sampled size deltas against an immutable source")
     parser.add_argument("--comparison", action="store_true", help="Exercise encoded before/after, hide, failure/retry and immutable identity")
     parser.add_argument("--replace-original", action="store_true", help="Exercise Save over the original, cancellation and same-session rebase")
-    parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
+    parser.add_argument("--timeline", action="store_true", help="Exercise live trim preview, keyboard input, failure/retry and export")
     parser.add_argument("--scrub", action="store_true", help="Verify held-drag decoded pixels, failure/retry and minimum-size input")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
@@ -1914,17 +1914,34 @@ def main():
             print("PASS silent playback: real motion, pause/resume/EOF, failure/retry, close, accepted export and immutable source")
             return
         if args.timeline:
+            px, py = image_point(editor, .75, .75)
+            def decoded_trim(name, channel):
+                path = output / f"timeline-{name}.png"
+                def arrived():
+                    run("import", "-window", editor, str(path))
+                    rgb = run("convert", str(path), "-crop", f"1x1+{px}+{py}", "-depth", "8", "rgb:-")
+                    return len(rgb) == 3 and rgb[channel] > 90 and all(rgb[channel] > rgb[i] + 40 for i in range(3) if i != channel)
+                wait(arrived, f"{name} trim preview decoded")
+            movie = spawn("trim-video", ["ffmpeg", "-y", "-v", "error", "-f", "x11grab",
+                "-draw_mouse", "1", "-framerate", "15", "-video_size", "980x940",
+                "-i", f"{env['DISPLAY']}+70,40", "-c:v", "libx264", "-preset", "ultrafast",
+                "-crf", "23", "-pix_fmt", "yuv420p", str(output / "trim.mp4")])
             def read_time(name):
                 click(editor, *center(editor, name))
                 run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
                 return int(run("xclip", "-selection", "clipboard", "-o").strip())
 
-            def drag(name, delta, cancel=False):
+            def drag(name, delta, cancel=False, channel=None, held_steps=()):
                 # Grab the probed grip itself, rather than the interval boundary.
                 x, y = center(editor, name)
                 run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y),
                     "mousedown", "1", "sleep", ".15", "mousemove_relative", "--sync", "--",
                     str(delta), "0", "sleep", ".2")
+                if channel is not None:
+                    decoded_trim(f"{name.lower().replace(' ', '-')}-held", channel)
+                for distance, next_channel in held_steps:
+                    run("xdotool", "mousemove_relative", "--sync", "--", str(distance), "0")
+                    decoded_trim(f"{name.lower().replace(' ', '-')}-{next_channel}-held", next_channel)
                 if cancel:
                     run("xdotool", "key", "Escape", "mousemove_relative", "--sync", "--", "100", "0")
                 run("xdotool", "mouseup", "1", "sleep", ".2")
@@ -1935,12 +1952,31 @@ def main():
             assert 780 <= track[2] - track[0] <= 900, track
             drag("Trim start", 2)
             assert read_time("Start (ms)") == 0, "subthreshold drag cannot jump trim start"
-            drag("Trim start", 300)
+            drag("Trim start", 300, channel=1, held_steps=((340, 2), (-340, 1)))
             start = read_time("Start (ms)")
             assert 1000 <= start <= 1100, ("start drag", start)
-            drag("Trim end", -200)
+            drag("Trim end", -200, channel=2)
             end = read_time("End (ms)")
             assert 2250 <= end <= 2400, ("end drag", end)
+            # A failed handle press must retain the accepted blue end frame,
+            # end its gesture and require a new press after restoring the source.
+            x, y = center(editor, "Trim start")
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "mousedown", "1")
+                wait(lambda: control(editor, "Status")[2] - control(editor, "Status")[0] > 100,
+                     "missing-source trim error")
+                idle(editor)
+                decoded_trim("failed-held", 2)
+            finally:
+                missing.rename(source)
+            run("xdotool", "mousemove_relative", "--sync", "--", "100", "0", "sleep", ".7")
+            decoded_trim("failure-ended-gesture", 2)
+            run("xdotool", "mouseup", "1")
+            assert read_time("Start (ms)") == start, "failure cannot resurrect a held drag"
+            press(editor, "Trim start")
+            decoded_trim("fresh-press-retry", 1)
             drag("Trim start", 15, cancel=True)
             cancelled_start = read_time("Start (ms)")
             assert 45 <= cancelled_start - start <= 60, (start, cancelled_start)
@@ -1950,8 +1986,11 @@ def main():
             run("xdotool", "key", "Right", "sleep", ".2")
             start = read_time("Start (ms)")
             assert start == cancelled_start + 1, ("focused keyboard step", start, cancelled_start)
-            shot(editor, "timeline-staged")
-            dominant(output / "timeline-staged.png", 0)
+            shot(editor, "timeline-live")
+            dominant(output / "timeline-live.png", 1)
+            movie.send_signal(signal.SIGINT)
+            movie.wait(timeout=10)
+            assert (output / "trim.mp4").stat().st_size > 0
             destination = exports / "timeline.mp4"
             set_destination(editor, destination)
             settle(editor)
@@ -1976,7 +2015,15 @@ def main():
             dominant(gif, 1, .1)
             dominant(gif, 2, 1.0)
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            press(editor, "Trim end")
             shot(editor, "timeline-minimum-saved")
+            dominant(output / "timeline-minimum-saved.png", 2)
+            # Pixel sampling scrolls the preview into view. Also inspect the
+            # complete Timeline/input row within the scroll page above Save.
+            visible_rect(editor, "Timeline track", whole_control=True)
+            visible_rect(editor, "Seek", whole_control=True)
+            run("xdotool", "mousemove", "--sync", "--window", editor, "12", "20", "sleep", ".2")
+            shot(editor, "timeline-minimum-controls")
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
             if args.thumbnails:
                 assert started.read_text().splitlines() == ["call"] * 3, "edits/seek/export never regenerate source thumbnails"
@@ -1988,7 +2035,8 @@ def main():
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "trim_start_ms": start, "trim_end_ms": end,
                 "checks": ["subthreshold-click", "start-drag", "end-drag", "escape-retains-last-stage",
-                    "focused-keyboard-step", "accepted-frame-retained", "live-trim",
+                    "focused-keyboard-step", "held-green-blue-green", "failed-preview-retained",
+                    "failure-ends-gesture", "fresh-press-retry", "live-trim", "minimum-edge-preview",
                     "source-relative-seek", "mp4-duration", "mp4-green-blue", "gif-green-blue",
                     "history-publication", "minimum-controls", "immutable-source", "saved-close-quit"]}, indent=2) + "\n")
             print("PASS recording timeline: pointer/keyboard trim, cancellation, live edits, MP4/GIF pixels, immutable source")

@@ -933,8 +933,93 @@ impl MediaToolchain {
         run_command(&mut command, cancel, "FFmpeg")
     }
 
+    /// Extract an unedited preview, holding the last decoded frame through the
+    /// source's trailing presentation interval. Callers validate `at_ms` against
+    /// the source duration. Literal encoded comparison seeks use `extract_frame`.
+    pub fn extract_source_frame(
+        &self,
+        input: &Path,
+        at_ms: u64,
+        destination: &Path,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        self.extract_still(input, at_ms, destination, None, cancel)
+    }
+
+    fn extract_still(
+        &self,
+        input: &Path,
+        at_ms: u64,
+        destination: &Path,
+        filter: Option<&str>,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let temporary = temporary_output_path(destination, "png");
+        let result = (|| {
+            let mut backoff_ms = 0;
+            loop {
+                if cancel.is_cancelled() {
+                    return Err(MediaToolError::Cancelled);
+                }
+                let seek_ms = at_ms.saturating_sub(backoff_ms);
+                let hold_ms = at_ms - seek_ms;
+                let mut command = Command::new(&self.ffmpeg);
+                command
+                    .args([
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-ss",
+                        &seconds(seek_ms),
+                        "-i",
+                    ])
+                    .arg(input);
+                let mut filters = Vec::new();
+                if hold_ms > 0 {
+                    // Input seeking can discard the final PTS while the frame
+                    // still owns the requested time. Seek earlier, extend that
+                    // final frame, then seek forward to the original intent.
+                    // Streaming padding retains one frame, not a reverse buffer.
+                    filters.push(format!(
+                        "tpad=stop_mode=clone:stop_duration={}",
+                        seconds(hold_ms)
+                    ));
+                    command.args(["-ss", &seconds(hold_ms)]);
+                }
+                if let Some(filter) = filter {
+                    filters.push(filter.to_owned());
+                }
+                if !filters.is_empty() {
+                    command.args(["-vf", &filters.join(",")]);
+                }
+                command.args(["-frames:v", "1"]).arg(&temporary);
+                run_command(&mut command, cancel, "FFmpeg")?;
+                if temporary.is_file() {
+                    return commit_temporary(&temporary, destination);
+                }
+                if seek_ms == 0 {
+                    return Err(MediaToolError::Process(
+                        "source contains no decodable preview frame".into(),
+                    ));
+                }
+                // Sparse GIF/VFR frames can own seconds, not just one nominal
+                // frame interval. Grow the lookback, terminating at source zero.
+                backoff_ms = if backoff_ms == 0 {
+                    100
+                } else {
+                    backoff_ms.saturating_mul(2)
+                };
+            }
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
+    }
+
     /// Extract one source frame at `at_ms` as a PNG with the export's crop and
-    /// scaling applied, so it lines up with a frame from the encoded output.
+    /// scaling applied, holding the final frame through its trailing interval.
     pub fn extract_edited_frame(
         &self,
         input: &Path,
@@ -963,21 +1048,7 @@ impl MediaToolchain {
         let attempts = export_attempts(probe, edit, spec)?;
         let attempt = attempts.first().ok_or(MediaToolError::IncompleteMetadata)?;
         let filter = preview_video_filter(probe, edit, spec, attempt)?;
-        let mut command = Command::new(&self.ffmpeg);
-        command
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                &seconds(at_ms),
-                "-i",
-            ])
-            .arg(input)
-            .args(["-frames:v", "1", "-vf", &filter])
-            .arg(destination);
-        run_command(&mut command, cancel, "FFmpeg")
+        self.extract_still(input, at_ms, destination, Some(&filter), cancel)
     }
 
     /// Encode a short sample and return matching source-filtered and encoded
@@ -5235,6 +5306,133 @@ mod tests {
         );
         assert_eq!(export_estimate_scratch_entries(), scratch_before);
         assert_eq!(std::fs::read(source).unwrap(), source_bytes);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn edited_stills_hold_the_final_frame_through_mp4_and_sparse_gif_duration() {
+        let Some((tools, ffmpeg, _)) = cross_platform_toolchain() else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        for (extension, rate, final_frame, duration_ms) in
+            [("mp4", 10, 9, 1_000), ("gif", 2, 1, 3_000)]
+        {
+            let source = directory.path().join(format!("last.{extension}"));
+            let mut command = std::process::Command::new(&ffmpeg);
+            command.args(["-v", "error", "-y", "-f", "lavfi", "-i"]);
+            command.arg(format!("color=red:size=320x180:rate={rate}:duration=1"));
+            command.args([
+                "-vf",
+                &format!("drawbox=color=blue:t=fill:enable='eq(n,{final_frame})'"),
+            ]);
+            if extension == "mp4" {
+                command.args(["-c:v", "mpeg4", "-q:v", "2", "-an"]);
+            } else {
+                command.args(["-final_delay", "250"]);
+            }
+            assert!(command.arg(&source).status().unwrap().success());
+            assert_eq!(
+                tools.probe(&source).unwrap().metadata.duration_ms,
+                Some(duration_ms)
+            );
+            let original = std::fs::read(&source).unwrap();
+            let edit = EditSpec {
+                crop: Some(crate::CropRect {
+                    x: 40,
+                    y: 10,
+                    width: 180,
+                    height: 140,
+                }),
+                output_width: Some(120),
+                output_height: Some(110),
+                ..EditSpec::default()
+            };
+            let export = ExportSpec {
+                format: ExportFormat::Mp4,
+                quality: QualityPreset::Preserve,
+                max_size_bytes: None,
+                frames_per_second: None,
+                gif_max_colors: None,
+            };
+            for (position, channel) in [(0, 0), (duration_ms - 1, 2)] {
+                let output = directory.path().join(format!("{extension}-{position}.png"));
+                tools
+                    .extract_edited_frame(
+                        &source,
+                        &edit,
+                        &export,
+                        position,
+                        &output,
+                        &CancelToken::default(),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    (
+                        tools.probe(&output).unwrap().metadata.width,
+                        tools.probe(&output).unwrap().metadata.height
+                    ),
+                    (120, 110)
+                );
+                let rgb = sample_rgb(&ffmpeg, &output, 0);
+                assert!(
+                    rgb[channel] > 220
+                        && rgb[(channel + 1) % 3] < 30
+                        && rgb[(channel + 2) % 3] < 30,
+                    "{extension} at {position}: {rgb:?}"
+                );
+            }
+            let source_frame = directory.path().join(format!("{extension}-source.png"));
+            tools
+                .extract_source_frame(
+                    &source,
+                    duration_ms - 1,
+                    &source_frame,
+                    &CancelToken::default(),
+                )
+                .unwrap();
+            let probe = tools.probe(&source_frame).unwrap();
+            assert_eq!((probe.metadata.width, probe.metadata.height), (320, 180));
+            let rgb = sample_rgb(&ffmpeg, &source_frame, 0);
+            assert_eq!(
+                rgb,
+                sample_rgb(&ffmpeg, &source, final_frame * 1_000 / rate)
+            );
+            assert!(
+                rgb[2] > 140 && rgb[0] < 30 && rgb[1] < 30,
+                "uncropped {extension}: {rgb:?}"
+            );
+            let accepted = std::fs::read(&source_frame).unwrap();
+            let cancel = CancelToken::default();
+            cancel.cancel();
+            assert!(matches!(
+                tools.extract_source_frame(&source, duration_ms - 1, &source_frame, &cancel),
+                Err(MediaToolError::Cancelled)
+            ));
+            assert!(
+                tools
+                    .extract_source_frame(
+                        &directory.path().join("missing.mp4"),
+                        duration_ms - 1,
+                        &source_frame,
+                        &CancelToken::default()
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                std::fs::read(&source_frame).unwrap(),
+                accepted,
+                "failed/cancelled seeks cannot replace the accepted frame"
+            );
+            assert!(!std::fs::read_dir(directory.path()).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".captures-")
+            }));
+            assert_eq!(std::fs::read(source).unwrap(), original);
+        }
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
