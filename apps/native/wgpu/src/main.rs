@@ -409,6 +409,12 @@ fn main() -> eframe::Result {
         print!("{}", captures_app::editor_fonts::NOTICE);
         return Ok(());
     }
+    // Package ownership outlives profile election, every worker and the event
+    // loop. Fixtures use package resources too; checkout binaries acquire none.
+    let _package_use = captures_app::updater::PackageUse::current().unwrap_or_else(|error| {
+        eprintln!("Captures could not start: {error}");
+        std::process::exit(1);
+    });
     let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
         eprintln!("{error}\n{}", options::USAGE);
         std::process::exit(2);

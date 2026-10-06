@@ -191,6 +191,22 @@ requires manual cleanup; it has not moved the old app. A persistent empty siblin
 lock file is intentional. Process-interruption recovery is **not a cross-platform
 power-loss guarantee**; Windows directory syncing is not supplied by Rust `std`.
 
+Packaged AppKit and wgpu hosts now retain a shared package-use guard from before
+profile/worker/renderer initialization through application-loop exit. It is keyed
+by the package root, not the profile, so separate development profiles all block
+replacement and rollback of the same package. Replacement/recovery require an
+exclusive guard before any package mutation. The persistent sibling `.use.lock`
+file survives rename gaps and must not be deleted. The package parent must be
+writable; a busy or unusable guard prevents host startup. Checkout binaries without
+packaging metadata do not acquire it.
+
+**This is a cooperative busy check, not stopped-process detection.** Older hosts,
+media children orphaned by a crash, and OS loading before the host starts are not
+covered. Metadata identifies the layout, not protocol enrollment or signed
+admission. Keep the explicit all-processes-stopped and launch-exclusion requirement,
+including for recovery. No GUI install/restart action is enabled by this guard;
+crash-safe subprocess supervision and versioned admission remain separate work.
+
 Tests use real Python-packaged, signed **inert** binaries/sidecars and disposable
 profiles. They cover each rename/cleanup boundary, exact old/new content,
 tampering, cancellation, locks, stale handles and conflicting files. The existing

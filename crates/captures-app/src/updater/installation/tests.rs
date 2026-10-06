@@ -127,6 +127,119 @@ impl Fixture {
 }
 
 #[test]
+fn every_package_user_blocks_replacement_and_running_replacement_blocks_rollback() {
+    let fixture = Fixture::new();
+    let first_profile_host = PackageUse::acquire(&fixture.destination).unwrap();
+    let second_profile_host = PackageUse::acquire(&fixture.destination).unwrap();
+    let other_package = tempfile::tempdir().unwrap();
+    let _other_host = PackageUse::acquire(other_package.path()).unwrap();
+    assert!(matches!(
+        fixture
+            .staged()
+            .replace(&fixture.destination, &CancelToken::default()),
+        Err(Error::Installation("the development package is in use"))
+    ));
+    fixture.old();
+    drop(first_profile_host);
+    // The second independent descriptor must continue to block mutation.
+    assert!(
+        fixture
+            .staged()
+            .replace(&fixture.destination, &CancelToken::default())
+            .is_err()
+    );
+    fixture.old();
+    drop(second_profile_host);
+    let pending = fixture.replace();
+    let transaction = pending.paths.transaction.clone();
+    let running_replacement = PackageUse::acquire(&fixture.destination).unwrap();
+    assert!(matches!(
+        pending.rollback(),
+        Err(Error::Installation("the development package is in use"))
+    ));
+    assert!(matches!(
+        recover_installation(&fixture.destination),
+        Err(Error::Installation("the development package is in use"))
+    ));
+    fixture.new_package();
+    assert!(transaction.is_dir());
+    // The stable sibling guard also blocks recovery in the missing-root gap.
+    fs::rename(&fixture.destination, transaction.join("prepared-new")).unwrap();
+    assert!(matches!(
+        recover_installation(&fixture.destination),
+        Err(Error::Installation("the development package is in use"))
+    ));
+    assert_eq!(
+        fs::read(transaction.join("prepared-new").join(&fixture.executable)).unwrap(),
+        NEW_BINARY
+    );
+    drop(running_replacement);
+    assert!(recover_installation(&fixture.destination).unwrap());
+    fixture.old();
+    assert!(!transaction.exists());
+}
+
+#[test]
+#[ignore = "subprocess fixture invoked by package_use_is_released_on_normal_exit_and_host_death"]
+fn package_use_process_fixture() {
+    let package = PathBuf::from(std::env::var_os("CAPTURES_TEST_PACKAGE_USE").unwrap());
+    let _lease = PackageUse::acquire(&package).unwrap();
+    println!("PACKAGE_USE_READY");
+    std::io::stdout().flush().unwrap();
+    std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+}
+
+#[test]
+fn package_use_is_released_on_normal_exit_and_host_death() {
+    use std::{
+        io::{BufRead, BufReader},
+        process::{Command, Stdio},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let paths = Paths::for_package(directory.path()).unwrap();
+    for killed in [false, true] {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "updater::installation::tests::package_use_process_fixture",
+                "--nocapture",
+            ])
+            .env("CAPTURES_TEST_PACKAGE_USE", directory.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "fixture exited before acquiring its lease"
+            );
+            if line.contains("PACKAGE_USE_READY") {
+                break;
+            }
+            line.clear();
+        }
+        assert!(paths.exclusive_use().is_err());
+        if killed {
+            child.kill().unwrap();
+        } else {
+            drop(child.stdin.take());
+        }
+        let status = child.wait().unwrap();
+        assert_eq!(status.success(), !killed);
+        assert!(paths.exclusive_use().is_ok());
+        assert!(paths.lock.with_extension("use.lock").is_file());
+    }
+    // Host death frees its OS lease, NOT proof that media descendants stopped.
+    // The operator's all-processes-stopped requirement remains mandatory.
+}
+
+#[test]
 fn replacement_reextracts_signed_bytes_and_confirmation_retains_new_package() {
     let fixture = Fixture::new();
     let staged = fixture.staged();
