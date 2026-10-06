@@ -215,8 +215,10 @@ alpha preserved; untagged images assume sRGB. Unsupported/malformed profiles ret
 recoverable errors. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
 SVG imports rasterize self-contained vectors/text using only bundled editor fonts;
 unavailable faces may substitute. Both hosts use the shared resvg decoder, not a
-browser or OS SVG renderer. Explicit absolute width and height are required;
-omitted/relative dimensions have browser defaults that differ from resvg's.
+browser or OS SVG renderer. Use absolute width and height, or one absolute dimension
+with a valid `viewBox` aspect ratio to infer the other. Percentage dimensions,
+`viewBox`-only sizes and missing dimensions with `preserveAspectRatio="none"` still
+require conversion: their browser defaults differ from resvg's.
 Input is limited to 4 MiB, 32,768 XML nodes, 32 element
 levels and 4,194,304 output pixels, with the editor's 16,384-pixel side limit.
 Images, HTML/foreignObject, reusable use references, DTD entities and SVGZ are not

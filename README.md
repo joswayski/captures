@@ -666,8 +666,10 @@ The shared decoder rejects calibrated or externally linked BMP color description
 with a conversion message; embedded BMP RGB profiles are supported. Legacy 32-bit
 BMPs without a declared alpha mask import as opaque.
 SVG imports rasterize self-contained vectors/text with Captures' bundled fonts
-(other faces may substitute), with explicit absolute width/height, up to 4 MiB
-and 4,194,304 pixels. SVGs containing
+(other faces may substitute), with absolute width/height or one absolute dimension
+and a `viewBox` aspect ratio, up to 4 MiB and 4,194,304 pixels. Percentage dimensions,
+`viewBox`-only sizes and missing dimensions with `preserveAspectRatio="none"`
+require conversion to PNG first. SVGs containing
 images, HTML or reusable references require conversion to PNG first; no external
 files, network resources or system fonts are loaded. Broader SVG parity remains open.
 Export settings hold output size, save quality (Preserve, Compress or a maximum

@@ -1179,7 +1179,8 @@ def main():
                 "(", "-size", "120x80", "xc:#2d64bd", ")", "-loop", "0", "-strip", str(gif))
             run("convert", "-size", "80x50", "xc:#ebbf48", "-fill", "#8e44ad",
                 "-draw", "rectangle 31,19 79,49", "-strip", "BMP3:" + str(bmp))
-            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" height="50" viewBox="0 0 180 100">'
+            # Infer height from width/viewBox; browser and native pixels must stay 90×50.
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" viewBox="0 0 180 100">'
                 '<path d="M0 0H70V100H0Z" fill="#2d64bd"/>'
                 '<rect x="100" y="40" width="50" height="50" fill="white" opacity="0.5"/>'
                 '<text x="78" y="28" font-family="sans-serif" font-size="24" fill="#2d64bd">A7</text></svg>')
@@ -1260,7 +1261,7 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["gif-bmp-svg-picker-filters", "mixed-case-extensions", "unsupported-file-skipped",
                            "first-gif-frame-only", "transparent-gif-pixels", "asymmetric-bmp-pixels",
-                           "svg-viewbox-rasterization", "straight-svg-alpha", "svg-bundled-text",
+                           "svg-inferred-height", "svg-viewbox-rasterization", "straight-svg-alpha", "svg-bundled-text",
                            "unsupported-svg-preserves-document-and-undo",
                            "ordered-placement", "one-undo-step-per-file", "stable-redo",
                            "immutable-sources", "draft-reopens-after-source-removal", "original-unchanged"],

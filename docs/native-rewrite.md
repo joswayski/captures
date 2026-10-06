@@ -3339,9 +3339,13 @@ The SVG follow-up accepts self-contained vector/text documents through shared re
 on both hosts (AppKit uses `captures_editor_decode_image_v1` and the existing retained
 frame ownership). It rasterizes intrinsic size/viewBox into straight-alpha sRGB RGBA;
 only bundled Liberation/Nunito faces are loaded, with substitution for unavailable
-faces. Root dimensions must be explicit absolute lengths: a Chromium image reference
-probe confirmed that browser defaults for omitted/viewBox-only sizes differ from
-resvg's standalone bounds. Cargo disables system fonts, raster-image and SVGZ defaults. XML rejects DTD
+faces. Root dimensions accept two absolute lengths or one absolute length plus a
+valid `viewBox` aspect ratio. Chromium image probes independently confirm width-only,
+height-only and physical-unit inference; shared tests check asymmetric offsets,
+straight alpha and inferred allocation limits. Percentages, `viewBox`-only sizes
+and missing dimensions with `preserveAspectRatio="none"` remain rejected because
+their browser defaults differ from resvg's standalone bounds.
+Cargo disables system fonts, raster-image and SVGZ defaults. XML rejects DTD
 entities and is bounded to 4 MiB, 32,768 nodes and 32 element levels; output is bounded
 to 4,194,304 pixels and the existing side limit. Image/feImage, foreignObject and use
 references fail recoverably before resource resolution or expansion, rather than
@@ -3350,7 +3354,10 @@ Broader SVG parity is explicitly unfinished. Shared tests independently check vi
 offsets, alpha, generic font mapping and resource/size/depth/node failures; the ABI
 retains exact pixels after removing a Unicode-named source and returns owned errors.
 Private-X11 picker/pixel/Undo/Redo/detached-reopen checks include SVG in both appearances.
-AppKit XCTest covers the same asymmetric SVG and conversion error; its first compile
+The inferred-size follow-up retains independent 90×50 pixels with omitted height
+in that host suite; AppKit's omitted-width ABI XCTest retains its independent 3×4
+pixels. X11 runs dark/light normal/minimum and conversion-error states. AppKit
+XCTest covers the same asymmetric SVG and conversion error; its first compile
 is macOS CI, not physical acceptance. Windows and Wayland share the implementation
 but remain presentation-unverified. No platform parity gate closes.
 The returned stable ID selects the new layer. Cancellation, decode failures and

@@ -3730,7 +3730,7 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("Vector é.SVG")
         let svg = """
-        <svg xmlns="http://www.w3.org/2000/svg" width="3" height="4" viewBox="0 0 6 8">
+        <svg xmlns="http://www.w3.org/2000/svg" height="4" viewBox="0 0 6 8">
           <rect x="2" y="4" width="2" height="2" fill="#0b49d3" opacity="0.5"/>
           <path d="M4 0H6V2H4Z" fill="#359711"/>
         </svg>
