@@ -1125,6 +1125,15 @@ char *captures_recording_editor_save_new_v1(const CapturesRecordingEditorSession
 char *captures_recording_editor_replace_original_v1(CapturesRecordingEditorSession *session,
     const CapturesRecordingEditorCancel *cancel,
     CapturesRecordingEditorProgress progress, void *context);
+/* Same response/lifetime contract as v1, with an explicit absolute same-format
+ * destination (borrowed UTF-8; NULL keeps v1 behavior). A different path must be
+ * absent and outside private History. It retains the History ID/creation time
+ * and leaves the previous permanent file intact. Publication never clobbers a
+ * concurrent destination. History failure removes only the owned unchanged
+ * new save; unsafe cleanup requires reopening. No crash-atomicity is claimed. */
+char *captures_recording_editor_replace_original_v2(CapturesRecordingEditorSession *session,
+    const char *destination_utf8, const CapturesRecordingEditorCancel *cancel,
+    CapturesRecordingEditorProgress progress, void *context);
 
 /* Allocation-free macOS window-radius fallback in points. Pass the current OS
  * major version from ProcessInfo. No OS access or session handle is required. */

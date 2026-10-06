@@ -504,7 +504,11 @@ or Estimate size button); the smoke waits for the editor's Working title to sett
 Decoded MP4/GIF pixels verify crop origin and scaling, even output dimensions, MP4
 encoder-capped versus explicit GIF sizes, failed-edit save gates and unchanged source
 bytes. `--replace-original` checks that Save overwrites the original without a
-confirmation. Review the minimum-size/error captures as well as the applied preview:
+confirmation, then changes folder through rfd's portal transport and saves a Unicode
+filename with **Save as new file** off. It checks collision refusal, retained History
+identity, the unchanged previous save, adopted-path repeat Save and cancellation.
+The disposable portal response is not physical file-dialog acceptance. Review the
+normal/minimum-size and collision/error captures as well as the applied preview:
 
 ```sh
 /usr/bin/python3 apps/native/x11_recording_editor_smoke.py \

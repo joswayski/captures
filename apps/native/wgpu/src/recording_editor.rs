@@ -66,7 +66,7 @@ impl Presented {
 enum Job {
     Apply(RecordingEditorRequest),
     Save(RecordingSaveRequest, CancelToken),
-    Replace(CancelToken),
+    Replace(PathBuf, CancelToken),
     Estimate(CancelToken),
     Compare(u64, CancelToken),
     Thumbnails(CancelToken),
@@ -369,7 +369,7 @@ impl View {
             && !self.requires_reopen
     }
 
-    /// Shipping's Save: a new copy, or the original replaced in place.
+    /// Shipping's Save: a new copy, or same-identity Save at the chosen path.
     fn save(&mut self, tx: &Sender<Job>) {
         if !self.can_save() {
             return;
@@ -389,7 +389,7 @@ impl View {
             if self.can_replace() {
                 let cancel = CancelToken::default();
                 self.cancel = Some(cancel.clone());
-                self.send(tx, Job::Replace(cancel));
+                self.send(tx, Job::Replace(self.destination(), cancel));
             }
             return;
         }
@@ -917,7 +917,7 @@ impl View {
         };
         if matches!(
             job,
-            Job::Apply(_) | Job::Play(..) | Job::SourceFrame(_) | Job::Replace(_)
+            Job::Apply(_) | Job::Play(..) | Job::SourceFrame(_) | Job::Replace(..)
         ) {
             self.comparison = None;
         }
@@ -1091,16 +1091,14 @@ impl View {
                         // Drop every source-dependent cache and saved baseline.
                         let directory = std::mem::take(&mut self.directory);
                         let stem = std::mem::take(&mut self.stem);
-                        let source_directory = std::mem::take(&mut self.source_directory);
-                        let source_stem = std::mem::take(&mut self.source_stem);
                         let artifact_id = std::mem::take(&mut self.artifact_id);
                         let preview_loop = self.preview_loop.clone();
                         preview_loop.store(false, Ordering::Relaxed);
                         *self = Self {
+                            source_directory: directory.clone(),
+                            source_stem: stem.clone(),
                             directory,
                             stem,
-                            source_directory,
-                            source_stem,
                             artifact_id,
                             original_path: Some(path.clone()),
                             preview_actual_size: self.preview_actual_size,
@@ -1478,10 +1476,10 @@ impl Editor {
                                 })
                             }),
                     ),
-                    Job::Replace(cancel) => {
+                    Job::Replace(destination, cancel) => {
                         let result = if let Some(s) = session.as_mut() {
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                s.replace_original(&cancel, |progress| {
+                                s.replace_original_at(&destination, &cancel, |progress| {
                                     let _ = out.send(Event::Progress(progress));
                                     wake(&wake_ctx, viewport);
                                 })
@@ -2990,7 +2988,7 @@ fn show_filename(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let change = ui
                 .add(egui::Button::new(text(tokens, "Change…", "text-2xs", "text")).small())
-                .on_hover_text("Choose the folder for the new copy.");
+                .on_hover_text("Choose the folder for the saved recording.");
             probe(ui, "Change…", change.rect);
             if change.clicked() {
                 view.picker = true;
@@ -3136,7 +3134,7 @@ fn show_save_actions(
                     .on_hover_text(if copy {
                         "Save as a new file and leave the original untouched."
                     } else {
-                        "Save the edits over the original recording and its History item."
+                        "Save the edits to the chosen filename and folder under the original History item."
                     });
                 probe(ui, "Save", save.rect);
                 // What Save does now, for the smoke tests' named targets.
@@ -4572,7 +4570,7 @@ mod tests {
         assert!(!view.replace_supported() && view.saving_copy());
         view.webm = false;
         view.save(&tx);
-        assert!(matches!(jobs.recv().unwrap(), Job::Replace(_)));
+        assert!(matches!(jobs.recv().unwrap(), Job::Replace(..)));
         assert!(view.busy && view.cancel.is_some());
         view.request_playback(&tx);
         view.request_comparison(&ctx, &tx);
@@ -4649,6 +4647,8 @@ mod tests {
         view.start_ms = 500;
         view.quality = QualityPreset::Tiny;
         view.maximum_size = true;
+        view.directory = "/Moved".into();
+        view.stem = "renamed".into();
         view.preview_loop.store(true, Ordering::Relaxed);
         let cancel = CancelToken::default();
         cancel.cancel();
@@ -4665,7 +4665,10 @@ mod tests {
         rebased.frame = Arc::new(RgbaImage::new(1200, 400));
         rebased.export.format = ExportFormat::Gif;
         rebased.preview_export = rebased.export.clone();
-        view.receive(&ctx, Event::Replaced(Ok(("original.gif".into(), rebased))));
+        view.receive(
+            &ctx,
+            Event::Replaced(Ok(("/Moved/renamed.gif".into(), rebased))),
+        );
         assert!(view.history_changed && !view.busy && !view.dirty() && !view.unapplied());
         assert!(
             view.original_replaced,
@@ -4676,7 +4679,10 @@ mod tests {
         );
         // Shipping's save toast, Show in Folder, and a disabled Save until
         // something changes.
-        assert_eq!(view.saved_path, Some(PathBuf::from("original.gif")));
+        assert_eq!(view.saved_path, Some(PathBuf::from("/Moved/renamed.gif")));
+        assert_eq!(view.original_path, view.saved_path);
+        assert_eq!(view.source_directory, PathBuf::from("/Moved"));
+        assert_eq!(view.source_stem, "renamed");
         assert!(view.already_saved() && !view.can_save());
         assert!(view.output_size.is_none() && !view.maximum_size && view.cancel.is_none());
         assert!(!view.preview_loop.load(Ordering::Relaxed));
@@ -5280,6 +5286,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut view = opened();
         view.original_path = Some("/recordings/original.mp4".into());
+        view.directory = "/New folder".into();
         view.stem = "copy".into();
         let (tx, jobs) = mpsc::channel();
         let (sender, _) = mpsc::channel();
@@ -5301,7 +5308,10 @@ mod tests {
         // Shipping's default: Save replaces a same-format original at once.
         assert!(view.replace_supported() && !view.saving_copy());
         click(&mut view, "Save");
-        assert!(matches!(jobs.try_recv(), Ok(Job::Replace(_))));
+        let Ok(Job::Replace(destination, _)) = jobs.try_recv() else {
+            panic!("same-identity save")
+        };
+        assert_eq!(destination, PathBuf::from("/New folder/copy.mp4"));
         view.receive(
             &ctx,
             Event::Replaced(Err(ReplaceOriginalError {

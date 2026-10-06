@@ -1755,8 +1755,12 @@ the staged values available for correction. MP4/GIF Save new copy uses
 shared encoding, reports progress and accepts independent cancellation. It never
 replaces an existing file or the original History artifact. Post-publication
 History failure reports the successfully saved path rather than inviting re-export.
-Both native editors replace the opened session's exact permanent MP4/GIF path
-(**Save** with **Save as new file** off) without a confirmation, as shipping does.
+Both native editors honor the edited filename and chosen folder for **Save** with
+**Save as new file** off, without a confirmation, as shipping does. Same-format
+MP4/GIF saves retain the History ID and creation time. Saving to the accepted
+permanent path replaces it; a different destination must be absent and leaves the
+previous permanent file intact. Success adopts the new original path and its
+filename/folder baseline for subsequent Save and `-edited` suggestions.
 Saved-path/format UI hints are not eligibility proofs:
 shared Rust verifies matching regular permanent and private recovery files and
 source identity. Serialized work reports progress and accepts cancellation during
@@ -1786,15 +1790,26 @@ AppKit CI covers lifecycle and rendered fixtures; physical acceptance remains op
 No parity gate is closed.
 The shared Replace original operation requires a regular permanent MP4/GIF outside
 History with byte-identical private recovery. It stages edited media, publishes the
-permanent path atomically, then updates History; a History failure restores the
-permanent path from intact recovery or requires reopening an indeterminate session.
+permanent path atomically (no-clobber for a different destination), then updates
+History. A History failure restores an in-place save from intact recovery or removes
+only an unchanged owned relocated publication; unsafe compensation requires reopening.
 The read-only original-save-path accessor supplies the accepted session's path
-for host confirmation; it does not claim replacement eligibility or alter v1/v2
+for host eligibility hints; it does not claim replacement eligibility or alter v1/v2
 snapshots, and publication revalidates the opened metadata and file identity.
 The old recovery bytes remain available during publication, but the two directories
 are not crash/power-loss atomic: a process kill can leave new permanent media with
 old or hidden History. History-only and reference-only recordings are unsupported.
 Shipping's recording editor has no edit drafts or undo, so neither is a parity gap.
+
+Save-location slice status: shared Rust and the additive
+`captures_recording_editor_replace_original_v2` ABI connect AppKit and the shared
+Windows/X11/Wayland host. Private X11 dark/light input checks cover a real rfd folder
+request with a disposable portal response, Unicode rename, collision refusal,
+original-file preservation, same-ID rebase, repeat Save and normal/minimum renders.
+Shared regressions cover a destination created during encoding, cancellation,
+History failure/owned-output cleanup and uppercase extensions. AppKit has host and
+real-bridge XCTest coverage, but this slice has not run on macOS, Windows or Wayland;
+physical dialogs/input/accessibility remain unverified. No parity gate closes.
 
 Platform status: shared Rust/C ABI is connected to both hosts. The first AppKit
 slice opens recordings from History in a separate native window with retained

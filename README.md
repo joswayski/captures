@@ -364,8 +364,11 @@ WebM is offered as in shipping but, like shipping's bundled media tools, cannot
 encode it, so saving WebM shows shipping's error.
 The shared recording editor now also supports same-format replacement of an
 existing permanent MP4/GIF when History retains identical recovery media.
-As in shipping, **Save** with **Save as new file** off replaces it without a
-confirmation; turning the switch on saves an `-edited` copy beside it. Replacement is
+As in shipping, **Save** with **Save as new file** off uses the chosen filename
+and folder under the same History item, without a confirmation. The original
+path is replaced; a different path must be unused, and the previous saved file
+stays intact. The new path becomes the editor's original for later saves.
+Turning the switch on suggests an `-edited` copy beside it. Replacement is
 unavailable for recovery-only or reference-only recordings (the switch then stays on),
 pending edits or a different output format; the backend
 also rejects missing or divergent recovery files. Success rebases the editor and

@@ -128,7 +128,7 @@ pub fn recording_media_file_name(kind: ArtifactKind, source: &Path) -> Option<St
             } else {
                 "mp4"
             });
-    Some(format!("media.{extension}"))
+    Some(format!("media.{}", extension.to_ascii_lowercase()))
 }
 
 pub fn find_recording_media(directory: &Path) -> Option<PathBuf> {
@@ -522,10 +522,14 @@ mod tests {
     fn metadata_updates_and_replacement_preserve_recording_recovery() {
         let root = tempdir().unwrap();
         let id = Uuid::new_v4().to_string();
-        let source = root.path().join("source.mp4");
+        let source = root.path().join("source.MP4");
         fs::write(&source, b"media").unwrap();
         let mut entry = recording(&id, Utc::now().to_rfc3339(), None);
         save_recording(root.path(), &entry, b"poster", &source).unwrap();
+        assert_eq!(
+            entry.recording_media_path(root.path()),
+            Some(root.path().join(&id).join("media.mp4"))
+        );
         entry.size_bytes = 99;
         update_metadata(root.path(), &entry).unwrap();
         save_entry(root.path(), &entry, None, b"new-poster", None).unwrap();
