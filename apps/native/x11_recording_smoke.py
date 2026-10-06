@@ -57,6 +57,8 @@ def main():
     env = os.environ.copy()
     # Live hosts must never unbind the developer's real OS screenshot keys.
     env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
+    if args.start_failure:
+        env["CAPTURES_NATIVE_LAYOUT_PROBE"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
     if args.virtual_microphone:
         for variable in ("PULSE_SERVER", "PULSE_COOKIE", "PULSE_RUNTIME_PATH"):
@@ -241,6 +243,22 @@ def main():
         # Disk cleanup precedes the worker reply. Only the event-thread finish
         # restores the previously visible root and releases the capture flow.
         wait(lambda: windows("Capture History"), "workspace restoration after worker completion")
+        if args.start_failure:
+            # Retirement and the recovery refresh can outlast root restoration.
+            # Wait for the real rendered action's enabled state before the next
+            # shortcut, rather than injecting it while routing is still blocked.
+            def history_ready():
+                for line in reversed((output / "app.jsonl").read_text().splitlines()):
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue  # A logger may still be writing the final line.
+                    if (event.get("event") == "history-action-layout"
+                            and event["detail"]["action"] == "Save file"):
+                        return event["detail"]["enabled"]
+                return False
+
+            wait(history_ready, "History actions enabled after recording retirement")
         time.sleep(.3)
 
     try:
