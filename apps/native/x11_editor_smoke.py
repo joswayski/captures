@@ -128,6 +128,8 @@ def main():
                         help="Keep Properties titles visible while fields scroll at minimum size")
     parser.add_argument("--external-image-only", action="store_true",
                         help="Open external images, preserve per-file errors and safely reopen drafts/sources")
+    parser.add_argument("--import-formats-only", action="store_true",
+                        help="Import GIF first frames and BMP layers, undo/redo and reopen without sources")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -1162,6 +1164,74 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.import_formats_only:
+            resize_editor(1200, 701)
+            gif = output / "First frame.GIF"
+            bmp = output / "Asymmetric.BMP"
+            notes = output / "notes.txt"
+            notes.write_text("not an image")
+            # Only frame zero should become a layer; frame one is solid blue.
+            run("convert", "-size", "120x80", "xc:none", "-fill", "#d53e55",
+                "-draw", "rectangle 0,0 45,79", "-fill", "#3cb371",
+                "-draw", "rectangle 46,18 70,49", "-delay", "5",
+                "(", "-size", "120x80", "xc:#2d64bd", ")", "-loop", "0", "-strip", str(gif))
+            run("convert", "-size", "80x50", "xc:#ebbf48", "-fill", "#8e44ad",
+                "-draw", "rectangle 31,19 79,49", "-strip", "BMP3:" + str(bmp))
+            source_bytes = {path: path.read_bytes() for path in [gif, bmp]}
+            chooser.selected = [gif, notes, bmp]
+            toolbar_click("import")
+            wait(lambda: chooser.pending, "GIF/BMP multi-select picker")
+            title, options = chooser.calls[-1]
+            assert title == "Import images" and options.get("multiple", False)
+            filters = str(options["filters"])
+            assert "*.gif" in filters and "*.bmp" in filters, filters
+            GLib.idle_add(chooser.respond, False)
+            imported = save_layers(lambda values: len(values) == 3, "GIF and BMP imported in order")
+            assert [layer["name"] for layer in imported[1:]] == [gif.name, bmp.name]
+            assert [(layer["naturalWidth"], layer["naturalHeight"]) for layer in imported[1:]] == [(120, 80), (80, 50)]
+            assert imported[2]["y"] >= imported[1]["y"] + imported[1]["height"]
+            asset_pixel(imported[1], 10, 10, (213, 62, 85, 255))
+            asset_pixel(imported[1], 50, 20, (60, 179, 113, 255))
+            asset_pixel(imported[1], 100, 10, (0, 0, 0, 0))
+            asset_pixel(imported[2], 10, 10, (235, 191, 72, 255))
+            asset_pixel(imported[2], 50, 30, (142, 68, 173, 255))
+            shot(editor, "gif-bmp-imported")
+            document_pixel("gif-bmp-imported", imported[1]["x"] + 10, imported[1]["y"] + 10, (213, 62, 85))
+            document_pixel("gif-bmp-imported", imported[2]["x"] + 50, imported[2]["y"] + 30, (142, 68, 173))
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 2, "one file per Undo")
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 1, "both imports undone")
+            toolbar_click("redo")
+            save_layers(lambda values: len(values) == 2, "GIF redone")
+            toolbar_click("redo")
+            assert save_layers(lambda values: len(values) == 3, "BMP redone") == imported
+            assert all(path.read_bytes() == before for path, before in source_bytes.items())
+            for path in source_bytes:
+                path.unlink()
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "imported editor closes")
+            editor = reopen()
+            assert layers() == imported, "reopened draft retains detached image assets"
+            asset_pixel(imported[1], 50, 20, (60, 179, 113, 255))
+            asset_pixel(imported[2], 50, 30, (142, 68, 173, 255))
+            shot(editor, "gif-bmp-reopened")
+            resize_editor(760, 540)
+            shot(editor, "gif-bmp-minimum")
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "import format suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["gif-bmp-picker-filters", "mixed-case-extensions", "unsupported-file-skipped",
+                           "first-gif-frame-only", "transparent-gif-pixels", "asymmetric-bmp-pixels",
+                           "ordered-placement", "one-undo-step-per-file", "stable-redo",
+                           "immutable-sources", "draft-reopens-after-source-removal", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native GIF/BMP imports: picker, pixels, alpha, undo/redo and detached draft reopen")
+            return
 
         if args.external_image_only:
             assert {item["saved_path"]: (item["width"], item["height"]) for item in entries} == {

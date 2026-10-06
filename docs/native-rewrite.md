@@ -3253,7 +3253,7 @@ pixels, undo/redo, draft restore and light/dark/minimum layouts are exercised on
 private X11. Windows/Wayland presentation remains unverified; AppKit style controls
 are described below. Physical input/accessibility acceptance stays open.
 
-The wgpu Import image action picks PNG/JPEG/WebP/TIFF files independently
+The wgpu Add images action picks PNG/JPEG/WebP/TIFF/GIF/BMP files independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
 normalizes EXIF orientation and supplies owned RGBA to the shared import command.
 Shipping decodes Add images and dropped layers in the webview, which color-manages
@@ -3273,12 +3273,24 @@ normalize to 8-bit sRGB. Malformed ICC profiles, or profiles whose color space
 does not match the samples, still fail recoverably rather than being ignored as
 browsers do. Undecodable imports report shipping's "<name> could not be loaded."
 TIFF import matches the macOS webview (WebView2 and WebKitGTK cannot decode TIFF,
-so native accepts more there); GIF, BMP, AVIF, SVG and HEIC layers, which shipping
-accepts through the webview, remain open. Analytic fixtures in
-`captures-app` cover ICC transport through PNG, JPEG, WebP and TIFF plus
+so native accepts more there). GIF imports decode frame zero into its logical canvas,
+preserving offsets and transparent uncovered pixels; opening GIFs remains a recording
+workflow. BMP rows normalize to top-down RGBA, with declared bitfield alpha retained
+and the unused byte of legacy 32-bit BI_RGB discarded. V5 embedded RGB ICC profiles
+convert through the existing pipeline. Calibrated/linked/unknown BMP descriptions
+fail recoverably instead of silently importing wrong colors; linked profiles never
+cause filesystem/network reads. ImageIO supplies AppKit's GIF/BMP decoding and color
+management. AVIF, SVG and HEIC layer parity remains open. Analytic fixtures in
+`captures-app` cover GIF first-frame offset/transparency/later-frame exclusion,
+BMP row direction/alpha/profile bounds, ICC transport through PNG, JPEG, WebP, TIFF and BMP plus
 grayscale alpha, a generated CMYK lut16 profile through Adobe CMYK and YCCK JPEGs
 and a CMYK TIFF, cICP precedence/primaries/fallback, PQ/HLG reference white, and
 gamma/chromaticity-only PNGs.
+The GIF/BMP slice adds private-X11 dark/light picker, exact asset/rendered pixels,
+undo/redo, detached draft reopening and normal/minimum captures. AppKit has matching
+offset-GIF and asymmetric-BMP ImageIO tests; macOS CI and physical acceptance status
+are recorded in its PR. Windows and Wayland share the implementation; their physical
+dialogs/input/rendering are unverified. This does not complete a platform parity gate.
 The returned stable ID selects the new layer. Cancellation, decode failures and
 late results after close preserve the editor; a completed selection waits for
 already accepted edits before importing. Imports do not write a draft or History

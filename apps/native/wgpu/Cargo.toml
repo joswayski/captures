@@ -19,7 +19,7 @@ eframe = { path = "vendor/eframe" }
 
 [dependencies]
 eframe = { git = "https://github.com/emilk/egui", rev = "60d7caaea38a795618e842925061ad2210028a2a", default-features = false, features = ["wgpu", "x11", "wayland", "accesskit", "default_fonts"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "png", "jpeg", "webp", "tiff"] }
 log = "0.4"
 moxcms = "0.8"
 png = "0.18"

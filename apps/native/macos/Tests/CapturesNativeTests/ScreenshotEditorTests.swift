@@ -3724,6 +3724,64 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(convertedCMYK.data[3], 255)
     }
 
+    func testImageIOImportsOnlyTheOffsetGifFirstFrameWithLogicalCanvasTransparency() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("animation.GIF")
+        // Same independently specified two-frame GIF as the shared Rust test:
+        // 3×4 logical canvas, blue then transparent at (1,2), later black at (0,0).
+        let bytes: [UInt8] = [
+            71, 73, 70, 56, 57, 97, 3, 0, 4, 0, 128, 1, 0, 0, 0, 0, 11, 73, 211,
+            33, 249, 4, 1, 0, 0, 0, 0, 44, 1, 0, 2, 0, 2, 0, 1, 0, 0, 2, 2, 12, 10, 0,
+            33, 249, 4, 0, 0, 0, 0, 0, 44, 0, 0, 0, 0, 2, 0, 1, 0, 0, 2, 2, 4, 10, 0, 59,
+        ]
+        try Data(bytes).write(to: url)
+        XCTAssertTrue(NativeEditorCanvas.isSupportedImage(url))
+        let decoded = try EditorImageDecoder.decode(url)
+        XCTAssertEqual(decoded.width, 3); XCTAssertEqual(decoded.height, 4)
+        XCTAssertEqual(decoded.bytesPerRow, 12)
+        for y in 0..<4 {
+            for x in 0..<3 {
+                let offset = (y * 3 + x) * 4
+                let expected: [UInt8] = x == 1 && y == 2 ? [11, 73, 211, 255] : [0, 0, 0, 0]
+                XCTAssertEqual(Array(decoded.data[offset..<(offset + 4)]), expected, "\(x),\(y)")
+            }
+        }
+    }
+
+    func testImageIOBmpImportsNormalizeAsymmetricTopDownAndBottomUpRows() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("layer.BMP")
+        let pixels: [[UInt8]] = [[11, 73, 211], [31, 51, 91], [53, 97, 17],
+                                 [107, 7, 61], [41, 131, 83], [149, 23, 193]]
+        for topDown in [false, true] {
+            var bytes = [UInt8](repeating: 0, count: 54)
+            bytes[0..<2] = [66, 77][...]
+            func word(_ offset: Int, _ value: UInt32) {
+                bytes.replaceSubrange(offset..<(offset + 4), (0..<4).map { UInt8((value >> ($0 * 8)) & 255) })
+            }
+            word(2, 78); word(10, 54); word(14, 40); word(18, 2)
+            word(22, UInt32(bitPattern: topDown ? -3 : 3))
+            bytes[26] = 1; bytes[28] = 24
+            for row in 0..<3 {
+                let y = topDown ? row : 2 - row
+                for x in 0..<2 {
+                    let pixel = pixels[y * 2 + x]
+                    bytes += [pixel[2], pixel[1], pixel[0]]
+                }
+                bytes += [0, 0] // 24-bit rows pad to four-byte boundaries.
+            }
+            try Data(bytes).write(to: url)
+            XCTAssertTrue(NativeEditorCanvas.isSupportedImage(url))
+            let decoded = try EditorImageDecoder.decode(url)
+            XCTAssertEqual(decoded.width, 2); XCTAssertEqual(decoded.height, 3)
+            XCTAssertEqual(Array(decoded.data), pixels.flatMap { $0 + [255] })
+        }
+    }
+
     func testRealBridgeImportedPixelsSurviveSourceRemovalDraftSaveAndReopen() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -8888,7 +8946,7 @@ extension ScreenshotEditorTests {
         XCTAssertFalse(controller.handleFileDrop(.drop, urls: [URL(fileURLWithPath: "/tmp/notes.txt")],
                                                  at: nearTop))
         XCTAssertTrue(worker.imports.isEmpty && decoded.isEmpty)
-        XCTAssertTrue(labels(in: controller.root).contains("Drop PNG, JPEG, WebP, or TIFF image files."))
+        XCTAssertTrue(labels(in: controller.root).contains(NativeEditorCanvas.dropUnsupported))
 
         XCTAssertTrue(controller.handleFileDrop(.hover, urls: [png], at: nearTop))
         XCTAssertTrue(controller.handleFileDrop(.drop, urls: [png, URL(fileURLWithPath: "/tmp/b.jpg")],
@@ -8926,17 +8984,17 @@ extension ScreenshotEditorTests {
         try showLayers(in: controller.root)
 
         try button("Add image layer", in: controller.root).performClick(nil)
-        pickerCompletion?([URL(fileURLWithPath: "/tmp/first.png"), URL(fileURLWithPath: "/tmp/notes.txt"),
-                           URL(fileURLWithPath: "/tmp/second.JPG")])
+        pickerCompletion?([URL(fileURLWithPath: "/tmp/first.GIF"), URL(fileURLWithPath: "/tmp/notes.txt"),
+                           URL(fileURLWithPath: "/tmp/second.BMP")])
         waitUntil { worker.imports.count == 2 && !controller.state.busy }
-        XCTAssertEqual(decoded.map(\.lastPathComponent), ["first.png", "second.JPG"],
+        XCTAssertEqual(decoded.map(\.lastPathComponent), ["first.GIF", "second.BMP"],
                        "unsupported files are skipped and the rest import in order")
         XCTAssertTrue(worker.imports.allSatisfy { $0.point == nil },
                       "the first takes the default placement and later ones stack below it")
 
         try button("Add image layer", in: controller.root).performClick(nil)
         pickerCompletion?([URL(fileURLWithPath: "/tmp/notes.txt")])
-        waitUntil { labels(in: controller.root).contains("Drop PNG, JPEG, WebP, or TIFF image files.") }
+        waitUntil { labels(in: controller.root).contains(NativeEditorCanvas.dropUnsupported) }
         XCTAssertEqual(worker.imports.count, 2)
         XCTAssertEqual(decoded.count, 2)
     }
