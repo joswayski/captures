@@ -182,29 +182,36 @@ def stage(platform, binary, output, resources=None, media_target=None):
     shutil.copy2(ROOT / "LICENSE", output / "LICENSE")
     shutil.copy2(ROOT / "TRADEMARKS.md", output / "TRADEMARKS.md")
     shutil.copy2(ROOT / "apps/native/TESTING.md", output / "TESTING.md")
+    _write_build_info(platform, output, executable, media_target)
     print(f"Staged unsigned development package: {output}")
     print("Nothing was installed or registered. See DEVELOPMENT.md for opt-in Open With and removal.")
     return launcher, executable
+
+
+def _write_build_info(platform, output, executable, media_target):
+    # Every staged host needs layout metadata for the cooperative package guard.
+    # Archive refreshes the hash after signing; this is not protocol enrollment.
+    digest = hashlib.sha256()
+    with executable.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    info = {"development": True, "platform": platform, "media_target": media_target,
+            "binary": executable.relative_to(output).as_posix(), "binary_sha256": digest.hexdigest(),
+            "source_commit": os.environ.get("GITHUB_SHA") if os.environ.get("GITHUB_ACTIONS") == "true" else None}
+    (output / "BUILD_INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
 
 
 def archive(platform, output, executable, destination, media_target=None):
     """Archive the staged package after signing, preserving executable modes."""
     output = output.resolve(strict=True)
     executable = executable.resolve(strict=True)
-    relative = executable.relative_to(output)
+    executable.relative_to(output)  # Reject external inputs before writing metadata.
     destination = destination.resolve()
     if destination.is_relative_to(output):
         raise ValueError("Archive must be outside the staged package")
     if destination.exists():
         raise FileExistsError(destination)
-    digest = hashlib.sha256()
-    with executable.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    info = {"development": True, "platform": platform, "media_target": media_target,
-            "binary": relative.as_posix(), "binary_sha256": digest.hexdigest(),
-            "source_commit": os.environ.get("GITHUB_SHA") if os.environ.get("GITHUB_ACTIONS") == "true" else None}
-    (output / "BUILD_INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    _write_build_info(platform, output, executable, media_target)
     destination.parent.mkdir(parents=True, exist_ok=True)
     stream = destination.open("xb")
     # These descriptors bind absolute staging paths. Portable archives must

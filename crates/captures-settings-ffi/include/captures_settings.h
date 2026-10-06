@@ -5,6 +5,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Cooperative package busy guard, independent of profile election. Acquire
+ * before host initialization; retain until the application loop and all shutdown
+ * work finish. No profile/network access. Non-null for unpackaged builds too;
+ * NULL means failure and the host must not initialize. Free exactly once.
+ * This does not account for legacy hosts or orphaned media children, and never
+ * replaces the operator's all-processes-stopped/launch-exclusion requirement. */
+typedef struct CapturesPackageUse CapturesPackageUse;
+CapturesPackageUse *captures_package_use_current_v1(void);
+void captures_package_use_free_v1(CapturesPackageUse *handle);
+
 /* Explicit signed development update checks, with no HTTP until Check.
  * create takes {endpoint,key_file,renderer,current_version,staging_directory?}; pins the public
  * Minisign key (regular UTF-8 file, <=8 KiB), development identity and host target.

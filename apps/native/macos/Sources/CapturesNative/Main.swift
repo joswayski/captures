@@ -1,4 +1,5 @@
 import AppKit
+import CCapturesSettings
 
 struct Options {
     static let themes = ["mustard", "ember", "rose", "violet", "cobalt", "aqua", "mint", "lime", "mono"]
@@ -134,6 +135,14 @@ struct Options {
                 print(try String(contentsOf: url, encoding: .utf8), terminator: "")
                 return
             }
+            // Hold across bundled/unbundled loops, secondaries and fixtures,
+            // independently of profile election and asynchronous termination.
+            guard let packageUse = captures_package_use_current_v1() else {
+                throw NSError(domain: "CapturesNativePackage", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "The native development package is busy or its use guard could not be opened.",
+                ])
+            }
+            defer { captures_package_use_free_v1(packageUse) }
             let bundled = Bundle.main.object(forInfoDictionaryKey: "CapturesNativeLive") as? Bool == true
             let options = try Options(Array(CommandLine.arguments.dropFirst()), bundled: bundled)
             if bundled {

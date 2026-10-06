@@ -2011,6 +2011,30 @@ This slice does not close distribution or Notices/updates acceptance. Installed-
 handoff/recovery, OS installers/signing, channel publication and installed-data
 backup/migration remain open. Tauri still ships; no release or cutover is activated.
 
+### Cooperative development-package busy guard
+
+Both packaged hosts now acquire shared package-root ownership before profile,
+worker and renderer initialization, retaining it through event-loop exit. Multiple
+profiles share the guard. Explicit replacement and recovery require exclusive
+ownership before mutating any package or cleanup tree; a persistent sibling lock
+survives missing-root rename boundaries. Unpackaged builds do not participate.
+This guard is separate from the operation lock held through startup health, so
+the acknowledged replacement can start without waiting on its own helper.
+
+This is not automated admission: old binaries and orphaned media children are not
+represented, and executable loading precedes host code. The helper still requires
+the operator to stop every process and exclude new launches. Metadata is only
+layout detection, not proof of process participation. GUI installation remains
+disabled until crash-safe subprocess supervision and versioned package enrollment
+are implemented; root-PID exit or an apparently free lock cannot enable it.
+
+| Platform | Package-use implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared guard and host-lifetime opaque C owner implemented for bundled/unbundled paths; portable core/FFI tests included in native CI; not compiled or physically exercised on macOS in this orb |
+| Windows | Shared guard and wgpu host lifetime implemented; portable multi-owner, replacement/recovery and subprocess-exit tests included in native CI; execution/physical acceptance pending |
+| X11 | Core layout/lease, multi-owner, rename-gap and subprocess-exit regressions implemented; packaged-host runtime verification recorded in the slice PR; private software-rendered host only |
+| Wayland | Same guard before renderer/profile initialization; no compositor-specific behavior introduced; live-host acceptance open |
+
 ### Explicit offline profile import: source preserved, no installed cutover
 
 The shared `profile_import` backend and `native_profile_import` CLI copy explicit

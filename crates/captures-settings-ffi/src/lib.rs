@@ -7,6 +7,7 @@ mod editor_export;
 mod feedback;
 mod icons;
 mod instance;
+mod package_use;
 mod preferences;
 mod preview;
 mod recording;

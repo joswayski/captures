@@ -14,7 +14,9 @@ use std::{
 };
 
 mod launch;
+mod usage;
 pub use launch::LaunchFailure;
+pub use usage::PackageUse;
 
 /// An activated development package whose previous package is still retained.
 /// Drop deliberately does nothing: another process can recover an interruption.
@@ -84,6 +86,7 @@ impl StagedUpdate {
         require_host_target(self.info().target)?;
         let paths = Paths::new(destination)?;
         let _lock = paths.lock()?;
+        let _use = paths.exclusive_use()?;
         if directory_present(&paths.transaction)? || directory_present(&paths.garbage())? {
             return Err(Error::Installation("recover the pending replacement first"));
         }
@@ -158,6 +161,7 @@ pub fn recover_installation(destination: &Path) -> Result<bool, Error> {
 
 fn recover(paths: Paths, expected_id: Option<uuid::Uuid>) -> Result<bool, Error> {
     let _lock = paths.lock()?;
+    let _use = paths.exclusive_use()?;
     if directory_present(&paths.garbage())? {
         if expected_id.is_some() || directory_present(&paths.transaction)? {
             return Err(Error::Installation("unexpected replacement cleanup state"));
@@ -238,6 +242,20 @@ impl Drop for OperationLock {
 
 impl Paths {
     fn new(destination: &Path) -> Result<Self, Error> {
+        let paths = Self::for_package(destination)?;
+        // Require the helper to run outside the directory it is going to move.
+        if std::env::current_exe()?
+            .canonicalize()?
+            .starts_with(&paths.package)
+        {
+            return Err(Error::Installation(
+                "the updater must run outside the package",
+            ));
+        }
+        Ok(paths)
+    }
+
+    fn for_package(destination: &Path) -> Result<Self, Error> {
         if !destination.is_absolute() {
             return Err(Error::Configuration(
                 "replacement destination must be absolute",
@@ -260,15 +278,6 @@ impl Paths {
         };
         let name = package.file_name().unwrap().to_str().unwrap();
         let parent = package.parent().unwrap();
-        // Require the helper to run outside the directory it is going to move.
-        if std::env::current_exe()?
-            .canonicalize()?
-            .starts_with(&package)
-        {
-            return Err(Error::Installation(
-                "the updater must run outside the package",
-            ));
-        }
         let id = format!("{:x}", Sha256::digest(name.as_bytes()));
         let stem = format!(".captures-native-install-{id}");
         let transaction = parent.join(&stem);

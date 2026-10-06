@@ -15,7 +15,7 @@ mod health;
 mod installation;
 mod staging;
 pub use health::HealthAcknowledgement;
-pub use installation::{LaunchFailure, PendingInstallation, recover_installation};
+pub use installation::{LaunchFailure, PackageUse, PendingInstallation, recover_installation};
 pub use staging::StagedUpdate;
 
 use std::{

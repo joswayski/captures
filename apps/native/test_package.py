@@ -58,6 +58,11 @@ class DevelopmentPackageTests(unittest.TestCase):
                 self.assertTrue(launcher.exists())
                 self.assertEqual((output / "TESTING.md").read_bytes(),
                                  (package.ROOT / "apps/native/TESTING.md").read_bytes())
+                info = json.loads((output / "BUILD_INFO.json").read_text())
+                self.assertTrue(info["development"])
+                self.assertEqual(info["platform"], platform)
+                self.assertEqual(info["binary"], executable.relative_to(output).as_posix())
+                self.assertEqual(info["binary_sha256"], hashlib.sha256(b"test executable").hexdigest())
                 with self.assertRaises(FileExistsError):
                     package.stage(platform, binary, output, resources)
                 if platform == "macos":
@@ -191,11 +196,12 @@ class DevelopmentPackageTests(unittest.TestCase):
             binary.write_bytes(b"local executable")
             output = root / "package"
             _, executable = package.stage("linux", binary, output)
+            original_info = (output / "BUILD_INFO.json").read_bytes()
             with self.assertRaises(ValueError):
                 package.archive("linux", output, executable, output / "recursive.tar.gz")
             with self.assertRaises(ValueError):
                 package.archive("linux", output, binary, root / "wrong.tar.gz")
-            self.assertFalse((output / "BUILD_INFO.json").exists())
+            self.assertEqual((output / "BUILD_INFO.json").read_bytes(), original_info)
             with patch.dict(os.environ, {"GITHUB_ACTIONS": "false", "GITHUB_SHA": "not this build"}):
                 package.archive("linux", output, executable, root / "local.tar.gz")
             self.assertIsNone(json.loads((output / "BUILD_INFO.json").read_text())["source_commit"])
