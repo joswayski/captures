@@ -57,6 +57,10 @@ final class UpdateNoticeTests: XCTestCase {
         XCTAssertNil(model.status)
         model.perform(.check)
         XCTAssertEqual(checks, 1)
+        var acquisitions: [UpdateNoticeAction] = []
+        model.acquire = { acquisitions.append($0) }
+        model.perform(.downloadVerify); model.perform(.cancelDownload)
+        XCTAssertEqual(acquisitions, [.downloadVerify, .cancelDownload])
         var opened: [String] = []
         model.openPullRequest = { opened.append($0); return true }
         model.perform(.openPullRequest("https://github.com/joswayski/captures/pull/321"))
@@ -64,8 +68,11 @@ final class UpdateNoticeTests: XCTestCase {
         let fixture = UpdateNoticeModel()
         fixture.event = { _, _ in }
         fixture.openPullRequest = { opened.append($0); return true }
+        fixture.acquire = { acquisitions.append($0) }
         try fixture.load(fixture: "available")
         fixture.perform(.openPullRequest("https://github.com/joswayski/captures/pull/999"))
+        fixture.perform(.downloadVerify); fixture.perform(.cancelDownload)
+        XCTAssertEqual(acquisitions.count, 2, "fixture actions cannot start acquisition")
         XCTAssertEqual(opened.count, 1, "fixtures must not open a browser")
     }
 

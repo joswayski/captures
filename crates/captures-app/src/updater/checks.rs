@@ -1,8 +1,8 @@
-//! Explicit, check-only native development updates. No automatic requests,
-//! downloads, installation, profile access or channel activation.
+//! Explicit native development checks and opt-in temporary package verification.
+//! No automatic requests, installation, profile access or channel activation.
 use std::{
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, mpsc},
     thread::{self, JoinHandle},
 };
@@ -11,6 +11,17 @@ use captures_media::CancelToken;
 use serde::Serialize;
 
 use super::{Error, ReleaseInfo, Renderer, Target, UpdateClient};
+
+/// An operator-selected scratch location, never an installation/profile path.
+/// Each download and stage owns only randomly named temporary entries inside it.
+pub fn validate_staging_directory(path: &Path) -> Result<(), Error> {
+    if !path.is_absolute() || !path.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+        return Err(Error::Configuration(
+            "staging directory must be an existing absolute directory, not a symlink",
+        ));
+    }
+    Ok(())
+}
 
 /// Both native hosts pin an explicitly supplied, bounded Minisign public key.
 /// This reads only the key file; construction performs no network request.
@@ -44,15 +55,36 @@ pub fn client_from_key_file(
     )
 }
 
-/// Read-only metadata states cannot express downloading or installation.
+/// Temporary acquisition is separate from installation; no state can install.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum CheckStatus {
     Idle,
     Checking,
     UpToDate,
-    Available { release: ReleaseInfo },
-    Error { message: String },
+    Available {
+        release: ReleaseInfo,
+    },
+    Error {
+        message: String,
+    },
+    Downloading {
+        release: ReleaseInfo,
+        downloaded: u64,
+    },
+    Verifying {
+        release: ReleaseInfo,
+    },
+    Cancelling {
+        release: ReleaseInfo,
+    },
+    Staged {
+        release: ReleaseInfo,
+    },
+    DownloadError {
+        release: ReleaseInfo,
+        message: String,
+    },
 }
 
 /// UI copy shared by AppKit and wgpu. A new worker stays idle until Check Now.
@@ -65,90 +97,241 @@ pub struct Presentation {
     pub enabled: bool,
     pub failed: bool,
     pub detail: &'static str,
+    pub acquisition: Option<crate::update_notice::Button>,
+}
+
+enum Job {
+    Check(CancelToken),
+    Download(CancelToken),
+    Shutdown,
+}
+
+enum Event {
+    Finished(CheckStatus),
+    Progress(u64),
+    Verifying,
 }
 
 pub struct CheckWorker {
     current_version: String,
     status: CheckStatus,
     generation: u64,
-    jobs: mpsc::Sender<()>,
-    results: mpsc::Receiver<CheckStatus>,
+    staging_enabled: bool,
+    jobs: mpsc::Sender<Job>,
+    results: mpsc::Receiver<Event>,
+    operation_cancel: Option<CancelToken>,
     cancel: CancelToken,
     thread: Option<JoinHandle<()>>,
 }
 
 impl CheckWorker {
-    /// Construction performs no request. The worker only reads authenticated
-    /// metadata; it does not retain an installable or downloaded package.
-    pub fn new(client: UpdateClient, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+    /// No request at construction. Without an explicit scratch directory this
+    /// remains check-only. Authenticated capabilities and staged owners stay on
+    /// the worker thread; paths are never serialized into UI replies.
+    pub fn new(
+        client: UpdateClient,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        staging_directory: Option<PathBuf>,
+    ) -> Result<Self, Error> {
+        if let Some(path) = &staging_directory {
+            validate_staging_directory(path)?;
+        }
         let current_version = client.current_version.to_string();
+        let staging_enabled = staging_directory.is_some();
         let (jobs, requests) = mpsc::channel();
         let (finished, results) = mpsc::channel();
         let cancel = CancelToken::default();
         let cancelled = cancel.clone();
         let thread = thread::spawn(move || {
-            while requests.recv().is_ok() {
+            let mut pending = None;
+            let mut staged = None;
+            while let Ok(job) = requests.recv() {
                 if cancelled.is_cancelled() {
                     break;
                 }
-                let checked = client.check(&cancelled);
-                if cancelled.is_cancelled() {
-                    break;
-                }
-                let status = match checked {
-                    Ok(Some(update)) => CheckStatus::Available {
-                        release: update.info().clone(),
-                    },
-                    Ok(None) => CheckStatus::UpToDate,
-                    Err(error) => CheckStatus::Error {
-                        message: error.to_string(),
-                    },
+                let status = match job {
+                    Job::Shutdown => break,
+                    Job::Check(token) => {
+                        // Drop verified temporary storage before rechecking.
+                        staged.take();
+                        pending = None;
+                        match client.check(&token) {
+                            Ok(Some(update)) => {
+                                let release = update.info().clone();
+                                pending = Some(update);
+                                CheckStatus::Available { release }
+                            }
+                            Ok(None) => CheckStatus::UpToDate,
+                            Err(error) => CheckStatus::Error {
+                                message: error.to_string(),
+                            },
+                        }
+                    }
+                    Job::Download(token) => {
+                        let Some(update) = &pending else { continue };
+                        let Some(directory) = &staging_directory else {
+                            continue;
+                        };
+                        let release = update.info().clone();
+                        let result = update
+                            .download(directory, &token, |received, _| {
+                                if !cancelled.is_cancelled() && !token.is_cancelled() {
+                                    let _ = finished.send(Event::Progress(received));
+                                    wake();
+                                }
+                            })
+                            .and_then(|verified| {
+                                if !cancelled.is_cancelled() && !token.is_cancelled() {
+                                    let _ = finished.send(Event::Verifying);
+                                    wake();
+                                }
+                                verified.stage(directory, &token)
+                            });
+                        if token.is_cancelled() {
+                            // Cleanup precedes the cancellation acknowledgement.
+                            drop(result);
+                            CheckStatus::Available { release }
+                        } else {
+                            match result {
+                                Ok(package) => {
+                                    staged = Some(package);
+                                    CheckStatus::Staged { release }
+                                }
+                                Err(error) => CheckStatus::DownloadError {
+                                    release,
+                                    message: match error {
+                                        Error::Io(_) => {
+                                            "Native update file operation failed.".into()
+                                        }
+                                        _ => error.to_string(),
+                                    },
+                                },
+                            }
+                        }
+                    }
                 };
-                if finished.send(status).is_err() {
+                if cancelled.is_cancelled() {
+                    break;
+                }
+                if finished.send(Event::Finished(status)).is_err() {
                     break;
                 }
                 wake();
             }
         });
-        Self {
+        Ok(Self {
             current_version,
             status: CheckStatus::Idle,
             generation: 0,
+            staging_enabled,
             jobs,
             results,
+            operation_cancel: None,
             cancel,
             thread: Some(thread),
-        }
+        })
     }
 
-    /// Repeated input during a check cannot enqueue duplicate HTTP requests.
+    /// Repeated input during any operation cannot enqueue duplicate requests.
     pub fn check(&mut self) -> bool {
         self.poll();
         if self.checking() || self.thread.is_none() {
             return false;
         }
         self.status = CheckStatus::Checking;
-        let accepted = self.jobs.send(()).is_ok();
+        let token = CancelToken::default();
+        self.operation_cancel = Some(token.clone());
+        let accepted = self.jobs.send(Job::Check(token)).is_ok();
         if accepted {
             self.generation += 1;
         }
         accepted
     }
 
-    /// A new explicit check may reveal a dismissed notice; its later result may not.
+    pub fn download(&mut self) -> bool {
+        self.poll();
+        if !self.staging_enabled || self.thread.is_none() {
+            return false;
+        }
+        let release = match &self.status {
+            CheckStatus::Available { release } | CheckStatus::DownloadError { release, .. } => {
+                release.clone()
+            }
+            _ => return false,
+        };
+        let token = CancelToken::default();
+        self.operation_cancel = Some(token.clone());
+        let accepted = self.jobs.send(Job::Download(token)).is_ok();
+        if accepted {
+            self.generation += 1;
+            self.status = CheckStatus::Downloading {
+                release,
+                downloaded: 0,
+            };
+        }
+        accepted
+    }
+
+    /// Do not unpin busy state until the worker has finished I/O and cleanup.
+    pub fn cancel_download(&mut self) -> bool {
+        self.poll();
+        let release = match &self.status {
+            CheckStatus::Downloading { release, .. } | CheckStatus::Verifying { release } => {
+                release.clone()
+            }
+            _ => return false,
+        };
+        self.operation_cancel.as_ref().unwrap().cancel();
+        self.status = CheckStatus::Cancelling { release };
+        true
+    }
+
+    /// New explicit checks/downloads reveal; progress/results/cancellation do not.
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
     pub fn checking(&self) -> bool {
-        matches!(self.status, CheckStatus::Checking)
+        matches!(
+            self.status,
+            CheckStatus::Checking
+                | CheckStatus::Downloading { .. }
+                | CheckStatus::Verifying { .. }
+                | CheckStatus::Cancelling { .. }
+        )
     }
 
     /// Nonblocking publication, including while Preferences is closed.
     pub fn poll(&mut self) -> bool {
+        if self.thread.is_none() {
+            return false;
+        }
         let mut changed = false;
-        while let Ok(status) = self.results.try_recv() {
-            self.status = status;
+        while let Ok(event) = self.results.try_recv() {
+            match event {
+                Event::Finished(status) => {
+                    self.status = status;
+                    self.operation_cancel = None;
+                }
+                Event::Progress(downloaded) => {
+                    let CheckStatus::Downloading {
+                        downloaded: current,
+                        ..
+                    } = &mut self.status
+                    else {
+                        continue;
+                    };
+                    *current = downloaded;
+                }
+                Event::Verifying => {
+                    let CheckStatus::Downloading { release, .. } = &self.status else {
+                        continue;
+                    };
+                    self.status = CheckStatus::Verifying {
+                        release: release.clone(),
+                    };
+                }
+            }
             changed = true;
         }
         changed
@@ -186,12 +369,35 @@ impl CheckWorker {
                 download_size: Some(release.size),
                 will_close_open_captures: false,
             },
-            CheckStatus::Error { message } => UpdateStatus::Error {
+            CheckStatus::Downloading {
+                release,
+                downloaded,
+            } => UpdateStatus::Downloading {
                 current_version,
                 current_display_version,
-                message: message.clone(),
-                retry_install: false,
+                version: release.version.clone(),
+                display_version: release.version.clone(),
+                downloaded: *downloaded,
+                total: Some(release.size),
             },
+            CheckStatus::Verifying { .. } | CheckStatus::Cancelling { .. } => {
+                UpdateStatus::Checking {
+                    current_version,
+                    current_display_version,
+                }
+            }
+            CheckStatus::Staged { .. } => UpdateStatus::UpToDate {
+                current_version,
+                current_display_version,
+            },
+            CheckStatus::Error { message } | CheckStatus::DownloadError { message, .. } => {
+                UpdateStatus::Error {
+                    current_version,
+                    current_display_version,
+                    message: message.clone(),
+                    retry_install: false,
+                }
+            }
         };
         let mut p = notice::present(
             Some(&status),
@@ -204,22 +410,54 @@ impl CheckWorker {
             CheckStatus::Checking => "Checking native updates",
             CheckStatus::Available { .. } => "Native development update",
             CheckStatus::UpToDate => "Native development up to date",
+            CheckStatus::Downloading { .. } => "Downloading development update",
+            CheckStatus::Verifying { .. } => "Verifying development package",
+            CheckStatus::Cancelling { .. } => "Cancelling development download",
+            CheckStatus::Staged { .. } => "Development package verified",
+            CheckStatus::DownloadError { .. } => "Development download failed",
             _ => "Native development check failed",
         }
         .into();
         p.description = match &self.status {
-            CheckStatus::Available { release } => {
-                format!("{} · Check only; no installation", release.version)
+            CheckStatus::Available { release }
+            | CheckStatus::Downloading { release, .. }
+            | CheckStatus::Verifying { release }
+            | CheckStatus::Cancelling { release }
+            | CheckStatus::Staged { release }
+            | CheckStatus::DownloadError { release, .. } => {
+                format!(
+                    "{} · {}; no installation",
+                    release.version,
+                    if self.staging_enabled {
+                        "Temporary verification"
+                    } else {
+                        "Check only"
+                    }
+                )
             }
             _ => format!("Current {} · Check only", self.current_version),
         };
         if let Some(error) = &mut p.error {
-            error.fallback_prefix = "Retry this development check below.".into();
+            error.fallback_prefix = if matches!(self.status, CheckStatus::DownloadError { .. }) {
+                "Retry this authenticated download below."
+            } else {
+                "Retry this development check below."
+            }
+            .into();
             error.fallback_link.clear();
             error.fallback_suffix.clear();
         }
-        if let Some(footer) = &mut p.footer {
-            footer.primary = (!self.checking()).then(|| Button {
+        p.dismiss_blocked = false;
+        let footer = p.footer.get_or_insert_with(|| notice::Footer {
+            dismiss: Button {
+                label: "Close".into(),
+                enabled: true,
+                action: Action::Dismiss,
+            },
+            primary: None,
+        });
+        footer.primary = self.acquisition().or_else(|| {
+            (!self.checking()).then(|| Button {
                 label: if p.error.is_some() {
                     "Try again"
                 } else {
@@ -228,9 +466,40 @@ impl CheckWorker {
                 .into(),
                 enabled: self.thread.is_some(),
                 action: Action::Check,
-            });
+            })
+        });
+        p.status_message = match self.status {
+            CheckStatus::Verifying { .. } => Some("Validating the signed package in temporary storage…".into()),
+            CheckStatus::Cancelling { .. } => Some("Waiting for pending I/O and temporary cleanup…".into()),
+            CheckStatus::Staged { .. } => Some("Package verified in temporary storage. Nothing installed or executed. Recheck or quit removes it.".into()),
+            _ => p.status_message,
+        };
+        if matches!(self.status, CheckStatus::Staged { .. }) {
+            p.icon = notice::Icon::Check;
+            p.icon_tone = notice::IconTone::Positive;
         }
         Some(p)
+    }
+
+    fn acquisition(&self) -> Option<crate::update_notice::Button> {
+        use crate::update_notice::{Action, Button};
+        if !self.staging_enabled || self.thread.is_none() {
+            return None;
+        }
+        let (label, enabled, action) = match self.status {
+            CheckStatus::Available { .. } => ("Download and verify", true, Action::DownloadVerify),
+            CheckStatus::DownloadError { .. } => ("Retry download", true, Action::DownloadVerify),
+            CheckStatus::Downloading { .. } | CheckStatus::Verifying { .. } => {
+                ("Cancel download", true, Action::CancelDownload)
+            }
+            CheckStatus::Cancelling { .. } => ("Cancelling…", false, Action::CancelDownload),
+            _ => return None,
+        };
+        Some(Button {
+            label: label.into(),
+            enabled,
+            action,
+        })
     }
 
     pub fn presentation(&self) -> Presentation {
@@ -241,11 +510,26 @@ impl CheckWorker {
             CheckStatus::Available { release } => {
                 format!("Development update {} available", release.version)
             }
-            CheckStatus::Error { message } => message.clone(),
+            CheckStatus::Downloading {
+                release,
+                downloaded,
+            } => format!("Downloading {} of {} bytes", downloaded, release.size),
+            CheckStatus::Verifying { .. } => "Verifying package…".into(),
+            CheckStatus::Cancelling { .. } => "Cancelling; waiting for I/O…".into(),
+            CheckStatus::Staged { release } => {
+                format!("Development package {} verified", release.version)
+            }
+            CheckStatus::Error { message } | CheckStatus::DownloadError { message, .. } => {
+                message.clone()
+            }
         };
         Presentation {
             version: format!("Native development {}", self.current_version),
-            channel: "Explicit development endpoint · Check only",
+            channel: if self.staging_enabled {
+                "Explicit development endpoint · Temporary verification"
+            } else {
+                "Explicit development endpoint · Check only"
+            },
             status,
             action: if self.checking() {
                 "Checking…"
@@ -253,8 +537,16 @@ impl CheckWorker {
                 "Check Now"
             },
             enabled: !self.checking() && self.thread.is_some(),
-            failed: matches!(self.status, CheckStatus::Error { .. }),
-            detail: "Verifies signed native development metadata. No download, installation or update channel is enabled.",
+            failed: matches!(
+                self.status,
+                CheckStatus::Error { .. } | CheckStatus::DownloadError { .. }
+            ),
+            detail: if self.staging_enabled {
+                "Explicit downloads validate a temporary package. No installation, execution or update channel is enabled."
+            } else {
+                "Verifies signed native development metadata. No download, installation or update channel is enabled."
+            },
+            acquisition: self.acquisition(),
         }
     }
 
@@ -262,7 +554,10 @@ impl CheckWorker {
     /// A currently blocked request can take up to its 60-second timeout.
     pub fn shutdown(&mut self) {
         self.cancel.cancel();
-        let _ = self.jobs.send(());
+        if let Some(token) = self.operation_cancel.take() {
+            token.cancel();
+        }
+        let _ = self.jobs.send(Job::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -298,9 +593,304 @@ mod tests {
                 Arc::new(move || {
                     let _ = wake.send(());
                 }),
-            ),
+                None,
+            )
+            .unwrap(),
             observed,
         )
+    }
+
+    fn wait_idle(worker: &mut CheckWorker) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            worker.poll();
+            if !worker.checking() {
+                return;
+            }
+            assert!(Instant::now() < deadline, "worker never finished");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn signed_package(base: &str, body: &[u8]) -> (String, Vec<u8>, Vec<u8>) {
+        use sha2::{Digest, Sha256};
+        let mut value = manifest(&format!("{base}/artifact"));
+        let artifact = &mut value["artifacts"][Target::LinuxX64.as_str()];
+        artifact["size"] = serde_json::json!(body.len());
+        artifact["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(body)));
+        signed(&value)
+    }
+
+    #[test]
+    fn explicit_download_retries_authenticated_bytes_and_owns_staging_until_recheck_or_quit() {
+        use crate::update_notice::Action;
+        let scratch = tempfile::tempdir().unwrap();
+        let sentinel = scratch.path().join("existing-file");
+        std::fs::write(&sentinel, b"operator data").unwrap();
+        let body = super::super::staging::tests::package_fixture(Target::LinuxX64, "valid");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (key, bytes, signature) = signed_package(&base, &body);
+        let mut corrupt = body.clone();
+        corrupt[53] ^= 1;
+        let server = serve(
+            listener,
+            vec![
+                (200, bytes.clone()),
+                (200, signature.clone()),
+                (200, corrupt),
+                (200, body.clone()),
+                (200, bytes),
+                (200, signature),
+                (200, body),
+            ],
+        );
+        let client = UpdateClient::new(
+            &format!("{base}/native.json"),
+            &key,
+            Renderer::Wgpu,
+            Target::LinuxX64,
+            "2026.9.99",
+        )
+        .unwrap();
+        let mut worker =
+            CheckWorker::new(client, Arc::new(|| {}), Some(scratch.path().to_owned())).unwrap();
+        assert!(!worker.download() && !worker.cancel_download());
+        assert!(worker.check());
+        wait_idle(&mut worker);
+        assert_eq!(
+            worker.presentation().acquisition.unwrap().action,
+            Action::DownloadVerify
+        );
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            1,
+            "checks never download"
+        );
+        assert!(worker.download());
+        wait_idle(&mut worker);
+        assert!(matches!(worker.status(), CheckStatus::DownloadError { .. }));
+        assert_eq!(
+            worker.presentation().status,
+            "Native update artifact hash does not match its signed manifest."
+        );
+        assert_eq!(
+            worker.presentation().acquisition.unwrap().label,
+            "Retry download"
+        );
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            1,
+            "failure removes all scratch"
+        );
+        assert!(worker.download());
+        wait_idle(&mut worker);
+        assert!(matches!(worker.status(), CheckStatus::Staged { .. }));
+        assert_eq!(worker.generation(), 3);
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            2,
+            "retain verified package, not original download"
+        );
+        let notice = worker.notice(true).unwrap();
+        assert_eq!(notice.title, "Development package verified");
+        assert!(notice.restart.is_none() && notice.close_warning.is_none());
+        assert!(
+            !serde_json::to_string(&notice)
+                .unwrap()
+                .contains(&scratch.path().display().to_string())
+        );
+        assert!(
+            !worker.download(),
+            "staged ownership cannot be overwritten by another download"
+        );
+        assert!(worker.check());
+        wait_idle(&mut worker);
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            1,
+            "recheck removes retained stage"
+        );
+        assert!(worker.download());
+        wait_idle(&mut worker);
+        worker.shutdown();
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            1,
+            "quit removes retained stage"
+        );
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"operator data");
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "/native.json",
+                "/native.json.minisig",
+                "/artifact",
+                "/artifact",
+                "/native.json",
+                "/native.json.minisig",
+                "/artifact"
+            ]
+        );
+    }
+
+    #[test]
+    fn authenticated_but_incomplete_package_is_not_reported_as_verified() {
+        let scratch = tempfile::tempdir().unwrap();
+        let body =
+            super::super::staging::tests::package_fixture(Target::LinuxX64, "missing-sidecar");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (key, bytes, signature) = signed_package(&base, &body);
+        let server = serve(listener, vec![(200, bytes), (200, signature), (200, body)]);
+        let client = UpdateClient::new(
+            &format!("{base}/native.json"),
+            &key,
+            Renderer::Wgpu,
+            Target::LinuxX64,
+            "2026.9.99",
+        )
+        .unwrap();
+        let mut worker =
+            CheckWorker::new(client, Arc::new(|| {}), Some(scratch.path().to_owned())).unwrap();
+        assert!(worker.check());
+        wait_idle(&mut worker);
+        assert!(worker.download());
+        wait_idle(&mut worker);
+        assert!(matches!(worker.status(), CheckStatus::DownloadError { .. }));
+        assert_eq!(
+            worker.presentation().status,
+            "Native update package is incomplete or has the wrong development identity."
+        );
+        assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
+        assert_eq!(
+            server.join().unwrap(),
+            ["/native.json", "/native.json.minisig", "/artifact"]
+        );
+    }
+
+    #[test]
+    fn cancel_or_shutdown_a_partial_download_waits_for_cleanup_and_preserves_retry() {
+        for shutdown in [false, true] {
+            let scratch = tempfile::tempdir().unwrap();
+            let body = super::super::staging::tests::package_fixture(Target::LinuxX64, "valid");
+            let expected_percent = ((23_300 + body.len() / 2) / body.len()) as u8;
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let (key, bytes, signature) = signed_package(&base, &body);
+            let (release, gate) = mpsc::channel();
+            let server = thread::spawn(move || {
+                let mut paths = serve(
+                    listener.try_clone().unwrap(),
+                    vec![(200, bytes), (200, signature)],
+                )
+                .join()
+                .unwrap();
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(line.split_whitespace().nth(1), Some("/artifact"));
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body[..233]).unwrap();
+                stream.flush().unwrap();
+                gate.recv_timeout(Duration::from_secs(10)).unwrap();
+                let _ = stream.write_all(&body[233..]);
+                drop(stream);
+                paths.push("/artifact".into());
+                if !shutdown {
+                    paths.extend(serve(listener, vec![(200, body)]).join().unwrap());
+                }
+                paths
+            });
+            let client = UpdateClient::new(
+                &format!("{base}/native.json"),
+                &key,
+                Renderer::Wgpu,
+                Target::LinuxX64,
+                "2026.9.99",
+            )
+            .unwrap();
+            let mut worker =
+                CheckWorker::new(client, Arc::new(|| {}), Some(scratch.path().to_owned())).unwrap();
+            assert!(worker.check());
+            wait_idle(&mut worker);
+            assert!(worker.download());
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !matches!(
+                worker.status(),
+                CheckStatus::Downloading {
+                    downloaded: 233,
+                    ..
+                }
+            ) {
+                worker.poll();
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert!(!worker.check() && !worker.download());
+            assert_eq!(worker.generation(), 2);
+            assert_eq!(
+                worker.notice(true).unwrap().download.unwrap().percent,
+                Some(expected_percent)
+            );
+            if shutdown {
+                let token = worker.cancel.clone();
+                let joined = thread::spawn(move || {
+                    worker.shutdown();
+                    worker
+                });
+                while !token.is_cancelled() {
+                    assert!(Instant::now() < deadline);
+                    thread::yield_now();
+                }
+                release.send(()).unwrap();
+                let mut closed = joined.join().unwrap();
+                assert!(!closed.poll() && !closed.download());
+            } else {
+                assert!(worker.cancel_download());
+                assert!(matches!(worker.status(), CheckStatus::Cancelling { .. }));
+                assert!(!worker.cancel_download() && !worker.download() && !worker.check());
+                assert!(worker.checking() && !worker.presentation().acquisition.unwrap().enabled);
+                assert_eq!(
+                    worker.generation(),
+                    2,
+                    "cancel cannot reveal a dismissed result"
+                );
+                release.send(()).unwrap();
+                wait_idle(&mut worker);
+                assert!(matches!(worker.status(), CheckStatus::Available { .. }));
+                assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
+                assert!(worker.download());
+                wait_idle(&mut worker);
+                assert!(matches!(worker.status(), CheckStatus::Staged { .. }));
+                worker.shutdown();
+            }
+            assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
+            let expected = if shutdown {
+                vec!["/native.json", "/native.json.minisig", "/artifact"]
+            } else {
+                vec![
+                    "/native.json",
+                    "/native.json.minisig",
+                    "/artifact",
+                    "/artifact",
+                ]
+            };
+            assert_eq!(server.join().unwrap(), expected);
+        }
     }
 
     #[test]
@@ -430,6 +1020,10 @@ mod tests {
                 assert!(worker.poll());
                 assert!(!worker.checking() && worker.presentation().enabled);
                 if current == "2026.9.99" {
+                    assert!(
+                        !worker.download(),
+                        "check-only launches cannot acquire even authenticated bytes"
+                    );
                     let CheckStatus::Available { release } = worker.status() else {
                         panic!("newer release not published")
                     };

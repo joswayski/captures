@@ -454,10 +454,11 @@ download progress, restart countdown and errors) from a simulated status source.
 An [explicit development launch](apps/native/README.md#native-preferences-update-checks)
 can connect Preferences and tray **Check for Updates** to a pinned, signed endpoint.
 Checks also drive a real native notice with signed release notes, up-to-date results
-and retryable errors. Dismissing a pending check keeps its result hidden until another
-explicit check. No automatic requests, package downloads or installation occur.
-No default endpoint/key or native
-update channel is enabled. A separate opt-in
+and retryable errors. An explicit scratch-directory option adds **Download and verify**
+for temporary package validation, with progress, cancellation and retry. Dismissing a
+pending operation keeps its result hidden until another explicit check or download.
+No automatic requests, installation, package execution or native update channel is
+enabled; ordinary check-only launches never fetch packages. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
 checks signed native manifests, verifies downloads and can validate unpacked native
 packages in temporary storage. It never installs or replaces an app, and no native

@@ -1,4 +1,4 @@
-//! Read-only signed native development metadata. No download/install commands.
+//! Signed native development checks and opt-in temporary acquisition. No install.
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -24,6 +24,7 @@ struct Configuration {
     key_file: PathBuf,
     renderer: Renderer,
     current_version: String,
+    staging_directory: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -31,6 +32,8 @@ struct Configuration {
 enum Request {
     Check { show_changelog: Option<bool> },
     Poll { show_changelog: Option<bool> },
+    DownloadVerify { show_changelog: Option<bool> },
+    CancelDownload { show_changelog: Option<bool> },
 }
 
 /// Construct an idle checker from explicit configuration, without HTTP.
@@ -62,9 +65,10 @@ pub unsafe extern "C" fn captures_update_checks_create_v1(
         ) else {
             return std::ptr::null_mut();
         };
-        Box::into_raw(Box::new(CapturesUpdateChecks {
-            worker: CheckWorker::new(client, Arc::new(|| {})),
-        }))
+        let Ok(worker) = CheckWorker::new(client, Arc::new(|| {}), config.staging_directory) else {
+            return std::ptr::null_mut();
+        };
+        Box::into_raw(Box::new(CapturesUpdateChecks { worker }))
     }))
     .unwrap_or(std::ptr::null_mut())
 }
@@ -94,11 +98,17 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
             let worker = &mut unsafe { &mut *handle }.worker;
             worker.poll();
             let show_changelog = match request {
-                Request::Check { show_changelog } | Request::Poll { show_changelog } => {
-                    show_changelog.unwrap_or(true)
-                }
+                Request::Check { show_changelog }
+                | Request::Poll { show_changelog }
+                | Request::DownloadVerify { show_changelog }
+                | Request::CancelDownload { show_changelog } => show_changelog.unwrap_or(true),
             };
-            let accepted = matches!(request, Request::Check { .. }) && worker.check();
+            let accepted = match request {
+                Request::Check { .. } => worker.check(),
+                Request::DownloadVerify { .. } => worker.download(),
+                Request::CancelDownload { .. } => worker.cancel_download(),
+                Request::Poll { .. } => false,
+            };
             Ok(json!({"accepted":accepted, "checking":worker.checking(),
                 "status":worker.status(), "presentation":worker.presentation(),
                 "generation":worker.generation(), "notice":worker.notice(show_changelog)}))
@@ -165,6 +175,15 @@ mod tests {
         assert!(reply["result"]["notice"].is_null());
         assert!(!reply.to_string().contains("private-endpoint"));
         for request in [
+            r#"{"operation":"download_verify"}"#,
+            r#"{"operation":"cancel_download"}"#,
+        ] {
+            let reply = call(handle, request);
+            assert_eq!(reply["result"]["accepted"], false);
+            assert_eq!(reply["result"]["generation"], 0);
+            assert!(reply["result"]["presentation"]["acquisition"].is_null());
+        }
+        for request in [
             r#"{"operation":"install"}"#,
             r#"{"operation":"download"}"#,
             r#"{"operation":"check","endpoint":"private-secret"}"#,
@@ -177,6 +196,26 @@ mod tests {
         assert_eq!(
             listener.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
+        );
+        unsafe { captures_update_checks_free_v1(handle) };
+        for path in [
+            "relative".into(),
+            key_file.clone(),
+            root.path().join("missing"),
+        ] {
+            let mut invalid = config.clone();
+            invalid["staging_directory"] = json!(path);
+            let input = CString::new(invalid.to_string()).unwrap();
+            assert!(unsafe { captures_update_checks_create_v1(input.as_ptr()) }.is_null());
+        }
+        let mut staged = config.clone();
+        staged["staging_directory"] = json!(root.path());
+        let input = CString::new(staged.to_string()).unwrap();
+        let handle = unsafe { captures_update_checks_create_v1(input.as_ptr()) };
+        assert!(!handle.is_null());
+        assert!(
+            call(handle, r#"{"operation":"poll"}"#)["result"]["presentation"]["acquisition"]
+                .is_null()
         );
         unsafe { captures_update_checks_free_v1(handle) };
         let mut invalid = config;

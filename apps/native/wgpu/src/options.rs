@@ -13,6 +13,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --capture-controls-recording --hud-state unmuted|muted|busy|no-microphone|saving|failed\n\
   --settings-file PATH\n\
   --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (explicit live profile; check only)\n\
+  --native-update-staging-directory ABSOLUTE_PATH (existing scratch directory; enables explicit temporary download/verification, never installation)\n\
   --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (health launches only)\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
@@ -124,6 +125,7 @@ pub struct Options {
     pub open_history: bool,
     pub native_update_health: Option<captures_app::updater::HealthAcknowledgement>,
     pub native_update_checks: Option<captures_app::updater::UpdateClient>,
+    pub native_update_staging_directory: Option<PathBuf>,
 }
 
 impl Options {
@@ -154,6 +156,7 @@ impl Options {
             open_history: false,
             native_update_health: None,
             native_update_checks: None,
+            native_update_staging_directory: None,
         };
         let mut native_update_ready_file = None;
         let mut native_update_ready_token = None;
@@ -268,6 +271,16 @@ impl Options {
                 }
                 "--settings-file" => {
                     options.settings_file = Some(args.next().ok_or("Missing settings path")?.into())
+                }
+                "--native-update-staging-directory" => {
+                    if options.native_update_staging_directory.is_some() {
+                        return Err("Duplicate native update staging directory".into());
+                    }
+                    options.native_update_staging_directory = Some(
+                        args.next()
+                            .ok_or("Missing native update staging directory")?
+                            .into(),
+                    );
                 }
                 "--native-update-manifest-url"
                 | "--native-update-public-key-file"
@@ -428,6 +441,16 @@ impl Options {
                 );
             }
         }
+        if let Some(path) = &options.native_update_staging_directory {
+            if options.native_update_checks.is_none() {
+                return Err(
+                    "Temporary acquisition requires the complete native update-check configuration"
+                        .into(),
+                );
+            }
+            captures_app::updater::checks::validate_staging_directory(path)
+                .map_err(|e| e.to_string())?;
+        }
         Ok(options)
     }
 }
@@ -487,6 +510,43 @@ mod tests {
             invalid.extend(extra.into_iter().map(String::from));
             assert!(Options::parse(invalid).is_err());
         }
+        let mut staged = args.clone();
+        staged.extend([
+            "--native-update-staging-directory".into(),
+            root.path().display().to_string(),
+        ]);
+        assert_eq!(
+            Options::parse(staged.clone())
+                .unwrap()
+                .native_update_staging_directory
+                .as_deref(),
+            Some(root.path())
+        );
+        assert!(
+            parse(&[
+                "--live",
+                "--native-update-staging-directory",
+                root.path().to_str().unwrap()
+            ])
+            .is_err()
+        );
+        for path in [
+            PathBuf::from("relative"),
+            key.clone(),
+            root.path().join("missing"),
+        ] {
+            let mut invalid = args.clone();
+            invalid.extend([
+                "--native-update-staging-directory".into(),
+                path.display().to_string(),
+            ]);
+            assert!(Options::parse(invalid).is_err());
+        }
+        staged.extend([
+            "--native-update-staging-directory".into(),
+            root.path().display().to_string(),
+        ]);
+        assert!(Options::parse(staged).is_err());
         assert!(Options::parse(args[1..].to_vec()).is_err());
         assert!(Options::parse(args[..args.len() - 2].to_vec()).is_err());
         let mut invalid = args;

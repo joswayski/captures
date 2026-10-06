@@ -9,18 +9,48 @@ final class UpdateChecksTests: XCTestCase {
         var status = "Not checked"
         var pollError = false
         var shutdowns = 0
+        var acquisition: [String: Any]?
         func request(_ object: [String: Any]) throws -> [String: Any] {
             let operation = object.string("operation")
             operations.append(operation)
             if operation == "poll" && pollError { throw AppBridgeError.invalidResponse }
             if operation == "check" { checking = true; status = "Checking signed metadata…" }
-            return ["accepted": operation == "check", "checking": checking,
+            if operation == "download_verify" {
+                checking = true; status = "Downloading…"
+                acquisition = ["label": "Cancel download", "enabled": true, "action": ["action": "cancel_download"]]
+            }
+            if operation == "cancel_download" {
+                acquisition?["enabled"] = false
+            }
+            return ["accepted": operation != "poll", "checking": checking,
                 "presentation": ["version": "Native development 2026.9.99",
                     "channel": "Explicit development endpoint · Check only", "status": status,
                     "action": checking ? "Checking…" : "Check Now", "enabled": !checking,
-                    "detail": "No download, installation or update channel is enabled."]]
+                    "detail": "No installation or update channel is enabled.", "acquisition": acquisition ?? [:]]]
         }
         func shutdown(completion: @escaping () -> Void) { shutdowns += 1; completion() }
+    }
+
+    func testAcquisitionRoutesExplicitInputAndKeepsCancellationBusyUntilAcknowledged() throws {
+        let transport = Transport(), model = try UpdateCheckModel(transport: transport)
+        XCTAssertFalse(model.acquire(.downloadVerify))
+        transport.acquisition = ["label": "Download and verify", "enabled": true, "action": ["action": "download_verify"]]
+        XCTAssertTrue(model.check())
+        transport.checking = false; model.poll()
+        XCTAssertTrue(model.acquire(.downloadVerify))
+        XCTAssertFalse(model.acquire(.downloadVerify))
+        XCTAssertFalse(model.check())
+        XCTAssertTrue(model.acquire(.cancelDownload))
+        XCTAssertFalse(model.acquire(.cancelDownload))
+        XCTAssertTrue(model.busy, "cancellation is not a cleanup acknowledgement")
+        XCTAssertFalse(model.check())
+        transport.checking = false; transport.acquisition = nil
+        model.poll()
+        XCTAssertFalse(model.busy)
+        XCTAssertEqual(transport.operations.filter { $0 == "download_verify" }.count, 1)
+        XCTAssertEqual(transport.operations.filter { $0 == "cancel_download" }.count, 1)
+        model.shutdown {}
+        XCTAssertFalse(model.acquire(.downloadVerify))
     }
 
     func testIdleBusyRetryClosedAndHiddenPresentationNeverStartAutomaticChecks() throws {
@@ -106,6 +136,15 @@ final class UpdateChecksTests: XCTestCase {
         defer { options.nativeUpdateChecks?.shutdown {} }
         XCTAssertNotNil(options.nativeUpdateChecks)
         XCTAssertNil(try Options(["--live"]).nativeUpdateChecks)
+        let staged = try Options(base + flags + ["--native-update-staging-directory", directory.path])
+        defer { staged.nativeUpdateChecks?.shutdown {} }
+        XCTAssertNotNil(staged.nativeUpdateChecks)
+        for path in ["relative", directory.appendingPathComponent("missing").path, key.path] {
+            XCTAssertThrowsError(try Options(base + flags + ["--native-update-staging-directory", path]))
+        }
+        XCTAssertThrowsError(try Options(base + ["--native-update-staging-directory", directory.path]))
+        XCTAssertThrowsError(try Options(base + flags + ["--native-update-staging-directory", directory.path,
+            "--native-update-staging-directory", directory.path]))
         for invalid in [Array(base.dropFirst()) + flags, base + Array(flags.dropLast(2)),
             ["--live", "--history-root", "relative", "--settings-file", "/settings"] + flags,
             ["--live", "--history-root", "/history", "--settings-file", "relative"] + flags,

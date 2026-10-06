@@ -57,12 +57,34 @@ check reveals it again. Capture/setup/permission UI suspends notice presentation
 AppKit anchors at the real status item; wgpu uses the existing no-tray fallback,
 not a fabricated tray location. The simulated workbench scenes below remain separate.
 
+Add `--native-update-staging-directory /absolute/existing-scratch-directory` to
+that same explicit launch to enable **Download and verify** in Preferences and
+the live notice. Without this optional flag, even an available update remains
+check-only. Choose a trusted scratch directory outside app/profile trees; relative,
+missing, file and symbolic-link paths are rejected. No request or scratch file is
+created at launch or as a side effect of Check Now.
+
+Download uses the retained authenticated URL/size/SHA-256 and validates the full
+development package layout, executable hash, tools and corresponding source/licenses
+in private temporary storage. Progress, verification, Cancel download, errors and
+Retry download use the real worker, not simulated install/restart transitions.
+Cancel pins busy state until pending I/O and cleanup finish; blocked HTTP can take
+up to 60 seconds. Retrying downloads fresh bytes against the same authenticated
+metadata. Check Now obtains fresh metadata and drops any retained stage.
+
+**Verified is not installed.** No package code is executed, existing app/profile is
+replaced or channel activated. Closing the notice does not cancel acquisition or
+reveal its later result; a new explicit check/download reveals again. Retained
+temporary storage is removed on recheck or normal quit. Forced termination or
+filesystem cleanup failure may leave owned scratch for manual removal.
+
 ## Native update acquisition diagnostic
 
 `captures_app::updater` implements shared signed-manifest checks and bounded,
 streamed downloads and temporary package staging without Tauri. It is **not an
 enabled installed-app updater**: only the explicit metadata checks above connect
-to native UI and its check notice. There is no bundled native
+to native UI, plus opt-in temporary acquisition with the scratch-directory flag.
+There is no bundled native
 signing key, release endpoint or installed-app
 updater. The explicit development-package helper below can replace and launch only
 a selected stopped development package with a new empty or explicitly imported

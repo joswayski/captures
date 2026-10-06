@@ -648,14 +648,17 @@ impl Preferences {
         &mut self,
         client: captures_app::updater::UpdateClient,
         ctx: &egui::Context,
-    ) {
+        staging_directory: Option<PathBuf>,
+    ) -> Result<(), captures_app::updater::Error> {
         let wake = ctx.clone();
         self.update_checks = Some(captures_app::updater::checks::CheckWorker::new(
             client,
             Arc::new(move || {
                 wake.request_repaint_of(egui::ViewportId::ROOT);
             }),
-        ));
+            staging_directory,
+        )?);
+        Ok(())
     }
 
     pub fn check_updates(&mut self) -> bool {
@@ -664,6 +667,17 @@ impl Preferences {
         };
         self.section_jump = Some(6);
         checker.check()
+    }
+
+    pub fn acquire_update(&mut self, action: captures_app::update_notice::Action) -> bool {
+        let Some(checker) = &mut self.update_checks else {
+            return false;
+        };
+        match action {
+            captures_app::update_notice::Action::DownloadVerify => checker.download(),
+            captures_app::update_notice::Action::CancelDownload => checker.cancel_download(),
+            _ => false,
+        }
     }
 
     pub fn update_notice(&self) -> Option<(u64, captures_app::update_notice::Presentation)> {
@@ -2396,6 +2410,20 @@ impl Preferences {
                 this.check_updates();
                 ui.ctx().request_repaint();
             }
+            if let Some(button) = copy.as_ref().and_then(|c| c.acquisition.as_ref()) {
+                Self::divider(ui, t);
+                if this.utility_row(
+                    ui,
+                    t,
+                    "Package verification",
+                    "Temporary storage only; nothing is installed or executed.",
+                    &button.label,
+                    button.enabled,
+                ) {
+                    this.acquire_update(button.action.clone());
+                    ui.ctx().request_repaint();
+                }
+            }
             Self::divider(ui, t);
             let copy = preferences::row("show_update_changelog");
             this.toggle(
@@ -2792,7 +2820,7 @@ mod tests {
             "2026.9.99",
         )
         .unwrap();
-        prefs.connect_update_checks(client, &ctx);
+        prefs.connect_update_checks(client, &ctx, None).unwrap();
         assert_eq!(
             prefs.update_checks.as_ref().unwrap().presentation().status,
             "Not checked"

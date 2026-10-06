@@ -227,9 +227,16 @@ impl Workbench {
             shortcut_input,
         );
         let updates_enabled = options.native_update_checks.is_some();
-        if let Some(client) = options.native_update_checks.take() {
-            preferences_state.connect_update_checks(client, &cc.egui_ctx);
-        }
+        let update_error = options.native_update_checks.take().and_then(|client| {
+            preferences_state
+                .connect_update_checks(
+                    client,
+                    &cc.egui_ctx,
+                    options.native_update_staging_directory.take(),
+                )
+                .err()
+                .map(|e| e.to_string())
+        });
         let crash_review_pending = crash
             .as_ref()
             .is_some_and(|session| session.preview().is_some())
@@ -378,7 +385,7 @@ impl Workbench {
             paste_input,
             action_tx,
             action_rx,
-            action_error: None,
+            action_error: update_error,
             quitting: false,
             update_notice,
             crash,

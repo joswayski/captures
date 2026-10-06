@@ -6,13 +6,17 @@
 #include <stdint.h>
 
 /* Explicit signed development update checks, with no HTTP until Check.
- * create takes {endpoint,key_file,renderer,current_version}; pins the public
+ * create takes {endpoint,key_file,renderer,current_version,staging_directory?}; pins the public
  * Minisign key (regular UTF-8 file, <=8 KiB), development identity and host target.
- * No default endpoint/channel, profile access, downloads or install commands.
- * Nonblocking serialized UI-thread requests: {operation:"check"|"poll",
+ * The optional existing absolute scratch directory enables explicit temporary
+ * acquisition; without it, checks remain read-only. No installation/execution,
+ * default endpoint/channel or profile access. Owned stage cleanup on recheck/free.
+ * Nonblocking serialized UI-thread requests: {operation:"check"|"poll"|"download_verify"|"cancel_download",
  * show_changelog?:bool}. Replies contain {accepted,checking,status,presentation,
- * generation,notice}; a new accepted Check increments generation, not a result.
- * notice is shared check-only notice copy, or null while idle. JSON envelopes and
+ * generation,notice}; checking means busy including download/verification/cancelling.
+ * An accepted Check/Download increments generation; progress/results/cancel do not.
+ * presentation.acquisition is an optional button; notice is null while idle.
+ * Paths/capabilities are not serialized. JSON envelopes and
  * buffer freeing match captures_settings_free_v1. Retain across window closure.
  * Free once off the UI thread; cancels/joins HTTP (blocked request <=60 s).
  * No concurrent request/free, or use after freeing. Invalid config returns NULL. */
