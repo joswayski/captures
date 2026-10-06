@@ -515,9 +515,11 @@ impl CaptureShortcuts {
     /// Add new chords before removing old ones. Parse/conflict failure retains
     /// the old mapping; OS rollback failure is reported, never silently ignored.
     pub fn update(&mut self, settings: &AppSettings) -> Result<(), String> {
+        #[cfg(not(target_os = "linux"))]
+        let Backend::Direct(manager) = &self.backend;
+        #[cfg(target_os = "linux")]
         let manager = match &self.backend {
             Backend::Direct(manager) => manager,
-            #[cfg(target_os = "linux")]
             Backend::Portal(_) => return Ok(()), // The chooser owns these bindings.
         };
         let next = bindings(settings)?;
@@ -547,9 +549,11 @@ impl CaptureShortcuts {
     /// can receive existing chords. Keep desired bindings across edits, then
     /// restore them on blur. Failure leaves routing suspended and is retryable.
     pub fn set_suspended(&mut self, suspended: bool) -> Result<(), String> {
+        #[cfg(not(target_os = "linux"))]
+        let Backend::Direct(manager) = &self.backend;
+        #[cfg(target_os = "linux")]
         let manager = match &self.backend {
             Backend::Direct(manager) => manager,
-            #[cfg(target_os = "linux")]
             Backend::Portal(_) => {
                 // The portal has no temporary ungrab API. Its Preferences rows
                 // use the desktop chooser, not Captures' local chord recorder.
