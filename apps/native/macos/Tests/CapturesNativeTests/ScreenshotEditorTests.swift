@@ -3761,7 +3761,7 @@ final class ScreenshotEditorTests: XCTestCase {
             var bytes = [UInt8](repeating: 0, count: 54)
             bytes[0..<2] = [66, 77][...]
             func word(_ offset: Int, _ value: UInt32) {
-                bytes.replaceSubrange(offset..<(offset + 4), (0..<4).map { UInt8((value >> ($0 * 8)) & 255) })
+                bytes.replaceSubrange(offset..<(offset + 4), with: (0..<4).map { UInt8((value >> ($0 * 8)) & 255) })
             }
             word(2, 78); word(10, 54); word(14, 40); word(18, 2)
             word(22, UInt32(bitPattern: topDown ? -3 : 3))

@@ -45,7 +45,8 @@ class DevelopmentPackageTests(unittest.TestCase):
 
     def test_stages_self_contained_resources_and_never_overwrites_output(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            # stage() canonicalizes paths; Windows TEMP may use an 8.3 alias.
+            root = Path(directory).resolve()
             binary = root / "binary"
             binary.write_bytes(b"test executable")
             resources = root / "resources.bundle"
