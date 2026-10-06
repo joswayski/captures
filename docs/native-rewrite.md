@@ -3184,7 +3184,10 @@ cleanup, the inline error line and tooltip placement. Behavior now matches shipp
 
 Status: Linux X11 is verified on the private Xvfb/PulseAudio desktop.
 `x11_recording_smoke.py --start-failure` covers the failed HUD, the inline error,
-disabled controls, the tooltip, a failing and a succeeding Retry and Delete.
+disabled controls, the tooltip, a failing and a succeeding Retry and Delete in
+dark/light CI. Before a second recording, it waits for rendered History actions
+to become enabled: recorder retirement/recovery refresh can outlast window
+restoration, and shortcuts deliberately remain blocked until that work finishes.
 `--device-change explicit` now covers a paused take with the inline error that is
 then saved. macOS AppKit has XCTest coverage but no physical-host run, and Windows
 is implemented but unverified. Wayland stays gated. Onboarding/selector permission

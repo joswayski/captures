@@ -440,7 +440,10 @@ jobs:
           done
       - name: Exercise the failed-start HUD, Retry recording and Delete on private X11
         if: matrix.suite == 'capture' && matrix.shard == 2
-        run: /usr/bin/python3 apps/native/x11_recording_smoke.py --start-failure --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-start-failure
+        run: |
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_recording_smoke.py --start-failure --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-start-failure-$appearance"
+          done
       - name: Capture regions while a native recording continues on private X11
         if: matrix.suite == 'capture' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_smoke.py --screenshot-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-recording-screenshot
