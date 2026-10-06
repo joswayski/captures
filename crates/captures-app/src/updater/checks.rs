@@ -70,6 +70,7 @@ pub struct Presentation {
 pub struct CheckWorker {
     current_version: String,
     status: CheckStatus,
+    generation: u64,
     jobs: mpsc::Sender<()>,
     results: mpsc::Receiver<CheckStatus>,
     cancel: CancelToken,
@@ -112,6 +113,7 @@ impl CheckWorker {
         Self {
             current_version,
             status: CheckStatus::Idle,
+            generation: 0,
             jobs,
             results,
             cancel,
@@ -126,7 +128,16 @@ impl CheckWorker {
             return false;
         }
         self.status = CheckStatus::Checking;
-        self.jobs.send(()).is_ok()
+        let accepted = self.jobs.send(()).is_ok();
+        if accepted {
+            self.generation += 1;
+        }
+        accepted
+    }
+
+    /// A new explicit check may reveal a dismissed notice; its later result may not.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn checking(&self) -> bool {
@@ -145,6 +156,81 @@ impl CheckWorker {
 
     pub fn status(&self) -> &CheckStatus {
         &self.status
+    }
+
+    /// Reuse shipping notice layout/notes without presenting an install, stable
+    /// download-page link, close-captures warning or simulated restart.
+    pub fn notice(&self, show_changelog: bool) -> Option<crate::update_notice::Presentation> {
+        use crate::update_notice::{self as notice, Action, Button, UpdateStatus, ViewState};
+        let current_version = self.current_version.clone();
+        let current_display_version = current_version.clone();
+        let status = match &self.status {
+            CheckStatus::Idle => return None,
+            CheckStatus::Checking => UpdateStatus::Checking {
+                current_version,
+                current_display_version,
+            },
+            CheckStatus::UpToDate => UpdateStatus::UpToDate {
+                current_version,
+                current_display_version,
+            },
+            CheckStatus::Available { release } => UpdateStatus::Available {
+                current_version,
+                current_display_version,
+                version: release.version.clone(),
+                display_version: release.version.clone(),
+                notes: release.notes.clone(),
+                changelog: vec![],
+                installable: false,
+                manual_download_url: None,
+                download_size: Some(release.size),
+                will_close_open_captures: false,
+            },
+            CheckStatus::Error { message } => UpdateStatus::Error {
+                current_version,
+                current_display_version,
+                message: message.clone(),
+                retry_install: false,
+            },
+        };
+        let mut p = notice::present(
+            Some(&status),
+            &ViewState {
+                show_changelog,
+                ..Default::default()
+            },
+        );
+        p.title = match self.status {
+            CheckStatus::Checking => "Checking native updates",
+            CheckStatus::Available { .. } => "Native development update",
+            CheckStatus::UpToDate => "Native development up to date",
+            _ => "Native development check failed",
+        }
+        .into();
+        p.description = match &self.status {
+            CheckStatus::Available { release } => {
+                format!("{} · Check only; no installation", release.version)
+            }
+            _ => format!("Current {} · Check only", self.current_version),
+        };
+        if let Some(error) = &mut p.error {
+            error.fallback_prefix = "Retry this development check below.".into();
+            error.fallback_link.clear();
+            error.fallback_suffix.clear();
+        }
+        if let Some(footer) = &mut p.footer {
+            footer.primary = (!self.checking()).then(|| Button {
+                label: if p.error.is_some() {
+                    "Try again"
+                } else {
+                    "Check again"
+                }
+                .into(),
+                enabled: self.thread.is_some(),
+                action: Action::Check,
+            });
+        }
+        Some(p)
     }
 
     pub fn presentation(&self) -> Presentation {
@@ -215,6 +301,68 @@ mod tests {
             ),
             observed,
         )
+    }
+
+    #[test]
+    fn real_notices_use_signed_notes_without_install_or_shipping_fallbacks() {
+        use crate::update_notice::Action;
+        let (key, _, _) = signed(&manifest("https://example.invalid/artifact"));
+        let (mut worker, _) = worker("http://127.0.0.1:9/native.json", &key, "2026.9.99");
+        assert!(worker.notice(true).is_none());
+        worker.status = CheckStatus::Available {
+            release: ReleaseInfo {
+                renderer: Renderer::Wgpu,
+                target: Target::LinuxX64,
+                version: "2026.10.50".into(),
+                notes: Some("* Fix native selection (#321)".into()),
+                size: 913,
+            },
+        };
+        let expanded = worker.notice(true).unwrap();
+        assert_eq!(expanded.title, "Native development update");
+        assert_eq!(
+            expanded.description,
+            "2026.10.50 · Check only; no installation"
+        );
+        assert_eq!(
+            expanded.notes.as_ref().unwrap().groups[0].items[0].text,
+            "Fix native selection"
+        );
+        assert_eq!(
+            expanded
+                .footer
+                .as_ref()
+                .unwrap()
+                .primary
+                .as_ref()
+                .unwrap()
+                .action,
+            Action::Check
+        );
+        assert!(
+            expanded.close_warning.is_none()
+                && expanded.download.is_none()
+                && expanded.restart.is_none()
+        );
+        let collapsed = worker.notice(false).unwrap();
+        assert!(collapsed.notes.is_none() && collapsed.reveal_notes.is_some());
+        for status in [
+            CheckStatus::Checking,
+            CheckStatus::UpToDate,
+            CheckStatus::Error {
+                message: "Native update signature verification failed.".into(),
+            },
+        ] {
+            worker.status = status;
+            let p = worker.notice(true).unwrap();
+            assert!(p.notes.is_none() && p.download.is_none() && p.restart.is_none());
+            assert!(!serde_json::to_string(&p).unwrap().contains("captur.es"));
+            if worker.checking() {
+                assert!(p.footer.unwrap().primary.is_none());
+            } else {
+                assert_eq!(p.footer.unwrap().primary.unwrap().action, Action::Check);
+            }
+        }
     }
 
     #[test]
@@ -425,7 +573,9 @@ mod tests {
         let (mut worker, observed) = worker(&format!("{base}/native.json"), &key, "2026.9.99");
         assert!(worker.check());
         started.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(worker.generation(), 1);
         assert!(!worker.check());
+        assert_eq!(worker.generation(), 1);
         release.send(()).unwrap();
         observed.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(worker.poll());

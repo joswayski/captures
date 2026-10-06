@@ -9,8 +9,10 @@
  * create takes {endpoint,key_file,renderer,current_version}; pins the public
  * Minisign key (regular UTF-8 file, <=8 KiB), development identity and host target.
  * No default endpoint/channel, profile access, downloads or install commands.
- * Nonblocking serialized UI-thread requests: {operation:"check"|"poll"}.
- * Replies contain {accepted,checking,status,presentation}; JSON envelopes and
+ * Nonblocking serialized UI-thread requests: {operation:"check"|"poll",
+ * show_changelog?:bool}. Replies contain {accepted,checking,status,presentation,
+ * generation,notice}; a new accepted Check increments generation, not a result.
+ * notice is shared check-only notice copy, or null while idle. JSON envelopes and
  * buffer freeing match captures_settings_free_v1. Retain across window closure.
  * Free once off the UI thread; cancels/joins HTTP (blocked request <=60 s).
  * No concurrent request/free, or use after freeing. Invalid config returns NULL. */

@@ -666,6 +666,18 @@ impl Preferences {
         checker.check()
     }
 
+    pub fn update_notice(&self) -> Option<(u64, captures_app::update_notice::Presentation)> {
+        let checker = self.update_checks.as_ref()?;
+        Some((
+            checker.generation(),
+            checker.notice(
+                self.value["show_update_changelog"]
+                    .as_bool()
+                    .unwrap_or(true),
+            )?,
+        ))
+    }
+
     pub fn receive(&mut self, ctx: &egui::Context) {
         if let Some(checker) = &mut self.update_checks {
             checker.poll();

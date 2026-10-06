@@ -1,7 +1,7 @@
 //! Update notice surface: a solid `--surface-raised` card with a tray caret in
 //! a transparent window. Copy and state come from `captures_app::update_notice`;
-//! placement comes from `captures_app::tray_notice`. The native rewrite has no
-//! signed updater yet, so the workbench drives this with the shared stub source.
+//! placement comes from `captures_app::tray_notice`. Live development checks
+//! and the isolated workbench fixture share drawing, not side-effect routing.
 use std::f32::consts::TAU;
 
 use captures_app::{
@@ -479,14 +479,16 @@ pub fn show(
                     "text-sm",
                     "text-subtle",
                 ));
-                let response = ui.add(
-                    egui::Button::new(
-                        text(tokens, &error.fallback_link, "text-sm", "text").underline(),
-                    )
-                    .frame(false),
-                );
-                if response.clicked() {
-                    action = Some(Action::OpenDownloadPage);
+                if !error.fallback_link.is_empty() {
+                    let response = ui.add(
+                        egui::Button::new(
+                            text(tokens, &error.fallback_link, "text-sm", "text").underline(),
+                        )
+                        .frame(false),
+                    );
+                    if response.clicked() {
+                        action = Some(Action::OpenDownloadPage);
+                    }
                 }
                 ui.label(text(
                     tokens,
@@ -541,10 +543,12 @@ impl FixtureTray {
     }
 }
 
-/// Workbench host for the notice, driven by the shared stub status source.
-/// It never downloads, installs, relaunches or opens URLs; link actions are
-/// reported as events instead.
-pub struct FixtureHost {
+/// Notice host for explicit signed checks or isolated simulated fixtures.
+/// Neither route downloads, installs or relaunches. Only live PR links open URLs.
+pub struct Host {
+    live: bool,
+    checked_presentation: Option<Presentation>,
+    check_generation: u64,
     fixture: String,
     tray: FixtureTray,
     status: Option<captures_app::update_notice::UpdateStatus>,
@@ -566,10 +570,13 @@ pub struct FixtureHost {
     rx: std::sync::mpsc::Receiver<Action>,
 }
 
-impl FixtureHost {
+impl Host {
     pub fn new(fixture: &str, tray: FixtureTray) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut host = Self {
+            live: false,
+            checked_presentation: None,
+            check_generation: 0,
             fixture: String::new(),
             tray,
             status: None,
@@ -590,6 +597,21 @@ impl FixtureHost {
         };
         host.select(fixture);
         host
+    }
+
+    pub fn live() -> Self {
+        let mut host = Self::new("", FixtureTray::None);
+        host.live = true;
+        host
+    }
+
+    fn receive_check(&mut self, generation: u64, presentation: Presentation) {
+        if generation != self.check_generation {
+            self.visible = true;
+            self.shown_at = None;
+        }
+        self.check_generation = generation;
+        self.checked_presentation = Some(presentation);
     }
 
     pub fn select(&mut self, fixture: &str) {
@@ -660,6 +682,12 @@ impl FixtureHost {
                 preferences.set_show_update_changelog(show);
             }
             Action::Install | Action::Check => {
+                if self.live {
+                    if action == Action::Check {
+                        preferences.check_updates();
+                    }
+                    return;
+                }
                 let Some(status) = &self.status else { return };
                 if matches!(
                     status,
@@ -726,6 +754,20 @@ impl FixtureHost {
         ctx.request_repaint();
     }
 
+    pub fn show_check(
+        &mut self,
+        ctx: &egui::Context,
+        tokens: &Tokens,
+        preferences: &mut crate::preferences::Preferences,
+        suspended: bool,
+        reduced_motion: bool,
+    ) {
+        if !self.live || suspended {
+            return;
+        }
+        self.show(ctx, tokens, preferences, reduced_motion);
+    }
+
     pub fn show(
         &mut self,
         ctx: &egui::Context,
@@ -741,7 +783,18 @@ impl FixtureHost {
         }
         let blocked = self.presentation().dismiss_blocked;
         while let Ok(action) = self.rx.try_recv() {
+            if self.live
+                && let Action::OpenPullRequest { url } = &action
+            {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+                continue;
+            }
             self.apply(action, blocked, preferences);
+        }
+        if self.live
+            && let Some((generation, p)) = preferences.update_notice()
+        {
+            self.receive_check(generation, p);
         }
         let placement = self
             .visible
@@ -863,7 +916,9 @@ impl FixtureHost {
     }
 
     fn presentation(&self) -> Presentation {
-        captures_app::update_notice::present(self.status.as_ref(), &self.view)
+        self.checked_presentation.clone().unwrap_or_else(|| {
+            captures_app::update_notice::present(self.status.as_ref(), &self.view)
+        })
     }
 
     /// One event per rendered state so fixtures can assert shared copy.
@@ -907,6 +962,134 @@ impl FixtureHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_live_links_request_a_browser() {
+        let ctx = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        let mut preferences = crate::preferences::Preferences::new(
+            ctx.clone(),
+            root.path().join("settings.json"),
+            None,
+            None,
+        );
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        for live in [false, true] {
+            let mut host = if live {
+                Host::live()
+            } else {
+                Host::new("available", FixtureTray::None)
+            };
+            host.tx
+                .send(Action::OpenPullRequest {
+                    url: "https://github.com/joswayski/captures/pull/321".into(),
+                })
+                .unwrap();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                host.show(ui.ctx(), &tokens, &mut preferences, true)
+            });
+            output.textures_delta.clear();
+            let urls: Vec<_> = output
+                .platform_output
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    egui::OutputCommand::OpenUrl(url) => Some(url.url.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                urls,
+                if live {
+                    vec!["https://github.com/joswayski/captures/pull/321"]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn suspended_checks_do_not_paint() {
+        use captures_app::update_notice::{ViewState, fixture, present};
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let root = tempfile::tempdir().unwrap();
+        let mut preferences = crate::preferences::Preferences::new(
+            ctx.clone(),
+            root.path().join("settings.json"),
+            None,
+            None,
+        );
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let mut host = Host::live();
+        host.receive_check(
+            1,
+            present(fixture("checking").as_ref(), &ViewState::default()),
+        );
+        let viewport = egui::ViewportId::from_hash_of("update-notice");
+        let mut suspended = ctx.run_ui(Default::default(), |ui| {
+            host.show_check(ui.ctx(), &tokens, &mut preferences, true, true)
+        });
+        suspended.textures_delta.clear();
+        assert!(!suspended.viewport_output.contains_key(&viewport));
+        let mut restored = ctx.run_ui(Default::default(), |ui| {
+            host.show_check(ui.ctx(), &tokens, &mut preferences, false, true)
+        });
+        restored.textures_delta.clear();
+        assert!(restored.viewport_output.contains_key(&viewport));
+        host.hide();
+        let mut dismissed = ctx.run_ui(Default::default(), |ui| {
+            host.show_check(ui.ctx(), &tokens, &mut preferences, false, true)
+        });
+        dismissed.textures_delta.clear();
+        assert!(!dismissed.viewport_output.contains_key(&viewport));
+    }
+
+    #[test]
+    fn dismissed_live_check_stays_hidden_through_result_and_capture_suspension() {
+        use captures_app::update_notice::{ViewState, fixture, present};
+        let mut host = Host::live();
+        assert!(!host.visible && host.status.is_none());
+        host.receive_check(
+            1,
+            present(fixture("checking").as_ref(), &ViewState::default()),
+        );
+        assert!(host.visible);
+        host.hide();
+        host.receive_check(
+            1,
+            present(fixture("available").as_ref(), &ViewState::default()),
+        );
+        assert!(!host.visible, "completion cannot undo a dismissal");
+        host.receive_check(
+            2,
+            present(fixture("checking").as_ref(), &ViewState::default()),
+        );
+        assert!(host.visible, "only a new explicit check reveals again");
+        assert!(!host.simulating && host.next_tick.is_none());
+    }
+
+    #[test]
+    fn live_install_actions_cannot_enter_the_fixture_simulation() {
+        use captures_app::update_notice::{ViewState, fixture, present};
+        let ctx = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        let mut preferences = crate::preferences::Preferences::new(
+            ctx,
+            root.path().join("settings.json"),
+            None,
+            None,
+        );
+        let mut host = Host::live();
+        host.receive_check(
+            1,
+            present(fixture("available").as_ref(), &ViewState::default()),
+        );
+        host.apply(Action::Install, false, &mut preferences);
+        assert!(!host.simulating && host.next_tick.is_none());
+        assert!(host.status.is_none() && !root.path().join("settings.json").exists());
+    }
 
     #[test]
     fn close_warning_has_shipping_stem_dot_and_scaled_stroke() {

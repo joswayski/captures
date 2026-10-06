@@ -209,13 +209,17 @@ struct UpdateNoticePlacement: Equatable {
     }
 }
 
-/// Workbench model over the shared, deterministic stub status source. It never
-/// downloads, installs, relaunches or opens URLs.
+/// Notice over either signed development checks or the isolated fixture source.
+/// Neither source can download, install or relaunch from this model.
 final class UpdateNoticeModel {
     /// Matches `captures_app::update_notice::FIXTURES`.
     static let fixtures = ["available", "single", "closing", "manual", "downloading",
                            "restarting", "error", "checking", "up-to-date"]
     private let transport: UpdateNoticeTransport
+    private var checkedPresentation: [String: Any]?
+    private var checkGeneration = 0
+    var checkAgain: () -> Void = {}
+    var openPullRequest: (String) -> Bool = { _ in false }
     private(set) var status: [String: Any]?
     private(set) var visible = false
     private(set) var simulating = false
@@ -229,6 +233,17 @@ final class UpdateNoticeModel {
 
     init(transport: UpdateNoticeTransport = UpdateNoticeBridge()) { self.transport = transport }
 
+    func receiveCheck(_ presentation: [String: Any], generation: Int) throws {
+        _ = try UpdateNoticePresentation(presentation)
+        checkedPresentation = presentation
+        // Dismissing while checking also dismisses its eventual result. Only
+        // a new explicit Check can reopen the notice.
+        if generation != checkGeneration { visible = true }
+        checkGeneration = generation
+        simulating = false; tickInterval = nil
+        changed()
+    }
+
     func load(fixture: String) throws {
         guard let status = try transport.request(["operation": "fixture", "name": fixture])["status"] as? [String: Any]
         else { throw AppBridgeError.invalidResponse }
@@ -238,7 +253,8 @@ final class UpdateNoticeModel {
     }
 
     func presentation() throws -> UpdateNoticePresentation {
-        try UpdateNoticePresentation(transport.request([
+        if let checkedPresentation { return try UpdateNoticePresentation(checkedPresentation) }
+        return try UpdateNoticePresentation(transport.request([
             "operation": "present", "status": status.map { $0 as Any } ?? NSNull(),
             "view": ["show_changelog": showChangelog, "action_error": NSNull(), "installing": false],
         ]))
@@ -284,6 +300,10 @@ final class UpdateNoticeModel {
             showChangelog = action == .showNotes
             persistShowChangelog(showChangelog)
         case .install, .check:
+            if checkedPresentation != nil {
+                if action == .check { checkAgain() }
+                break
+            }
             if action == .install, status?["state"] as? String == "available",
                status?["installable"] as? Bool == false {
                 event("update-notice-open-url", ["kind": "release", "opened": false]); return
@@ -291,7 +311,8 @@ final class UpdateNoticeModel {
             simulating = true
             step(action == .install ? "install" : "check")
         case .openPullRequest(let url):
-            event("update-notice-open-url", ["kind": "pull_request", "url": url, "opened": false])
+            let opened = checkedPresentation != nil && openPullRequest(url)
+            event("update-notice-open-url", ["kind": "pull_request", "url": url, "opened": opened])
         case .openDownloadPage:
             event("update-notice-open-url", ["kind": "download", "url": "https://captur.es/#download", "opened": false])
         }
@@ -739,14 +760,16 @@ final class UpdateNoticePanel: NSPanel {
     }
 }
 
-/// Presents the workbench update notice from the stub status source.
+/// Presents signed check notices or the separate workbench fixture.
 final class UpdateNoticeController {
     let model: UpdateNoticeModel
-    private let tokens: Tokens
+    private var tokens: Tokens
     private let tray: String
+    var statusItemFrame: (() -> NSRect?)?
     private var panel: UpdateNoticePanel?
     private var view: UpdateNoticeView?
     private var timer: Timer?
+    private var suspended = false
     private var lastReport: [String: Any] = [:]
     /// When shipping's `update-restart-exit` (3 s into the restart state) ends;
     /// the stub "restart" keeps the faded card until then.
@@ -767,9 +790,12 @@ final class UpdateNoticeController {
         timer?.invalidate(); timer = nil; panel?.close(); panel = nil; view = nil; restartExitEnd = nil
     }
     func refresh() { render() }
+    func setSuspended(_ suspended: Bool) { self.suspended = suspended; render() }
+    func restyle(_ tokens: Tokens) { close(); self.tokens = tokens; render() }
 
     private func render() {
         timer?.invalidate(); timer = nil
+        guard !suspended else { close(); return }
         if !model.visible, let end = restartExitEnd, end.timeIntervalSinceNow > 0, let panel {
             // The stub restart finished: let the exit fade end, accepting no input.
             panel.ignoresMouseEvents = true
@@ -785,10 +811,14 @@ final class UpdateNoticeController {
             let monitor = UpdateNoticePlacement.topLeft(screen.frame, primaryHeight: primaryHeight)
             let workArea = UpdateNoticePlacement.topLeft(screen.visibleFrame, primaryHeight: primaryHeight)
             let trayRect: CGRect?
-            switch tray {
-            case "none": trayRect = nil
-            case "bottom": trayRect = CGRect(x: monitor.maxX - 180, y: monitor.maxY - 36, width: 24, height: 36)
-            default: trayRect = CGRect(x: monitor.maxX - 180, y: monitor.minY, width: 24, height: 24)
+            if let actual = statusItemFrame?() {
+                trayRect = UpdateNoticePlacement.topLeft(actual, primaryHeight: primaryHeight)
+            } else {
+                switch tray {
+                case "none": trayRect = nil
+                case "bottom": trayRect = CGRect(x: monitor.maxX - 180, y: monitor.maxY - 36, width: 24, height: 36)
+                default: trayRect = CGRect(x: monitor.maxX - 180, y: monitor.minY, width: 24, height: 24)
+                }
             }
             let placement = try model.placement(monitor: monitor, workArea: workArea, tray: trayRect,
                 cardWidth: presentation.cardWidth, cardHeight: presentation.cardHeight)

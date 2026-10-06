@@ -4,6 +4,71 @@ import XCTest
 @testable import CapturesNative
 
 final class UpdateNoticeTests: XCTestCase {
+    func testSuspendedSignedNoticeCannotReopenOnResultOrAppearanceChange() throws {
+        _ = NSApplication.shared
+        guard NSScreen.main != nil else { throw XCTSkip("A window server is required") }
+        let bridge = UpdateNoticeBridge()
+        let status = try XCTUnwrap(bridge.request(["operation": "fixture", "name": "checking"])["status"])
+        let presentation = try bridge.request(["operation": "present", "status": status,
+            "view": ["show_changelog": true, "action_error": NSNull(), "installing": false]])
+        let controller = UpdateNoticeController(tokens: Tokens.variants["dark-mustard"]!, tray: "none")
+        defer { controller.close() }
+        controller.model.event = { _, _ in }
+        let panelVisible = { NSApp.windows.contains { $0.title == "Captures Update" && $0.isVisible } }
+        controller.setSuspended(true)
+        try controller.model.receiveCheck(presentation, generation: 1)
+        XCTAssertFalse(panelVisible())
+        controller.restyle(Tokens.variants["light-mustard"]!)
+        XCTAssertFalse(panelVisible(), "restyling cannot bypass suspension")
+        controller.setSuspended(false)
+        XCTAssertTrue(panelVisible(), "retained state returns after capture/permissions")
+        controller.setSuspended(true)
+        XCTAssertFalse(panelVisible())
+        try controller.model.receiveCheck(presentation, generation: 1)
+        XCTAssertFalse(panelVisible(), "a reply cannot bypass suspension")
+        controller.model.perform(.dismiss)
+        controller.setSuspended(false)
+        XCTAssertFalse(panelVisible(), "restoring must respect dismissal")
+    }
+
+    func testSignedCheckNoticeDismissalSurvivesResultsAndNeverEntersStubInstall() throws {
+        let bridge = UpdateNoticeBridge()
+        let status = try XCTUnwrap(bridge.request(["operation": "fixture", "name": "checking"])["status"])
+        var presentation = try bridge.request(["operation": "present", "status": status,
+            "view": ["show_changelog": true, "action_error": NSNull(), "installing": false]])
+        presentation["title"] = "Checking native updates"
+        let model = UpdateNoticeModel()
+        model.event = { _, _ in }
+        var checks = 0
+        model.checkAgain = { checks += 1 }
+        try model.receiveCheck(presentation, generation: 1)
+        XCTAssertTrue(model.visible)
+        model.perform(.dismiss)
+        XCTAssertFalse(model.visible)
+        presentation["title"] = "Native development up to date"
+        try model.receiveCheck(presentation, generation: 1)
+        XCTAssertFalse(model.visible, "the response must not undo dismissal")
+        XCTAssertEqual(try model.presentation().title, "Native development up to date")
+        try model.receiveCheck(presentation, generation: 2)
+        XCTAssertTrue(model.visible, "a new explicit check reveals again")
+        model.perform(.install); model.tick()
+        XCTAssertFalse(model.simulating)
+        XCTAssertNil(model.tickInterval)
+        XCTAssertNil(model.status)
+        model.perform(.check)
+        XCTAssertEqual(checks, 1)
+        var opened: [String] = []
+        model.openPullRequest = { opened.append($0); return true }
+        model.perform(.openPullRequest("https://github.com/joswayski/captures/pull/321"))
+        XCTAssertEqual(opened, ["https://github.com/joswayski/captures/pull/321"])
+        let fixture = UpdateNoticeModel()
+        fixture.event = { _, _ in }
+        fixture.openPullRequest = { opened.append($0); return true }
+        try fixture.load(fixture: "available")
+        fixture.perform(.openPullRequest("https://github.com/joswayski/captures/pull/999"))
+        XCTAssertEqual(opened.count, 1, "fixtures must not open a browser")
+    }
+
     func testHeaderIconsUseShippingPathsAndSpinnerGeometry() throws {
         let tokens = Tokens.variants["dark-mustard"]!
         let frame = NSRect(x: 0, y: 0, width: 36, height: 36)

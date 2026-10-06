@@ -116,7 +116,7 @@ pub struct Workbench {
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
     quitting: bool,
-    update_notice: crate::update_notice::FixtureHost,
+    update_notice: crate::update_notice::Host,
     crash: Option<Arc<captures_app::crash::Session>>,
     crash_review_pending: bool,
     update_health: Option<UpdateHealth>,
@@ -295,12 +295,16 @@ impl Workbench {
         // Preferences or (with --open-history) History once settings load.
         let root_hidden = options.live;
         let launched_quietly = options.live && options.scene == Scene::Idle;
-        let update_notice = crate::update_notice::FixtureHost::new(
-            options.update_state.as_deref().unwrap_or("available"),
-            options
-                .update_tray
-                .unwrap_or(crate::update_notice::FixtureTray::Top),
-        );
+        let update_notice = if options.live {
+            crate::update_notice::Host::live()
+        } else {
+            crate::update_notice::Host::new(
+                options.update_state.as_deref().unwrap_or("available"),
+                options
+                    .update_tray
+                    .unwrap_or(crate::update_notice::FixtureTray::Top),
+            )
+        };
         let launched_with_media = !options.open_media.is_empty();
         let (startup_notice_tx, startup_notice_rx) = mpsc::channel();
         let update_acknowledgement = options.native_update_health.take();
@@ -498,7 +502,8 @@ impl Workbench {
         #[cfg(target_os = "windows")]
         if action == TrayAction::LeftClick {
             match tray::left_click(
-                self.options.scene == Scene::Update && self.update_notice.is_visible(),
+                (self.options.scene == Scene::Update || self.options.live)
+                    && self.update_notice.is_visible(),
                 self.startup_notice.is_some(),
             ) {
                 tray::LeftClick::HideUpdateNotice => {
@@ -1899,6 +1904,17 @@ impl eframe::App for Workbench {
             live.set_permission_recovery_visible(self.preferences_state.permission_recovery_open());
             live.set_companion_visible(self.preferences.presented());
             live.set_root_shown(!self.root_hidden);
+            let notice_suspended = live.workspace_hidden()
+                || live.is_capturing()
+                || !self.preferences_state.onboarding_complete()
+                || self.preferences_state.permission_recovery_open();
+            self.update_notice.show_check(
+                &ctx,
+                &t,
+                &mut self.preferences_state,
+                notice_suspended,
+                self.options.reduced_motion,
+            );
             if recovery_requested {
                 self.show_root(&ctx);
             }
