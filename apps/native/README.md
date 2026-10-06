@@ -832,8 +832,12 @@ portal still from History. It restores the windows on success, cancellation or
 failure. Captures return to History without guessed display geometry or preview
 placement. **Record display…** uses the same unmapping acknowledgement before
 portal consent, then the normal MP4 recording controls with compositor placement.
-Region/window selectors and screenshots during a recording remain unavailable;
-recording controls are included in output and Hide needs a working tray.
+The recording HUD's Screenshot action and display screenshot shortcut can request
+a desktop-portal still while running or paused, with screenshot countdown off.
+It hides the HUD for the still, retains the take and its clock, and restores only
+the controls afterward; cancellation/failure leaves the recording intact.
+Region/window selectors remain unavailable; recording controls are included in
+video output and Hide needs a working tray.
 Consent and cursor inclusion are portal-controlled. Remapping may change
 compositor-assigned window positions. Linux X11 needs an
 active, unlocked desktop session; bare Xvfb normally has no session service and

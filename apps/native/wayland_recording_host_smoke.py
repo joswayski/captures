@@ -21,7 +21,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
-from wayland_screenshot_smoke import DESKTOP, ready, stop, wait_owner
+from wayland_screenshot_smoke import DESKTOP, ready, rgba, stop, wait_owner
 from x11_capture_smoke import ScreenSaver
 
 
@@ -66,8 +66,10 @@ def events(path, name=None):
     return parsed
 
 
-def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrupt_source, window_only=False):
-    profile = root / (appearance + "-window" if window_only else appearance)
+def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrupt_source,
+                   window_only=False, pending_quit=False):
+    suffix = "-window" if window_only else "-pending-quit" if pending_quit else ""
+    profile = root / (appearance + suffix)
     profile.mkdir()
     history_root = profile / "history"
     settings = profile / "settings.json"
@@ -79,6 +81,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         "output_directory": str(profile / "exports"),
         "launch_at_login": False,
         "auto_copy_to_clipboard": False,
+        "screenshot_countdown_seconds": 0,
         "new_capture_shortcut": "Ctrl+Shift+F10",
         "region_shortcut": "Ctrl+Shift+F7",
         "window_shortcut": "Ctrl+Shift+F8",
@@ -100,7 +103,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
     app = subprocess.Popen([
         binary, "--live", "--open-history", "--open-preferences",
         "--settings-file", str(settings), "--history-root", str(history_root),
-        "--quit-after", "40",
+        "--quit-after", "26" if pending_quit else "70",
     ], env=env, stdout=host_log, stderr=host_log)
 
     def click(x, y):
@@ -172,6 +175,33 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         x1, y1, x2, y2 = detail.get("rect", detail.get("button"))
         click(outer["x"] + (x1 + x2) / 2, outer["y"] + (y1 + y2) / 2)
 
+    def metadata(kind=None):
+        return {path for path in history_root.glob("*/metadata.json")
+                if kind is None or json.loads(path.read_text())["kind"] == kind}
+
+    def take_screenshot(state, mode="real", request_log=None):
+        before = metadata()
+        layout = hud_control("screenshot", state, True)
+        assert layout[0]["label"] == "Take a desktop-portal screenshot"
+        previous = len(events(request_log, "request")) if request_log else 0
+        click_layout(layout)
+        if mode == "real":
+            added = wait(lambda: metadata() - before, "screenshot child saved")
+            assert len(added) == 1 and added <= metadata("screenshot"), added
+            path = next(iter(added)).parent / "capture.png"
+            assert rgba(path) == bytes((*BACKGROUND, 255)) * (WIDTH * HEIGHT), \
+                "screenshot must exclude the HUD and all hidden workspace windows"
+        else:
+            wait(lambda: len(events(request_log, "request")) > previous,
+                 "screenshot child reached the portal fixture")
+        restored = hud_control("screenshot", state, True)
+        assert not window("Capture History") and not window("Captures Preferences"), \
+            "child completion remapped workspace into the recording"
+        if mode != "real":
+            assert metadata() == before, "cancelled/failed child published an artifact"
+        shot(f"screenshot-{state}-{mode}")
+        return restored[0]["elapsed_ms"]
+
     try:
         wait(lambda: app.poll() is None and window("Capture History") and
              window("Captures Preferences"), "History and Preferences mapped")
@@ -231,12 +261,16 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         running = hud_control("pause_resume", "recording", True)
         running_wall = time.monotonic()
         assert not window("Captures Recording Countdown"), "countdown and HUD overlapped"
-        screenshot = hud_control("screenshot", "recording", False)
+        screenshot = hud_control("screenshot", "recording", True)
         stop_control = hud_control("stop", "recording", True)
-        assert screenshot[0]["label"] == "Take a region screenshot"
+        assert screenshot[0]["label"] == "Take a desktop-portal screenshot"
         assert stop_control[0]["enabled"]
         shot("running-hud")
+        if not pending_quit:
+            after_screenshot = take_screenshot("recording")
+            assert after_screenshot >= running[0]["elapsed_ms"], "child reset the take's clock"
 
+        running = hud_control("pause_resume", "recording", True)
         before_pause = running[0]["elapsed_ms"]
         click_layout(running)
         pause_wall_start = time.monotonic()
@@ -245,18 +279,43 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         paused_at = paused[0]["elapsed_ms"]
         assert paused_at >= before_pause
         shot("paused-hud")
+        if pending_quit:
+            request_log = portal_mode("screenshot-wait")
+            click_layout(hud_control("screenshot", "paused", True))
+            wait(lambda: events(request_log, "request"), "pending screenshot before Quit")
+            wait(lambda: not windows(env), "all app surfaces hidden for pending screenshot")
+            assert rgba(shot("pending-screenshot")) == bytes((*BACKGROUND, 255)) * (WIDTH * HEIGHT)
+            wait(lambda: app.poll() is not None, "Quit drains pending child and paused take", timeout=35)
+            assert app.returncode == 0, app.returncode
+            assert len(events(request_log, "close")) == len(events(request_log, "request"))
+            assert len(metadata()) == 1 and metadata() == metadata("video")
+            video = next(iter(metadata())).parent / "media.mp4"
+            probe = json.loads(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_format", "-of", "json", str(video)
+            ], timeout=10))
+            assert float(probe["format"]["duration"]) > .3, probe
+            assert not list((profile / "recording-recovery").glob("*/manifest.json"))
+            report = {"appearance": appearance, "pending_screenshot_closed_on_quit": True,
+                      "paused_take_published_once": True, "screenshot_published": False}
+            (profile / "result.json").write_text(json.dumps(report, indent=2))
+            print(json.dumps(report), flush=True)
+            return
         # The hold must dominate two acquisitions and observation latency, so
         # the independent duration bounds still reject a pause-inclusive clock.
         time.sleep(3.13)  # deliberately not aligned with the HUD's 100 ms timer
         paused_later = hud_control("pause_resume", "paused", True)
         assert paused_later[0]["elapsed_ms"] == paused_at, (paused_at, paused_later[0])
-        assert hud_control("screenshot", "paused", False)[0]["enabled"] is False
+        assert take_screenshot("paused") == paused_at, "paused child advanced the clock"
+        for mode in ("cancel", "failure"):
+            request_log = portal_mode("screenshot-" + mode)
+            assert take_screenshot("paused", mode, request_log) == paused_at
+        portal_mode("real")
         assert hud_control("stop", "paused", True)[0]["enabled"] is True
 
         # Resume opens a fresh portal grant/segment; real input must remain usable.
         resume_wall = time.monotonic()
         paused_wall_seconds = resume_wall - paused_wall
-        click_layout(paused_later)
+        click_layout(hud_control("pause_resume", "paused", True))
         resumed = hud_control("pause_resume", "recording", True)
         resumed_wall = time.monotonic()
         assert resumed[0]["elapsed_ms"] >= paused_at
@@ -271,12 +330,12 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         lower_duration = pause_wall_start - running_wall + stop_clicked_wall - resumed_wall
         upper_duration = paused_wall - submit_wall + stop_submitted_wall - resume_wall
 
-        metadata = wait(lambda: next(iter(history_root.glob("*/metadata.json")), None),
-                        "published recording metadata", timeout=25)
-        entry = json.loads(metadata.read_text())
+        recording_metadata = wait(lambda: next(iter(metadata("video")), None),
+                                  "published recording metadata", timeout=25)
+        entry = json.loads(recording_metadata.read_text())
         assert entry["kind"] == "video" and entry["target"] == {"type": "portal_display"}, entry
         assert "rect" not in entry["target"] and (entry["width"], entry["height"]) == (WIDTH, HEIGHT), entry
-        media = metadata.parent / "media.mp4"
+        media = recording_metadata.parent / "media.mp4"
         wait(media.is_file, "published MP4")
         probe = json.loads(subprocess.check_output([
             "ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(media)
@@ -340,7 +399,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         record_button()
         assert not window("Captures Recording Controls")
         assert not list((profile / "recording-recovery").glob("*/manifest.json"))
-        assert len(list(history_root.glob("*/metadata.json"))) == 1
+        assert len(metadata()) == 3 and len(metadata("screenshot")) == 2
         shot("consent-cancelled")
         portal_mode("real")
 
@@ -364,12 +423,12 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         retained = partial.read_bytes()
         time.sleep(.9)
         assert partial.read_bytes() == retained, "failed recording continued encoding"
-        assert len(list(history_root.glob("*/metadata.json"))) == 1
+        assert len(metadata()) == 3
         arrange("Captures Preferences", (650, 300, 600, 560))
         arrange("Capture History", (24, 28, 1020, 720))
         settled_layout("portal-recording-layout", "Capture History")
         shot("source-lost-recovery")
-        wait(lambda: app.poll() is not None, "clean timed app exit", timeout=45)
+        wait(lambda: app.poll() is not None, "clean timed app exit", timeout=75)
         assert app.returncode == 0, app.returncode
         assert partial.read_bytes() == retained, "Quit deleted accepted recovery media"
         report = {
@@ -386,6 +445,8 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
             "mp4": str(media.relative_to(profile)),
             "countdown_cancelled": True,
             "consent_cancelled": True,
+            "active_and_paused_screenshot_exact_pixels": True,
+            "screenshot_cancel_failure_retained_paused_take": True,
             "source_loss_retained_seconds": float(partial_probe["format"]["duration"]),
             "source_loss_stopped_and_survived_quit": True,
         }
@@ -422,6 +483,23 @@ def isolated(args):
         WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman", WGPU_BACKEND="gl",
         CAPTURES_NATIVE_LAYOUT_PROBE="1", CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER="1",
     )
+    # Use the still-capture suite's transparent private cursor theme, so exact
+    # pixels hold even immediately after input. Portal cursor policy stays open.
+    cursor_root = output / "cursor-themes"
+    theme = cursor_root / "captures-transparent-fixture"
+    cursors = theme / "cursors"
+    cursors.mkdir(parents=True)
+    image = cursor_root / "transparent.png"
+    subprocess.run(["convert", "-size", "24x24", "xc:none", f"PNG32:{image}"], check=True)
+    assert rgba(image)[3::4] == bytes(24 * 24)
+    cursor_config = cursor_root / "cursor.conf"
+    cursor_config.write_text(f"24 0 0 {image}\n")
+    subprocess.run(["xcursorgen", str(cursor_config), str(cursors / "default")], check=True)
+    for name in ("left_ptr", "arrow", "top_left_arrow", "left_arrow", "pointer", "hand2",
+                 "hand1", "hand", "pointing_hand", "text", "xterm", "ibeam", "crosshair"):
+        (cursors / name).symlink_to("default")
+    (theme / "index.theme").write_text("[Icon Theme]\nName=Captures transparent fixture\n")
+    env.update(XCURSOR_PATH=str(cursor_root), XCURSOR_THEME=theme.name, XCURSOR_SIZE="24")
     services, logs = [], []
 
     def spawn(name, command, announce=False):
@@ -455,6 +533,9 @@ def isolated(args):
         sway_config.write_text(
             f"output HEADLESS-1 resolution {WIDTH}x{HEIGHT}\n"
             "output * bg #234567 solid_color\nseat seat0 fallback true\n"
+            "seat seat0 xcursor_theme captures-transparent-fixture 24\n"
+            # No idle-hide timer: transparent pixels are deterministic after input.
+            "seat seat0 hide_cursor 0\n"
             "default_border none\ndefault_floating_border none\n"
             'for_window [title="Capture History"] floating enable\n'
             'for_window [title="Captures Preferences"] floating enable\n'
@@ -493,6 +574,12 @@ def isolated(args):
             elif name == "portal":
                 public_portal = process
 
+        # Consent exists only in this disposable bus/data profile.
+        store = dbus.Interface(bus.get_object("org.freedesktop.impl.portal.PermissionStore",
+                                             "/org/freedesktop/impl/portal/PermissionStore"),
+                               "org.freedesktop.impl.portal.PermissionStore")
+        store.SetPermission("screenshot", True, "screenshot", "", ["yes"])
+
         def portal_mode(mode):
             nonlocal backend, public_portal
             stop(public_portal)
@@ -504,6 +591,14 @@ def isolated(args):
                     wait_owner(bus, "org.freedesktop.impl.portal.desktop.wlr", backend)
                 public_portal = spawn("portal-restored", ["/usr/libexec/xdg-desktop-portal"])
                 wait_owner(bus, DESKTOP, public_portal)
+            elif mode.startswith("screenshot-"):
+                request_log = output / (mode + ".jsonl")
+                public_portal = spawn("portal-" + mode, [sys.executable,
+                    str(Path(__file__).with_name("wayland_screenshot_smoke.py")),
+                    "--fixture", mode.removeprefix("screenshot-"), "--uri", "file:///unused.png",
+                    "--log", str(request_log)], True)
+                ready(public_portal)
+                return request_log
             else:
                 public_portal = spawn("portal-cancel", [sys.executable,
                     str(Path(__file__).with_name("wayland_video_smoke.py")), "--fixture", mode,
@@ -518,6 +613,9 @@ def isolated(args):
                            portal_mode, lambda: stop(backend), window_only=True)
             run_appearance(str(args.binary.resolve()), pointer, output, appearance, env,
                            portal_mode, lambda: stop(backend))
+            portal_mode("real")
+            run_appearance(str(args.binary.resolve()), pointer, output, appearance, env,
+                           portal_mode, lambda: stop(backend), pending_quit=True)
         (output / "PASS").write_text("dark and light native Wayland recording host acceptance passed\n")
     except Exception:
         (output / "FAIL").write_text("inspect retained logs and screenshots\n")

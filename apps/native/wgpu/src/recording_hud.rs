@@ -198,8 +198,8 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
     {
         for control in &mut policy.controls {
             if control.control == Control::Screenshot {
-                control.enabled = false;
-                control.tooltip = "Screenshots during Wayland recording are not available yet";
+                control.label = "Take a desktop-portal screenshot";
+                control.tooltip = "Take a portal screenshot";
             }
         }
     }
@@ -347,7 +347,10 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             .truncate(),
         );
     }
-    if let Some((anchor, control, progress)) = tooltip {
+    // Both use the space below the card; keep an actionable error readable.
+    if view.error.is_none()
+        && let Some((anchor, control, progress)) = tooltip
+    {
         paint_tooltip(ui, tokens, anchor, &control, progress, bounds);
     }
     action

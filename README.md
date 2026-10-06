@@ -201,7 +201,10 @@ Display recordings include the controls; Hide requires a working tray restore pa
 Window recording requires a ScreenCast portal v3+ advertising window sources;
 only the chosen window is shared, and every new/resumed segment asks again.
 Unsupported backends report an error without falling back to display capture.
-Region capture, window screenshots and screenshots during recording remain unavailable.
+While a take runs or is paused, the controls' Screenshot action requests a separate
+desktop-portal still without stopping the take. Captures' windows and HUD are
+hidden for the still; cancellation or failure preserves the recording. Turn off
+the screenshot countdown first. Region capture and window screenshots remain unavailable.
 Portal policy controls consent and cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
 Native Wayland global shortcuts use the desktop's GlobalShortcuts portal. The
