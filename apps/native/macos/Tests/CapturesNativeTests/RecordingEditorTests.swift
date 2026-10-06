@@ -159,6 +159,7 @@ final class RecordingEditorTests: XCTestCase {
     func testReplaceOriginalSavesWithoutConfirmationCancelFailureAndRebase() throws {
         _ = NSApplication.shared
         let path = "/Exports/original.mp4"
+        let destination = "/Exports/stale.mp4"
         let initial = try presentation(position: 400, revision: 1, originalSavePath: path)
         let rebased = try presentation(position: 0, revision: 2)
         let worker = FakeRecordingEditorWorker(presentation: initial)
@@ -166,13 +167,15 @@ final class RecordingEditorTests: XCTestCase {
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
             worker: worker, didReplaceOriginal: { refreshed.append($0) })
         defer { controller.window.orderOut(nil) }
-        controller.present(artifact: recordingArtifact(savedPath: "/Exports/stale.mp4"), historyRoot: "/History",
+        controller.present(artifact: recordingArtifact(savedPath: destination), historyRoot: "/History",
                            outputDirectory: "/Exports")
-        // Shipping's Save overwrites a same-format original at once.
+        // Save keeps the History identity at the chosen filename, which may
+        // differ from the worker's validated original source path.
         let replace = try button("Replace original", in: controller.root)
         XCTAssertTrue(replace.isEnabled)
         replace.performClick(nil)
         XCTAssertEqual(worker.replaceCalls, 1, "Save replaces without a confirmation")
+        XCTAssertEqual(worker.replaceDestinations, [destination])
         XCTAssertFalse(controller.dirty)
         XCTAssertTrue(replace.isEnabled, "ordinary failure preserves accepted edits")
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("replace unavailable") })
@@ -186,7 +189,8 @@ final class RecordingEditorTests: XCTestCase {
         cancel.performClick(nil)
         XCTAssertTrue(try XCTUnwrap(worker.observedReplaceCancel).isCancelled)
         let thumbnailCount = worker.thumbnailCalls
-        worker.completeReplace(.success(RecordingReplaceResult(path: path, presentation: rebased)))
+        XCTAssertEqual(worker.replaceDestinations, [destination, destination])
+        worker.completeReplace(.success(RecordingReplaceResult(path: destination, presentation: rebased)))
         XCTAssertEqual(refreshed, ["recording-id"],
                        "success after cancellation can be committed and must be shown")
         XCTAssertEqual(worker.thumbnailCalls, thumbnailCount + 1)
