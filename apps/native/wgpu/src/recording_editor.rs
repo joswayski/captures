@@ -5037,6 +5037,9 @@ mod tests {
         let p = view.presented.as_mut().unwrap();
         p.export = export.clone();
         p.preview_export = export;
+        // Like opened(), keep background estimates out of worker-free renders.
+        // Changing the accepted export invalidated the old attempted identity.
+        view.estimate_attempt = view.estimate_key();
         view
     }
 
@@ -5127,13 +5130,14 @@ mod tests {
             let (tx, jobs) = mpsc::channel();
             let (events, _) = mpsc::channel();
             view.request_comparison(&ctx, &tx);
-            let Some(Job::Compare(generation, _)) =
-                jobs.iter().find(|job| !matches!(job, Job::Estimate(_)))
-            else {
-                panic!("comparison")
+            let Ok(Job::Compare(generation, _)) = jobs.try_recv() else {
+                panic!("comparison was not dispatched in {name}")
             };
             let result = comparison(&view);
             view.receive(&ctx, Event::Compared(generation, Ok(result)));
+            // Exercise an expired estimate deadline without relying on runner
+            // speed. This fixture has no worker to complete background jobs.
+            view.estimate_due = view.estimate_key().map(|key| (key, Instant::now()));
             let ids = view
                 .comparison
                 .as_ref()
@@ -5226,10 +5230,13 @@ mod tests {
                 view.comparison_split.0 > before_key,
                 "the focused split accepts arrow input"
             );
-            // The automatic estimate may come due on a slow runner; split input
-            // itself must dispatch nothing else.
+            // Even an expired deadline must not leave an uncompleted estimate
+            // blocking this worker-free comparison fixture.
             assert!(!view.dirty() && !view.history_changed);
-            assert!(jobs.try_iter().all(|job| matches!(job, Job::Estimate(_))));
+            assert!(
+                jobs.try_recv().is_err(),
+                "unexpected background job in {name}"
+            );
             view.gif = true;
             render(&mut view, vec![]);
             assert!(
@@ -5244,10 +5251,8 @@ mod tests {
             );
             // Hide dismisses it, and the Save quality card offers it back.
             view.request_comparison(&ctx, &tx);
-            let Some(Job::Compare(generation, _)) =
-                jobs.iter().find(|job| !matches!(job, Job::Estimate(_)))
-            else {
-                panic!("comparison")
+            let Ok(Job::Compare(generation, _)) = jobs.try_recv() else {
+                panic!("comparison was not dispatched in {name}")
             };
             view.receive(&ctx, Event::Compared(generation, Ok(comparison(&view))));
             assert!(view.comparison.is_some());
