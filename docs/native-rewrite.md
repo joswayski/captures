@@ -1902,14 +1902,31 @@ can leave owned scratch, never an installed update.
 
 | Platform | Temporary acquisition implementation / verification |
 | --- | --- |
-| AppKit/macOS | Shared Rust/C ABI, CLI guard, Preferences/notice routing and busy-only polling implemented; XCTest cancellation/source-isolation/configuration regressions included; this slice's macOS execution and physical acceptance await main CI/host verification |
-| Windows | Same worker, CLI and wgpu integration implemented; portable host/configuration regressions pass; this slice's Windows execution and physical acceptance await main CI/host verification |
+| AppKit/macOS | Shared Rust/C ABI, CLI guard, Preferences/notice routing and busy-only polling implemented; XCTest cancellation/source-isolation/configuration regressions and development packaging pass in [macOS CI](https://github.com/joswayski/captures/actions/runs/37407078921); physical acceptance open |
+| Windows | Same worker, CLI and wgpu integration implemented; tests, native-window smoke and development packaging pass in [Windows/Linux CI](https://github.com/joswayski/captures/actions/runs/37407078573); physical acquisition acceptance open |
 | X11 | Signed real-packager fixtures verify altered artifact rejection/retry, incomplete package rejection, partial progress/cancel/quit, stage ownership and cleanup; real dark/normal and light/minimum UI smokes exercise download/notice cancellation, hash failure/notice retry, validation, hidden completion, recheck/quit cleanup and unchanged operator files/settings; renders inspected |
 | Wayland | Same worker/UI and existing notice-suspension policy; no compositor-specific behavior introduced or accepted; physical/live acquisition acceptance remains open |
 
 This connects acquisition/staging to development UI, not an installed updater.
 External helper/process handoff, signed distribution, channel policy, installed-data
 migration and end-to-end acceptance remain separate. Tauri still ships.
+
+### Native update shutdown drain
+
+wgpu's accepted Quit now cancels update work, drains accepted capture/editor work
+and retires viewports while the event loop remains active. Nonblocking cleanup
+polling joins only a finished update worker. Profile election and the current crash
+marker stay owned until cleanup completes; only then are settings flushed, the
+marker marked clean and election released. Repeated Quit cannot skip that boundary,
+and closing workers cannot accept new requests or publish late results. Editor
+save/draft failures still refuse Quit before update cancellation starts.
+
+| Platform | Update shutdown implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing off-main drain and `.terminateLater` retained; shared shutdown guards apply; this slice's macOS execution awaits main CI, physical acceptance open |
+| Windows | Shared nonblocking wgpu drain implemented; deterministic host/worker regressions cover held HTTP, repeated Quit and cleanup acknowledgement; runtime/physical acceptance open |
+| X11 | Deterministic worker/host regressions pass; eight real-window dark/light cases cover idle, held metadata, held partial download and verified-stage Quit; all windows hide, the event loop advances, election/marker stay owned until drain, scratch is removed and existing settings/sentinel remain byte-exact; progress renders inspected |
+| Wayland | Same wgpu logic-only drain; no compositor-specific implementation introduced; live compositor/physical shutdown acceptance open |
 
 ### Native update package staging: temporary validation, no installation
 

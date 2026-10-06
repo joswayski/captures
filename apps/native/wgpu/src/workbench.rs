@@ -802,11 +802,30 @@ impl Workbench {
         if let Some(instance) = &mut self.instance {
             instance.stop_accepting();
         }
-        self.preferences_state.flush();
+        // Begin update cancellation before draining other accepted work. Never
+        // release the election while a blocked request still owns scratch.
+        self.preferences_state.try_shutdown_updates();
         if let Some(live) = &mut self.live {
             live.flush();
         }
         self.shortcuts.0.borrow_mut().take();
+        self.root_hidden = true;
+        // Hidden-root logic passes do not redeclare/retire child viewports.
+        // Hide every current window before leaving only the cleanup loop alive.
+        let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
+        for viewport in viewports {
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(false));
+        }
+        self.finish_quit(ctx);
+    }
+
+    fn finish_quit(&mut self, ctx: &egui::Context) {
+        if !self.preferences_state.try_shutdown_updates() {
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after_for(Duration::from_millis(100), egui::ViewportId::ROOT);
+            return;
+        }
+        self.preferences_state.flush();
         self.tray.take();
         if let Some(session) = &self.crash
             && let Err(error) = session.clean_exit()
@@ -814,7 +833,7 @@ impl Workbench {
             eprintln!("{error}");
         }
         self.instance.take();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
 
     fn receive_instance(&mut self, ctx: &egui::Context) {
@@ -1526,7 +1545,7 @@ impl eframe::App for Workbench {
             || json!({"pass":ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)}),
         );
         if self.quitting {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.finish_quit(ctx);
             return;
         }
         self.preferences_state.set_presented(if self.options.live {
@@ -1804,6 +1823,11 @@ impl eframe::App for Workbench {
         let _span = crate::diagnostics::span("root-ui");
         let start = Instant::now();
         let ctx = ui.ctx().clone();
+        if self.quitting {
+            // Accepted Quit hides the root and retires companion viewports.
+            // Logic-only wakes continue until update cleanup has joined.
+            return;
+        }
         // Font/layout initialization and the settings load can require several
         // initial passes. Count settled work separately, without a sampling timer.
         if self.started.elapsed() >= Duration::from_secs(2) {
