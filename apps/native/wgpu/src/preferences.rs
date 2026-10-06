@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{
-        OnceLock,
+        Arc, OnceLock,
         mpsc::{self, Receiver, Sender},
     },
     thread::{self, JoinHandle},
@@ -258,6 +258,7 @@ pub struct Preferences {
     shortcut_rects: BTreeMap<&'static str, [f32; 4]>,
     last_shortcut_probe: Option<Value>,
     feedback: crate::feedback::FeedbackWindow,
+    update_checks: Option<captures_app::updater::checks::CheckWorker>,
     login_root: Option<PathBuf>,
     login_enabled: Option<bool>,
     login_pending: bool,
@@ -360,6 +361,7 @@ impl Preferences {
             shortcut_rects: BTreeMap::new(),
             last_shortcut_probe: None,
             feedback: crate::feedback::FeedbackWindow::default(),
+            update_checks: None,
             login_root: None,
             login_enabled: None,
             login_pending: false,
@@ -577,6 +579,8 @@ impl Preferences {
         })
     }
     pub fn flush(&mut self) {
+        // Cancel/join metadata before the host releases profile ownership.
+        self.update_checks.take();
         self.io.flush();
     }
 
@@ -640,7 +644,32 @@ impl Preferences {
         }
     }
 
+    pub fn connect_update_checks(
+        &mut self,
+        client: captures_app::updater::UpdateClient,
+        ctx: &egui::Context,
+    ) {
+        let wake = ctx.clone();
+        self.update_checks = Some(captures_app::updater::checks::CheckWorker::new(
+            client,
+            Arc::new(move || {
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+            }),
+        ));
+    }
+
+    pub fn check_updates(&mut self) -> bool {
+        let Some(checker) = &mut self.update_checks else {
+            return false;
+        };
+        self.section_jump = Some(6);
+        checker.check()
+    }
+
     pub fn receive(&mut self, ctx: &egui::Context) {
+        if let Some(checker) = &mut self.update_checks {
+            checker.poll();
+        }
         while let Ok(message) = self.rx.try_recv() {
             match message {
                 Message::Loaded(Ok(settings)) => {
@@ -879,6 +908,7 @@ impl Preferences {
                 "controls": self.shortcut_rects,
                 "recording": self.shortcut_recorder.as_ref().map(|recorder| recorder.field.label()),
                 "save_error": self.save_error.is_some(),
+                "update_checks": self.update_checks.as_ref().map(|checker| checker.presentation()),
             });
             if self.last_shortcut_probe.as_ref() != Some(&probe) {
                 crate::emit("preferences-shortcuts-layout", probe.clone());
@@ -2259,6 +2289,32 @@ impl Preferences {
 
     fn updates(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         self.card(ui, t, 6, |this, ui| {
+            let copy = this
+                .update_checks
+                .as_ref()
+                .map(|checker| checker.presentation());
+            let version = copy
+                .as_ref()
+                .map(|c| c.version.as_str())
+                .unwrap_or(preferences::UPDATES_VERSION);
+            let channel = copy
+                .as_ref()
+                .map(|c| c.channel)
+                .unwrap_or(preferences::UPDATES_CHANNEL);
+            let status = copy
+                .as_ref()
+                .map(|c| c.status.as_str())
+                .unwrap_or(preferences::UPDATES_TITLE);
+            let action = copy
+                .as_ref()
+                .map(|c| c.action)
+                .unwrap_or(preferences::UPDATES_ACTION);
+            let detail = copy
+                .as_ref()
+                .map(|c| c.detail)
+                .unwrap_or(preferences::UPDATES_DETAIL);
+            let enabled = copy.as_ref().is_some_and(|c| c.enabled);
+            let mut check = false;
             let width = preferences::UPDATES_ACTION_WIDTH;
             let background = ui.painter().add(egui::Shape::Noop);
             // Unlike other compact rows, build identity and actions keep their columns.
@@ -2271,13 +2327,13 @@ impl Preferences {
                         |ui| {
                             ui.set_min_width(copy_width);
                             ui.label(
-                                RichText::new(preferences::UPDATES_VERSION)
+                                RichText::new(version)
                                     .size(t.number("text-md"))
                                     .color(t.color("text")),
                             );
                             ui.add_space(3.);
                             ui.label(
-                                RichText::new(preferences::UPDATES_CHANNEL)
+                                RichText::new(channel)
                                     .size(t.number("text-sm"))
                                     .color(t.color("text-subtle")),
                             );
@@ -2289,37 +2345,45 @@ impl Preferences {
                         egui::Layout::top_down(egui::Align::Max),
                         |ui| {
                             ui.set_min_width(width);
-                            ui.add_enabled_ui(false, |ui| {
-                                widgets::button_with_size(
-                                    ui,
-                                    t,
-                                    preferences::UPDATES_ACTION,
-                                    false,
-                                    egui::vec2(width, t.number("h-md")),
-                                )
-                                .on_disabled_hover_text(preferences::UPDATES_DETAIL);
-                            });
+                            let response = ui
+                                .add_enabled_ui(enabled, |ui| {
+                                    widgets::button_with_size(
+                                        ui,
+                                        t,
+                                        action,
+                                        false,
+                                        egui::vec2(width, t.number("h-md")),
+                                    )
+                                    .on_hover_text(detail)
+                                    .on_disabled_hover_text(detail)
+                                })
+                                .inner;
+                            check = response.clicked();
+                            if shortcut_probe_enabled() {
+                                let rect = response.rect;
+                                this.shortcut_rects.insert(
+                                    "Check for updates",
+                                    [rect.left(), rect.top(), rect.right(), rect.bottom()],
+                                );
+                            }
                             ui.add_space(t.number("s-2"));
-                            ui.label(
-                                RichText::new(preferences::UPDATES_TITLE)
-                                    .size(t.number("text-xs"))
-                                    .color(t.color("text-subtle")),
-                            );
+                            ui.label(RichText::new(status).size(t.number("text-xs")).color(
+                                t.color(if copy.as_ref().is_some_and(|c| c.failed) {
+                                    "danger-text"
+                                } else {
+                                    "text-subtle"
+                                }),
+                            ));
                         },
                     );
                 })
                 .response
                 .rect;
-            this.remember(
-                format!(
-                    "{} {} {}",
-                    preferences::UPDATES_VERSION,
-                    preferences::UPDATES_CHANNEL,
-                    preferences::UPDATES_TITLE
-                ),
-                row,
-                background,
-            );
+            this.remember(format!("{version} {channel} {status}"), row, background);
+            if check {
+                this.check_updates();
+                ui.ctx().request_repaint();
+            }
             Self::divider(ui, t);
             let copy = preferences::row("show_update_changelog");
             this.toggle(
@@ -2669,6 +2733,79 @@ fn set(v: &mut Value, path: &[&str], value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_update_checks_publish_without_an_open_window_and_refuse_overlapping_input() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let key = root.path().join("public.key");
+        std::fs::write(&key, "untrusted comment: minisign public key E7620F1842B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/native.json", listener.local_addr().unwrap());
+        let (started, observed) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(line.split_whitespace().nth(1), Some("/native.json"));
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            started.send(()).unwrap();
+            gate.recv_timeout(Duration::from_secs(5)).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 503 Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+        let ctx = egui::Context::default();
+        let mut prefs =
+            Preferences::new(ctx.clone(), root.path().join("settings.json"), None, None);
+        assert!(!prefs.check_updates());
+        let client = captures_app::updater::checks::client_from_key_file(
+            &endpoint,
+            &key,
+            captures_app::updater::Renderer::Wgpu,
+            "2026.9.99",
+        )
+        .unwrap();
+        prefs.connect_update_checks(client, &ctx);
+        assert_eq!(
+            prefs.update_checks.as_ref().unwrap().presentation().status,
+            "Not checked"
+        );
+        assert!(prefs.check_updates());
+        observed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!prefs.check_updates());
+        assert_eq!(prefs.section_jump, Some(6));
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while prefs.update_checks.as_ref().unwrap().checking() {
+            prefs.receive(&ctx);
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            prefs.update_checks.as_ref().unwrap().presentation().status,
+            "Native update service returned HTTP 503."
+        );
+        assert!(prefs.update_checks.as_ref().unwrap().presentation().enabled);
+        assert!(!root.path().join("settings.json").exists());
+        prefs.flush();
+        assert!(prefs.update_checks.is_none() && !prefs.check_updates());
+        server.join().unwrap();
+    }
 
     #[test]
     fn native_updates_keep_identity_left_and_reserved_action_status_right() {

@@ -24,6 +24,7 @@ pub enum Action {
     History,
     Preferences,
     SendFeedback,
+    CheckUpdates,
     OpenOutputFolder,
     #[cfg(target_os = "linux")]
     Unavailable,
@@ -64,7 +65,7 @@ enum Row {
         label: &'static str,
         shortcut: Option<Shortcut>,
     },
-    /// "Check for Updates…" stays disabled until signed updates are connected.
+    /// Enabled only for explicitly configured, check-only development metadata.
     Updates,
     Separator,
 }
@@ -196,7 +197,7 @@ fn accelerator(shortcut: &str) -> Option<Accelerator> {
         .ok()
 }
 
-fn build_menu(shortcuts: &MenuShortcuts) -> Result<Menu, String> {
+fn build_menu(shortcuts: &MenuShortcuts, updates_enabled: bool) -> Result<Menu, String> {
     let menu = Menu::new();
     for row in MENU {
         let result = match row {
@@ -213,7 +214,7 @@ fn build_menu(shortcuts: &MenuShortcuts) -> Result<Menu, String> {
             Row::Updates => menu.append(&MenuItem::with_id(
                 "check-updates",
                 "Check for Updates…",
-                false,
+                updates_enabled,
                 None,
             )),
             Row::Separator => menu.append(&PredefinedMenuItem::separator()),
@@ -227,11 +228,16 @@ pub struct Tray {
     icon: TrayIcon,
     actions: Receiver<Action>,
     shortcuts: MenuShortcuts,
+    updates_enabled: bool,
 }
 
 impl Tray {
-    pub fn new(ctx: egui::Context, shortcuts: MenuShortcuts) -> Result<Self, String> {
-        let menu = build_menu(&shortcuts)?;
+    pub fn new(
+        ctx: egui::Context,
+        shortcuts: MenuShortcuts,
+        updates_enabled: bool,
+    ) -> Result<Self, String> {
+        let menu = build_menu(&shortcuts, updates_enabled)?;
 
         let image =
             image::load_from_memory(include_bytes!("../../../desktop/src-tauri/icons/32x32.png"))
@@ -266,6 +272,7 @@ impl Tray {
                 "history" => Some(Action::History),
                 "preferences" => Some(Action::Preferences),
                 "send-feedback" => Some(Action::SendFeedback),
+                "check-updates" => Some(Action::CheckUpdates),
                 "output" => Some(Action::OpenOutputFolder),
                 "quit" => Some(Action::Quit),
                 _ => None,
@@ -295,6 +302,7 @@ impl Tray {
             icon,
             actions: receiver,
             shortcuts,
+            updates_enabled,
         })
     }
 
@@ -307,7 +315,7 @@ impl Tray {
         if shortcuts == self.shortcuts {
             return;
         }
-        match build_menu(&shortcuts) {
+        match build_menu(&shortcuts, self.updates_enabled) {
             Ok(menu) => {
                 self.icon.set_menu(Some(Box::new(menu)));
                 self.shortcuts = shortcuts;
@@ -539,6 +547,7 @@ mod tests {
         for action in [
             Action::History,
             Action::Preferences,
+            Action::CheckUpdates,
             Action::Quit,
             #[cfg(target_os = "linux")]
             Action::Unavailable,

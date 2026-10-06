@@ -22,12 +22,43 @@ Linux requires the documented X11 or experimental Wayland prerequisites. These
 artifacts do not close signing, updater, migration or physical-platform acceptance
 gates.
 
+## Native Preferences update checks
+
+Both hosts can opt into **check-only** signed development metadata in Preferences
+and **Check for Updates…** in the tray/menu bar. There is no default endpoint or
+public key and no automatic request. Without this configuration the actions stay
+disabled. Use isolated development settings/History paths, never shipping data:
+
+```sh
+/path/to/native-host --live \
+  --history-root /absolute/development-history --settings-file /absolute/development-settings.json \
+  --native-update-manifest-url "$NATIVE_TEST_MANIFEST_URL" \
+  --native-update-public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
+  --native-update-current-version 2026.9.99
+```
+
+`native-host` is `CapturesNative` on AppKit, `CapturesNative.exe` in a Windows
+development package, or `captures-native` in a Linux package (local wgpu builds
+use `captures-wgpu-workbench`). All three update flags are required together,
+with explicit `--live` and absolute profile paths; fixture scenes, media-open
+and startup-health launches cannot enable these checks. The regular UTF-8 key
+file is limited to 8 KiB. The renderer and target are selected by the host.
+
+**Check Now** fetches only the manifest and its detached signature, verifies the
+development identity/renderer/target/version, and shows Checking, Available,
+Up to date or an error with retry. State survives closing Preferences. Busy
+input cannot queue overlapping requests; there is no idle polling timer. Quit
+cancels/joins pending HTTP; a currently blocked request can take up to 60 seconds.
+These actions never download, install, replace an app or activate a channel.
+The update-notice windows below remain simulated fixtures, not the live checker.
+
 ## Native update acquisition diagnostic
 
 `captures_app::updater` implements shared signed-manifest checks and bounded,
 streamed downloads and temporary package staging without Tauri. It is **not an
-enabled updater**: Preferences, tray actions and the update-notice fixture remain
-unchanged. There is no bundled native signing key, release endpoint or installed-app
+enabled installed-app updater**: only the explicit metadata checks above connect
+to native UI; the update notice remains a fixture. There is no bundled native
+signing key, release endpoint or installed-app
 updater. The explicit development-package helper below can replace and launch only
 a selected stopped development package with a new empty or explicitly imported
 development profile; it never reuses an installed profile.

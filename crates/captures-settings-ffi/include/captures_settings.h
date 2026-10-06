@@ -5,6 +5,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Explicit signed development update checks, with no HTTP until Check.
+ * create takes {endpoint,key_file,renderer,current_version}; pins the public
+ * Minisign key (regular UTF-8 file, <=8 KiB), development identity and host target.
+ * No default endpoint/channel, profile access, downloads or install commands.
+ * Nonblocking serialized UI-thread requests: {operation:"check"|"poll"}.
+ * Replies contain {accepted,checking,status,presentation}; JSON envelopes and
+ * buffer freeing match captures_settings_free_v1. Retain across window closure.
+ * Free once off the UI thread; cancels/joins HTTP (blocked request <=60 s).
+ * No concurrent request/free, or use after freeing. Invalid config returns NULL. */
+typedef struct CapturesUpdateChecks CapturesUpdateChecks;
+CapturesUpdateChecks *captures_update_checks_create_v1(const char *configuration_json);
+char *captures_update_checks_request_v1(CapturesUpdateChecks *handle, const char *request_json);
+void captures_update_checks_free_v1(CapturesUpdateChecks *handle);
+
 /* Retained account/sharing worker. Construct only after explicit Share, using
  * the elected native profile root. No vault/network I/O until a command.
  * Serialize nonblocking request calls on the owning UI thread. open takes

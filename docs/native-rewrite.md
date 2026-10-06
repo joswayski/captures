@@ -1811,7 +1811,8 @@ progress, cancellation and failed-download cleanup are covered by real signature
 and loopback tests. `native_update_probe` can check or verify a supplied development
 endpoint without a window, installation or relaunch. No production key/endpoint
 is configured and no release/service is activated. The existing update-notice
-source remains a fixture; Preferences and tray update actions remain disabled.
+source remains a fixture; Preferences and tray checks require the explicit
+development configuration described below.
 [Protocol and diagnostic usage](../apps/native/README.md#native-update-acquisition-diagnostic)
 describe the limits, including I/O-boundary cancellation and its request timeout.
 
@@ -1825,6 +1826,35 @@ describe the limits, including I/O-boundary cancellation and its request timeout
 This is acquisition, not a complete updater. Temporary archive staging is described
 below; native installation/relaunch, signed channel publication, freshness/rollback
 policy, installed-data migration and end-to-end cross-platform acceptance remain open.
+
+### Signed native development checks in Preferences and the tray
+
+Both hosts now connect an opt-in, read-only metadata worker to Preferences and
+the tray/menu-bar Check for Updates action. An explicit endpoint, pinned public
+key file and current semantic version are required together, with plain `--live`
+and absolute development settings/History paths. Default, fixture and health
+launches remain disconnected. Construction/idle have no HTTP requests; only
+explicit Check fetches metadata/signature. Shared identity, renderer, target,
+signature and version policy is unchanged.
+
+Checking, Available, Up to date and retryable errors use one shared presentation.
+The worker retains state across Preferences closure, refuses overlapping work
+and cancels/joins on termination without publishing a late response. AppKit polls
+only while busy and refreshes just the Updates card, preserving other controls.
+wgpu publishes on root wakes, including when Preferences is closed. No native UI
+downloads, installs, launches a replacement or activates a channel. Update-notice
+status sources remain fixtures.
+
+| Platform | Check-only UI implementation / verification |
+| --- | --- |
+| AppKit/macOS | Opaque Rust worker, busy-only model, Preferences/tray wiring and lifecycle implemented; C ABI and XCTest regressions included; host execution/physical acceptance pending |
+| Windows | Same shared worker, explicit CLI and wgpu Preferences/tray wiring implemented; portable options/host regressions included; Windows execution/physical acceptance pending |
+| X11 | Shared Rust/C ABI and wgpu regressions pass; real software-rendered dark/normal and light/minimum input verifies idle, held checking, signed available/up-to-date, signature failure/retry and pending-HTTP clean quit, with settings byte-exact and no artifact requests; inspected renders |
+| Wayland | Same shared worker and wgpu UI; existing no-remap capture guard preserved; live compositor/physical acceptance unverified for this slice |
+
+[Invocation and limits](../apps/native/README.md#native-preferences-update-checks)
+remain development-only. This does not close signed installation, distribution,
+physical parity or the Notices/updates acceptance gate. Tauri still ships.
 
 ### Native update package staging: temporary validation, no installation
 

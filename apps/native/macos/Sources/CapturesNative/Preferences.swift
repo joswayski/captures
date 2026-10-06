@@ -632,6 +632,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private let showFeedback: () -> Void
     private let liveCaptureAvailable: Bool
     private let loginItemService: LoginItemServicing?
+    private let updateChecks: UpdateCheckModel?
     private var settings: [String: Any] = [:]
     /// Default microphone choices, enumerated off the main thread once.
     private var microphones: [NativeMicrophoneDevice]?
@@ -679,6 +680,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var loginItemError: String?
     private var loginItemGeneration = 0
     private var keyboardSettingsError: String?
+    private var updatesRevealPending = false
     /// Capture-menu deep link: the setting row to reveal and highlight.
     private(set) var highlightedSetting: String?
     private var highlightRevealed = false
@@ -710,6 +712,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
          showHistory: @escaping () -> Void, liveCaptureAvailable: Bool = false,
          showFeedback: @escaping () -> Void = {},
          loginItemService: LoginItemServicing? = nil,
+         updateChecks: UpdateCheckModel? = nil,
          initialAppearance: String? = nil, initialTheme: String? = nil) {
         self.root = root; self.store = store; tokensProvider = tokens
         self.appearanceChanged = appearanceChanged; self.showHistory = showHistory
@@ -720,6 +723,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         self.shortcutPolicy = shortcutPolicy; self.shortcutDisplay = shortcutDisplay
         self.liveCaptureAvailable = liveCaptureAvailable
         self.loginItemService = loginItemService
+        self.updateChecks = updateChecks
         super.init()
         compactLayout = AppWindowLayout.compact(width: root.bounds.width)
         buildShell()
@@ -913,6 +917,34 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         updateActiveSection()
         installKeyViewLoop()
         if !rebuilding { revealHighlightIfNeeded() }
+        if updatesRevealPending { updatesRevealPending = false; reveal("updates") }
+    }
+
+    /// Replace only Updates: a network result must not interrupt a shortcut
+    /// recorder or text control in another card.
+    func refreshUpdateChecks() {
+        guard let old = sectionViews["updates"] else { return }
+        let frame = old.frame
+        let index = searchable.firstIndex { $0.0.isDescendant(of: old) } ?? searchable.count
+        searchable.removeAll { $0.0.isDescendant(of: old) }
+        old.removeFromSuperview()
+        let count = searchable.count
+        _ = updatesCard(frame.minY)
+        let replacement = Array(searchable[count...])
+        searchable.removeSubrange(count...)
+        searchable.insert(contentsOf: replacement, at: index)
+        let delta = (sectionViews["updates"]?.frame.height ?? frame.height) - frame.height
+        sectionViews["about"]?.frame.origin.y += delta
+        document.frame.size.height += delta
+        let maxY = max(0, document.frame.height - scroll.contentSize.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(scroll.contentView.bounds.minY, maxY)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        updateFind(); updateActiveSection(); installKeyViewLoop()
+    }
+
+    func revealUpdates() {
+        if sectionViews["updates"] == nil { updatesRevealPending = true }
+        else { reveal("updates") }
     }
 
     /// Shipping `preferences-target`: scroll a setting row to the middle of the
@@ -1785,28 +1817,30 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func updatesCard(_ y: CGFloat) -> CGFloat {
         let (card, top) = makeCard("updates", y: y)
         let width = CGFloat((PreferencesPolicy.copy["updates"] as? [String: Any])?["action_width"] as? Double ?? 160)
-        let status = PreferencesPolicy.text("updates.title")
+        let copy = updateChecks?.presentation
+        let status = copy?.string("status") ?? PreferencesPolicy.text("updates.title")
         let statusHeight = textHeight(status, size: tokens.number("text-xs"), width: width)
-        let layout = inlineRow(PreferencesPolicy.text("updates.version"),
-            detail: PreferencesPolicy.text("updates.channel"),
+        let layout = inlineRow(copy?.string("version") ?? PreferencesPolicy.text("updates.version"),
+            detail: copy?.string("channel") ?? PreferencesPolicy.text("updates.channel"),
             control: NSSize(width: width, height: tokens.number("h-md") + tokens.number("s-2") + statusHeight),
             y: top, card: card, keepInline: true)
-        let button = CaptureButton(PreferencesPolicy.text("updates.action"),
+        let button = CaptureButton(copy?.string("action") ?? PreferencesPolicy.text("updates.action"),
             frame: NSRect(x: layout.control.minX, y: layout.control.minY, width: width, height: tokens.number("h-md")),
-            tokens: tokens, action: {})
-        button.isEnabled = false
+            tokens: tokens, action: { [weak self] in _ = self?.updateChecks?.check() })
+        button.isEnabled = updateChecks?.enabled == true
         button.identifier = NSUserInterfaceItemIdentifier("updates.check")
-        button.toolTip = PreferencesPolicy.text("updates.detail")
+        button.toolTip = copy?.string("detail") ?? PreferencesPolicy.text("updates.detail")
         card.addSubview(button)
         let statusLabel = wrappingLabel(status,
             frame: NSRect(x: layout.control.minX, y: button.frame.maxY + tokens.number("s-2"),
                 width: width, height: statusHeight), size: tokens.number("text-xs"), parent: card)
+        if copy?["failed"] as? Bool == true { statusLabel.textColor = tokens.color("danger-text") }
         statusLabel.alignment = .right
         statusLabel.identifier = NSUserInterfaceItemIdentifier("updates.status")
         var y = layout.row.maxY
         y = divider(y, card)
-        let copy = PreferencesPolicy.row("show_update_changelog")
-        y = switchRow(["show_update_changelog"], title: copy.title, detail: copy.detail, y: y, card: card)
+        let rowCopy = PreferencesPolicy.row("show_update_changelog")
+        y = switchRow(["show_update_changelog"], title: rowCopy.title, detail: rowCopy.detail, y: y, card: card)
         return finish(card, y)
     }
 
