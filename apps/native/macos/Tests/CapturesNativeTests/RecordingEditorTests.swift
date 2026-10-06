@@ -1209,8 +1209,17 @@ final class RecordingEditorTests: XCTestCase {
                 worker.completeRequest(.success(try presentation(position: 1400, revision: 1)))
             } else { XCTAssertTrue(worker.requests.isEmpty, "\(stop) cancels the queued seek") }
             XCTAssertEqual(worker.playbackStarts, [400], "\(stop) cannot restart playback")
-            XCTAssertEqual(errors.count, stop.hasSuffix("error") ? 1 : 0,
-                           "the fixture must deliver the failure instead of cancellation")
+            let expectedErrors: [String]
+            switch stop {
+            case "quit": expectedErrors = ["Pausing recording playback before quitting…"]
+            case "quit-seeking": expectedErrors = ["Cancel or wait for the recording operation before quitting."]
+            case "playback-error":
+                expectedErrors = ["Sound playback failed: source removed. The accepted preview was restored."]
+            case "seek-error": expectedErrors = ["Recording preview failed: decode failed"]
+            default: expectedErrors = []
+            }
+            XCTAssertEqual(errors, expectedErrors,
+                           "\(stop) reports its exact failure or Quit veto, never a masked cancellation")
             XCTAssertFalse(controller.dirty)
         }
     }
