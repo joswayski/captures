@@ -2441,12 +2441,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             if stagedDiffers { showError("Wait for the edited preview before seeking.") }
             return
         }
-        guard position != presentation?.snapshot.positionMilliseconds else {
+        let finishCropOnSuccess = cropAdjustmentActive
+        if !finishCropOnSuccess { restoreAcceptedPresentation() }
+        guard position != presentation?.snapshot.positionMilliseconds || finishCropOnSuccess else {
             updateControls()
             return
         }
-        let finishCropOnSuccess = cropAdjustmentActive
-        if !finishCropOnSuccess { restoreAcceptedPresentation() }
         seekingPosition = position
         trimTimeline.setAcceptedPosition(position)
         request(["operation": "seek", "position_ms": position],

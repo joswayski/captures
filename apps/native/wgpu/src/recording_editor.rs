@@ -3719,7 +3719,7 @@ fn show_timeline_card(
             let height = recording_editor_ui::TIMELINE_TRACK_HEIGHT + 6.;
             let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
             if let Some(position) = show_trim_timeline(ui, tokens, view, duration, row)
-                && (view.seek_pending() || view.presented.as_ref().is_some_and(|p| p.position_ms != position))
+                && (view.seek_pending() || view.playback_position_ms.is_some() || view.presented.as_ref().is_some_and(|p| p.position_ms != position))
             {
                 view.send(tx, Job::Apply(RecordingEditorRequest::Seek { position_ms: position }));
             }
@@ -6636,6 +6636,49 @@ mod tests {
         view.request_playback(&tx);
         assert!(matches!(jobs.recv().unwrap(), Job::Play(950, false, _)));
         assert!(!view.dirty());
+    }
+
+    #[test]
+    fn track_seek_to_the_accepted_position_restores_transient_playback() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let mut view = opened();
+        let accepted = view.presented.as_ref().unwrap().clone();
+        view.playback_position_ms = Some(1800);
+        view.position_ms = 1800;
+        view.set_frame(&ctx, &RgbaImage::new(2, 1));
+        let (tx, jobs) = mpsc::channel();
+        let (events, _) = mpsc::channel();
+        let size = egui::vec2(960., 1800.);
+        let render = |view: &mut View, input| {
+            probe_frame_with(&ctx, &tokens, view, &tx, &events, size, input).1
+        };
+        render(&mut view, vec![]);
+        let controls = render(&mut view, vec![]);
+        let track = probed(&controls, "Timeline track");
+        let point = egui::pos2(
+            track.left() + track.width() * (700. / 3100.),
+            track.center().y,
+        );
+        render(
+            &mut view,
+            vec![egui::Event::PointerMoved(point), trim_pointer(point, true)],
+        );
+        assert!(matches!(
+            jobs.try_recv(),
+            Ok(Job::Apply(RecordingEditorRequest::Seek {
+                position_ms: 700
+            }))
+        ));
+        view.receive(&ctx, Event::Presented(Ok(accepted)));
+        render(&mut view, vec![trim_pointer(point, false)]);
+        assert_eq!(view.position_ms, 700);
+        assert_eq!(view.texture.as_ref().unwrap().size(), [4, 2]);
+        assert!(view.playback_position_ms.is_none() && !view.dirty());
+        assert!(
+            jobs.try_recv().is_err(),
+            "release does not decode the accepted frame twice"
+        );
     }
 
     #[test]
