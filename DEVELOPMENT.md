@@ -201,7 +201,11 @@ The recording diagnostic also exercises real MP4/GIF session finalization,
 pause/resume, restart, discard/cancel and recovery after transport loss. The
 [native Wayland recording host smoke](apps/native/wgpu/README.md#native-wayland-recording-controls)
 exercises the real History/countdown/HUD path in both appearances, cancellation
-and source-loss recovery with the same disposable backend. Window recording uses
+and source-loss recovery with the same disposable backend. It also checks nonzero
+screenshot countdowns beside running/paused takes, cancellation before consent,
+exact still pixels and pending-child Quit. The native screenshot-host smoke checks
+idle countdown cancellation/retry and Quit during the countdown in both appearances.
+Window recording uses
 ScreenCast v3+ window grants, with fresh consent per segment and no display fallback.
 Scripted window grants test protocol admission/cleanup; the live wlr fixture tests
 its unsupported-window UI, not successful GNOME/KDE window capture. Physical consent,

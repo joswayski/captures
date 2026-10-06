@@ -162,7 +162,7 @@ recovery after the worker releases its owner. Linux still includes HUD pixels;
 Hide requires a working tray restoration path, and the notice says when it is absent.
 Region/window selection and click/keystroke overlays remain unsupported on Wayland.
 The Screenshot control and display screenshot route now acquire a separate
-desktop-portal still while running or paused, with screenshot countdown off.
+desktop-portal still while running or paused, with the configured screenshot countdown.
 Its child generation retains the accepted recording parent without X11 grabs.
 All Captures viewports, including children with unknown visibility, must acknowledge
 unmapping before submission. Hidden-root UI passes replace the HUD callback before
@@ -175,6 +175,19 @@ unchanged paused time, cancellation/failure without History artifacts and pendin
 Quit with exactly one playable video. A transparent private cursor theme removes
 cursor timing from the pixel expectation, not from physical acceptance.
 macOS/Windows retain their direct child paths and remain unverified in this Linux orb.
+The countdown follow-up uses the shared monotonic clock and fixed-glass presentation
+in a compact compositor-placed window, without inventing monitor geometry. Focused
+Escape/close and normal Quit cancel before consent; cancellation retains the parent
+take, paused clock and restore policy. At expiry, the host keeps the countdown
+viewport alive with a hidden callback until winit acknowledges the NULL-buffer
+unmap. Omitting it earlier drops queued hide commands and can capture its last frame.
+It is removed after portal completion, never restored with the workspace. The
+two-second unmap timeout starts after the delay. Zero countdown retains its path.
+Private-Sway idle and recording fixtures check nonzero delay, cancellation/retry,
+exact still pixels and pending/countdown Quit in dark/light. The compact countdown
+can appear in an ongoing display take, as Wayland does not exclude these windows.
+AppKit/macOS, Windows and X11 countdown paths are unchanged; physical GNOME/KDE,
+accessibility, Escape delivery and mixed-DPI acceptance remain open. No parity gate closes.
 The shared shortcut dispatcher now retains distinct busy actions in arrival order,
 coalescing duplicates to at most seven entries. An ignored recording chord cannot
 swallow a later New Capture restore/error route. Idle and selector routes keep their

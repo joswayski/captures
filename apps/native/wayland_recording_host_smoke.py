@@ -81,7 +81,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         "output_directory": str(profile / "exports"),
         "launch_at_login": False,
         "auto_copy_to_clipboard": False,
-        "screenshot_countdown_seconds": 0,
+        "screenshot_countdown_seconds": 3,
         "new_capture_shortcut": "Ctrl+Shift+F10",
         "region_shortcut": "Ctrl+Shift+F7",
         "window_shortcut": "Ctrl+Shift+F8",
@@ -103,7 +103,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
     app = subprocess.Popen([
         binary, "--live", "--open-history", "--open-preferences",
         "--settings-file", str(settings), "--history-root", str(history_root),
-        "--quit-after", "26" if pending_quit else "70",
+        "--quit-after", "30" if pending_quit else "100",
     ], env=env, stdout=host_log, stderr=host_log)
 
     def click(x, y):
@@ -184,7 +184,16 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         layout = hud_control("screenshot", state, True)
         assert layout[0]["label"] == "Take a desktop-portal screenshot"
         previous = len(events(request_log, "request")) if request_log else 0
+        clicked = time.monotonic()
         click_layout(layout)
+        countdown = wait(lambda: window("Captures Screenshot Countdown"),
+                         "visible screenshot countdown", timeout=4)
+        assert countdown["rect"]["width"] > 0 and countdown["rect"]["height"] > 0
+        wait(lambda: len(windows(env)) == 1, "only screenshot countdown is mapped")
+        assert metadata() == before, "countdown cannot publish a still"
+        if request_log:
+            assert len(events(request_log, "request")) == previous, "consent requested before countdown"
+        shot(f"screenshot-countdown-{state}-{mode}")
         if mode == "real":
             added = wait(lambda: metadata() - before, "screenshot child saved")
             assert len(added) == 1 and added <= metadata("screenshot"), added
@@ -194,7 +203,9 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         else:
             wait(lambda: len(events(request_log, "request")) > previous,
                  "screenshot child reached the portal fixture")
+        assert time.monotonic() - clicked >= 3, "screenshot bypassed configured delay"
         restored = hud_control("screenshot", state, True)
+        assert not window("Captures Screenshot Countdown"), "expired countdown was remapped"
         assert not window("Capture History") and not window("Captures Preferences"), \
             "child completion remapped workspace into the recording"
         if mode != "real":
@@ -306,6 +317,19 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         paused_later = hud_control("pause_resume", "paused", True)
         assert paused_later[0]["elapsed_ms"] == paused_at, (paused_at, paused_later[0])
         assert take_screenshot("paused") == paused_at, "paused child advanced the clock"
+        request_log = portal_mode("screenshot-wait")
+        before_cancel = metadata()
+        requests_before_cancel = len(events(request_log, "request"))
+        click_layout(hud_control("screenshot", "paused", True))
+        countdown = wait(lambda: window("Captures Screenshot Countdown"), "cancellable still countdown")
+        subprocess.run(["swaymsg", f'[con_id={countdown["id"]}] kill'], env=env, check=True,
+                       stdout=subprocess.DEVNULL)
+        restored = hud_control("screenshot", "paused", True)
+        assert restored[0]["elapsed_ms"] == paused_at
+        assert len(events(request_log, "request")) == requests_before_cancel, \
+            "cancelled countdown requested portal consent"
+        assert metadata() == before_cancel, "cancelled countdown published a still"
+        assert not window("Capture History") and not window("Captures Preferences")
         for mode in ("cancel", "failure"):
             request_log = portal_mode("screenshot-" + mode)
             assert take_screenshot("paused", mode, request_log) == paused_at
@@ -540,7 +564,8 @@ def isolated(args):
             'for_window [title="Capture History"] floating enable\n'
             'for_window [title="Captures Preferences"] floating enable\n'
             'for_window [title="Captures Recording Controls"] floating enable\n'
-            'for_window [title="Captures Recording Countdown"] floating enable\n')
+            'for_window [title="Captures Recording Countdown"] floating enable\n'
+            'for_window [title="Captures Screenshot Countdown"] floating enable\n')
         sway = spawn("sway", ["sway", "--unsupported-gpu", "--config", str(sway_config)])
         sockets = wait(lambda: [path for path in runtime.glob("wayland-*") if path.is_socket()],
                        "private Wayland socket")

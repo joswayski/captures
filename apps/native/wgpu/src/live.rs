@@ -1644,6 +1644,27 @@ struct PortalScreenshot {
     recording: bool,
     started: Instant,
     submitted: bool,
+    countdown: Option<captures_app::capture_flow::Countdown>,
+    countdown_hidden_frame: Option<u64>,
+}
+
+#[cfg(target_os = "linux")]
+impl PortalScreenshot {
+    fn countdown_hidden(&mut self, now: Instant, frame: u64) -> bool {
+        let Some(clock) = self.countdown else {
+            return true;
+        };
+        if clock.remaining(now) > 0 {
+            return false;
+        }
+        let Some(hidden) = self.countdown_hidden_frame else {
+            self.countdown_hidden_frame = Some(frame);
+            // The unmap timeout starts after the configured delay, not launch.
+            self.started = now;
+            return false;
+        };
+        frame > hidden
+    }
 }
 
 /// The nonvisual state machine is intentionally independent of egui so stale
@@ -3224,11 +3245,6 @@ impl Live {
                 return;
             }
         };
-        if settings.screenshot_countdown_seconds != 0 {
-            self.capture_failed("Native Wayland screenshot countdown is not available yet. Turn off the screenshot countdown in Preferences to use the desktop portal.".into());
-            self.history_requested = true;
-            return;
-        }
         let flow = match if recording {
             self.flow
                 .as_ref()
@@ -3246,7 +3262,7 @@ impl Live {
         // The portal supplies no named-monitor coordinates. Return to History
         // instead of placing a preview against guessed desktop bounds.
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-        let hidden = ctx.input(|input| {
+        let mut hidden = ctx.input(|input| {
             input
                 .raw
                 .viewports
@@ -3263,6 +3279,15 @@ impl Live {
             ctx.request_repaint_of(id);
         }
         let generation = flow.generation();
+        let countdown = (settings.screenshot_countdown_seconds > 0).then(|| {
+            // No monitor geometry is supplied by the screenshot portal; use
+            // the same compact, compositor-placed countdown as portal recording.
+            hidden.push(recording_screenshot_countdown_viewport(generation));
+            captures_app::capture_flow::Countdown::new(
+                Instant::now(),
+                settings.screenshot_countdown_seconds,
+            )
+        });
         let wake = ctx.clone();
         thread::spawn(move || {
             // Keep the logic-only root alive across compositor acknowledgements.
@@ -3281,12 +3306,14 @@ impl Live {
             recording,
             started: Instant::now(),
             submitted: false,
+            countdown,
+            countdown_hidden_frame: None,
         });
         self.capture_in_flight = true;
         self.status = "Preparing desktop-portal screenshot…".into();
-        if recording {
+        if recording || countdown.is_some() {
             // Replace the HUD callback before any child can repaint with its
-            // old Visible(true), including children with unknown visibility.
+            // old Visible(true), and declare the countdown on the hidden root.
             request_hidden_root_ui(ctx);
         }
         ctx.request_repaint_after(Duration::from_millis(100));
@@ -3310,14 +3337,55 @@ impl Live {
             return;
         }
         if !portal.flow.is_current() {
+            if let Some(clock) = portal.countdown {
+                let remaining = clock.remaining(Instant::now());
+                if remaining > 0 {
+                    self.countdown_exit = Some(CountdownExit::new(
+                        recording_screenshot_countdown_viewport(portal.flow.generation()),
+                        "Captures Screenshot Countdown",
+                        None,
+                        crate::countdown::Kind::Screenshot,
+                        remaining,
+                    ));
+                    request_hidden_root_ui(ctx);
+                }
+            }
             self.finish_portal_screenshot(ctx, false);
-            self.status = "Screenshot cancelled: desktop session unavailable.".into();
+            self.status = "Screenshot cancelled (Escape or desktop session unavailable).".into();
             return;
+        }
+        let countdown_hidden = portal.countdown_hidden(Instant::now(), ctx.cumulative_frame_nr());
+        if !countdown_hidden {
+            if portal.countdown_hidden_frame.is_some() {
+                ctx.send_viewport_cmd_to(
+                    recording_screenshot_countdown_viewport(portal.flow.generation()),
+                    egui::ViewportCommand::Visible(false),
+                );
+                // Replace the old deferred callback in a completed UI pass
+                // before trusting the countdown window's unmap acknowledgement.
+                request_hidden_root_ui(ctx);
+            }
+            if portal.countdown_hidden_frame.is_none()
+                || portal.started.elapsed() <= Duration::from_secs(2)
+            {
+                return;
+            }
         }
         for id in &portal.hidden {
             ctx.request_repaint_of(*id);
         }
-        let hidden = frame.winit_window().and_then(|window| window.is_visible()) == Some(false)
+        let hidden = countdown_hidden
+            && frame.winit_window().and_then(|window| window.is_visible()) == Some(false)
+            && (portal.countdown.is_none()
+                || ctx.input(|input| {
+                    input
+                        .raw
+                        .viewports
+                        .get(&recording_screenshot_countdown_viewport(
+                            portal.flow.generation(),
+                        ))
+                        .is_some_and(|info| info.visible() == Some(false))
+                }))
             && ctx.input(|input| {
                 portal.hidden.iter().all(|id| {
                     input
@@ -3372,7 +3440,8 @@ impl Live {
             }
             return;
         }
-        for id in portal.hidden {
+        let countdown = recording_screenshot_countdown_viewport(portal.flow.generation());
+        for id in portal.hidden.into_iter().filter(|id| *id != countdown) {
             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
             ctx.request_repaint_of(id);
         }
@@ -8563,6 +8632,50 @@ impl Live {
             );
         }
         let mut countdown_declared = false;
+        #[cfg(target_os = "linux")]
+        if let Some(portal) = &self.portal_screenshot
+            && let Some(clock) = portal.countdown
+        {
+            let t = t.clone();
+            let generation = portal.flow.generation();
+            // Omission would drop the viewport before its queued hide command
+            // is processed. Keep it alive and hidden through portal completion.
+            ctx.show_viewport_deferred(
+                recording_screenshot_countdown_viewport(generation),
+                countdown_viewport("Captures Screenshot Countdown", None, &t)
+                    .with_visible(clock.remaining(Instant::now()) > 0),
+                move |ui, _| {
+                    if clock.remaining(Instant::now()) == 0 {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                        return;
+                    }
+                    if ui.input(|i| {
+                        i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
+                    }) {
+                        captures_app::capture_flow::cancel(generation);
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    }
+                    let poses = countdown_entrance(
+                        ui.ctx(),
+                        &t,
+                        ("portal-screenshot-countdown", generation),
+                        reduced_motion,
+                    );
+                    crate::countdown::show(
+                        ui,
+                        &t,
+                        clock.remaining(Instant::now()).max(1),
+                        crate::countdown::Kind::Screenshot,
+                        !captures_app::capture_flow::is_current(generation),
+                        poses,
+                    );
+                    ui.ctx().request_repaint_after(Duration::from_millis(100));
+                },
+            );
+            countdown_declared = true;
+        }
         if let Some(flow) = &self.recording_screenshot_flow
             && let Some(
                 RecordingScreenshotPhase::Countdown { .. }
@@ -10495,6 +10608,7 @@ mod tests {
     fn wayland_hud_screenshot_is_a_portal_action_and_child_cleanup_keeps_the_take() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
         ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
         let mut live = Live::new(ctx.clone(), Some(root.path().into()));
         live.capture_phase = Some(CapturePhase::RecordingPaused);
@@ -10511,7 +10625,38 @@ mod tests {
                 recording: true,
                 started: Instant::now(),
                 submitted: true,
+                countdown: None,
+                countdown_hidden_frame: None,
             });
+            let now = Instant::now();
+            let portal = live.portal_screenshot.as_mut().unwrap();
+            assert!(portal.countdown_hidden(now, 7), "zero delay is unchanged");
+            portal.countdown = Some(captures_app::capture_flow::Countdown::new(now, 3));
+            assert!(!portal.countdown_hidden(now + Duration::from_millis(2999), 7));
+            assert!(portal.countdown_hidden_frame.is_none());
+            let deadline = now + Duration::from_secs(3);
+            assert!(!portal.countdown_hidden(deadline, 7));
+            assert_eq!(portal.started, deadline);
+            assert!(!portal.countdown_hidden(deadline, 7), "same UI pass");
+            assert!(
+                portal.countdown_hidden(deadline, 8),
+                "hidden callback applied"
+            );
+            portal.countdown = Some(captures_app::capture_flow::Countdown::new(now, 0));
+            let countdown = recording_screenshot_countdown_viewport(portal.flow.generation());
+            ctx.begin_pass(Default::default());
+            live.capture_viewports(&ctx, &crate::tokens::load()["dark-mustard"], false);
+            let mut output = ctx.end_pass();
+            let visible = output
+                .viewport_output
+                .get(&countdown)
+                .map(|viewport| viewport.builder.visible);
+            output.textures_delta.clear();
+            assert_eq!(
+                visible,
+                Some(Some(false)),
+                "expired viewport retained hidden"
+            );
             assert!(!live.recording_screenshot_available());
             live.capture_action(captures_app::capture_error::Action::NewCapture, &ctx);
             assert!(
@@ -10542,6 +10687,8 @@ mod tests {
             recording: true,
             started: Instant::now(),
             submitted: true,
+            countdown: None,
+            countdown_hidden_frame: None,
         });
         live.finish_capture(&ctx, false);
         assert!(
