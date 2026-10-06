@@ -1143,7 +1143,7 @@ final class RecordingEditorTests: XCTestCase {
         let play = try button("Play", in: controller.root)
         let loop = try checkbox("Loop recording preview", in: controller.root)
         loop.performClick(nil); play.performClick(nil)
-        XCTAssertTrue(timeline.seekEnabled); XCTAssertFalse(timeline.editingEnabled)
+        XCTAssertTrue(timeline.seekEnabled && timeline.editingEnabled)
         func pointer(_ type: NSEvent.EventType, _ fraction: CGFloat) throws -> NSEvent {
             let point = timeline.convert(NSPoint(x: 10 + (timeline.bounds.width - 20) * fraction,
                 y: timeline.bounds.midY), to: nil)
@@ -2394,6 +2394,128 @@ final class RecordingEditorTests: XCTestCase {
         timeline.endDrag()
         XCTAssertTrue(controller.canEstimate)
         XCTAssertTrue(controller.comparisonApplies)
+    }
+
+    func testPlayingTrimCoalescesThroughTeardownAndResumesWithFocusedHandle() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400))
+        worker.deferPlayback = true; worker.deferRequest = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+        let handle = try XCTUnwrap(descendants(in: timeline).compactMap { $0 as? RecordingTrimHandle }
+            .first { $0.edge == .start })
+        let play = try button("Play", in: controller.root)
+        try checkbox("Loop recording preview", in: controller.root).performClick(nil)
+        play.performClick(nil)
+        try dispatchMouse(.leftMouseDown, to: handle, in: controller)
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
+        let width = timeline.bounds.width - 20
+        timeline.continueDrag(at: 10 + width * 0.4)
+        XCTAssertTrue(worker.requests.isEmpty, "trim waits for the old decoder to stop")
+        XCTAssertTrue(timeline.trimming && timeline.editingEnabled)
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [800])
+        timeline.continueDrag(at: 10 + width * 0.25)
+        worker.completeRequest(.success(try presentation(start: 800, position: 800, revision: 1)))
+        XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [800, 500])
+        XCTAssertEqual(worker.playbackStarts, [400], "obsolete preview cannot resume")
+        XCTAssertEqual(try field("Trim start milliseconds", in: controller.root).stringValue, "500")
+        XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 500)
+        worker.completeRequest(.success(try presentation(start: 500, position: 500, revision: 2)))
+        XCTAssertEqual(worker.playbackStarts, [400, 500])
+        XCTAssertEqual(worker.playbackSoundSelections, [true, true])
+        XCTAssertTrue(try XCTUnwrap(worker.observedPlaybackLoop).isEnabled)
+        XCTAssertTrue(timeline.trimming && controller.window.firstResponder === handle,
+                      "automatic resume cannot resign the held handle")
+        timeline.endDrag()
+        XCTAssertFalse(try XCTUnwrap(worker.observedPlaybackCancel).isCancelled)
+        timeline.nudge(edge: .start, direction: 1, page: true)
+        worker.completePlayback(.success(.cancelled))
+        XCTAssertEqual(worker.requests.last?["position_ms"] as? UInt64, 1500)
+        worker.completeRequest(.success(try presentation(start: 1500, position: 1500, revision: 3)))
+        XCTAssertEqual(worker.playbackStarts, [400, 500, 1500])
+        XCTAssertTrue(controller.window.firstResponder === handle,
+                      "keyboard nudges retain focus across resume")
+        XCTAssertTrue(controller.dirty)
+    }
+
+    func testPlayingTrimEndPausesWithoutLoopAndWrapsWithLoop() throws {
+        _ = NSApplication.shared
+        for looping in [false, true] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(start: 250, position: 400))
+            worker.deferPlayback = true; worker.deferRequest = true
+            let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+            let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+            if looping { try checkbox("Loop recording preview", in: controller.root).performClick(nil) }
+            try button("Play", in: controller.root).performClick(nil)
+            XCTAssertTrue(timeline.beginDrag(edge: .end, at: timeline.bounds.width - 10))
+            worker.completePlayback(.success(.cancelled))
+            let position: UInt64 = looping ? 250 : 1999
+            XCTAssertEqual(worker.requests.last?["position_ms"] as? UInt64, position)
+            XCTAssertEqual(timeline.endMilliseconds, 2000)
+            worker.completeRequest(.success(try presentation(start: 250, position: position, revision: 1)))
+            XCTAssertEqual(worker.playbackStarts, looping ? [400, 250] : [400])
+            XCTAssertTrue(timeline.trimming && timeline.editingEnabled)
+            timeline.endDrag()
+        }
+    }
+
+    func testPlayingTrimExplicitPauseAndFailuresRetireResumeButRetainInput() throws {
+        _ = NSApplication.shared
+        for stop in ["pause-pending", "pause-decoding", "focus", "close", "quit", "playback-error", "trim-error"] {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400))
+            worker.deferPlayback = true; worker.deferRequest = true
+            var errors: [String] = []
+            let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                worker: worker, reportError: { errors.append($0) }, requestTermination: {})
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+            let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+            let play = try button("Play", in: controller.root)
+            play.performClick(nil)
+            XCTAssertTrue(timeline.beginDrag(edge: .start, at: 10))
+            timeline.continueDrag(at: 10 + (timeline.bounds.width - 20) * 0.375)
+            switch stop {
+            case "pause-pending":
+                XCTAssertEqual(play.title, "Pause"); XCTAssertTrue(play.isEnabled)
+                play.performClick(nil)
+            case "focus": controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+            case "close": XCTAssertFalse(controller.windowShouldClose(controller.window))
+            case "quit": XCTAssertFalse(controller.prepareForTermination())
+            default: break
+            }
+            if stop == "playback-error" {
+                worker.completePlayback(.failure(AppBridgeError.backend("source removed")))
+                XCTAssertTrue(worker.requests.isEmpty)
+            } else {
+                worker.completePlayback(.success(.cancelled))
+                XCTAssertEqual(worker.requests.count, 1, "staged trim survives \(stop)")
+                if stop == "pause-decoding" {
+                    XCTAssertEqual(play.title, "Pause"); XCTAssertTrue(play.isEnabled)
+                    play.performClick(nil)
+                }
+                worker.completeRequest(stop == "trim-error"
+                    ? .failure(AppBridgeError.backend("decode failed"))
+                    : .success(try presentation(start: 750, position: 750, revision: 1)))
+            }
+            XCTAssertEqual(worker.playbackStarts, [400], "\(stop) cannot resume playback")
+            XCTAssertEqual(try field("Trim start milliseconds", in: controller.root).stringValue, "750")
+            XCTAssertTrue(controller.dirty)
+            if stop.hasSuffix("error") {
+                XCTAssertEqual(errors, [stop == "trim-error"
+                    ? "Recording preview failed: decode failed"
+                    : "Sound playback failed: source removed. The accepted preview was restored."])
+                XCTAssertFalse(timeline.trimming)
+                XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 400)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                XCTAssertEqual(worker.requests.count, stop == "trim-error" ? 1 : 0,
+                               "failure requires fresh input, not a debounce retry")
+            }
+        }
     }
 
     func testPausedTrimPreviewCoalescesWithoutRewindingRangeOrEndingDrag() throws {

@@ -1541,19 +1541,32 @@ seeks plus streaming final-frame padding preserve the requested time without a
 reverse buffer; cancellation/error leaves the prior destination intact. Encoded
 comparison's literal seek/fallback reporting is unchanged. Sparse inputs can need
 multiple seeks and a longer lookback; this is not constant-cost EOF decoding.
-Playing trim handles remain gated and recording-editor acceptance stays open.
+Recording-editor acceptance stays open.
 The private-X11 `--timeline` check samples held green/blue/green pixels before
 release, end preview, missing-source gesture teardown/fresh retry, keyboard and
 minimum-size input, MP4/GIF duration/colors, unchanged source/History and clean Quit.
+The source-crop fixture identifies unfiltered source-seek commands rather than
+the old output basename, preserving cancellation coverage with atomic PNG output.
 Shared tests cover final-frame pixels for MP4 and a sparse GIF with a 2.5-second
 last-frame interval, crop/resize and uncropped EOF, cancellation and immutable media.
 Deferred host tests cover older replies, latest intent and estimate/quit ordering.
 
-| Platform | Paused live trim implementation / verification |
+The playing-trim follow-up reuses that atomic request after the old playback
+decoder acknowledges teardown. Only the latest full edit/position can resume;
+held pointer gestures and keyboard focus survive. The end grip pauses with Loop
+off and wraps to the selected start with Loop on, matching shipping's clock policy.
+Sound/Loop selections survive. Pause stays usable while teardown/decode is pending;
+focus loss/minimize, Close/Quit and failures retire resume intent but keep staged
+edits and the existing unsaved-edit guard. Deferred tests cover ordering, older
+replies, pending Pause, failures and held/keyboard resume. Dark/light private-X11
+`--playing-trim` tests check held motion, both end policies, MP4 duration/colors,
+minimum-size controls, immutable source/History and clean Quit. No parity gate closes.
+
+| Platform | Live trim implementation / verification |
 | --- | --- |
-| AppKit/macOS | Implemented through the shared V2 C ABI; deferred-worker XCTest cases added; no local Swift compiler or physical host in this orb |
+| AppKit/macOS | Paused trim verified by [macOS CI](https://github.com/joswayski/captures/actions/runs/37543407724): 587 XCTest cases, one skip, zero failures. Playing-trim/deferred-worker tests added; their execution and physical acceptance remain separate; no local Swift compiler |
 | Windows | Implemented through shared wgpu; local shared host tests, no physical Windows execution in this orb |
-| X11 | Real private-X11/software-GL trim fixture and ordinary scrub regression in both appearances; physical input/accessibility and mixed-DPI acceptance open |
+| X11 | Real private-X11/software-GL paused/playing trim fixtures and ordinary scrub regression in both appearances; physical input/accessibility and mixed-DPI acceptance open |
 | Wayland | Implemented through shared wgpu; local shared tests, trim compositor/physical acceptance unverified |
 
 The wgpu track now
@@ -1583,7 +1596,9 @@ unchanged. Release ends the gesture without decoding or restarting again. Explic
 Pause, focus loss/minimize, Close, Quit and playback/seek failure retire resume intent;
 late playback frames cannot overwrite a requested target. Failed seeks restore the
 accepted still and require a fresh gesture. Trim, numeric seek and other editing/
-export controls remain gated. Live trim preview is paused-only, as described above.
+export controls were gated in this slice; the live-trim follow-ups above now connect
+trim handles while paused/playing. Numeric seek and other edit/export controls still
+wait for playback to stop.
 Deferred-worker tests cover decoder ordering, coalescing, release and terminal paths.
 The dark/light `--scrub` fixture also checks a backwards playing seek from green to
 red, automatic progression back to green while still held, another held seek to blue
@@ -1604,8 +1619,8 @@ A single latest-frame slot bounds pending UI work; no timer remains after stop.
 Pause retains the last presented source position, EOF replays from accepted trim
 start, and failures restore the accepted still. Focus loss/minimize requests Pause;
 close cancels and waits for teardown before the normal unsaved-edit confirmation.
-Numeric seek/trim/edit/save/estimate remain gated while decoding; the timeline track
-can supersede playback or a seek through the serialized worker. Loop preview defaults off;
+Numeric seek/edit/save/estimate remain gated while decoding; the timeline track and
+trim handles can supersede playback through the serialized worker. Loop preview defaults off;
 it can change while playing without changing accepted edits, estimates or History.
 Looping is gapless like shipping's `<video loop>`: one shared playback stream
 (`looping_playback`, FFI `playback_open_v3`) serves every lap. While a lap plays it

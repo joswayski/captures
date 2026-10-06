@@ -368,26 +368,44 @@ impl View {
 
     fn preview_trim(&mut self, tx: &Sender<Job>, position: u64) {
         let Some(p) = &self.presented else { return };
-        if self.playing
-            || self.resume_after_seek
-            || (self.maximum_size && self.maximum_bytes().is_none())
-        {
+        if self.maximum_size && self.maximum_bytes().is_none() {
             return;
         }
+        let playing = self.resume_after_seek
+            || (self.playing
+                && self
+                    .cancel
+                    .as_ref()
+                    .is_some_and(|cancel| !cancel.is_cancelled()));
+        let at_end = position == self.end_ms;
+        let looping = self.preview_loop.load(Ordering::Relaxed);
+        let position = if playing && at_end && looping {
+            self.start_ms
+        } else {
+            position
+        };
         let position_ms = position.min(p.source.duration_ms.unwrap_or(0).saturating_sub(1));
         let edit = self.staged_edit(p);
         let export = self.export_spec();
         self.position_ms = position_ms;
         self.apply_due = None;
         self.apply_failed = None;
-        self.send(
-            tx,
-            Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
-                edit,
-                export,
-                position_ms,
-            }),
-        );
+        let job = Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+            edit,
+            export,
+            position_ms,
+        });
+        if self.playing {
+            // Keep ownership until the old decoder acknowledges teardown.
+            self.pause_playback();
+            self.resume_after_seek = playing && (!at_end || looping);
+            self.queued = Some(job);
+        } else {
+            if playing {
+                self.resume_after_seek = !at_end || looping;
+            }
+            self.send(tx, job);
+        }
     }
 
     fn save_fingerprint(&self) -> Option<SaveFingerprint> {
@@ -1012,7 +1030,7 @@ impl View {
             }
             return;
         }
-        if trimming.is_none() {
+        if trimming.is_none() && !matches!(job, Job::Play(..)) {
             self.trim_gesture = None;
         }
         self.crop_gesture = None;
@@ -1194,6 +1212,7 @@ impl View {
                             self.scrub = None;
                         }
                         if trimming.is_some() {
+                            self.resume_after_seek = false;
                             self.queued = None;
                             self.trim_gesture = None;
                             self.apply_due = None;
@@ -1469,9 +1488,16 @@ impl View {
                         );
                     }
                     Err(error) => {
+                        if self.trim_pending() {
+                            self.apply_failed = self
+                                .presented
+                                .as_ref()
+                                .map(|p| (self.staged_edit(p), self.export_spec()));
+                        }
                         self.resume_after_seek = false;
                         self.queued = None;
                         self.scrub = None;
+                        self.trim_gesture = None;
                         self.playback_position_ms = None;
                         self.playback_ended = false;
                         if let Some(p) = &self.presented {
@@ -2461,8 +2487,11 @@ fn show_overlay_play(
         viewport.max - egui::Vec2::splat(size / 2.),
     );
     let rect = egui::Rect::from_center_size(center, egui::Vec2::splat(size));
-    let pausing = view.playing && view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
-    let enabled = if view.playing {
+    let playing = view.playing || view.resume_after_seek;
+    let pausing = view.playing
+        && !view.resume_after_seek
+        && view.cancel.as_ref().is_some_and(CancelToken::is_cancelled);
+    let enabled = if playing {
         !pausing
     } else {
         !view.blocked()
@@ -2472,7 +2501,7 @@ fn show_overlay_play(
             && view.presented.is_some()
             && !view.unapplied()
     };
-    let label = if view.playing {
+    let label = if playing {
         if pausing {
             "Pausing…"
         } else {
@@ -2491,7 +2520,7 @@ fn show_overlay_play(
                 egui::Sense::hover()
             },
         )
-        .on_hover_text(if view.playing {
+        .on_hover_text(if playing {
             "Pause the preview."
         } else if view.unapplied() {
             "Updating the edited preview…"
@@ -2502,10 +2531,11 @@ fn show_overlay_play(
     probe(ui, "Play preview", rect);
     probe(ui, label, rect);
     // Shipping hides the pause affordance while playing until the media is hovered.
-    let hovered = ui.rect_contains_pointer(viewport) || response.has_focus();
+    let hovered =
+        ui.rect_contains_pointer(viewport) || response.has_focus() || view.resume_after_seek;
     let opacity = if view.playing && !hovered {
         0.
-    } else if enabled || view.playing {
+    } else if enabled || playing {
         1.
     } else {
         0.45
@@ -2528,7 +2558,7 @@ fn show_overlay_play(
         );
         let ink = tokens.color("theme-accent-ink").gamma_multiply(opacity);
         let glyph = tokens.number("s-4") + 1.;
-        if view.playing {
+        if playing {
             for offset in [-glyph / 2., glyph / 2.] {
                 painter.rect_filled(
                     egui::Rect::from_center_size(
@@ -2561,7 +2591,7 @@ fn show_overlay_play(
         }
     }
     if response.clicked() {
-        if view.playing {
+        if playing {
             view.pause_playback();
         } else {
             view.request_playback(tx);
@@ -2613,7 +2643,7 @@ fn show_trim_timeline(
         && view.end_ms <= duration
         && ui.input(|input| input.focused)
         && !egui::Popup::is_any_open(ui.ctx());
-    let enabled = available && (!view.blocked() || view.trim_pending());
+    let enabled = available && (!view.blocked() || view.trim_pending() || view.playing);
     // Clicking the track scrubs the accepted still, as the shipping track
     // seeks its video. A trim decode only accepts newer trim intent.
     let scrub_enabled = available
@@ -3351,13 +3381,13 @@ fn show_save_actions(
                     "Cancel export"
                 };
                 let response = ui.add_enabled(
-                    !cancel.is_cancelled(),
+                    !cancel.is_cancelled() || (view.playing && view.resume_after_seek),
                     egui::Button::new(label).min_size(egui::vec2(0., tokens.number("h-md"))),
                 );
                 probe(ui, "Cancel", response.rect);
                 probe(ui, label, response.rect);
                 if response.clicked() {
-                    cancel.cancel();
+                    if view.playing { view.pause_playback(); } else { cancel.cancel(); }
                 }
             }
             // `.recording-make-copy`: checked and locked when the format or
@@ -6969,6 +6999,314 @@ mod tests {
         );
         assert!(view.playing && !view.dirty() && !view.history_changed);
         assert!(view.preview_loop.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn playing_trim_coalesces_through_teardown_and_resumes_while_held() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let (tx, jobs) = mpsc::channel();
+        let (events, rx) = mpsc::channel();
+        let mut view = opened();
+        view.preview_loop.store(true, Ordering::Relaxed);
+        view.preview_muted = false;
+        view.request_playback(&tx);
+        let Job::Play(700, true, cancel) = jobs.try_recv().unwrap() else {
+            panic!("initial playback")
+        };
+        let size = egui::vec2(960., 1800.);
+        probe_frame_with(&ctx, &tokens, &mut view, &tx, &events, size, vec![]);
+        let controls = probe_frame_with(&ctx, &tokens, &mut view, &tx, &events, size, vec![]).1;
+        let track = probed(&controls, "Timeline track");
+        let down = probed(&controls, "Trim start").center();
+        let moved = down + egui::vec2(track.width() * 0.4, 0.);
+        for input in [
+            vec![egui::Event::PointerMoved(down), trim_pointer(down, true)],
+            vec![egui::Event::PointerMoved(moved)],
+        ] {
+            probe_frame_with(&ctx, &tokens, &mut view, &tx, &events, size, input);
+        }
+        assert!(
+            cancel.is_cancelled(),
+            "playing handles remain input targets"
+        );
+        assert_eq!((view.start_ms, view.position_ms), (1240, 1240));
+        assert!(view.trim_gesture.is_some() && view.resume_after_seek);
+        assert!(jobs.try_recv().is_err(), "trim waits for decoder teardown");
+        view.receive_playback_frame(
+            &ctx,
+            PlaybackFrame {
+                position_ms: 1800,
+                pixels: Arc::new(RgbaImage::new(2, 1)),
+            },
+        );
+        assert_eq!(
+            view.position_ms, 1240,
+            "late motion cannot rewind trim intent"
+        );
+        let editor = Editor {
+            viewport: egui::ViewportId::ROOT,
+            view: Arc::new(Mutex::new(view)),
+            playback_frame: Arc::new(Mutex::new(None)),
+            tx,
+            events,
+            rx,
+            worker: None,
+        };
+        editor
+            .events
+            .send(Event::PlaybackFinished(Ok(PlaybackEnd::Paused)))
+            .unwrap();
+        editor.receive(&ctx);
+        let Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+            edit,
+            export,
+            position_ms,
+        }) = jobs.try_recv().unwrap()
+        else {
+            panic!("atomic trim after teardown")
+        };
+        assert_eq!((edit.trim_start_ms, position_ms), (1240, 1240));
+        {
+            let mut view = editor.view.lock().unwrap();
+            view.start_ms = 950;
+            view.preview_trim(&editor.tx, 950);
+        }
+        let mut accepted = opened().presented.unwrap();
+        accepted.edit = edit;
+        accepted.export = export;
+        accepted.position_ms = position_ms;
+        editor
+            .events
+            .send(Event::Presented(Ok(accepted.clone())))
+            .unwrap();
+        editor.receive(&ctx);
+        let Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+            edit,
+            export,
+            position_ms,
+        }) = jobs.try_recv().unwrap()
+        else {
+            panic!("only the latest trim follows the older completion")
+        };
+        assert_eq!((edit.trim_start_ms, position_ms), (950, 950));
+        assert_eq!(editor.view.lock().unwrap().position_ms, 950);
+        accepted.edit = edit;
+        accepted.export = export;
+        accepted.position_ms = position_ms;
+        editor.events.send(Event::Presented(Ok(accepted))).unwrap();
+        editor.receive(&ctx);
+        let Job::Play(950, true, replay) = jobs.try_recv().unwrap() else {
+            panic!("latest accepted trim resumes without another Play press")
+        };
+        let mut view = editor.view.lock().unwrap();
+        assert!(
+            view.trim_gesture.is_some(),
+            "automatic resume retains the held handle"
+        );
+        assert!(view.preview_loop.load(Ordering::Relaxed) && view.dirty());
+        probe_frame_with(
+            &ctx,
+            &tokens,
+            &mut view,
+            &editor.tx,
+            &editor.events,
+            size,
+            vec![trim_pointer(moved, false)],
+        );
+        assert!(!replay.is_cancelled() && jobs.try_recv().is_err());
+        assert!(view.playing && !view.history_changed && view.trim_gesture.is_none());
+        probe_frame_with(
+            &ctx,
+            &tokens,
+            &mut view,
+            &editor.tx,
+            &editor.events,
+            size,
+            vec![trim_key(egui::Key::PageUp)],
+        );
+        assert_eq!(
+            view.start_ms, 1950,
+            "keyboard focus survives automatic resume"
+        );
+        assert!(replay.is_cancelled() && view.resume_after_seek);
+    }
+
+    #[test]
+    fn playing_trim_end_pauses_without_loop_and_wraps_with_loop() {
+        let ctx = egui::Context::default();
+        for (looping, end) in [(false, 3100), (true, 3100), (false, 2500), (true, 2500)] {
+            let (tx, jobs) = mpsc::channel();
+            let (events, rx) = mpsc::channel();
+            let mut view = opened();
+            view.start_ms = 250;
+            view.presented.as_mut().unwrap().edit.trim_start_ms = 250;
+            view.preview_loop.store(looping, Ordering::Relaxed);
+            view.request_playback(&tx);
+            let Job::Play(_, _, cancel) = jobs.try_recv().unwrap() else {
+                panic!("play")
+            };
+            view.end_ms = end;
+            view.preview_trim(&tx, end);
+            assert!(cancel.is_cancelled());
+            let editor = Editor {
+                viewport: egui::ViewportId::ROOT,
+                view: Arc::new(Mutex::new(view)),
+                playback_frame: Arc::new(Mutex::new(None)),
+                tx,
+                events,
+                rx,
+                worker: None,
+            };
+            editor
+                .events
+                .send(Event::PlaybackFinished(Ok(PlaybackEnd::Paused)))
+                .unwrap();
+            editor.receive(&ctx);
+            let Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+                edit,
+                export,
+                position_ms,
+            }) = jobs.try_recv().unwrap()
+            else {
+                panic!("trim")
+            };
+            assert_eq!(
+                edit.trim_end_ms,
+                (end < 3100).then_some(end),
+                "full duration remains the canonical untrimmed end"
+            );
+            assert_eq!(position_ms, if looping { 250 } else { end.min(3099) });
+            let mut accepted = opened().presented.unwrap();
+            accepted.edit = edit;
+            accepted.export = export;
+            accepted.position_ms = position_ms;
+            editor.events.send(Event::Presented(Ok(accepted))).unwrap();
+            editor.receive(&ctx);
+            if looping {
+                assert!(matches!(jobs.try_recv().unwrap(), Job::Play(250, true, _)));
+            } else {
+                assert!(jobs.try_recv().is_err(), "non-looping end press must pause");
+                assert!(!editor.view.lock().unwrap().playing);
+            }
+        }
+    }
+
+    #[test]
+    fn playing_trim_pause_and_failures_retire_resume_but_retain_staged_input() {
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let pause = |editor: &Editor| {
+            let mut view = editor.view.lock().unwrap();
+            let mut controls = ProbeRects::new();
+            for _ in 0..2 {
+                controls = probe_frame_with(
+                    &ctx,
+                    &tokens,
+                    &mut view,
+                    &editor.tx,
+                    &editor.events,
+                    egui::vec2(960., 1800.),
+                    vec![],
+                )
+                .1;
+            }
+            let point = probed(&controls, "Pause preview").center();
+            for pressed in [true, false] {
+                probe_frame_with(
+                    &ctx,
+                    &tokens,
+                    &mut view,
+                    &editor.tx,
+                    &editor.events,
+                    egui::vec2(960., 1800.),
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        trim_pointer(point, pressed),
+                    ],
+                );
+            }
+            assert!(!view.resume_after_seek, "pending Pause is a usable button");
+        };
+        for stop in [
+            "pause",
+            "pause-decoding",
+            "close",
+            "quit",
+            "playback-error",
+            "trim-error",
+        ] {
+            let (tx, jobs) = mpsc::channel();
+            let (events, rx) = mpsc::channel();
+            let mut view = opened();
+            view.request_playback(&tx);
+            jobs.try_recv().unwrap();
+            view.start_ms = 1250;
+            view.preview_trim(&tx, 1250);
+            let editor = Editor {
+                viewport: egui::ViewportId::ROOT,
+                view: Arc::new(Mutex::new(view)),
+                playback_frame: Arc::new(Mutex::new(None)),
+                tx,
+                events,
+                rx,
+                worker: None,
+            };
+            if stop == "pause" {
+                pause(&editor);
+            }
+            if stop == "close" {
+                editor.view.lock().unwrap().request_close();
+            }
+            if stop == "quit" {
+                assert!(editor.flush(&ctx).is_err());
+            }
+            editor
+                .events
+                .send(Event::PlaybackFinished(if stop == "playback-error" {
+                    Err("source removed".into())
+                } else {
+                    Ok(PlaybackEnd::Paused)
+                }))
+                .unwrap();
+            editor.receive(&ctx);
+            if stop != "playback-error" {
+                let Job::Apply(RecordingEditorRequest::UpdatePreviewAt {
+                    edit,
+                    export,
+                    position_ms,
+                }) = jobs.try_recv().unwrap()
+                else {
+                    panic!("staged trim survives {stop}")
+                };
+                if stop == "pause-decoding" {
+                    pause(&editor);
+                }
+                let mut accepted = opened().presented.unwrap();
+                accepted.edit = edit;
+                accepted.export = export;
+                accepted.position_ms = position_ms;
+                editor
+                    .events
+                    .send(Event::Presented(if stop == "trim-error" {
+                        Err("decode failed".into())
+                    } else {
+                        Ok(accepted)
+                    }))
+                    .unwrap();
+                editor.receive(&ctx);
+            }
+            let mut view = editor.view.lock().unwrap();
+            assert_eq!(view.start_ms, 1250, "{stop} retains staged trim");
+            assert!(view.dirty() && !view.resume_after_seek && !view.playing && !view.busy);
+            assert!(jobs.try_recv().is_err(), "{stop} cannot restart playback");
+            if stop.ends_with("error") {
+                assert_eq!(view.position_ms, 700);
+                assert!(view.trim_gesture.is_none() && view.apply_failed.is_some());
+                view.drive_apply(&ctx, &editor.tx, false);
+                assert!(jobs.try_recv().is_err(), "failure requires fresh input");
+            }
+        }
     }
 
     #[test]

@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--comparison", action="store_true", help="Exercise encoded before/after, hide, failure/retry and immutable identity")
     parser.add_argument("--replace-original", action="store_true", help="Exercise Save over the original, cancellation and same-session rebase")
     parser.add_argument("--timeline", action="store_true", help="Exercise live trim preview, keyboard input, failure/retry and export")
+    parser.add_argument("--playing-trim", action="store_true", help="Exercise held trim during playback, end pause/loop and accepted export")
     parser.add_argument("--scrub", action="store_true", help="Verify held-drag decoded pixels, failure/retry and minimum-size input")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
@@ -430,7 +431,7 @@ def main():
             return [path for path in exports.iterdir() if path != source]
         source_width, source_height = (640, 360) if args.maximum_size or args.gif_quality or args.comparison else (1600, 900) if args.preview_scale or args.gif_width or args.export_preferences else (640, 1440) if args.presets else (320, 180)
         source_size = f"{source_width}x{source_height}"
-        segment_seconds = 12 if args.estimate_delta else 2 if args.playback or args.sound or args.scrub else 1
+        segment_seconds = 12 if args.estimate_delta else 2 if args.playback or args.sound or args.scrub or args.playing_trim else 1
         audio_inputs = []
         audio_filters = ""
         audio_maps = []
@@ -489,6 +490,12 @@ def main():
             started = output / f"{operation}-calls.txt"
             allowed = output / f"allow-{operation}"
             predicate = "'.captures-replace-' in arg" if args.replace_original else "'captures-export-comparison-' in arg" if args.comparison else "'-attempt-' in arg" if args.maximum_size else "'tile=' in arg" if args.thumbnails else "'source-frame-' in arg"
+            if args.graphical_crop:
+                # Atomic PNG output no longer retains its destination basename.
+                # Match this fixture's unfiltered source seek, not edited frames,
+                # thumbnails or poster work. Cancellation/pixel assertions stay real.
+                predicate = (f"arg == {str(source)!r} and '-ss' in sys.argv[1:] "
+                             "and '-vf' not in sys.argv[1:] and sys.argv[-1].endswith('.png')")
             if args.maximum_size or args.comparison or args.replace_original:
                 allowed.touch()
             ffmpeg = shutil.which("ffmpeg")
@@ -1912,6 +1919,108 @@ def main():
                     "failure-restores-still", "retry", "minimum-layout", "dirty-close",
                     "accepted-export-duration-colors", "source-immutable", "clean-close"]}, indent=2) + "\n")
             print("PASS silent playback: real motion, pause/resume/EOF, failure/retry, close, accepted export and immutable source")
+            return
+        if args.playing_trim:
+            track = visible_rect(editor, "Timeline track", whole_control=True)
+            px, py = image_point(editor, .75, .75)
+            width = track[2] - track[0]
+            def decoded(name, channel):
+                path = output / f"playing-trim-{name}.png"
+                def arrived():
+                    run("import", "-window", editor, str(path))
+                    rgb = run("convert", str(path), "-crop", f"1x1+{px}+{py}", "-depth", "8", "rgb:-")
+                    return len(rgb) == 3 and rgb[channel] > 90 and all(rgb[channel] > rgb[i] + 40 for i in range(3) if i != channel)
+                wait(arrived, f"{name} decoded while held")
+            def hold(name):
+                x, y = center(editor, name)
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y),
+                    "mousedown", "1")
+            def move(fraction):
+                run("xdotool", "mousemove_relative", "--sync", "--", str(round(width * fraction)), "0")
+            def pause():
+                # Playback never becomes idle by itself with Loop on.
+                raw_press(editor, "Play preview")
+                idle(editor)
+            def read_time(name):
+                click(editor, *center(editor, name))
+                run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+                return int(run("xclip", "-selection", "clipboard", "-o").strip())
+
+            movie = spawn("playing-trim-video", ["ffmpeg", "-y", "-v", "error", "-f", "x11grab",
+                "-draw_mouse", "1", "-framerate", "15", "-video_size", "980x940",
+                "-i", f"{env['DISPLAY']}+70,40", "-c:v", "libx264", "-preset", "ultrafast",
+                "-crf", "23", "-pix_fmt", "yuv420p", str(output / "playing-trim.mp4")])
+            press_preview(editor, "Loop preview")
+            raw_press(editor, "Play preview")
+            hold("Trim start")
+            move(.08)
+            decoded("start-red-held", 0)
+            decoded("start-resumed-green-held", 1)
+            move(.47)
+            decoded("start-green-held", 1)
+            decoded("start-resumed-blue-held", 2)
+            run("xdotool", "mouseup", "1")
+            pause()
+            start = read_time("Start (ms)")
+            assert 3200 <= start <= 3400, ("playing start trim", start)
+            shot(editor, "playing-trim-start-paused")
+
+            press_preview(editor, "Loop preview")
+            raw_press(editor, "Play preview")
+            hold("Trim end")
+            move(-.30)
+            decoded("end-no-loop-blue-held", 2)
+            idle(editor)
+            assert "Pause preview" not in controls(editor), "end trim pauses when Loop is off"
+            run("xdotool", "mouseup", "1")
+            end = read_time("End (ms)")
+            assert 4100 <= end <= 4300, ("playing end trim", end)
+            shot(editor, "playing-trim-end-paused")
+
+            fill(editor, "Start (ms)", 0)
+            settle(editor)
+            # Seek inside the red phase, then play; the end grip itself must
+            # wrap to zero and keep advancing without another Play press.
+            click(editor, round(track[0] + width / 30), (track[1] + track[3]) // 2)
+            press_preview(editor, "Loop preview")
+            raw_press(editor, "Play preview")
+            hold("Trim end")
+            move(-.20)
+            decoded("end-loop-red-held", 0)
+            decoded("end-loop-green-held", 1)
+            decoded("end-loop-wrapped-red-held", 0)
+            run("xdotool", "mouseup", "1")
+            pause()
+            end = read_time("End (ms)")
+            assert 2900 <= end <= 3100, ("looping end trim", end)
+            movie.send_signal(signal.SIGINT)
+            movie.wait(timeout=10)
+            assert (output / "playing-trim.mp4").stat().st_size > 0
+            shot(editor, "playing-trim-loop-paused")
+            destination = exports / "playing-trim-export.mp4"
+            set_destination(editor, destination)
+            save_copy(editor)
+            wait(destination.exists, "playing trim export")
+            probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(destination)))
+            assert abs(float(probe["format"]["duration"]) - end / 1000) <= .15, probe
+            dominant(destination, 0, .3)
+            dominant(destination, 1, 2.3)
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            visible_rect(editor, "Timeline track", whole_control=True)
+            visible_rect(editor, "Seek", whole_control=True)
+            shot(editor, "playing-trim-minimum-controls")
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert len(list(history.glob("*/metadata.json"))) == 2
+            close(editor)
+            wait(lambda: not windows("Captures Editor"), "saved playing trim closes")
+            close(root)
+            wait(lambda: app.poll() is not None, "playing trim quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "end_ms": end, "checks": ["start-held-resume", "latest-held-range", "end-pauses-without-loop",
+                    "end-wraps-with-loop", "loop-motion-while-held", "explicit-pause", "accepted-export-duration-colors",
+                    "source-history-immutable", "minimum-controls", "clean-close-quit"]}, indent=2) + "\n")
+            print("PASS playing trim: held start resume, end pause/loop, latest range, accepted MP4 pixels, minimum controls and immutable source")
             return
         if args.timeline:
             px, py = image_point(editor, .75, .75)
