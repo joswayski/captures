@@ -2259,6 +2259,67 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(try slider("Recording frame position", in: controller.root).isEnabled)
     }
 
+    func testHeldTrackScrubDecodesAndCoalescesLatestThenPreservesFrameOnFailure() throws {
+        _ = NSApplication.shared
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(exportQuality: "standard"))
+        worker.deferRequest = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
+        let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
+        func pointer(_ type: NSEvent.EventType, _ fraction: CGFloat) throws -> NSEvent {
+            let point = timeline.convert(NSPoint(x: 10 + (timeline.bounds.width - 20) * fraction,
+                y: timeline.bounds.midY), to: nil)
+            return try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: controller.window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        }
+        timeline.mouseDown(with: try pointer(.leftMouseDown, 0.2))
+        XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [400])
+        XCTAssertTrue(timeline.seekEnabled, "track stays live while decoding")
+        XCTAssertFalse(timeline.editingEnabled, "trim edits wait for decoding")
+        XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
+        XCTAssertFalse(controller.comparisonApplies, "a comparison cannot interrupt the held scrub")
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.75))
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.2))
+        XCTAssertEqual(worker.requests.count, 1, "no decode backlog")
+        worker.completeRequest(.success(try presentation(position: 400, revision: 1, exportQuality: "standard")))
+        XCTAssertEqual(worker.requests.count, 1, "returning to the active target drops the older queued seek")
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.45))
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.75))
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.6))
+        XCTAssertEqual(worker.requests.count, 2)
+        worker.completeRequest(.success(try presentation(position: 900, revision: 2, exportQuality: "standard")))
+        XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [400, 900, 1200])
+        worker.completeRequest(.success(try presentation(position: 1200, revision: 3, exportQuality: "standard")))
+        XCTAssertFalse(controller.comparisonApplies, "even a settled decode must wait for release")
+        timeline.mouseUp(with: try pointer(.leftMouseUp, 0.6))
+        XCTAssertEqual(worker.requests.count, 3, "release does not decode twice")
+        XCTAssertTrue(controller.comparisonApplies, "release restores the accepted comparison")
+        XCTAssertFalse(controller.dirty)
+        let preview = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSImageView }.first)
+        let acceptedFrame = preview.image
+        timeline.mouseDown(with: try pointer(.leftMouseDown, 0.55))
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.85))
+        worker.completeRequest(.failure(AppBridgeError.backend("injected seek failure")))
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.7))
+        XCTAssertEqual(worker.requests.count, 4, "failure ends scrubbing and drops queued targets")
+        XCTAssertEqual(try slider("Recording frame position", in: controller.root).doubleValue, 1200)
+        XCTAssertTrue(preview.image === acceptedFrame)
+        XCTAssertFalse(controller.dirty)
+        worker.deferEstimate = true
+        controller.estimateSizeNow()
+        timeline.mouseDown(with: try pointer(.leftMouseDown, 0.4))
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.65))
+        timeline.mouseDragged(with: try pointer(.leftMouseDragged, 0.1))
+        XCTAssertEqual(worker.requests.count, 4, "seek waits for the superseded estimate")
+        worker.completeEstimate(.failure(AppBridgeError.backend("operation cancelled")))
+        XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [400, 900, 1200, 1100, 200])
+        worker.completeRequest(.success(try presentation(position: 200, revision: 4, exportQuality: "standard")))
+        timeline.mouseUp(with: try pointer(.leftMouseUp, 0.1))
+        XCTAssertEqual(worker.requests.count, 5, "only the latest target follows the estimate")
+    }
+
     func testTimelineWindowHitTestingPointerDispatchAndResignKey() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(start: 200, end: 1_800))
@@ -5021,6 +5082,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     var openCount = 0
     var deferOpen = false
     var requests: [[String: Any]] = []
+    var deferRequest = false
     var requestResult: Result<RecordingEditorPresentation, Error>?
     var estimateResult: Result<RecordingEditorEstimate, Error> = .failure(AppBridgeError.backend("estimate unavailable"))
     var deferEstimate = false
@@ -5062,6 +5124,7 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     weak var observedPlaybackCancel: NativeRecordingEditorCancel?
     weak var observedPlaybackLoop: RecordingPlaybackLoopControl?
     private var pendingOpen: ((Result<RecordingEditorPresentation, Error>) -> Void)?
+    private var pendingRequest: ((Result<RecordingEditorPresentation, Error>) -> Void)?
     private var pendingEstimate: ((Result<RecordingEditorEstimate, Error>) -> Void)?
     private var pendingComparison: ((Result<RecordingEditorComparison, Error>) -> Void)?
     private var pendingSave: ((Result<RecordingEditorSaveResult, Error>) -> Void)?
@@ -5086,7 +5149,12 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
     }
     func request(_ object: [String: Any],
                  completion: @escaping (Result<RecordingEditorPresentation, Error>) -> Void) {
-        requests.append(object); completion(requestResult ?? .success(initial))
+        requests.append(object)
+        if deferRequest { pendingRequest = completion }
+        else { completion(requestResult ?? .success(initial)) }
+    }
+    func completeRequest(_ result: Result<RecordingEditorPresentation, Error>) {
+        let completion = pendingRequest; pendingRequest = nil; completion?(result)
     }
     func estimate(cancel: NativeRecordingEditorCancel,
                   completion: @escaping (Result<RecordingEditorEstimate, Error>) -> Void) {

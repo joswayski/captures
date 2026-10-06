@@ -143,9 +143,10 @@ final class RecordingTrimTimeline: NSView {
     fileprivate(set) var startMilliseconds: UInt64 = 0
     fileprivate(set) var endMilliseconds: UInt64 = 1
     var onStage: ((NativeRecordingTimelineEdge, UInt64) -> Void)?
-    /// Clicking the track outside the grips seeks the accepted preview there.
+    /// The track seeks throughout a drag; hosts coalesce frame decoding.
     var onSeek: ((UInt64) -> Void)?
-    var seekEnabled = false
+    var seekEnabled = false { didSet { if !seekEnabled { scrubbing = false } } }
+    private(set) var scrubbing = false
     private var drag: NativeRecordingTimelineDrag?
     private var dragEdge: NativeRecordingTimelineEdge?
     private(set) var editingEnabled = false
@@ -180,7 +181,7 @@ final class RecordingTrimTimeline: NSView {
     func setEditingEnabled(_ enabled: Bool) {
         editingEnabled = enabled
         startHandle.enabled = enabled; endHandle.enabled = enabled
-        if !enabled { endDrag() }
+        if !enabled { drag = nil; dragEdge = nil }
     }
 
     func setPlaybackPosition(_ milliseconds: UInt64?) {
@@ -248,7 +249,7 @@ final class RecordingTrimTimeline: NSView {
         stage(edge: edge, milliseconds: UInt64(milliseconds.rounded()))
     }
 
-    func endDrag() { drag = nil; dragEdge = nil; needsDisplay = true }
+    func endDrag() { drag = nil; dragEdge = nil; scrubbing = false; needsDisplay = true }
 
     func nudge(edge: NativeRecordingTimelineEdge, direction: Int, page: Bool) {
         guard editingEnabled, direction == -1 || direction == 1 else { return }
@@ -295,10 +296,11 @@ final class RecordingTrimTimeline: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
-        guard editingEnabled, bounds.contains(local) else { return nil }
+        guard editingEnabled || seekEnabled, bounds.contains(local) else { return nil }
         let startDistance = abs(local.x - startHandle.frame.midX)
         let endDistance = abs(local.x - endHandle.frame.midX)
         if min(startDistance, endDistance) <= 10 {
+            guard editingEnabled else { return nil }
             if startDistance == endDistance, window?.firstResponder === startHandle {
                 return startHandle
             }
@@ -308,6 +310,22 @@ final class RecordingTrimTimeline: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard seekEnabled else { return }
+        scrubbing = true
+        scrub(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if scrubbing { scrub(with: event) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard scrubbing else { return }
+        scrubbing = false
+        scrub(with: event)
+    }
+
+    private func scrub(with event: NSEvent) {
         guard seekEnabled, let onSeek else { return }
         let x = convert(event.locationInWindow, from: nil).x
         guard durationMilliseconds > 0,
@@ -806,6 +824,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var savedEdit: Data?
     private var savedExport: Data?
     private var busy = false
+    /// One active decode and one latest target, never a pointer-event backlog.
+    private var seekingPosition: UInt64?
+    private var pendingSeek: UInt64?
     private var pickerOpen = false
     private var originalPath: String?
     private var requiresReopen = false
@@ -2385,6 +2406,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         applyWork?.cancel(); applyWork = nil; applyWorkKey = nil; applyFailedKey = nil
         estimateWork?.cancel(); estimateWork = nil; estimateWorkKey = nil
         estimateAttempt = nil; estimateCancel = nil; afterEstimate.removeAll()
+        seekingPosition = nil; pendingSeek = nil
         editingText = false; savedFingerprint = nil
     }
 
@@ -2393,11 +2415,25 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     /// Decodes the accepted preview at `position`, from the slider or a
-    /// timeline click (shipping scrubs its video from the track).
+    /// timeline drag (shipping scrubs its video from the track).
     private func seek(to position: UInt64) {
         invalidateComparison()
+        if let seekingPosition {
+            pendingSeek = position == seekingPosition ? nil : position
+            trimTimeline.setAcceptedPosition(position)
+            return
+        }
         if estimating, !stagedDiffers {
-            supersedeEstimate { [weak self] in self?.seek(to: position) }
+            let alreadyWaiting = pendingSeek != nil
+            pendingSeek = position
+            trimTimeline.setAcceptedPosition(position)
+            if !alreadyWaiting {
+                supersedeEstimate { [weak self] in
+                    guard let self, let latest = self.pendingSeek else { return }
+                    self.pendingSeek = nil
+                    self.seek(to: latest)
+                }
+            }
             return
         }
         guard !busy, !stagedDiffers else {
@@ -2405,11 +2441,28 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             if stagedDiffers { showError("Wait for the edited preview before seeking.") }
             return
         }
+        guard position != presentation?.snapshot.positionMilliseconds else {
+            updateControls()
+            return
+        }
         let finishCropOnSuccess = cropAdjustmentActive
         if !finishCropOnSuccess { restoreAcceptedPresentation() }
+        seekingPosition = position
+        trimTimeline.setAcceptedPosition(position)
         request(["operation": "seek", "position_ms": position],
                 activity: "Decoding source-relative frame…",
-                finishCropOnSuccess: finishCropOnSuccess)
+                finishCropOnSuccess: finishCropOnSuccess, settled: { [weak self] success in
+                    guard let self else { return }
+                    self.seekingPosition = nil
+                    let next = self.pendingSeek
+                    self.pendingSeek = nil
+                    if success, let next {
+                        self.seek(to: next)
+                    } else if !success {
+                        self.trimTimeline.endDrag()
+                        self.trimTimeline.setAcceptedPosition(self.presentation?.snapshot.positionMilliseconds)
+                    }
+                })
     }
 
     private func request(_ object: [String: Any], activity: String,
@@ -2688,7 +2741,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     var comparisonApplies: Bool {
         guard let snapshot = presentation?.snapshot, !comparisonDismissed, !requiresReopen,
               playbackState == .idle, playbackPositionMilliseconds == nil,
-              !cropAdjustmentActive, !stagedDiffers, !webmSelected else { return false }
+              !cropAdjustmentActive, !trimTimeline.scrubbing, !stagedDiffers, !webmSelected else { return false }
         let compresses = (snapshot.saveExport["quality"] as? String ?? "preserve") != "preserve"
             || snapshot.saveExport["max_size_bytes"] is NSNumber
         return compresses
@@ -3570,7 +3623,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         microphoneAudio.isEnabled = available && !gif
         monoOutput.isEnabled = available && !gif
         trimTimeline.setEditingEnabled(available && stagedEdit != nil)
-        trimTimeline.seekEnabled = available && valid && !stagedDiffers && !cropAdjustmentActive
+        let seekPending = seekingPosition != nil || pendingSeek != nil
+        trimTimeline.seekEnabled = (available || seekPending) && valid && !stagedDiffers
+            && !cropAdjustmentActive && !pickerOpen && !requiresReopen && playbackState == .idle
+        if let requested = pendingSeek ?? seekingPosition {
+            trimTimeline.setAcceptedPosition(requested)
+        }
         thumbnailRetryButton?.isHidden = !thumbnailRetryAvailable
         thumbnailRetryButton?.isEnabled = available && thumbnailRetryAvailable
         thumbnailStatusLabel.isHidden = !thumbnailRetryAvailable

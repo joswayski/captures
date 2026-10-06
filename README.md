@@ -378,7 +378,9 @@ result requires closing and reopening. This is not crash-atomic across the saved
 file and History. Saving with **Save as new file** on remains non-destructive.
 Trim handles do not decode on each pointer move; the preview updates when the drag
 ends. Focused trim handles also accept arrow keys and Page Up/Page Down.
-Clicking the trim track seeks the accepted preview; **Reset trim** restores the full range.
+Dragging the trim track continuously scrubs the paused, accepted preview on both
+native hosts. Decoding keeps only the latest waiting position; a failed seek retains
+the accepted frame and ends the gesture. **Reset trim** restores the full range.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and
 interior move. Crop handles follow the aspect lock; arrows move one source pixel,
 or ten with Shift. Crop changes apply when each gesture ends, and **Done cropping**

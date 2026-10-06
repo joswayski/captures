@@ -477,6 +477,14 @@ preserves an opened WebM's format. WebM remains explicitly unavailable in bundle
 tools; choose MP4 or GIF to export it. Refocusing an existing editor retains its
 edits. Capture still records a video master, and GIF palettes follow editor quality,
 not the recording palette preference.
+Both hosts decode the paused, accepted preview throughout a held timeline-track
+drag, with one active seek and only the latest waiting target. Trim/edit/export
+controls wait for decoding; failure retains the accepted frame and ends the gesture.
+The private-X11 `x11_recording_editor_smoke.py --scrub` check independently samples
+changing red/green/blue preview pixels before release, failure/retry, minimum-size
+input and unchanged source/History bytes in dark/light. It records the held drag.
+AppKit has matching deferred-worker XCTest coverage; physical platform acceptance
+and live trim-handle preview remain open.
 Unsigned development packages can include the existing pinned media tools,
 corresponding source and licenses; see [staging](../../DEVELOPMENT.md#native-development-open-with).
 History **Save file**
