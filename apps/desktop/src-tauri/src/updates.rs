@@ -901,11 +901,22 @@ fn sync_update_notice_window(
         eprintln!("failed to refresh update notice status: {error}");
     }
     let _ = crate::apply_tray_notice_position(window, placement);
-    if let Some(caret) = crate::notice_caret_payload(&placement)
-        && let Err(error) = window.emit(crate::NOTICE_CARET_EVENT, caret)
-    {
+    if let Err(error) = window.emit(
+        crate::NOTICE_CARET_EVENT,
+        crate::notice_caret_payload(&placement),
+    ) {
         eprintln!("failed to update the update notice caret: {error}");
     }
+}
+
+#[cfg(target_os = "macos")]
+fn update_notice_placement(app: &AppHandle) -> crate::StartupNoticePlacement {
+    let status = annotate_status(app, app.state::<UpdateCoordinator>().status.lock().clone());
+    crate::tray_anchored_notice_placement(
+        app,
+        UPDATE_NOTICE_WIDTH,
+        update_notice_height(&status, show_update_changelog(app)),
+    )
 }
 
 fn create_update_notice(
@@ -942,6 +953,8 @@ fn create_update_notice(
     let _ =
         crate::set_window_content_protected(&window, should_hide_update_notice_for_capture(app));
     crate::apply_tray_notice_position(&window, placement)?;
+    #[cfg(target_os = "macos")]
+    crate::track_tray_notice(&window, placement, update_notice_placement);
     Ok(())
 }
 

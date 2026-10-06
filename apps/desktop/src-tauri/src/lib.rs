@@ -5752,16 +5752,11 @@ pub(crate) struct NoticeCaretPayload {
     pub x: f64,
 }
 
-pub(crate) fn notice_caret_payload(
-    placement: &StartupNoticePlacement,
-) -> Option<NoticeCaretPayload> {
-    placement
-        .caret
-        .as_query_value()
-        .map(|edge| NoticeCaretPayload {
-            edge,
-            x: placement.caret_x,
-        })
+pub(crate) fn notice_caret_payload(placement: &StartupNoticePlacement) -> NoticeCaretPayload {
+    NoticeCaretPayload {
+        edge: placement.caret.as_query_value().unwrap_or("none"),
+        x: placement.caret_x,
+    }
 }
 
 fn show_startup_notice(app: &AppHandle, visible_for: std::time::Duration) {
@@ -5847,6 +5842,8 @@ fn create_startup_notice(
     window.show()?;
 
     apply_tray_notice_position(&window, placement)?;
+    #[cfg(target_os = "macos")]
+    track_tray_notice(&window, placement, startup_notice_placement);
 
     let timer_app = app.clone();
     std::thread::spawn(move || {
@@ -5877,6 +5874,46 @@ pub(crate) fn apply_tray_notice_position(
     Ok(())
 }
 
+/// tray-icon reports mouse movement, not menu-bar layout changes. Poll live
+/// geometry while visible; never show, raise, or focus a notice during tracking.
+#[cfg(target_os = "macos")]
+pub(crate) fn track_tray_notice(
+    window: &tauri::WebviewWindow,
+    initial: StartupNoticePlacement,
+    resolve: fn(&AppHandle) -> StartupNoticePlacement,
+) {
+    let window = window.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last = initial;
+        loop {
+            let visible = match window.is_visible() {
+                Ok(visible) => visible,
+                Err(_) => break, // Native window was destroyed.
+            };
+            if visible {
+                let placement = resolve(window.app_handle());
+                if placement != last {
+                    let notice = window.clone();
+                    let _ = window.run_on_main_thread(move || {
+                        if notice.is_visible().unwrap_or(false) {
+                            let _ = apply_tray_notice_position(&notice, placement);
+                            let _ =
+                                notice.emit(NOTICE_CARET_EVENT, notice_caret_payload(&placement));
+                        }
+                    });
+                    last = placement;
+                }
+            }
+            tokio::time::sleep(if visible {
+                Duration::from_millis(250)
+            } else {
+                Duration::from_secs(1)
+            })
+            .await;
+        }
+    });
+}
+
 fn startup_notice_url(placement: StartupNoticePlacement) -> String {
     tray_notice_url("startup", placement)
 }
@@ -5900,6 +5937,29 @@ pub(crate) fn tray_anchored_notice_placement(
     card_width: f64,
     card_height: f64,
 ) -> StartupNoticePlacement {
+    #[cfg(target_os = "macos")]
+    if let Some(geometry) = app.tray_by_id(TRAY_ICON_ID).and_then(|tray| {
+        tray.with_inner_tray_icon(|tray| {
+            captures_macos_window::tray_notice_geometry(tray.ns_status_item().as_deref())
+        })
+        .ok()
+        .flatten()
+    }) {
+        let rect = |rect: captures_macos_window::NoticeRect| LogicalRect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        };
+        return resolve_tray_notice_placement(
+            rect(geometry.monitor),
+            rect(geometry.work_area),
+            geometry.tray.map(rect),
+            true,
+            card_width,
+            card_height,
+        );
+    }
     let tray = tray_icon_physical_rect(app);
     let monitor = tray
         .and_then(|(x, y, width, height)| {
@@ -9416,6 +9476,26 @@ mod tests {
         assert_eq!(placement.height, window_height);
         assert_eq!(placement.caret, StartupNoticeCaret::None);
         assert_eq!(startup_notice_url(placement), "index.html?view=startup");
+    }
+
+    #[test]
+    fn update_notice_follows_menu_bar_relayout_and_clears_the_fallback_caret() {
+        let monitor = notice_monitor(1512.0, 982.0);
+        let work_area = notice_tray(0.0, 32.0, 1512.0, 900.0);
+        let placement = |tray| {
+            super::resolve_tray_notice_placement(monitor, work_area, tray, true, 440.0, 290.0)
+        };
+        let before = placement(Some(notice_tray(868.0, 0.0, 28.0, 32.0)));
+        let after = placement(Some(notice_tray(832.0, 0.0, 28.0, 32.0)));
+        assert_eq!((before.x, before.y, before.caret_x), (634.0, 30.0, 248.0));
+        assert_eq!((after.x, after.y, after.caret_x), (598.0, 30.0, 248.0));
+        assert_eq!(super::notice_caret_payload(&after).edge, "top");
+        let hidden = placement(None); // AppKit rejected the notch-occluded item.
+        assert_eq!(
+            (hidden.x, hidden.y, hidden.width, hidden.height),
+            (998.0, 42.0, 496.0, 346.0)
+        );
+        assert_eq!(super::notice_caret_payload(&hidden).edge, "none");
     }
 
     #[test]

@@ -1,5 +1,10 @@
 mod conceal_policy;
 mod cursor_policy;
+#[cfg(any(target_os = "macos", test))]
+mod tray_notice;
+
+#[cfg(target_os = "macos")]
+pub use tray_notice::{NoticeRect, TrayNoticeGeometry, tray_notice_geometry};
 
 pub use conceal_policy::{
     donated_titled_windows_to_push_behind, should_conceal_documents_for_capture_activation,
