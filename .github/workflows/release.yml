@@ -141,7 +141,7 @@ jobs:
     name: Rust checks (${{ matrix.os }})
     needs: [queue, route]
     if: needs.queue.outputs.should_release == 'true'
-    runs-on: ${{ needs.route.outputs.mac == 'true' && matrix.os == 'macos-26' && fromJSON('["self-hosted","josemac"]') || matrix.os }}
+    runs-on: ${{ needs.route.outputs.mac == 'true' && matrix.os == 'macos-26' && fromJSON('["self-hosted","josemac"]') || needs.route.outputs.windows == 'true' && startsWith(matrix.os, 'windows') && fromJSON('["self-hosted","josewin"]') || needs.route.outputs.linux == 'true' && startsWith(matrix.os, 'ubuntu') && fromJSON('["self-hosted","joselinux"]') || matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
