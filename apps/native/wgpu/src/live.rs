@@ -6669,7 +6669,9 @@ impl Live {
             }
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.restore_root_visible));
-        request_hidden_root_paint(ctx);
+        // Preferences was undeclared while capturing. Recreate its viewport
+        // even when History stays hidden; an ordinary Wayland wake is logic-only.
+        request_hidden_root_ui(ctx);
         ctx.request_repaint();
     }
 
@@ -12243,12 +12245,16 @@ mod tests {
     fn capture_completion_restores_the_root_visibility_it_started_with() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
         let mut live = Live::new(ctx.clone(), Some(root.path().into()));
         live.restore_root_visible = false;
+        let preferences = crate::preferences_window::viewport();
+        live.recording_portal_windows = vec![preferences, main_countdown_viewport()];
 
         ctx.begin_pass(Default::default());
         live.finish_capture(&ctx, false);
         let mut output = ctx.end_pass();
+        output.textures_delta.clear();
         let commands = &output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
@@ -12256,7 +12262,16 @@ mod tests {
             .commands;
         assert!(commands.contains(&egui::ViewportCommand::Visible(false)));
         assert!(!commands.contains(&egui::ViewportCommand::Visible(true)));
-        output.textures_delta.clear();
+        assert!(
+            commands.contains(&egui::ViewportCommand::RequestPaintWhileHidden),
+            "the hidden Wayland root must redeclare its restored children"
+        );
+        assert!(
+            !output
+                .viewport_output
+                .contains_key(&main_countdown_viewport())
+        );
+        assert!(live.recording_portal_windows.is_empty());
         live.flush();
     }
 

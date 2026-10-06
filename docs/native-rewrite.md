@@ -35,6 +35,14 @@ paint request without creating it. Private-Sway lifecycle and real dark/light
 recording regressions pass. Isolated capture/recording smokes preserve the selected
 compositor PATH after dropping privileges instead of silently using old system Sway.
 Unsupported region/window screenshot modes remain unsupported even when granted.
+Capture completion now requests a child-declaration UI pass, so Preferences returns
+even when the Wayland History root remains hidden. The shortcut-host fixture waits
+for a portal screenshot's intentional History presentation before launching its next
+take, then explicitly exercises recording cleanup with History hidden and shown.
+Compositor focus is checked before pointer/scroll input; stale layout geometry alone
+does not establish that Preferences is the input target. Window-tree and full-desktop
+failure captures retain evidence for restoration failures. macOS is unchanged;
+Windows/X11 share the completion request but physical acceptance remains open.
 
 | Platform | Desktop-shortcuts slice implementation / verification |
 | --- | --- |

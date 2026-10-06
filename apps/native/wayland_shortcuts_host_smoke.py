@@ -52,6 +52,9 @@ def cases(binary, pointer, root, env, bus):
             original = settings.read_bytes()
             host_log = profile / "host.log"
             with host_log.open("w") as log:
+                # Exercise restoration with History hidden and shown, rather
+                # than letting asynchronous mapping decide which path runs.
+                history_shown = appearance == "light" and mode == "ui"
                 app = subprocess.Popen([binary, "--live", "--open-preferences",
                                         "--settings-file", str(settings),
                                         "--history-root", str(profile / "history"),
@@ -79,7 +82,8 @@ def cases(binary, pointer, root, env, bus):
                                         f'resize set {width} {height}, move position 80 80, focus'],
                                        env=env, check=True, stdout=subprocess.DEVNULL)
                         wait(lambda: window()["rect"]["width"] == width
-                             and window()["rect"]["height"] == height, "Preferences resize")
+                             and window()["rect"]["height"] == height
+                             and window()["focused"], "Preferences resize and focus")
 
                     def state(expected):
                         def found():
@@ -92,7 +96,7 @@ def cases(binary, pointer, root, env, bus):
                         node = window()
                         rect = detail.get("controls", {}).get("Desktop shortcuts")
                         page = detail.get("page", [])
-                        return (detail if rect and node and len(page) == 4
+                        return (detail if rect and node and node["focused"] and len(page) == 4
                                 and page[2:] == [node["rect"]["width"], node["rect"]["height"]]
                                 and page[1] <= rect[1] < rect[3] <= page[3] else None)
 
@@ -106,6 +110,10 @@ def cases(binary, pointer, root, env, bus):
                         # before correcting scroll from layout probe geometry.
                         time.sleep(.5)
                         for _ in range(60):
+                            if not window()["focused"]:
+                                subprocess.run(["swaymsg", f'[con_id={window()["id"]}] focus'],
+                                               env=env, check=True, stdout=subprocess.DEVNULL)
+                                wait(lambda: window()["focused"], "Preferences focus before scrolling")
                             detail = wait(lambda: layout().get("page") and layout(), "Preferences page layout")
                             offset = detail["card_top"] - detail["page"][1] - 16
                             if control_visible() and abs(offset) <= 2:
@@ -145,6 +153,9 @@ def cases(binary, pointer, root, env, bus):
                     expected = "pending" if mode.startswith("pending-") else "unavailable" if mode == "deny" else "bound"
                     state(expected)
                     ctl = dbus.Interface(bus.get_object(DESKTOP, ROOT), CONTROL)
+                    if history_shown:
+                        menu_action(bus, "Capture History…")
+                        wait(lambda: window("Capture History"), "explicitly shown History")
                     for width, height in ((880, 660), (560, 440)):
                         arrange(width, height)
                         show_shortcuts()
@@ -198,6 +209,17 @@ def cases(binary, pointer, root, env, bus):
                         assert rgba(next(iter(added)).parent / "capture.png") == original_pixels
                         assert source.read_bytes() == png(41, 19), "modified portal-owned source"
                         wait(window, "Preferences restored after capture")
+                        # Portal captures intentionally show History. Wait for
+                        # that completed UI transition before starting a take;
+                        # file publication precedes the host's History request.
+                        history = wait(lambda: window("Capture History"), "captured screenshot shown in History")
+                        if not history_shown:
+                            subprocess.run(["swaymsg", f'[con_id={history["id"]}] kill'],
+                                           env=env, check=True, stdout=subprocess.DEVNULL)
+                        wait(lambda: (window("Capture History") is not None) == history_shown,
+                             "chosen History visibility before recording")
+                        arrange(880, 660)
+                        show_shortcuts()
                         ctl.EmitActivated("record_window"); ctl.EmitDeactivated("record_window")
                         draft = wait(lambda: next(iter((profile / "recording-recovery").glob("*/manifest.json")), None),
                                      "recording shortcut creates a window take")
@@ -223,8 +245,12 @@ def cases(binary, pointer, root, env, bus):
                         wait(lambda: not window("Captures Recording Controls") and not draft.exists(),
                              "Delete removes only the empty failed window take")
                         wait(window, "Preferences restored after recording failure")
+                        wait(lambda: (window("Capture History") is not None) == history_shown,
+                             "recording completion restores prior History visibility")
                         arrange(880, 660)
                         show_shortcuts()
+                        assert (window("Capture History") is not None) == history_shown
+                        (profile / "restored-windows.json").write_text(json.dumps(windows(env), indent=2) + "\n")
                         shot("restored")
                         ctl.BeginFlood()
                     started = time.monotonic()
@@ -238,6 +264,9 @@ def cases(binary, pointer, root, env, bus):
                     assert settings.read_bytes() == original, "desktop binding UI edited requested keys"
                     print(json.dumps({"appearance": appearance, "mode": mode, "passed": True}), flush=True)
                 except Exception:
+                    (profile / "failed-windows.json").write_text(json.dumps(windows(env), indent=2) + "\n")
+                    subprocess.run(["grim", str(profile / "failed-desktop.png")],
+                                   env=env, check=True, timeout=5)
                     if app.poll() is None and window():
                         shot("failed")
                     print(host_log.read_text())
