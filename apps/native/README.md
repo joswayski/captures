@@ -496,7 +496,13 @@ uses duration minus one millisecond and holds the final decoded frame through th
 trailing MP4/GIF/VFR interval, including the uncropped Adjust crop view.
 `x11_recording_editor_smoke.py --timeline` exercises held green/blue/green pixels,
 end preview, failure/retry, keyboard/minimum-size input, MP4/GIF exports and unchanged
-source/History. Playing trim handles remain gated; physical input/accessibility and
+source/History. Playing trim handles now stop the old decoder before accepting the
+latest range and resuming, retaining the held gesture and focused keyboard handle.
+The end grip pauses with Loop off and wraps to the selected start with Loop on.
+Pause remains usable during teardown/decoding; focus loss, Close/Quit and failures
+retire resume intent without discarding staged edits. The private-X11 `--playing-trim`
+check covers held motion, both end policies, accepted export pixels and minimum-size
+controls in dark/light. Physical input/accessibility and
 macOS/Windows/Wayland compositor acceptance are not established by private X11.
 Unsigned development packages can include the existing pinned media tools,
 corresponding source and licenses; see [staging](../../DEVELOPMENT.md#native-development-open-with).

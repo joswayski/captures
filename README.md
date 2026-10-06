@@ -376,14 +376,17 @@ updates the existing History item. Cancellation stops preparation but cannot und
 publication once it begins. Ordinary failure keeps accepted edits; an uncertain
 result requires closing and reopening. This is not crash-atomic across the saved
 file and History. Saving with **Save as new file** on remains non-destructive.
-Trim handles do not decode on each pointer move; the preview updates when the drag
-ends. Focused trim handles also accept arrow keys and Page Up/Page Down.
+Trim handles preview their edge while held, with one active decode and only the
+latest waiting range and position. Focused handles also accept arrow keys and
+Page Up/Page Down. During playback, changing a handle stops the old decoder,
+accepts the latest trim and resumes without ending the gesture. The end grip
+pauses with Loop off and wraps to the selected start with Loop on.
 Dragging the trim track continuously seeks on both native hosts, paused or playing.
 Decoding keeps only the latest waiting position. A playing seek stops the old
 decoder, then resumes at the latest accepted frame without another Play press;
 release does not restart it. Pause, focus loss, Close, Quit or failure cancel that
 resume intent. A failed seek retains the accepted frame and ends the gesture.
-Numeric seek and trim/edit/export controls remain gated during playback or decoding.
+Numeric seek and other edit/export controls remain gated during playback or decoding.
 **Reset trim** restores the full range.
 **Adjust crop** shows an uncropped source frame with draggable edges/corners and
 interior move. Crop handles follow the aspect lock; arrows move one source pixel,
@@ -398,7 +401,7 @@ preview. Thumbnail generation can be canceled or retried without losing edits;
 it does not change the source recording. **Play/Pause** offers motion within
 the accepted trim, with a preview capped at 30 fps and 1280 × 720. Pause retains
 the last displayed frame; reaching the trim end makes Play restart that range.
-Editing and export controls wait for playback to stop. Losing focus or minimizing
+Other editing and export controls wait for playback to stop. Losing focus or minimizing
 pauses playback. **Loop preview**, off by default, repeats the accepted trim until
 paused. It can be switched on or off during playback and never changes the export.
 **Sound**, on by default like the shipping preview and changeable while stopped,
@@ -455,8 +458,8 @@ custom output dimensions, MP4/GIF/WebM settings, automatic size estimation and
 cancellable **Save** with the same shipping save semantics as Windows/Linux. Available system and microphone tracks have independent 0–200%
 volume and mute controls plus mono output; audio applies to MP4 while GIF disables
 the controls without losing their MP4 values. Its graphical trim handles overlay an
-immutable 12-frame source-relative thumbnail strip and stage the same numeric values
-without seeking; the edited preview updates when the drag ends. Loading can be
+immutable 12-frame source-relative thumbnail strip and preview the edge live with
+the same playback, coalescing and failure policy as Windows/Linux. Loading can be
 canceled or retried without disabling editing. Play/Pause presents bounded accepted-edit motion frames and
 a source-relative playhead without changing the accepted preview, edits, History or
 source. Like the shipping preview it plays the accepted MP4 mix with Sound on by

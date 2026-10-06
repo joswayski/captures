@@ -89,7 +89,11 @@ arrow/Page Up/Page Down keys. Paused handle press, thresholded dragging and keyb
 nudges preview the edge live with one active decode and only the latest queued
 edit/position. Failure retains the accepted still and staged values, ends the
 gesture and requires fresh input to retry. Other edits and Save wait for decoding;
-background estimate/comparison waits for release. Playing trim handles stay gated.
+background estimate/comparison waits for release. Playing handles stop the old
+decoder, accept the latest trim, then resume without ending a held gesture or
+losing keyboard focus. The end grip pauses with Loop off and wraps to the selected
+start with Loop on. Sound/Loop selections survive; Pause remains usable during a
+pending resume. Focus loss, Close/Quit and failures retire resume intent.
 **Adjust crop**
 loads an independent full-source still at the accepted position; eight handles and
 interior move stage source-pixel coordinates with the current aspect lock. Arrow
@@ -107,8 +111,8 @@ provides silent playback of the accepted trim using one persistent shared decode
 at up to 30 fps and 1280 × 720. A single latest-frame slot prevents queued stale
 frames. Pause retains the last displayed frame; EOF makes the next Play restart
 the trim. Focus loss/minimize pauses, and close waits for teardown before checking
-unsaved edits. Seek/edit/save/estimate wait for playback to stop; playback never
-changes accepted edits or History. **Loop preview** defaults off and can be changed
+unsaved edits. Numeric seek/other edits/save/estimate wait for playback to stop;
+motion frames never change accepted edits or History. **Loop preview** defaults off and can be changed
 while playing; turning it off finishes the current lap, while Pause stops it.
 Each lap reopens the accepted trim after the previous decoder finishes teardown.
 Audio playback remains open. See the

@@ -2439,21 +2439,37 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         editingText = false; savedFingerprint = nil
     }
 
-    /// Apply the staged range and its edge frame atomically. Only paused
-    /// handles remain editable while this operation owns the decoder.
+    /// Apply the staged range and its edge frame atomically, after stopping
+    /// the old playback decoder. Retain only the latest held trim intent.
     private func previewTrim(to position: UInt64) {
-        guard playbackState == .idle, !pickerOpen, !requiresReopen,
+        guard !pickerOpen, !requiresReopen,
               !busy || estimating || trimPreviewRequest != nil || pendingTrimPreview != nil,
               let duration = presentation?.snapshot.durationMilliseconds, duration > 0,
               let edit = stagedEdit, let export = stagedExport,
               !maximumSizeEnabled || maximumSizeBytes != nil else { return }
-        let position = min(position, duration - 1)
+        let playing = playbackState == .playing || resumeAfterSeek
+        let atEnd = position == trimTimeline.endMilliseconds
+        let resume = playing && (!atEnd || playbackLoopEnabled)
+        let position = min(playing && atEnd && playbackLoopEnabled
+            ? trimTimeline.startMilliseconds : position, duration - 1)
         let object: [String: Any] = ["operation": "update_preview_at", "edit": edit,
                                      "export": export, "position_ms": position]
         applyWork?.cancel(); applyWork = nil; applyWorkKey = nil; applyFailedKey = nil
         invalidateComparison()
         trimTimeline.setAcceptedPosition(position)
         seekSlider.doubleValue = Double(position); seekLabel.stringValue = time(position)
+        if playbackState != .idle {
+            pendingTrimPreview = object
+            if playbackState == .playing {
+                pausePlayback(resumingAfterSeek: resume) { [weak self] in
+                    guard let self, let latest = self.pendingTrimPreview else { return }
+                    self.pendingTrimPreview = nil
+                    self.performTrimPreview(latest)
+                }
+            } else { resumeAfterSeek = resume; updateControls() }
+            return
+        }
+        if playing { resumeAfterSeek = resume }
         if trimPreviewRequest != nil || pendingTrimPreview != nil {
             pendingTrimPreview = canonical(object) == canonical(trimPreviewRequest) ? nil : object
             return
@@ -2481,10 +2497,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             if success, let next {
                 self.performTrimPreview(next)
             } else if !success {
+                self.resumeAfterSeek = false
                 self.trimTimeline.endDrag()
                 self.applyFailedKey = self.stagedKey
                 self.restoreAcceptedPresentation()
                 self.trimTimeline.setAcceptedPosition(self.presentation?.snapshot.positionMilliseconds)
+            } else if self.resumeAfterSeek {
+                self.resumeAfterSeek = false
+                self.startPlayback(preservingTrim: true)
             }
         })
     }
@@ -2590,6 +2610,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func togglePlayback() {
+        if resumeAfterSeek { pausePlayback(); updateControls(); return }
         switch playbackState {
         case .idle:
             if estimating {
@@ -2622,13 +2643,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         updateControls()
     }
 
-    private func startPlayback() {
+    private func startPlayback(preservingTrim: Bool = false) {
         invalidateComparison()
         guard !busy, !pickerOpen, playbackState == .idle,
               pendingCropInputValid, stagedEdit != nil, stagedExport != nil,
               !stagedDiffers, let snapshot = presentation?.snapshot,
               let cancel = NativeRecordingEditorCancel() else { return }
-        window.makeFirstResponder(nil)
+        if !preservingTrim { window.makeFirstResponder(nil) }
         guard !stagedDiffers else { return }
         let trimStart = (snapshot.edit["trim_start_ms"] as? NSNumber)?.uint64Value ?? 0
         let position = playbackReachedEOF ? trimStart
@@ -2681,6 +2702,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     self.status.textColor = self.tokens.color("text-muted")
                     self.status.stringValue = "\(self.playbackStatusName) paused."
                 case .failure(let error):
+                    if self.pendingTrimPreview != nil {
+                        self.applyFailedKey = self.stagedKey
+                        self.pendingTrimPreview = nil
+                    }
                     self.resumeAfterSeek = false; self.pendingSeek = nil
                     self.trimTimeline.endDrag()
                     self.restoreAcceptedPresentation()
@@ -3729,8 +3754,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         microphoneAudio.isEnabled = available && !gif
         monoOutput.isEnabled = available && !gif
         let trimPending = trimPreviewRequest != nil || pendingTrimPreview != nil
-        trimTimeline.setEditingEnabled((available || trimPending) && valid && !pickerOpen
-            && !requiresReopen && playbackState == .idle)
+        trimTimeline.setEditingEnabled((available || trimPending || playbackState == .playing)
+            && valid && !pickerOpen && !requiresReopen)
         let seekPending = seekingPosition != nil || pendingSeek != nil
         let playbackSeek = playbackState == .playing || resumeAfterSeek
         trimTimeline.seekEnabled = (available || seekPending || playbackSeek) && valid && !stagedDiffers && !trimPending
@@ -3763,8 +3788,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             && playbackState != .pausing
         playbackSound.isEnabled = available
             && playbackState == .idle
-        switch playbackState {
-        case .idle:
+        switch (playbackState, resumeAfterSeek) {
+        case (.idle, false):
             playbackButton?.title = "Play"
             playbackButton?.icon = .shipping("resume")
             playbackButton?.setAccessibilityLabel(playbackSoundEnabled
@@ -3773,13 +3798,13 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                 : "Play the accepted trim and mix with Sound on."
             playbackButton?.isEnabled = available && valid && !stagedDiffers
                 && !cropAdjustmentActive
-        case .playing:
+        case (.playing, _), (_, true):
             playbackButton?.title = "Pause"
             playbackButton?.icon = .shipping("pause")
             playbackButton?.setAccessibilityLabel("Pause recording preview")
             playbackButton?.toolTip = "Pause the preview."
             playbackButton?.isEnabled = true
-        case .pausing:
+        case (.pausing, false):
             playbackButton?.title = "Pausing…"
             playbackButton?.icon = .shipping("pause")
             playbackButton?.setAccessibilityLabel("Pausing recording preview")

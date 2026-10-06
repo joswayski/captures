@@ -497,6 +497,9 @@ jobs:
       - name: Exercise held recording timeline scrubbing and seek failure on private X11
         if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --scrub --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-scrub-$APPEARANCE"
+      - name: Exercise held playing trim, end pause and loop on private X11
+        if: matrix.suite == 'recording' && matrix.shard == 2
+        run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --playing-trim --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-playing-trim-$APPEARANCE"
       - name: Exercise silent recording playback and teardown on private X11
         if: matrix.suite == 'recording' && matrix.shard == 2
         run: /usr/bin/python3 apps/native/x11_recording_editor_smoke.py --playback --appearance "$APPEARANCE" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-recording-playback-$APPEARANCE"
