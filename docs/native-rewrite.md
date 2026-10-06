@@ -151,6 +151,24 @@ physical GNOME/KDE permission UX, cursor/audio and mixed-DPI acceptance stay ope
 | X11 | Direct target/monitor positioning and global Escape retained; local workspace/native tests cover existing lifecycle; hardware acceptance remains open |
 | Wayland | History/countdown/HUD/MP4 connected and exercised on disposable dark/light Sway, including cancellation and transport-loss recovery; physical parity remains open |
 
+The window-recording follow-up adds **Record window…** to Wayland History and
+routes Window recording shortcuts through the same countdown/session/HUD. It
+requests only ScreenCast window sources (bit 2), requires portal v3+ and an
+explicit matching `source_type`, and never crops or substitutes a display grant.
+`portal_window` stores no guessed window ID or geometry. Pause/resume and restart
+ask afresh; the chooser can select a different window for each segment.
+Denied/cancelled, wrong/missing source, legacy and unsupported-backend requests
+retain the existing cleanup/recovery semantics without fallback or publication.
+The HUD distinguishes selected-window capture from display capture's included
+controls. Region capture and window screenshots remain unavailable on Wayland.
+
+| Platform | Window-recording follow-up implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing native-window recorder unchanged; portal targets explicitly rejected; physical execution unverified in this orb |
+| Windows | Existing native-window recorder unchanged; portal targets explicitly rejected; physical execution unverified in this orb |
+| X11 | Existing direct-window recorder retained; shared model/session tests cover the new target without changing direct acquisition; physical acceptance open |
+| Wayland | Portal-window route implemented; scripted grants cover protocol admission/cleanup, while dark/light Sway checks the actual wlr unsupported-window error and normal/minimum UI without display fallback; successful GNOME/KDE window capture and physical acceptance unverified |
+
 The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
 when a tray exists. Preferences, Feedback and media bootstrap independently;
 empty/GIO relaunch reaches Preferences without flashing History. Missing/lost tray

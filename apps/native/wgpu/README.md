@@ -418,13 +418,16 @@ independent expectations. This is not physical GNOME/KDE or native-host acceptan
 
 ### Wayland video acquisition diagnostic
 
-`captures_recording_xcap::PortalVideoSource` requests one display through the public
-ScreenCast portal and connects only to its granted PipeWire remote. CreateSession,
+`captures_recording_xcap::PortalVideoSource` requests one display or window through
+the public ScreenCast portal and connects only to its granted PipeWire remote. CreateSession,
 SelectSources and Start responses are matched to the pinned unique portal owner
 and request handle. Denial/cancellation ends the request without xcap, unrestricted
 PipeWire or compositor fallback. No restore token or persistent permission is
 requested. Cursor inclusion requires the advertised hidden/embedded mode; click
-highlights and window/region targeting are not implemented by this source.
+highlights, keystrokes and region targeting are unavailable. Window requests use
+only source bit 2, require portal v3+ advertising window sources, and reject absent
+or non-window `source_type` before opening the remote. The portal chooses the
+window; Captures does not enumerate window IDs or crop a display grant.
 
 The worker accepts bounded, single-plane CPU-mapped RGBA/BGRA/RGBx/BGRx frames.
 It validates chunk offsets, sizes, positive strides and dimensions, rejects
@@ -457,9 +460,11 @@ the backend/service nor changes selection, consent or remote grants. This is not
 stock-backend or physical consent acceptance.
 
 The smoke uses a private mount namespace, bus, Sway and PipeWire/WirePlumber with
-DISPLAY unset. Thirteen protocol cases cover peer spoofs, early responses,
-denial/cancellation, lost replies, legacy cursors, unsupported display/cursor modes,
-invalid streams and session cleanup. A separate animated Wayland client supplies
+DISPLAY unset. Display and window protocol cases cover peer spoofs, early responses,
+denial/cancellation, lost replies, legacy portals/cursors, unsupported source/cursor modes,
+wrong or absent window source types, invalid streams and session cleanup. The
+scripted window grant reaches the remote-open call, but intentionally returns an
+error there: it is protocol coverage, not a real captured window. A separate animated Wayland client supplies
 two asymmetric frames. The real portal/PipeWire path must see both phases and
 match every output pixel across repeated sessions, with cancellation during an
 active stream leaving no output. Terminating the backend while the granted stream
@@ -474,11 +479,12 @@ output directory and never imports/overwrites profile data. `--scenario` accepts
 `video`, `gif`, `pause`, `restart`, `discard`, `recover` or `stream-loss`; the last
 requires externally ending the granted stream. `--duration-ms` defaults to 450;
 `--cancel-after-ms` cancels consent/start or discards an active session. Both probes
-reject DISPLAY. Portal sessions serialize `{"type":"portal_display"}` without
-monitor IDs or origins; dimensions come only from validated pixel frames. Cursor
+accept `--target display|window` (default display) and reject DISPLAY. Portal sessions
+serialize `{"type":"portal_display"}` or `{"type":"portal_window"}` without
+monitor/window IDs or origins; dimensions come only from validated pixel frames. Cursor
 pixels are portal-owned, and unsupported click/keystroke overlays are rejected.
 
-Passing `--recording-binary` repeats all 13 protocol cases through the session,
+Passing `--recording-binary` repeats both targets' protocol cases through the session,
 then checks MP4/GIF publication, asymmetric pause/resume durations (excluding an
 800 ms pause), restart replacement, paused-draft recovery, discard/cancellation,
 and refusal to overwrite existing outputs. FFmpeg independently decodes both
@@ -493,8 +499,8 @@ controls follow-up below connects MP4 recording in the development host.
 
 ### Native Wayland recording controls
 
-In `--live` Wayland History, **Record display…** prepares an MP4 take from the
-recording preferences, verifies FFmpeg/ffprobe on the worker, and shows a compact
+In `--live` Wayland History, **Record display…** and **Record window…** prepare an MP4 take from the
+recording preferences, verify FFmpeg/ffprobe on the worker, and show a compact
 native countdown without monitor IDs, origins or geometry. Before portal consent,
 the host unmaps History, Preferences and the countdown and waits for compositor
 acknowledgements. A new session uses only the portal-granted PipeWire remote.
@@ -504,9 +510,13 @@ portal cancellation discards the empty initial bundle. A cancelled resume leaves
 accepted media paused. Source loss stops the timer/controls, releases the session
 owner, restores the workspace and exposes retained partial media in recovery.
 
-Linux includes the recording controls in video. Hide is available only with a
+Window recording requires portal v3+ with window-source support. A window grant
+shares only the selected window; each resume/restart obtains fresh consent and
+can select a different window. Unsupported backends fail visibly without display
+fallback, retaining a failed empty take for Retry/Delete.
+Linux display capture includes the recording controls in video. Hide is available only with a
 working tray restoration path; the HUD states when it is unavailable. Screenshots
-during recording, region/window targeting and click/keystroke overlays are not
+during recording, region targeting and click/keystroke overlays are not
 supported on Wayland. Window placement after remapping is compositor-controlled.
 
 ```sh
@@ -518,13 +528,19 @@ supported on Wayland. Window placement after remapping is compositor-controlled.
 
 Use a new disposable output directory and the video fixture's pinned backend.
 The dark/light real-window smoke uses compositor geometry and real pointer input,
+checks the window action at normal/minimum sizes and the actual wlr backend's
+unsupported-window error, failed `portal_window` manifest, Retry/Delete and no media/fallback,
 checks countdown/unmapping, exactly frozen paused time, pause-free MP4 duration,
 and independently decoded pixels beneath the pre-capture windows. It closes the
 countdown, sends a public-portal cancellation, terminates the active backend,
 and checks stable playable recovery bytes after a clean timed app exit.
+Duration uses independently observed running/paused/Stop wall-time bounds, excluding
+grant latency from the lower bound. The held pause must exceed the entire bounds
+gap plus rounding tolerance, so including it in output necessarily fails.
 CI retains its logs/media/screenshots. This is software-rendered Sway with
 non-interactive fixture consent, not physical GNOME/KDE, audio/cursor, mixed-DPI
-or stock-portal permission UX acceptance. macOS/Windows/direct-X11 paths remain
+or stock-portal permission UX acceptance. Successful GNOME/KDE window capture is
+unverified. macOS/Windows/direct-X11 paths remain
 on their existing engines; no Tauri cutover or native release follows.
 
 ### Native Wayland portal screenshots
@@ -539,7 +555,8 @@ Portal policy controls consent, image extent and cursor inclusion. There is no
 guessed named-monitor geometry and no mini preview; captures return to History.
 History **Edit** opens the normal screenshot editor directly on Wayland, without
 first placing a preview. **Restore** is disabled with a platform limitation tooltip.
-Nonzero native countdown and region/window/recording requests fail explicitly.
+Nonzero screenshot countdown and region/window screenshots fail explicitly;
+display/window recording uses the controls path above.
 
 The private eframe patch keeps hidden-root logic running without presenting
 buffers, refreshes child visibility, preserves compositor occlusion, and recreates

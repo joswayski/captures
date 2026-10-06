@@ -49,6 +49,9 @@ pub enum RecordingTarget {
     /// A display selected by the public ScreenCast portal, with no stable
     /// monitor ID or compositor-space geometry claimed by Captures.
     PortalDisplay,
+    /// A window selected by the public ScreenCast portal, not an enumerated
+    /// native window ID or a crop of a display stream.
+    PortalWindow,
     Display {
         display_id: String,
     },
@@ -59,6 +62,12 @@ pub enum RecordingTarget {
     Window {
         window_id: String,
     },
+}
+
+impl RecordingTarget {
+    pub const fn is_portal(&self) -> bool {
+        matches!(self, Self::PortalDisplay | Self::PortalWindow)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -180,9 +189,7 @@ impl RecordingOptions {
         if self.countdown_seconds > 10 {
             return Err("recording countdown must be at most 10 seconds");
         }
-        if self.target == RecordingTarget::PortalDisplay
-            && (self.highlight_clicks || self.show_keystrokes)
-        {
+        if self.target.is_portal() && (self.highlight_clicks || self.show_keystrokes) {
             return Err("portal recording does not support click highlights or keystrokes");
         }
         if matches!(self.target, RecordingTarget::Region { rect, .. } if !rect.is_valid()) {
@@ -284,25 +291,30 @@ mod tests {
 
     #[test]
     fn portal_target_roundtrips_without_geometry_and_rejects_unsupported_overlays() {
-        let mut recording = options(RecordingKind::Video);
-        recording.target = RecordingTarget::PortalDisplay;
-        assert_eq!(
-            serde_json::to_value(&recording.target).unwrap(),
-            serde_json::json!({"type": "portal_display"})
-        );
-        let bytes = serde_json::to_vec(&recording).unwrap();
-        assert_eq!(
-            serde_json::from_slice::<RecordingOptions>(&bytes).unwrap(),
-            recording
-        );
-        assert!(recording.validate().is_ok()); // Embedded portal cursor is supported.
-        for (clicks, keys) in [(true, false), (false, true)] {
-            recording.highlight_clicks = clicks;
-            recording.show_keystrokes = keys;
+        for (target, name) in [
+            (RecordingTarget::PortalDisplay, "portal_display"),
+            (RecordingTarget::PortalWindow, "portal_window"),
+        ] {
+            let mut recording = options(RecordingKind::Video);
+            recording.target = target;
             assert_eq!(
-                recording.validate(),
-                Err("portal recording does not support click highlights or keystrokes")
+                serde_json::to_value(&recording.target).unwrap(),
+                serde_json::json!({"type": name})
             );
+            let bytes = serde_json::to_vec(&recording).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<RecordingOptions>(&bytes).unwrap(),
+                recording
+            );
+            assert!(recording.validate().is_ok()); // Embedded portal cursor is supported.
+            for (clicks, keys) in [(true, false), (false, true)] {
+                recording.highlight_clicks = clicks;
+                recording.show_keystrokes = keys;
+                assert_eq!(
+                    recording.validate(),
+                    Err("portal recording does not support click highlights or keystrokes")
+                );
+            }
         }
     }
 

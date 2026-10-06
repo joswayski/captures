@@ -151,7 +151,7 @@ impl Worker {
                         // History can launch a portal recording without opening the
                         // capture menu, whose direct path verifies the toolchain.
                         let verified = if cfg!(target_os = "linux")
-                            && matches!(options.target, captures_recording::RecordingTarget::PortalDisplay)
+                            && options.target.is_portal()
                         {
                             tools.verify().map_err(|error| format!("Native recording requires FFmpeg and ffprobe: {error}"))
                         } else {

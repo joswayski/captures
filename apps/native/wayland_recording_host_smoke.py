@@ -66,8 +66,8 @@ def events(path, name=None):
     return parsed
 
 
-def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrupt_source):
-    profile = root / appearance
+def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrupt_source, window_only=False):
+    profile = root / (appearance + "-window" if window_only else appearance)
     profile.mkdir()
     history_root = profile / "history"
     settings = profile / "settings.json"
@@ -177,6 +177,37 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
              window("Captures Preferences"), "History and Preferences mapped")
         arrange("Capture History", (24, 28, 880, 640))
         arrange("Captures Preferences", (650, 300, 600, 560))
+        if window_only:
+            window_layout = settled_layout("portal-window-recording-layout", "Capture History")
+            assert window_layout[0]["enabled"], "Record window must be reachable without a tray"
+            shot("window-action")
+            arrange("Capture History", (24, 28, 560, 480))
+            minimum = settled_layout("portal-window-recording-layout", "Capture History")
+            left, top, right, bottom = minimum[0]["button"]
+            width, height = minimum[0]["viewport_size"]
+            assert 0 <= left < right <= width and 0 <= top < bottom <= height, minimum
+            settled_layout("portal-limitation-layout", "Capture History", lambda detail:
+                           detail["clip"][0] <= detail["rect"][0] < detail["rect"][2] <= detail["clip"][2]
+                           and detail["clip"][1] <= detail["rect"][1] < detail["rect"][3] <= detail["clip"][3])
+            shot("window-action-minimum")
+            click_layout(minimum)
+            retry = hud_control("restart", "failed", True)
+            assert retry[0]["label"] == "Retry recording"
+            assert hud_control("delete", "failed", True)[0]["enabled"]
+            draft_path = wait(lambda: next(iter((profile / "recording-recovery").glob("*/manifest.json")), None),
+                              "failed window take retained for retry/delete")
+            draft = json.loads(draft_path.read_text())
+            assert draft["state"] == "failed" and draft["options"]["target"] == {"type": "portal_window"}, draft
+            assert "cannot share a window" in draft["last_error"], draft
+            assert not draft["segments"] and not list(profile.rglob("*.mp4"))
+            assert not list(history_root.glob("*/metadata.json")), "window request must not fall back to a display"
+            shot("window-unavailable")
+            report = {"appearance": appearance, "target": draft["options"]["target"],
+                      "window_only_request": True, "unsupported_backend_error": draft["last_error"],
+                      "retry_delete_available": True, "fallback": False, "published_media": False}
+            (profile / "result.json").write_text(json.dumps(report, indent=2))
+            print(json.dumps(report), flush=True)
+            return
         history_layout = settled_layout("portal-recording-layout", "Capture History")
         assert history_layout[0]["enabled"], \
             "Record display button is disabled (recording toolchain did not initialize)"
@@ -198,6 +229,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         assert countdown["rect"]["width"] > 0 and countdown["rect"]["height"] > 0
 
         running = hud_control("pause_resume", "recording", True)
+        running_wall = time.monotonic()
         assert not window("Captures Recording Countdown"), "countdown and HUD overlapped"
         screenshot = hud_control("screenshot", "recording", False)
         stop_control = hud_control("stop", "recording", True)
@@ -209,26 +241,35 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         click_layout(running)
         pause_wall_start = time.monotonic()
         paused = hud_control("pause_resume", "paused", True)
+        paused_wall = time.monotonic()
         paused_at = paused[0]["elapsed_ms"]
         assert paused_at >= before_pause
         shot("paused-hud")
-        time.sleep(.83)  # deliberately not aligned with the HUD's 100 ms timer
+        # The hold must dominate two acquisitions and observation latency, so
+        # the independent duration bounds still reject a pause-inclusive clock.
+        time.sleep(3.13)  # deliberately not aligned with the HUD's 100 ms timer
         paused_later = hud_control("pause_resume", "paused", True)
         assert paused_later[0]["elapsed_ms"] == paused_at, (paused_at, paused_later[0])
         assert hud_control("screenshot", "paused", False)[0]["enabled"] is False
         assert hud_control("stop", "paused", True)[0]["enabled"] is True
 
         # Resume opens a fresh portal grant/segment; real input must remain usable.
-        paused_wall_seconds = time.monotonic() - pause_wall_start
         resume_wall = time.monotonic()
+        paused_wall_seconds = resume_wall - paused_wall
         click_layout(paused_later)
         resumed = hud_control("pause_resume", "recording", True)
+        resumed_wall = time.monotonic()
         assert resumed[0]["elapsed_ms"] >= paused_at
         time.sleep(.9)
         stop_layout = hud_control("stop", "recording", True)
         hud_active_seconds = stop_layout[0]["elapsed_ms"] / 1000
         click_layout(stop_layout)
-        expected_duration = pause_wall_start - submit_wall + time.monotonic() - resume_wall
+        stop_clicked_wall = time.monotonic()
+        stopped = wait(lambda: events(host_log_path, "recording-stop-submit"), "accepted Stop command")[-1]["detail"]
+        stop_submitted_wall = time.monotonic()
+        assert stopped["generation"] == submit["generation"], stopped
+        lower_duration = pause_wall_start - running_wall + stop_clicked_wall - resumed_wall
+        upper_duration = paused_wall - submit_wall + stop_submitted_wall - resume_wall
 
         metadata = wait(lambda: next(iter(history_root.glob("*/metadata.json")), None),
                         "published recording metadata", timeout=25)
@@ -244,11 +285,18 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         assert len(videos) == 1 and videos[0]["codec_name"] == "h264", probe
         assert (int(videos[0]["width"]), int(videos[0]["height"])) == (WIDTH, HEIGHT), probe
         duration = float(probe["format"]["duration"])
-        # Independent active wall intervals include portal connection latency,
-        # unlike the HUD clock, which starts after the worker accepts a segment.
-        # The allowance is smaller than the held pause, so including pause fails.
-        assert expected_duration > 1 and paused_wall_seconds > 1
-        assert abs(duration - expected_duration) <= .75, (duration, expected_duration, entry)
+        # Bound accepted media with independently observed lifecycle times, not
+        # the HUD counter or encoded duration. Grant/first-frame latency belongs
+        # only in the upper bound. Running-state intervals give the lower bound.
+        # Two frame periods plus dispatch rounding fit inside 150 ms at 15 FPS.
+        tolerance = .15
+        assert lower_duration > 1 and upper_duration >= lower_duration
+        # This discriminates a clock that accidentally includes the entire pause
+        # even if valid output lands at the lowest allowed recording duration.
+        assert paused_wall_seconds > upper_duration - lower_duration + 2 * tolerance, \
+            (paused_wall_seconds, [lower_duration, upper_duration], duration)
+        assert lower_duration - tolerance <= duration <= upper_duration + tolerance, \
+            (duration, [lower_duration, upper_duration], entry)
 
         # Sample the first decoded frame beneath both pre-capture windows.
         frame = subprocess.check_output([
@@ -329,7 +377,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
             "target": entry["target"],
             "dimensions": [WIDTH, HEIGHT],
             "duration_seconds": duration,
-            "expected_active_seconds": expected_duration,
+            "expected_active_bounds_seconds": [lower_duration, upper_duration],
             "hud_active_seconds": hud_active_seconds,
             "paused_wall_seconds": paused_wall_seconds,
             "pause_elapsed_ms": [paused_at, paused_later[0]["elapsed_ms"]],
@@ -466,6 +514,8 @@ def isolated(args):
         ready(pointer)
         for appearance in ("dark", "light"):
             portal_mode("real")
+            run_appearance(str(args.binary.resolve()), pointer, output, appearance, env,
+                           portal_mode, lambda: stop(backend), window_only=True)
             run_appearance(str(args.binary.resolve()), pointer, output, appearance, env,
                            portal_mode, lambda: stop(backend))
         (output / "PASS").write_text("dark and light native Wayland recording host acceptance passed\n")

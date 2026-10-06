@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use captures_recording::RecordingTarget;
 use dbus::{
     Path,
     arg::{PropMap, RefArg, Variant},
@@ -75,6 +76,7 @@ struct PortalSession {
 
 impl PortalSession {
     fn open(
+        source_type: u32,
         show_cursor: bool,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(Self, OwnedFd, Stream), PortalVideoError> {
@@ -176,8 +178,20 @@ impl PortalSession {
         let sources: u32 = proxy
             .get(SCREENCAST, "AvailableSourceTypes")
             .map_err(error)?;
-        if sources & 1 == 0 {
-            return Err(error("the portal cannot share a display").into());
+        if sources & source_type == 0 {
+            let name = if source_type == 1 {
+                "display"
+            } else {
+                "window"
+            };
+            return Err(error(format!("the portal cannot share a {name}")).into());
+        }
+        // Window streams must identify their source type, introduced in v3.
+        // Do not publish a display stream under a promised window target.
+        if source_type == 2 && version < 3 {
+            return Err(
+                error("window recording requires ScreenCast portal version 3 or later").into(),
+            );
         }
         let cursor_mode = if show_cursor { 2_u32 } else { 1_u32 };
         if version >= 2 {
@@ -192,7 +206,7 @@ impl PortalSession {
         }
         let path = session.path.clone();
         session.request("SelectSources", cancelled, |proxy, mut options| {
-            options.insert("types".into(), value(1_u32));
+            options.insert("types".into(), value(source_type));
             options.insert("multiple".into(), value(false));
             if version >= 2 {
                 options.insert("cursor_mode".into(), value(cursor_mode));
@@ -205,7 +219,7 @@ impl PortalSession {
         let results = session.request("Start", cancelled, |proxy, options| {
             proxy.method_call(SCREENCAST, "Start", (path, "", options))
         })?;
-        let stream = selected_stream(&results)?;
+        let stream = selected_stream(&results, source_type)?;
         check_cancel(cancelled)?;
         let (fd,): (dbus::arg::OwnedFd,) = session
             .connection
@@ -335,7 +349,7 @@ struct Stream {
     serial: Option<u64>,
 }
 
-fn selected_stream(results: &PropMap) -> Result<Stream, String> {
+fn selected_stream(results: &PropMap, source_type: u32) -> Result<Stream, String> {
     let mut streams = results
         .get("streams")
         .and_then(|value| value.0.as_iter())
@@ -364,6 +378,7 @@ fn selected_stream(results: &PropMap) -> Result<Stream, String> {
     }
     let mut properties = properties;
     let mut serial = None;
+    let mut source_matched = false;
     while let Some(name) = properties.next() {
         let item = properties
             .next()
@@ -381,11 +396,21 @@ fn selected_stream(results: &PropMap) -> Result<Stream, String> {
                         .ok_or_else(|| error("invalid stream serial"))?,
                 );
             }
-            Some("source_type") if value.as_u64() != Some(1) => {
-                return Err(error("the selected source is not a display"));
+            Some("source_type") => {
+                if value.as_u64() != Some(u64::from(source_type)) {
+                    return Err(error(
+                        "the selected source does not match the requested recording target",
+                    ));
+                }
+                source_matched = true;
             }
             _ => {}
         }
+    }
+    if source_type == 2 && !source_matched {
+        return Err(error(
+            "the portal did not identify the selected window source",
+        ));
     }
     Ok(Stream { node, serial })
 }
@@ -401,14 +426,20 @@ pub struct PortalVideoSource {
 
 impl PortalVideoSource {
     pub fn start(
+        target: &RecordingTarget,
         show_cursor: bool,
         frame_rate: u16,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(Self, Receiver<Frame>), PortalVideoError> {
+        let source_type = match target {
+            RecordingTarget::PortalDisplay => 1,
+            RecordingTarget::PortalWindow => 2,
+            _ => return Err(error("recording target is not a portal source").into()),
+        };
         if !(1..=60).contains(&frame_rate) {
             return Err(error("invalid video frame rate").into());
         }
-        let (session, fd, stream) = PortalSession::open(show_cursor, cancelled)?;
+        let (session, fd, stream) = PortalSession::open(source_type, show_cursor, cancelled)?;
         let (control, commands) = pw::channel::channel();
         let (tx, frames) = mpsc::sync_channel(1);
         let warning = Arc::new(Mutex::new(None));
@@ -838,22 +869,39 @@ mod tests {
     }
 
     #[test]
-    fn selected_stream_rejects_empty_multiple_non_display_and_invalid_nodes() {
+    fn selected_stream_preserves_target_type_and_rejects_ambiguous_windows() {
         let results = |streams: Vec<(u32, PropMap)>| [("streams".into(), value(streams))].into();
-        assert!(selected_stream(&results(vec![])).is_err());
+        assert!(selected_stream(&results(vec![]), 1).is_err());
         assert!(
-            selected_stream(&results(vec![(13, PropMap::new()), (37, PropMap::new())])).is_err()
+            selected_stream(
+                &results(vec![(13, PropMap::new()), (37, PropMap::new())]),
+                1
+            )
+            .is_err()
         );
-        assert!(selected_stream(&results(vec![(u32::MAX, PropMap::new())])).is_err());
-        let properties = [("source_type".into(), value(2_u32))].into();
-        assert!(selected_stream(&results(vec![(13, properties)])).is_err());
-        let properties = [
-            ("source_type".into(), value(1_u32)),
-            ("pipewire-serial".into(), value(987654321_u64)),
-        ]
-        .into();
-        let stream = selected_stream(&results(vec![(37, properties)])).unwrap();
-        assert_eq!(stream.node, 37);
-        assert_eq!(stream.serial, Some(987654321));
+        assert!(selected_stream(&results(vec![(u32::MAX, PropMap::new())]), 1).is_err());
+        // Older display-only portals omit source_type; window grants cannot.
+        assert!(selected_stream(&results(vec![(13, PropMap::new())]), 1).is_ok());
+        assert!(selected_stream(&results(vec![(13, PropMap::new())]), 2).is_err());
+        for returned in [1_u32, 2, 4] {
+            for requested in [1, 2] {
+                let properties = [
+                    ("source_type".into(), value(returned)),
+                    ("pipewire-serial".into(), value(987654321_u64)),
+                ]
+                .into();
+                let stream = selected_stream(&results(vec![(37, properties)]), requested);
+                if returned == requested {
+                    let stream = stream.unwrap();
+                    assert_eq!(stream.node, 37);
+                    assert_eq!(stream.serial, Some(987654321));
+                } else {
+                    assert!(
+                        stream.is_err(),
+                        "requested {requested}, returned {returned}"
+                    );
+                }
+            }
+        }
     }
 }

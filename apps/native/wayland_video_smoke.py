@@ -58,10 +58,11 @@ def desktop_fixture():
     Gtk.main()
 
 
-def fixture(mode, log):
+def fixture(mode, log, target):
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
     name = dbus.service.BusName(DESKTOP, bus)
+    source_type = 2 if target == "window" else 1
 
     def record(event):
         with open(log, "a") as file:
@@ -113,7 +114,7 @@ def fixture(mode, log):
         def Get(self, interface, property):
             assert interface == SCREENCAST
             return dbus.UInt32({"version": 1 if mode == "legacy" else 6,
-                                "AvailableSourceTypes": 2 if mode == "no-display" else 1,
+                                "AvailableSourceTypes": 3 - source_type if mode == "no-display" else source_type,
                                 "AvailableCursorModes": 1 if mode == "no-cursor" else 3}[property])
 
         @dbus.service.method(SCREENCAST, in_signature="a{sv}", out_signature="o", sender_keyword="sender")
@@ -126,7 +127,7 @@ def fixture(mode, log):
         @dbus.service.method(SCREENCAST, in_signature="oa{sv}", out_signature="o", sender_keyword="sender")
         def SelectSources(self, session, options, sender):
             assert str(session) == self.path
-            assert int(options["types"]) == 1 and not options["multiple"]
+            assert int(options["types"]) == source_type and not options["multiple"]
             if mode == "legacy":
                 assert "cursor_mode" not in options
             else:
@@ -137,13 +138,15 @@ def fixture(mode, log):
         @dbus.service.method(SCREENCAST, in_signature="osa{sv}", out_signature="o", sender_keyword="sender")
         def Start(self, session, parent, options, sender):
             assert str(session) == self.path and not parent
-            streams = [(dbus.UInt32(37), dbus.Dictionary({"source_type": dbus.UInt32(1), "pipewire-serial": dbus.UInt64(987654321)}, signature="sv"))]
+            streams = [(dbus.UInt32(37), dbus.Dictionary({"source_type": dbus.UInt32(source_type), "pipewire-serial": dbus.UInt64(987654321)}, signature="sv"))]
             if mode == "legacy":
                 streams = [(dbus.UInt32(37), dbus.Dictionary({}, signature="sv"))]
             elif mode == "invalid-serial":
                 streams[0][1]["pipewire-serial"] = dbus.UInt64(0)
-            elif mode == "window":
-                streams[0][1]["source_type"] = dbus.UInt32(2)
+            elif mode == "wrong-source":
+                streams[0][1]["source_type"] = dbus.UInt32(3 - source_type)
+            elif mode == "missing-source":
+                del streams[0][1]["source_type"]
             if mode == "multiple":
                 streams.append((dbus.UInt32(53), dbus.Dictionary({}, signature="sv")))
             if mode == "missing-streams":
@@ -162,17 +165,20 @@ def fixture(mode, log):
     GLib.MainLoop().run()
 
 
-def protocols(binary, root, env, recording=False):
+def protocols(binary, root, env, recording=False, target="display"):
     modes = ("fd-error", "legacy", "cancel", "denied", "multiple", "missing-streams", "invalid-serial",
-             "window", "no-display", "no-cursor", "wait", "method-error")
+             "wrong-source", "no-display", "no-cursor", "wait", "method-error")
+    if target == "window":
+        modes += ("missing-source",)
     for mode in modes:
-        suffix = "recording" if recording else "source"
+        suffix = f"{'recording' if recording else 'source'}-{target}"
         log = root / f"{mode}-{suffix}.jsonl"
         output = root / f"{mode}-{suffix}"
-        service = subprocess.Popen([sys.executable, __file__, "--fixture", mode, "--log", str(log)], env=env, stdout=subprocess.PIPE)
+        service = subprocess.Popen([sys.executable, __file__, "--fixture", mode, "--log", str(log),
+                                    "--target", target], env=env, stdout=subprocess.PIPE)
         try:
             ready(service)
-            arguments = [binary, "--output", str(output)]
+            arguments = [binary, "--output", str(output), "--target", target]
             if mode == "wait":
                 arguments += ["--cancel-after-ms", "150"]
             elif mode == "no-cursor":
@@ -188,23 +194,32 @@ def protocols(binary, root, env, recording=False):
             assert events[-1] == "Session.Close", (mode, events, result.stderr)
             calls = [event for event in events if not event.endswith(".Close")]
             expected = ["CreateSession"]
-            if mode not in ("method-error", "no-display", "no-cursor"):
+            unsupported = mode in ("method-error", "no-display", "no-cursor") or (target == "window" and mode == "legacy")
+            if not unsupported:
                 expected += ["SelectSources"]
-            if mode not in ("method-error", "denied", "no-display", "no-cursor"):
+            if not unsupported and mode != "denied":
                 expected += ["Start"]
-            if mode in ("fd-error", "legacy"):
+            if mode == "fd-error" or (mode == "legacy" and target == "display"):
                 expected += ["OpenPipeWireRemote"]
             assert calls == expected, (mode, calls, result.stderr)
+            if mode == "wrong-source":
+                assert "does not match" in result.stderr, result.stderr
+            elif target == "window" and mode == "missing-source":
+                assert "did not identify" in result.stderr, result.stderr
+            elif target == "window" and mode == "legacy":
+                assert "version 3" in result.stderr, result.stderr
             if mode in ("wait", "method-error"):
                 assert "Request.Close" in events and time.monotonic() - started < 2
         finally:
             stop(service)
     bus = dbus.bus.BusConnection(env["DBUS_SESSION_BUS_ADDRESS"])
     assert not bus.name_has_owner(DESKTOP)
-    result = subprocess.run([binary, "--output", str(root / f"pre-cancel-{recording}"), "--cancel-after-ms", "0"], env=env, capture_output=True, text=True, timeout=3)
+    result = subprocess.run([binary, "--output", str(root / f"pre-cancel-{recording}-{target}"),
+                             "--target", target, "--cancel-after-ms", "0"], env=env, capture_output=True, text=True, timeout=3)
     assert result.returncode == 1 and "cancelled" in result.stderr and not bus.name_has_owner(DESKTOP)
     bus.close()
-    print(json.dumps({"protocols": len(modes) + 1, "recording": recording, "peer_spoofs_ignored": True, "failed_sessions_closed": True, "fallback": False}), flush=True)
+    print(json.dumps({"protocols": len(modes) + 1, "recording": recording, "target": target,
+                      "peer_spoofs_ignored": True, "failed_sessions_closed": True, "fallback": False}), flush=True)
 
 
 def check_recording(output, events, phases, duration_range, kind="video/mp4"):
@@ -435,6 +450,7 @@ def main():
     parser.add_argument("--wlr-backend", type=Path, default=Path("/usr/libexec/xdg-desktop-portal-wlr"),
                         help="Private ScreenCast backend; use build_wayland_portal_fixture.sh for SHM-only desktops")
     parser.add_argument("--fixture", help=argparse.SUPPRESS)
+    parser.add_argument("--target", choices=("display", "window"), default="display", help=argparse.SUPPRESS)
     parser.add_argument("--desktop-fixture", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--log", help=argparse.SUPPRESS)
     parser.add_argument("--isolated", action="store_true", help=argparse.SUPPRESS)
@@ -443,7 +459,7 @@ def main():
         desktop_fixture()
         return
     if args.fixture:
-        fixture(args.fixture, args.log)
+        fixture(args.fixture, args.log, args.target)
         return
     if not args.binary:
         parser.error("--binary is required")
@@ -470,8 +486,10 @@ def main():
         try:
             env["DBUS_SESSION_BUS_ADDRESS"] = daemon.stdout.readline().decode().strip()
             protocols(binary, root, env)
+            protocols(binary, root, env, target="window")
             if recording_binary:
                 protocols(recording_binary, root, env, recording=True)
+                protocols(recording_binary, root, env, recording=True, target="window")
             real_video(binary, backend, root, env, recording_binary)
         finally:
             stop(daemon)

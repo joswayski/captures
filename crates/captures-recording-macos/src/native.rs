@@ -413,7 +413,9 @@ fn filter_for_target(
     exclude_captures_app: bool,
 ) -> MacRecordingResult<CaptureSource> {
     match target {
-        RecordingTarget::PortalDisplay => Err(MacRecordingError::TargetUnavailable),
+        RecordingTarget::PortalDisplay | RecordingTarget::PortalWindow => {
+            Err(MacRecordingError::TargetUnavailable)
+        }
         RecordingTarget::Display { display_id } => {
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
