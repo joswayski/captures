@@ -18,12 +18,13 @@ use sctk::output::{OutputHandler, OutputState};
 use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::pointer::ThemedPointer;
 use sctk::seat::SeatState;
-use sctk::shell::xdg::window::{Window, WindowConfigure, WindowHandler};
+use sctk::shell::xdg::window::{Window, WindowConfigure, WindowData, WindowHandler};
 use sctk::shell::xdg::XdgShell;
 use sctk::shell::WaylandSurface;
 use sctk::shm::slot::SlotPool;
 use sctk::shm::{Shm, ShmHandler};
 use sctk::subcompositor::SubcompositorState;
+use sctk::reexports::protocols::xdg::shell::client::{xdg_surface, xdg_toplevel};
 
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
 use crate::platform_impl::wayland::output::MonitorHandle;
@@ -43,6 +44,7 @@ use crate::platform_impl::OsError;
 pub struct VisibilitySync {
     pub window_id: WindowId,
     pub generation: u64,
+    pub after_unmap: bool,
 }
 
 /// Winit's Wayland state.
@@ -330,12 +332,41 @@ impl wayland_client::Dispatch<wl_callback::WlCallback, VisibilitySync> for Winit
         _: &wl_callback::WlCallback,
         _: wl_callback::Event,
         sync: &VisibilitySync,
-        _: &Connection,
-        _: &QueueHandle<Self>,
+        connection: &Connection,
+        queue_handle: &QueueHandle<Self>,
     ) {
         if let Some(window) = state.windows.get_mut().get(&sync.window_id) {
-            window.lock().unwrap().unmap_processed(sync.generation);
+            let mut window = window.lock().unwrap();
+            if sync.after_unmap {
+                window.unmap_processed(sync.generation);
+            } else if window.unmap_after_drain(sync.generation) {
+                connection.display().sync(queue_handle, VisibilitySync { after_unmap: true, ..*sync });
+            }
             state.dispatched_events = true;
+        }
+    }
+}
+
+impl wayland_client::Dispatch<xdg_surface::XdgSurface, WindowData> for WinitState {
+    fn event(
+        state: &mut Self,
+        surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        data: &WindowData,
+        connection: &Connection,
+        queue_handle: &QueueHandle<Self>,
+    ) {
+        let Some(window) = Window::from_xdg_surface(surface) else { return; };
+        let id = super::make_wid(window.wl_surface());
+        let accepts = state.windows.borrow().get(&id)
+            .is_some_and(|window| window.lock().unwrap().accepts_configure());
+        if accepts {
+            // SCTK ACKs before calling WindowHandler::configure. Configures
+            // invalidated by NULL must be discarded before that ACK, not in
+            // WindowState::configure. NULL submission runs on this same queue.
+            <XdgShell as wayland_client::Dispatch<xdg_surface::XdgSurface, WindowData, Self>>::event(
+                state, surface, event, data, connection, queue_handle,
+            );
         }
     }
 }
@@ -466,4 +497,4 @@ sctk::delegate_output!(WinitState);
 sctk::delegate_registry!(WinitState);
 sctk::delegate_shm!(WinitState);
 sctk::delegate_xdg_shell!(WinitState);
-sctk::delegate_xdg_window!(WinitState);
+wayland_client::delegate_dispatch!(WinitState: [xdg_toplevel::XdgToplevel: WindowData] => XdgShell);

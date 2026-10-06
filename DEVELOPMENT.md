@@ -207,6 +207,25 @@ Scripted window grants test protocol admission/cleanup; the live wlr fixture tes
 its unsupported-window UI, not successful GNOME/KDE window capture. Physical consent,
 audio/cursor and GNOME/KDE acceptance remain open.
 
+The [native Wayland desktop-shortcut checks](apps/native/wgpu/README.md#native-wayland-desktop-shortcuts)
+exercise private-bus adversarial grants and real native Preferences/routing on
+private Sway. Build all native binaries plus `apps/native/wayland_drag_probe`, then
+run `/usr/bin/python3 apps/native/wayland_shortcuts_smoke.py --binary
+apps/native/wgpu/target/debug/wayland_shortcuts_probe` and
+`/usr/bin/python3 apps/native/wayland_shortcuts_host_smoke.py --binary
+apps/native/wgpu/target/debug/captures-wgpu-workbench --injector
+apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe --output
+/tmp/native-shortcuts-new`. Use a new output directory. Grants are scripted,
+not physical compositor key delivery. No installed keys/settings are modified.
+Same-role remapping requires the compositor's fresh initial-configure fix;
+Sway 1.7 is unsupported. On Debian 12, `.agents/setup` prepares a pinned,
+headless-only Sway 1.9 fixture in the cache. Select it only for a smoke command:
+`PATH="$(apps/native/build_wayland_compositor_fixture.sh):$PATH" python3
+apps/native/wayland_visibility_smoke.py`. The helper's returned launch directory
+also works for the native capture, recording, shortcuts and lifecycle smokes;
+it never replaces the system compositor. Keep review output outside `/tmp` for
+smokes that isolate `/tmp` in a private mount namespace.
+
 ### Native exploratory test archives
 
 Native pull-request CI publishes `native-development-macos-ARM64`,

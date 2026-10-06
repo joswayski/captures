@@ -15,6 +15,14 @@ Local changes add COPY-only `ActiveEventLoopExtX11/Wayland::start_file_drag` and
 Wayland `set_visible`/`is_visible` support. Visibility uses NULL-buffer unmapping, waits for a
 generation-checked `wl_display.sync` before reporting hidden, and gates redraw until the remap
 configure. It reports client mapping readiness, not compositor occlusion or minimization.
+Hide first stops render readiness, then submits NULL on the event queue after a
+drain sync. A second sync acknowledges unmapping. The custom xdg-surface dispatch
+filters stale configures before SCTK auto-ACK; the drain alone cannot exclude
+later compositor events. Show/hide during a bufferless remap retains its handshake.
+The persistent decoration object keeps its mode. Repeated set_mode can crash
+Sway 1.7's retired-container arrangement; that compositor also lacks the fresh
+initial-configure remap fix and is unsupported. The pinned headless-only Sway 1.9
+fixture exercises immediate present/hide, cancelled remaps and exact pixels.
 Completion reports `(accepted_copy, own_client, exact_source_window)`. The file
 must outlive completion. Source handling shares winit's connection and event
 queue: a second Wayland connection cannot use the original pointer serial.
@@ -52,7 +60,9 @@ GPU surfaces after remapping. An explicitly hidden root runs its initial UI pass
 without presenting a buffer. One-shot `RequestPaintWhileHidden` requests declare
 new children without remapping History; consumed requests do not turn ordinary
 worker wakes into recurring UI passes. Normally visible roots keep their initial
-paint. Pending texture deltas now share the renderer's single texture namespace
+paint. Presentation uses the private `WindowExtWayland::is_surface_ready` gate,
+distinct from acknowledged `is_visible`; paint requests cannot bypass drain/remap.
+Pending texture deltas now share the renderer's single texture namespace
 across root, deferred and immediate viewports, preserving allocation-before-update
 order when a hidden root does not paint. This queue is shared on every host;
 extra mapping and surface-reset behavior is gated to actual Linux Wayland window

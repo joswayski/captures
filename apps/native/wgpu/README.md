@@ -377,6 +377,58 @@ re-hides the root after eframe's automatic first paint and verifies visibility a
 the quit deadline. A transient startup map remains possible. Resolving this is a
 renderer gate.
 
+### Native Wayland desktop shortcuts
+
+An actual Wayland window uses `org.freedesktop.portal.GlobalShortcuts`; macOS,
+Windows and X11 retain the direct manager. The seven stable action IDs are not
+promises that the desktop grants every action or accepts the requested keys.
+Preferences displays returned `trigger_description` strings and unbound rows,
+without local recorders or writes to saved chords. Configure uses portal v2;
+v1 keeps bindings read-only. Denial, session closure or owner loss needs explicit
+Retry. Configure failure keeps the current grant. There is no OS-key takeover,
+X11 fallback or automatic consent retry. Region/window screenshot and region
+recording limitations still apply even if their IDs are granted.
+
+The worker activates and pins the portal owner, subscribes before requesting,
+validates owned request/session handles and rejects peer signals (including
+directed signals). Bind runs once per session; a partial ShortcutsChanged clears
+held/queued routes, then ListShortcuts replaces complete membership. Cancellation
+is terminal and closes owned resources. Native Quit cannot launch a queued
+capture after worker drain.
+
+```sh
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bins
+cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked
+/usr/bin/python3 apps/native/wayland_shortcuts_smoke.py \
+  --binary apps/native/wgpu/target/debug/wayland_shortcuts_probe
+/usr/bin/python3 apps/native/wayland_shortcuts_host_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe \
+  --output /tmp/native-wayland-shortcuts-new
+```
+
+The protocol suite has 24 private-bus cases. The host suite owns Sway, Swaybar,
+a private bus and disposable profiles; it checks 14 dark/light Pending, Bound,
+Unavailable, v1 and configuration-error cases at 880×660 and minimum 560×440,
+long descriptions, Configure/Retry, screenshot pixels/source retention, a
+window-only failed recording and confirmed Delete, and pending/event-heavy Quit.
+No DISPLAY is set. The layout probe records only readiness/enabled/error booleans
+and control geometry, not desktop keys or installed paths. Inspect its PNGs.
+These are scripted desktop grants, not physical key delivery or consent UX.
+
+Same-role remapping requires the fresh initial-configure fix; Sway 1.7 lacks it
+and is unsupported. For Debian 12's old compositor, build the pinned headless-only
+fixture with `apps/native/build_wayland_compositor_fixture.sh`, then prepend its
+printed launcher directory to PATH for these smokes. Build prerequisites are
+Meson/Ninja, libffi/expat, libdrm, Pixman, xkbcommon, json-c, pcre2, Cairo/Pango,
+libevdev, libinput headers and libsystemd development packages. It installs only
+inside a cache, never as the user's compositor or portal. `wayland_visibility_smoke.py`
+also checks immediate post-present hide, cancelled remaps and exact pixels.
+The private patch serializes unmap on the event queue, filters stale configure
+events before SCTK auto-ACK, and distinguishes render readiness from acknowledged
+visibility. Decoration objects retain their mode rather than replaying set_mode
+during remap. Physical GNOME/KDE, accessibility and mixed-DPI gates stay open.
+
 ### Wayland screenshot acquisition diagnostic
 
 `captures_capture::portal_screenshot` acquires a still through the public
@@ -396,9 +448,9 @@ In xdg-desktop-portal 1.16, version-1 Screenshot backends bypass its permission
 store check. The orb's wlr 0.7 backend is version 1 and returned success even with
 the disposable permission set to “no”; this is not a client fallback or proof of
 consent enforcement. The smoke reports the backend version/policy it exercised.
-Native window targeting, selectors, countdown, preview placement, global shortcut
-registration and recording remain gated. Portal still capture is
-connected to History as described below.
+Native window targeting, selectors, screenshot countdown and preview placement
+remain gated. Portal still capture, display/window recording and desktop shortcuts
+are connected to the host as described in their sections.
 
 ```sh
 cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_screenshot_probe
@@ -595,7 +647,7 @@ open only the requested child. Closing those children retains residency. Missing
 or lost trays expose reachable History with normal close-to-quit. General's
 development login toggle is explicit and OS-authoritative on Wayland too.
 The notice points to History in the tray menu instead of advertising an
-unregistered Wayland global shortcut.
+ungranted requested Wayland global shortcut.
 
 ```sh
 /usr/bin/python3 apps/native/wayland_lifecycle_smoke.py \

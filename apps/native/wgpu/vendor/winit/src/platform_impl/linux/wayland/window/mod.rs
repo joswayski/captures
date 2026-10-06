@@ -256,7 +256,7 @@ impl Window {
         if let Some(generation) = sync_generation {
             self.display.sync(
                 &self.queue_handle,
-                super::state::VisibilitySync { window_id: self.window_id, generation },
+                super::state::VisibilitySync { window_id: self.window_id, generation, after_unmap: false },
             );
         }
         if visible {
@@ -269,6 +269,10 @@ impl Window {
     #[inline]
     pub fn is_visible(&self) -> Option<bool> {
         Some(self.window_state.lock().unwrap().is_visible())
+    }
+
+    pub fn is_surface_ready(&self) -> bool {
+        self.window_state.lock().unwrap().can_redraw()
     }
 
     #[inline]

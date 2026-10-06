@@ -1513,6 +1513,10 @@ def main():
                     # it up again rather than reuse an earlier window id.
                     nonlocal root
                     root = wait(lambda: windows("Captures Preferences"), "Preferences window")[0]
+                    # Mapping precedes the first usable settings UI, especially
+                    # on a cold restart. Do not send navigation input to loading.
+                    wait(lambda: shortcut_layout().get("controls", {}).get("New Capture"),
+                         "Preferences loaded shortcut controls")
                     click(root, 98, 187)
                     wait(shortcuts_ready, "settled Shortcuts page with all seven recorders visible")
 

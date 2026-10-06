@@ -17,14 +17,14 @@ use serde_json::json;
 
 use captures_app::{
     app_windows::{self, AppWindow},
-    shortcuts::CaptureShortcuts,
+    shortcuts::{CaptureShortcuts, PortalShortcutStatus},
 };
 
 use crate::{
     emit,
     live::{HistoryFilter, Live},
     options::{HudState, Options, Scene},
-    preferences::Preferences,
+    preferences::{PortalShortcutCommand, Preferences},
     preferences_window::{PreferencesWindow, Shown},
     recording_hud, shortcut_input,
     tokens::{self, Tokens},
@@ -674,7 +674,8 @@ impl Workbench {
                     if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
                         == Some(true)
                     {
-                        // Native Wayland global shortcuts are not registered.
+                        // Desktop trigger descriptions are not local chord
+                        // syntax; never advertise the requested keys as granted.
                         Vec::new()
                     } else {
                         captures_app::shortcuts::shortcut_display_tokens(
@@ -898,7 +899,17 @@ impl Workbench {
             shortcuts.update(&settings)
         } else {
             let wake = ctx.clone();
-            CaptureShortcuts::new(&settings, move || wake_shortcut_host(&wake)).map(|shortcuts| {
+            let create = CaptureShortcuts::new;
+            #[cfg(target_os = "linux")]
+            let create = if ctx
+                .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                == Some(true)
+            {
+                CaptureShortcuts::new_wayland
+            } else {
+                create
+            };
+            create(&settings, move || wake_shortcut_host(&wake)).map(|shortcuts| {
                 *owner = Some(shortcuts);
             })
         };
@@ -916,6 +927,55 @@ impl Workbench {
                 self.shortcut_error =
                     Some(format!("Global capture shortcuts unavailable: {error}"));
             }
+        }
+    }
+
+    fn sync_portal_shortcuts(&mut self, ctx: &egui::Context) {
+        if !self.options.live
+            || ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                != Some(true)
+        {
+            return;
+        }
+        match self.preferences_state.take_portal_shortcut_command() {
+            Some(PortalShortcutCommand::Retry) => {
+                self.shortcuts.0.borrow_mut().take();
+                self.shortcuts_generation = 0;
+                self.sync_shortcuts(ctx);
+            }
+            Some(PortalShortcutCommand::Configure) => {
+                let error = self
+                    .shortcuts
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .and_then(|owner| owner.configure_portal().err());
+                self.preferences_state.shortcut_configuration_error(error);
+            }
+            None => {}
+        }
+        let has_owner = self.shortcuts.0.borrow().is_some();
+        let status = self
+            .shortcuts
+            .0
+            .borrow()
+            .as_ref()
+            .and_then(CaptureShortcuts::portal_status)
+            .unwrap_or_else(|| {
+                self.shortcut_error.clone().map_or(
+                    PortalShortcutStatus::Pending,
+                    PortalShortcutStatus::Unavailable,
+                )
+            });
+        self.shortcut_error = match (&status, has_owner) {
+            (PortalShortcutStatus::Unavailable(_), true) => {
+                Some("Global shortcuts unavailable. Open Preferences → Shortcuts to retry.".into())
+            }
+            (PortalShortcutStatus::Unavailable(_), false) => self.shortcut_error.clone(),
+            _ => None,
+        };
+        if self.preferences_state.set_portal_shortcuts(Some(status)) {
+            ctx.request_repaint_of(crate::preferences_window::viewport());
         }
     }
 
@@ -1662,6 +1722,7 @@ impl eframe::App for Workbench {
             self.show_root(ctx);
         }
         self.sync_shortcuts(ctx);
+        self.sync_portal_shortcuts(ctx);
         if self.options.live
             && !self.quitting
             && ctx.input(|input| input.viewport().close_requested())
@@ -1683,6 +1744,9 @@ impl eframe::App for Workbench {
                 // keep them open on failure.
                 RootClose::Quit => self.quit(ctx),
             }
+        }
+        if self.quitting {
+            return;
         }
         let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(false));
         let workspace_focused = root_focused || self.preferences.focused();
@@ -1727,7 +1791,17 @@ impl eframe::App for Workbench {
         {
             self.tray_shortcuts_generation = persisted;
             if let Ok(settings) = self.preferences_state.snapshot() {
-                tray.set_shortcuts(crate::tray::MenuShortcuts::from_settings(&settings));
+                let shortcuts = if ctx
+                    .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                    == Some(true)
+                {
+                    // The portal returns localized display descriptions, not
+                    // accelerator syntax. Keep requested chords out of the menu.
+                    Default::default()
+                } else {
+                    crate::tray::MenuShortcuts::from_settings(&settings)
+                };
+                tray.set_shortcuts(shortcuts);
             }
         }
         let mut tray_actions = Vec::new();
@@ -1742,6 +1816,11 @@ impl eframe::App for Workbench {
             } else {
                 self.show_root(ctx);
             }
+        }
+        // Quit may arrive alongside a queued global shortcut. Never launch
+        // that capture after draining the worker and retiring native windows.
+        if self.quitting {
+            return;
         }
         if onboarding_complete && let Some(live) = &mut self.live {
             live.launch_requested_capture(ctx, frame, self.preferences_state.snapshot());
@@ -1857,8 +1936,14 @@ impl eframe::App for Workbench {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 }
             }
-            self.frames += 1;
-            return;
+            if !self.options.live {
+                self.frames += 1;
+                return;
+            }
+            // The hidden live root must still declare its children on this
+            // pass. A fast settings load can request the launch notice before
+            // the first UI pass; returning would consume its one-shot hidden
+            // paint request without creating that viewport.
         }
         if self.live.is_some() && !self.preferences_state.onboarding_complete() {
             egui::CentralPanel::default().show(ui, |ui| {

@@ -25,8 +25,14 @@ packages=(
   libdbus-1-dev
   libdrm-dev
   libegl-dev
+  libevdev-dev
+  libexpat1-dev
+  libffi-dev
   libgbm-dev
   libinih-dev
+  libinput-dev
+  libjson-c-dev
+  libpixman-1-dev
   libpipewire-0.3-dev
   libspa-0.2-dev
   librsvg2-dev
@@ -80,6 +86,12 @@ if ((${#missing_packages[@]} > 0)); then
   sudo apt-get update
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
 fi
+
+step "preparing private Wayland compositor fixture"
+# Debian 12's Sway 1.7 lacks the fresh-configure remap fix. Keep the modern
+# headless-only fixture separate; tests explicitly select its launcher PATH.
+fixture_tools="$(apps/native/build_wayland_compositor_fixture.sh)"
+printf '[setup] Wayland smoke launcher directory: %s\n' "$fixture_tools"
 
 step "checking Node.js and npm"
 if ! command -v npm >/dev/null 2>&1; then

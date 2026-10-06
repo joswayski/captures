@@ -204,6 +204,12 @@ Unsupported backends report an error without falling back to display capture.
 Region capture, window screenshots and screenshots during recording remain unavailable.
 Portal policy controls consent and cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
+Native Wayland global shortcuts use the desktop's GlobalShortcuts portal. The
+desktop chooses the available actions and keys; Preferences shows its returned
+bindings with Configure (portal v2+) or explicit Retry after failure. There is no
+X11 fallback or takeover of system screenshot keys. A granted action does not add
+an unsupported capture mode. Same-role window remapping needs a compositor with
+the fresh-configure fix (for Sway, use 1.9+); older Sway 1.7 is not supported.
 Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
@@ -213,7 +219,9 @@ Recording and optional Microphone access, Settings links, and a permission resta
 Windows/X11 show screen capture as ready and do not require upfront screen access.
 Wayland screenshot permission is handled by the desktop portal at capture time.
 Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
-"Captures is ready to use" notice with the New Capture shortcut.
+"Captures is ready to use" notice with the New Capture shortcut on direct hosts;
+Wayland names the tray without advertising ungranted keys. Without a tray icon's
+screen position, the compositor places the notice and it has no directional caret.
 The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:
@@ -288,14 +296,17 @@ and display screenshot shortcuts and tray items take that screenshot beside the 
 as the shipping app does: region and window open their selector on the display under
 the pointer, display captures that display directly, and each uses the screenshot
 countdown and leaves out the recording controls unless they are included in captures.
-The recording keeps running untouched. Focused Preferences suppresses those shortcuts.
+The recording keeps running untouched. Only an active focused shortcut recorder
+in Preferences suppresses those shortcuts on direct hosts.
 While a screenshot outside a recording is preparing, counting down or capturing, New Capture
 and Screenshot Display report that a capture is already in progress and the other shortcuts and tray
 items do nothing. An active recording ignores the recording shortcuts and tray items, and
 New Capture reports that a capture is already in progress. While recording controls are
 hidden, or left out of a screenshot beside the take, New Capture brings them back, and
-the screenshot shortcuts and tray items still take a screenshot. Native Preferences can edit all seven capture
-and recording shortcuts. Recording keys open the selector without starting a take. Linux requires
+the screenshot shortcuts and tray items still take a screenshot. On macOS, Windows
+and X11, native Preferences can edit all seven capture and recording shortcuts;
+Wayland uses the desktop chooser described above. Recording keys on direct hosts
+open the selector without starting a take. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
 Native Record creates H.264 MP4 using the stored recording defaults and supported

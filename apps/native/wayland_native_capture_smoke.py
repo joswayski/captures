@@ -274,10 +274,13 @@ def main():
         screenshots.mkdir(parents=True, exist_ok=True)
     if not args.isolated:
         # Old wlr backends write /tmp/out.png: isolate it, then drop privileges.
+        # Preserve explicitly selected fixture tools: sudo's secure_path must
+        # not silently replace a modern compositor with the system version.
         command = ["sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
-                   'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" "$4" "$5" --isolated --binary "$6" --injector "$7" ${8:+--screenshots} ${8:+"$8"}',
+                   'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="$9" "$4" "$5" --isolated --binary "$6" --injector "$7" ${8:+--screenshots} ${8:+"$8"}',
                    "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable,
-                   str(Path(__file__).resolve()), binary, injector, str(screenshots) if screenshots else ""]
+                   str(Path(__file__).resolve()), binary, injector, str(screenshots) if screenshots else "",
+                   os.environ["PATH"]]
         subprocess.run(command, check=True)
         return
     with tempfile.TemporaryDirectory(prefix="captures-native-wayland-") as temporary:

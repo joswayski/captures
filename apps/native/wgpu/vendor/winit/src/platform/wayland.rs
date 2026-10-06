@@ -101,6 +101,11 @@ impl<T> EventLoopBuilderExtWayland for EventLoopBuilder<T> {
 pub trait WindowExtWayland {
     /// Returns `xdg_toplevel` of the window or [`None`] if the window is X11 window.
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>>;
+
+    /// Whether a Wayland surface may accept rendered buffers. False as soon as
+    /// hiding is requested, while `is_visible` waits for acknowledged unmapping.
+    /// Returns None for an X11 window.
+    fn is_surface_ready(&self) -> Option<bool>;
 }
 
 impl WindowExtWayland for Window {
@@ -112,6 +117,15 @@ impl WindowExtWayland for Window {
             crate::platform_impl::Window::X(_) => None,
             #[cfg(wayland_platform)]
             crate::platform_impl::Window::Wayland(window) => window.xdg_toplevel(),
+        }
+    }
+
+    fn is_surface_ready(&self) -> Option<bool> {
+        match &self.window {
+            #[cfg(x11_platform)]
+            crate::platform_impl::Window::X(_) => None,
+            #[cfg(wayland_platform)]
+            crate::platform_impl::Window::Wayland(window) => Some(window.is_surface_ready()),
         }
     }
 }

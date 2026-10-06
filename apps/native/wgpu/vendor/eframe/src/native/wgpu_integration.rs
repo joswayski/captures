@@ -137,6 +137,21 @@ fn wayland_unmapped(window: &Window) -> Option<bool> {
     }
 }
 
+/// Stop presentation as soon as a hide is requested, before the native unmap
+/// acknowledgement used by portal capture settling. Other hosts are unchanged.
+fn can_paint(window: &Window) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::WindowExtWayland;
+        window.is_surface_ready().unwrap_or(true)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        true
+    }
+}
+
 // ----------------------------------------------------------------------------
 
 impl<'app> WgpuWinitApp<'app> {
@@ -730,8 +745,8 @@ impl WgpuWinitRunning<'_> {
             let hidden_wayland = wayland_unmapped(window) == Some(true);
             let bootstrap_ui = viewport.class == ViewportClass::Root
                 && integration.frame.info().cpu_usage.is_none();
-            let is_visible =
-                viewport.info.visible().unwrap_or(true) || (wants_paint && !hidden_wayland);
+            let is_visible = can_paint(window)
+                && (viewport.info.visible().unwrap_or(true) || (wants_paint && !hidden_wayland));
 
             {
                 profiling::scope!("set_window");
@@ -1316,12 +1331,13 @@ fn render_immediate_viewport(
 
     let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
     // Immediate callbacks may run while a sibling is still configuring its
-    // remap. Do not attach a buffer to an acknowledged hidden native window.
-    if wayland_unmapped(window) != Some(true)
-        || viewport
+    // remap or draining for unmap. No paint request may bypass that handshake.
+    if can_paint(window)
+        && (wayland_unmapped(window) != Some(true)
+            || viewport
             .actions_requested
             .iter()
-            .any(ActionRequested::wants_paint)
+            .any(ActionRequested::wants_paint))
     {
         painter.paint_and_update_textures(
             ids.this,

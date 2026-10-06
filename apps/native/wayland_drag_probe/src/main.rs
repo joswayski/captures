@@ -35,6 +35,7 @@ struct App {
     windows: Vec<Arc<Window>>,
     surfaces: Vec<Surface<Arc<Window>, Arc<Window>>>,
     dragging: Arc<AtomicBool>,
+    hide_after_paint: Option<usize>,
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -99,6 +100,23 @@ impl ApplicationHandler<UserEvent> for App {
             }
             (Some("redraw"), Some(index)) => {
                 self.windows[index.parse::<usize>().unwrap()].request_redraw()
+            }
+            (Some("present-hide"), Some(index)) => {
+                let index = index.parse::<usize>().unwrap();
+                self.hide_after_paint = Some(index);
+                self.windows[index].request_redraw();
+            }
+            (Some("show-hide"), Some(index)) => {
+                let index = index.parse::<usize>().unwrap();
+                self.windows[index].set_visible(true);
+                self.windows[index].set_visible(false);
+                println!("SHOW-HIDE {index}");
+            }
+            (Some("hide-show"), Some(index)) => {
+                let index = index.parse::<usize>().unwrap();
+                self.windows[index].set_visible(false);
+                self.windows[index].set_visible(true);
+                println!("HIDE-SHOW {index}");
             }
             (Some("status"), Some(index)) => {
                 let index = index.parse::<usize>().unwrap();
@@ -182,6 +200,13 @@ impl ApplicationHandler<UserEvent> for App {
                 buffer.fill(if index == 0 { 0xffcc3311 } else { 0xff22aa55 });
                 buffer.present().unwrap();
                 println!("REDRAW {index}");
+                if self.hide_after_paint == Some(index) {
+                    self.hide_after_paint = None;
+                    self.windows[index].set_visible(false);
+                    use winit::platform::wayland::WindowExtWayland;
+                    assert_eq!(self.windows[index].is_surface_ready(), Some(false));
+                    println!("PRESENT-HIDE {index}");
+                }
             }
             WindowEvent::CloseRequested => event_loop.exit(),
             _ => {}
@@ -238,6 +263,7 @@ fn main() {
         windows: Vec::new(),
         surfaces: Vec::new(),
         dragging: Arc::new(AtomicBool::new(false)),
+        hide_after_paint: None,
     };
     event_loop.run_app(&mut app).unwrap();
 }
@@ -245,7 +271,10 @@ fn main() {
 fn inject(destination: &str, click: Option<[u32; 4]>) {
     use wayland_client::{
         globals::{registry_queue_init, GlobalListContents},
-        protocol::{wl_pointer::ButtonState, wl_registry},
+        protocol::{
+            wl_pointer::{Axis, ButtonState},
+            wl_registry,
+        },
         Connection, Dispatch, QueueHandle,
     };
     use wayland_protocols_wlr::virtual_pointer::v1::client::{
@@ -296,12 +325,19 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
     queue.roundtrip(&mut State).unwrap();
     let clock = std::time::Instant::now();
     let timestamp = || clock.elapsed().as_millis() as u32;
-    let mut perform = |click: Option<[u32; 4]>| {
+    let mut perform = |click: Option<[u32; 4]>, scroll: Option<f64>| {
         let [x, y, width, height] = click.unwrap_or([180, 150, 900, 500]);
         pointer.motion_absolute(timestamp(), x, y, width, height);
         pointer.frame();
         queue.roundtrip(&mut State).unwrap();
         thread::sleep(Duration::from_millis(150));
+        if let Some(distance) = scroll {
+            pointer.axis(timestamp(), Axis::VerticalScroll, distance);
+            pointer.frame();
+            queue.roundtrip(&mut State).unwrap();
+            thread::sleep(Duration::from_millis(150));
+            return;
+        }
         pointer.button(timestamp(), 0x110, ButtonState::Pressed);
         pointer.frame();
         queue.roundtrip(&mut State).unwrap();
@@ -336,10 +372,20 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
                     .parse::<u32>()
                     .expect("coordinate")
             });
-            perform(Some(coordinates));
-            println!("CLICKED");
+            let scroll = values
+                .next()
+                .map(|value| value.parse().expect("scroll distance"));
+            perform(Some(coordinates), scroll);
+            println!(
+                "{}",
+                if scroll.is_some() {
+                    "SCROLLED"
+                } else {
+                    "CLICKED"
+                }
+            );
         }
     } else {
-        perform(click);
+        perform(click, None);
     }
 }

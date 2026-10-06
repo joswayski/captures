@@ -395,7 +395,7 @@ the shipping Preferences layout, controls and copy, shared through
 `captures-app::preferences`; physical input, screen-reader and Windows/Wayland
 acceptance and the other checklist gates remain open.
 
-Preferences records all seven stored shortcut fields using the shared Rust
+On macOS, Windows and X11, Preferences records all seven stored shortcut fields using the shared Rust
 key/modifier, display, cancellation and validation policy. Escape (including
 modified Escape), focus loss or leaving the recorder cancels without saving.
 Modifier-only input previews the chord; invalid keys show an inline error.
@@ -421,6 +421,21 @@ re-suspend restored shortcuts. AppKit is unchanged.
 AppKit XCTest renders both appearances and checks controller/bridge input. Synthetic
 virtual-key mapping does not prove physical Mac media/external-keyboard input;
 physical Windows/macOS, Wayland and screen-reader acceptance remain open.
+
+On actual Wayland surfaces, the native host uses the public GlobalShortcuts
+portal instead of the direct manager. Preferences shows Pending, the desktop's
+returned bindings, or Unavailable with explicit Retry. Configure requires portal
+v2; errors preserve active bindings. The desktop may choose different keys,
+grant only some actions or grant none. Rows are read-only; requested local keys
+are neither rewritten nor advertised in the tray/startup notice. Changes revoke
+queued/held routes before ListShortcuts refreshes complete membership. Owner or
+session loss stops routing without a new automatic consent request. Quit closes
+owned requests/sessions, including pending consent and event-heavy traffic.
+The private-bus suite has 24 cases, and the native private-Sway suite exercises
+14 dark/light states, real Configure/Retry input, screenshot routing and a failed
+window recording take without display fallback. These fixtures do not establish
+physical GNOME/KDE key delivery, consent, accessibility or platform acceptance.
+See [diagnostics and host checks](wgpu/README.md#native-wayland-desktop-shortcuts).
 
 ## Shared recording runtime
 
@@ -624,7 +639,8 @@ normal close-to-quit. Losing the tray host restores the root instead of strandin
 the process. XEmbed-only trays require an SNI bridge. Wayland History offers
 desktop-portal screenshots even without a tray. Quiet startup stays hidden with a
 tray and exposes History without one; tray loss also exposes History, and closing
-it quits normally. Native selectors and recording remain gated. Physical macOS,
+it quits normally. Native selectors remain gated; display/window portal recording
+and desktop-managed shortcuts are described above. Physical macOS,
 Windows, mixed-DPI and accessibility acceptance remain open.
 
 ## New Capture controls
