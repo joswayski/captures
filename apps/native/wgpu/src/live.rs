@@ -1641,6 +1641,7 @@ struct PortalScreenshot {
     flow: captures_app::capture_flow::PortalCapture,
     hidden: Vec<egui::ViewportId>,
     restore_root: bool,
+    recording: bool,
     started: Instant,
     submitted: bool,
 }
@@ -2469,6 +2470,10 @@ impl Live {
     }
 
     pub fn show_recording_controls(&mut self, ctx: &egui::Context) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.portal_screenshot.is_some() {
+            return false; // Do not remap excluded controls during the portal round trip.
+        }
         if !self.recording_controls_hidden() {
             self.recording_controls_hidden = None;
             self.recording_hidden_notice_until = None;
@@ -2512,6 +2517,10 @@ impl Live {
     /// A running or paused recording can take a region, window or display
     /// screenshot now. Routes those shortcuts past the recording's capture flow.
     pub fn recording_screenshot_available(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.portal_screenshot.is_some() {
+            return false;
+        }
         matches!(
             self.capture_phase,
             Some(CapturePhase::Recording | CapturePhase::RecordingPaused)
@@ -2644,6 +2653,11 @@ impl Live {
         use captures_app::capture_error::{
             Action, BusyRoute, CAPTURE_IN_PROGRESS, Target, busy_route,
         };
+        #[cfg(target_os = "linux")]
+        if self.portal_screenshot.is_some() {
+            // A busy error dialog or New Capture restore would enter the still.
+            return;
+        }
         if self.recapture.is_some() || self.requested_recapture.is_some() {
             // The open UI is already being recaptured.
             return;
@@ -3186,7 +3200,12 @@ impl Live {
         request: CaptureRequest,
         settings: Result<AppSettings, String>,
     ) {
-        if !self.can_start_capture() {
+        let recording = is_recording_phase(self.capture_phase);
+        if !(if recording {
+            self.recording_screenshot_available()
+        } else {
+            self.can_start_capture()
+        }) {
             self.capture_failed("Capture is unavailable until the current action finishes.".into());
             return;
         }
@@ -3210,7 +3229,14 @@ impl Live {
             self.history_requested = true;
             return;
         }
-        let flow = match captures_app::capture_flow::PortalCapture::begin() {
+        let flow = match if recording {
+            self.flow
+                .as_ref()
+                .ok_or_else(|| "The recording is no longer active".to_owned())
+                .and_then(CaptureFlow::begin_recording_portal_screenshot)
+        } else {
+            captures_app::capture_flow::PortalCapture::begin()
+        } {
             Ok(flow) => flow,
             Err(error) => {
                 self.capture_failed(error);
@@ -3252,11 +3278,17 @@ impl Live {
             hidden,
             restore_root: self.root_shown
                 || frame.winit_window().and_then(|window| window.is_visible()) == Some(true),
+            recording,
             started: Instant::now(),
             submitted: false,
         });
         self.capture_in_flight = true;
         self.status = "Preparing desktop-portal screenshot…".into();
+        if recording {
+            // Replace the HUD callback before any child can repaint with its
+            // old Visible(true), including children with unknown visibility.
+            request_hidden_root_ui(ctx);
+        }
         ctx.request_repaint_after(Duration::from_millis(100));
     }
 
@@ -3304,11 +3336,15 @@ impl Live {
             });
             self.status = "Waiting for the desktop screenshot portal…".into();
         } else if portal.started.elapsed() > Duration::from_secs(2) {
+            let recording = portal.recording;
             self.finish_portal_screenshot(ctx, false);
-            self.capture_failed(
-                "Could not unmap all Captures windows. No screenshot was taken.".into(),
-            );
-            self.history_requested = true;
+            let error = "Could not unmap all Captures windows. No screenshot was taken.".into();
+            if recording {
+                self.hud_action_failed(ctx, error);
+            } else {
+                self.capture_failed(error);
+                self.history_requested = true;
+            }
         }
     }
 
@@ -3317,11 +3353,30 @@ impl Live {
         let Some(portal) = self.portal_screenshot.take() else {
             return;
         };
-        self.restore_root_visible = portal.restore_root;
+        if portal.recording {
+            // Child completion/cancellation must not retire the accepted take,
+            // reset its clock, or remap the workspace into its video.
+            self.capture_in_flight = false;
+            if !captured {
+                self.auto_copy_on_capture = false;
+            }
+            // With every child unmapped, a logic-only root cannot redeclare
+            // the HUD callback that restores it (and respects manual Hide).
+            request_hidden_root_ui(ctx);
+            if !self.recording_controls_hidden() {
+                // Updating a deferred callback does not run an unmapped child;
+                // remap only the HUD, never the hidden History/Preferences.
+                let hud = egui::ViewportId::from_hash_of("recording-controls");
+                ctx.send_viewport_cmd_to(hud, egui::ViewportCommand::Visible(true));
+                ctx.request_repaint_of(hud);
+            }
+            return;
+        }
         for id in portal.hidden {
             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
             ctx.request_repaint_of(id);
         }
+        self.restore_root_visible = portal.restore_root;
         self.finish_capture(ctx, captured);
     }
 
@@ -5701,8 +5756,11 @@ impl Live {
                     }) {
                         continue;
                     }
+                    let recording = self.portal_screenshot.as_ref().unwrap().recording;
                     let captured = matches!(&result, Ok(Some(_)));
-                    self.history_requested = !matches!(&result, Ok(None));
+                    if !recording {
+                        self.history_requested = !matches!(&result, Ok(None));
+                    }
                     self.finish_portal_screenshot(ctx, captured);
                     match result {
                         Ok(Some(artifact)) => {
@@ -5713,6 +5771,7 @@ impl Live {
                             );
                         }
                         Ok(None) => self.status = "Screenshot cancelled.".into(),
+                        Err(error) if recording => self.hud_action_failed(ctx, error),
                         Err(error) => self.capture_failed(error),
                     }
                 }
@@ -6128,6 +6187,15 @@ impl Live {
     /// The recording controls' Screenshot button: shipping
     /// `start_capture_inner(Region)`, on the recording's display.
     fn start_recording_screenshot(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "linux")]
+        if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) == Some(true)
+        {
+            // The desktop chooses the screenshot extent; no native region or
+            // monitor geometry is promised for this portal action.
+            self.request_capture(CaptureRequest::Display);
+            request_hidden_root_ui(ctx);
+            return;
+        }
         let Some(settings) = self.recording_screenshot_settings.as_ref().cloned() else {
             self.hud_action_failed(
                 ctx,
@@ -6470,6 +6538,12 @@ impl Live {
     }
 
     fn finish_capture(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
+        #[cfg(target_os = "linux")]
+        if let Some(portal) = self.portal_screenshot.take() {
+            // Source/session loss or parent finalization invalidates only an
+            // uncommitted child. A worker already persisting owns its result.
+            portal.flow.cancel();
+        }
         if is_recording_phase(self.capture_phase) {
             // A failed session deliberately holds its recovery-root lease until
             // the owner is dropped. List only after that worker acknowledges it.
@@ -7915,6 +7989,12 @@ impl Live {
             let controls_hidden = self.recording_controls_hidden == Some(generation)
                 || (self.recording_screenshot_flow.is_some()
                     && !self.recording_screenshot_keeps_controls());
+            #[cfg(target_os = "linux")]
+            let controls_hidden = controls_hidden
+                || self
+                    .portal_screenshot
+                    .as_ref()
+                    .is_some_and(|portal| portal.recording);
             let hide_available = self.recording_restore_available;
             let busy = restart_confirmation || delete_confirmation || phase_busy;
             let elapsed_ms = interpolated_recording_elapsed(
@@ -10407,6 +10487,67 @@ mod tests {
             assert!(live.take_capture_failure().is_none(), "refused silently");
         }
         live.capture_phase = None;
+        live.flush();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wayland_hud_screenshot_is_a_portal_action_and_child_cleanup_keeps_the_take() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), true));
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.capture_phase = Some(CapturePhase::RecordingPaused);
+        live.workspace_hidden = true;
+        live.restore_root_visible = true;
+        live.start_recording_screenshot(&ctx);
+        assert_eq!(live.requested_capture.take(), Some(CaptureRequest::Display));
+        assert_eq!(live.capture_phase, Some(CapturePhase::RecordingPaused));
+        for captured in [false, true] {
+            live.portal_screenshot = Some(PortalScreenshot {
+                flow: captures_app::capture_flow::PortalCapture::begin().unwrap(),
+                hidden: vec![egui::ViewportId::from_hash_of("recording-controls")],
+                restore_root: false,
+                recording: true,
+                started: Instant::now(),
+                submitted: true,
+            });
+            assert!(!live.recording_screenshot_available());
+            live.capture_action(captures_app::capture_error::Action::NewCapture, &ctx);
+            assert!(
+                live.take_capture_failure().is_none(),
+                "no dialog during portal capture"
+            );
+            assert!(!live.show_recording_controls(&ctx));
+            live.request_capture(CaptureRequest::Display);
+            assert!(live.requested_capture.is_none(), "no queued second child");
+            live.auto_copy_on_capture = true;
+            live.finish_portal_screenshot(&ctx, captured);
+            assert!(live.portal_screenshot.is_none());
+            assert_eq!(live.capture_phase, Some(CapturePhase::RecordingPaused));
+            assert!(
+                live.workspace_hidden,
+                "completion cannot expose the workspace"
+            );
+            assert!(
+                live.restore_root_visible,
+                "parent restore policy is retained"
+            );
+            assert_eq!(live.auto_copy_on_capture, captured);
+        }
+        live.portal_screenshot = Some(PortalScreenshot {
+            flow: captures_app::capture_flow::PortalCapture::begin().unwrap(),
+            hidden: Vec::new(),
+            restore_root: false,
+            recording: true,
+            started: Instant::now(),
+            submitted: true,
+        });
+        live.finish_capture(&ctx, false);
+        assert!(
+            live.portal_screenshot.is_none(),
+            "source loss retires a pending child"
+        );
         live.flush();
     }
 

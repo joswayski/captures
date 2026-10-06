@@ -5,7 +5,8 @@ Do not replace the installed app or point this build at its settings or History.
 Signed updates, installed-data migration/rollback and full platform acceptance
 are not ready. Wayland supports desktop-portal screenshots returning to History
 and display MP4 recording with native countdown and controls. Region/window
-selection, floating previews and screenshots during recording remain unavailable.
+selection and floating previews remain unavailable. While recording or paused,
+the HUD can request a separate desktop-portal screenshot with screenshot countdown off.
 
 ## Start safely
 
@@ -48,7 +49,10 @@ profile. Leave Start Captures on login off during this first test.
   On Wayland, use **Record display…** in History for an MP4; try countdown/consent
   cancellation, pause/resume and Stop. Controls appear in the video; Hide requires
   a working tray restore path. Cancelling initial consent removes the empty take;
-  a lost stream retains partial media in History recovery. Test real audio only
+  a lost stream retains partial media in History recovery. With screenshot countdown
+  off, use the HUD's Screenshot action while running and paused; cancel it too.
+  Check that the HUD stays out of the still and the take resumes its previous state.
+  Test real audio only
   if desired; physical compositor/audio/cursor acceptance remains open.
 - Drag History and mini-preview files to another app. Check copied bytes and
   cancelled drags. Delete only test captures; ordinary exported files remain.

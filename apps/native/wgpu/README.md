@@ -612,6 +612,20 @@ first placing a preview. **Restore** is disabled with a platform limitation tool
 Nonzero screenshot countdown and region/window screenshots fail explicitly;
 display/window recording uses the controls path above.
 
+The recording HUD's Screenshot action (or a granted display screenshot shortcut)
+can request a separate desktop-portal still while the take runs or is paused.
+It owns a child generation, not a second recording, and waits for all Captures
+windows including the HUD to unmap. Completion restores the controls through a
+hidden-root UI pass, retaining the take, elapsed clock and manual Hide state;
+the workspace stays out of the video. Cancellation/failure publishes no still
+and preserves the take. Pending child requests close on Quit before the accepted
+recording is finalized. Screenshot countdown must be off; the portal controls
+extent, cursor and consent, and the still goes to History without a floating preview.
+The dark/light recording-host fixture checks exact still pixels while active
+and paused, unchanged paused clocks, child cancellation/failure, and Quit with
+a pending screenshot preserving one playable video. Its transparent private cursor
+theme makes every pixel independent of cursor timing; physical cursor policy is unverified.
+
 The private eframe patch keeps hidden-root logic running without presenting
 buffers, refreshes child visibility, preserves compositor occlusion, and recreates
 Wayland GPU surfaces after remapping. Normal Windows/X11 rendering is retained.

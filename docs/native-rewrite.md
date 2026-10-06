@@ -160,8 +160,24 @@ is discarded, while cancelling resume retains paused media. Fatal video-source
 loss is distinct from audio warnings, stops the controls/timer and restores History
 recovery after the worker releases its owner. Linux still includes HUD pixels;
 Hide requires a working tray restoration path, and the notice says when it is absent.
-Region/window selection, screenshots during recording and click/keystroke overlays
-remain unsupported on Wayland.
+Region/window selection and click/keystroke overlays remain unsupported on Wayland.
+The Screenshot control and display screenshot route now acquire a separate
+desktop-portal still while running or paused, with screenshot countdown off.
+Its child generation retains the accepted recording parent without X11 grabs.
+All Captures viewports, including children with unknown visibility, must acknowledge
+unmapping before submission. Hidden-root UI passes replace the HUD callback before
+capture and restore it afterward without exposing the workspace or overriding
+manual Hide. Child cancellation/failure retains the take and paused clock;
+source/session loss retires uncommitted children, and Quit closes pending requests
+before finalizing the accepted take. Portal extent/consent/cursor policy is unchanged.
+The dark/light private-Sway host checks active and paused exact still pixels,
+unchanged paused time, cancellation/failure without History artifacts and pending-child
+Quit with exactly one playable video. A transparent private cursor theme removes
+cursor timing from the pixel expectation, not from physical acceptance.
+macOS/Windows retain their direct child paths and remain unverified in this Linux orb.
+The X11 region-child regression passes. The broader display-child smoke saves its
+first still, then fails to present the New Capture busy-take dialog; the same failure
+reproduces on the pre-slice source. Shared/native gates pass; physical parity gates remain open.
 
 The real-window dark/light Sway smoke uses compositor rectangles and pointer input,
 checks countdown and workspace exclusion, exact paused elapsed time, independently

@@ -322,6 +322,15 @@ impl CaptureFlow {
             }
         }
     }
+    /// A portal screenshot owns only a child generation; the accepted recording
+    /// keeps its parent and the desktop owns consent and cancellation (no grabs).
+    #[cfg(target_os = "linux")]
+    pub fn begin_recording_portal_screenshot(&self) -> Result<PortalCapture, String> {
+        let generation = GATE.begin_child(self.generation)?;
+        watch_session(generation);
+        Ok(PortalCapture { generation })
+    }
+
     /// Temporarily owns Escape and screenshot persistence while this accepted
     /// recording retains the process-wide parent generation and hotkey manager.
     pub fn begin_recording_screenshot(&self, seconds: u8) -> Result<Self, String> {
@@ -481,6 +490,29 @@ mod tests {
         assert!(
             flow.is_current(),
             "unsupported child cannot cancel the take"
+        );
+        let child = PortalCapture {
+            generation: GATE.begin_child(flow.generation()).unwrap(),
+        };
+        assert!(flow.begin_recording_portal_screenshot().is_err());
+        assert!(GATE.commit(child.generation()));
+        child.cancel();
+        assert!(
+            child.is_current(),
+            "cancellation cannot undo committed pixels"
+        );
+        drop(child);
+        assert_eq!(GATE.child.load(Ordering::Acquire), 0);
+        assert!(flow.is_current(), "child completion retains the recording");
+        let cancelled = PortalCapture {
+            generation: GATE.begin_child(flow.generation()).unwrap(),
+        };
+        cancelled.cancel();
+        assert!(!GATE.commit(cancelled.generation()));
+        drop(cancelled);
+        assert!(
+            flow.is_current(),
+            "child cancellation retains the recording"
         );
         assert!(flow.restart_countdown(11).is_err());
         assert!(flow.is_current());
