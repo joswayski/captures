@@ -579,9 +579,20 @@ impl Preferences {
         })
     }
     pub fn flush(&mut self) {
-        // Cancel/join metadata before the host releases profile ownership.
+        // Blocking fallback; normal Quit drains updates before reaching this.
         self.update_checks.take();
         self.io.flush();
+    }
+
+    /// Keep the event loop and profile election alive while HTTP cleanup drains.
+    pub fn try_shutdown_updates(&mut self) -> bool {
+        if let Some(checker) = &mut self.update_checks
+            && !checker.try_shutdown()
+        {
+            return false;
+        }
+        self.update_checks.take();
+        true
     }
 
     /// The update notice's Hide / What's new toggle persists like shipping.
@@ -2775,7 +2786,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn explicit_update_checks_publish_without_an_open_window_and_refuse_overlapping_input() {
+    fn explicit_update_checks_publish_without_a_window_refuse_overlap_and_drain_nonblocking() {
         use std::{
             io::{BufRead, BufReader, Write},
             net::TcpListener,
@@ -2788,26 +2799,30 @@ mod tests {
         let (started, observed) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut reader = BufReader::new(&mut stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            assert_eq!(line.split_whitespace().nth(1), Some("/native.json"));
-            loop {
-                line.clear();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
-                if line == "\r\n" {
-                    break;
+                assert_eq!(line.split_whitespace().nth(1), Some("/native.json"));
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
                 }
+                started.send(()).unwrap();
+                gate.recv_timeout(Duration::from_secs(5)).unwrap();
+                stream
+                    .write_all(
+                        b"HTTP/1.1 503 Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .unwrap();
             }
-            started.send(()).unwrap();
-            gate.recv_timeout(Duration::from_secs(5)).unwrap();
-            stream
-                .write_all(b"HTTP/1.1 503 Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                .unwrap();
         });
         let ctx = egui::Context::default();
         let mut prefs =
@@ -2842,6 +2857,21 @@ mod tests {
         );
         assert!(prefs.update_checks.as_ref().unwrap().presentation().enabled);
         assert!(!root.path().join("settings.json").exists());
+        assert!(prefs.check_updates());
+        observed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!prefs.try_shutdown_updates());
+        assert!(
+            !prefs.try_shutdown_updates(),
+            "Quit cannot acknowledge blocked I/O"
+        );
+        assert!(prefs.update_checks.is_some(), "retain cleanup ownership");
+        assert!(!prefs.check_updates());
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !prefs.try_shutdown_updates() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
         prefs.flush();
         assert!(prefs.update_checks.is_none() && !prefs.check_updates());
         server.join().unwrap();

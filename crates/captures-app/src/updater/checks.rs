@@ -235,7 +235,7 @@ impl CheckWorker {
     /// Repeated input during any operation cannot enqueue duplicate requests.
     pub fn check(&mut self) -> bool {
         self.poll();
-        if self.checking() || self.thread.is_none() {
+        if self.cancel.is_cancelled() || self.checking() || self.thread.is_none() {
             return false;
         }
         self.status = CheckStatus::Checking;
@@ -250,7 +250,7 @@ impl CheckWorker {
 
     pub fn download(&mut self) -> bool {
         self.poll();
-        if !self.staging_enabled || self.thread.is_none() {
+        if self.cancel.is_cancelled() || !self.staging_enabled || self.thread.is_none() {
             return false;
         }
         let release = match &self.status {
@@ -275,6 +275,9 @@ impl CheckWorker {
     /// Do not unpin busy state until the worker has finished I/O and cleanup.
     pub fn cancel_download(&mut self) -> bool {
         self.poll();
+        if self.cancel.is_cancelled() {
+            return false;
+        }
         let release = match &self.status {
             CheckStatus::Downloading { release, .. } | CheckStatus::Verifying { release } => {
                 release.clone()
@@ -303,7 +306,7 @@ impl CheckWorker {
 
     /// Nonblocking publication, including while Preferences is closed.
     pub fn poll(&mut self) -> bool {
-        if self.thread.is_none() {
+        if self.cancel.is_cancelled() || self.thread.is_none() {
             return false;
         }
         let mut changed = false;
@@ -550,14 +553,36 @@ impl CheckWorker {
         }
     }
 
-    /// Cancel and join bounded HTTP work before destroying the native host.
-    /// A currently blocked request can take up to its 60-second timeout.
-    pub fn shutdown(&mut self) {
+    fn begin_shutdown(&mut self) {
+        if self.cancel.is_cancelled() {
+            return;
+        }
         self.cancel.cancel();
         if let Some(token) = self.operation_cancel.take() {
             token.cancel();
         }
         let _ = self.jobs.send(Job::Shutdown);
+    }
+
+    /// Cancel immediately, but join only after I/O and owned-stage cleanup finish.
+    /// A UI host must retain its profile election while this returns false.
+    pub fn try_shutdown(&mut self) -> bool {
+        self.begin_shutdown();
+        if self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return false;
+        }
+        self.shutdown();
+        true
+    }
+
+    /// Blocking fallback for Drop and hosts that drain off their UI thread.
+    /// A currently blocked request can take up to its 60-second timeout.
+    pub fn shutdown(&mut self) {
+        self.begin_shutdown();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -847,18 +872,21 @@ mod tests {
                 Some(expected_percent)
             );
             if shutdown {
-                let token = worker.cancel.clone();
-                let joined = thread::spawn(move || {
-                    worker.shutdown();
-                    worker
-                });
-                while !token.is_cancelled() {
-                    assert!(Instant::now() < deadline);
-                    thread::yield_now();
-                }
+                assert!(
+                    !worker.try_shutdown(),
+                    "pending I/O cannot be joined on the UI thread"
+                );
+                assert!(!worker.try_shutdown(), "repeated quit cannot finish early");
+                assert!(!worker.poll() && !worker.check() && !worker.download());
+                assert!(!worker.cancel_download());
+                assert_eq!(worker.generation(), 2);
+                assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
                 release.send(()).unwrap();
-                let mut closed = joined.join().unwrap();
-                assert!(!closed.poll() && !closed.download());
+                while !worker.try_shutdown() {
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                assert!(!worker.poll() && !worker.download());
             } else {
                 assert!(worker.cancel_download());
                 assert!(matches!(worker.status(), CheckStatus::Cancelling { .. }));

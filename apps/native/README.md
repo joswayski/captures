@@ -72,6 +72,13 @@ Cancel pins busy state until pending I/O and cleanup finish; blocked HTTP can ta
 up to 60 seconds. Retrying downloads fresh bytes against the same authenticated
 metadata. Check Now obtains fresh metadata and drops any retained stage.
 
+Normal Quit cancels update work and waits for cleanup without joining pending HTTP
+on the UI thread. AppKit waits off-main. wgpu retires its native windows and keeps
+the event loop running until the worker finishes. Both retain profile election and
+the current crash marker until owned temporary storage is cleaned up, then finish shutdown.
+This does not make a blocked request immediately cancellable or change editor
+save/draft failure guards; an unsuccessful editor drain still refuses Quit.
+
 **Verified is not installed.** No package code is executed, existing app/profile is
 replaced or channel activated. Closing the notice does not cancel acquisition or
 reveal its later result; a new explicit check/download reveals again. Retained
