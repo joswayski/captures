@@ -103,6 +103,11 @@ the native candidate; no shipping dependency changes.
 Dark/light headless-Sway host tests cover real acquisition, repeated captures,
 three-window exclusion, cancellation/failure, simulated lock and pending-request
 Quit. Portal consent, extent and cursor inclusion remain backend-controlled.
+The failure-dialog fixture waits for the restored workspace's mapped windows and
+enabled screenshot action before arranging/focusing the dialog and clicking OK.
+Mapping the dialog alone is insufficient: a later History remap can cover it, and
+Wayland ignores the native always-on-top hint. This private scene verifies dismissal
+and same-process recovery, not physical compositor stacking or focus acceptance.
 History Edit opens portal captures directly in the screenshot editor; floating
 preview Restore is disabled with a limitation tooltip. Both appearances exercise
 the real History Edit action. No monitor identity/origin is invented; no mini

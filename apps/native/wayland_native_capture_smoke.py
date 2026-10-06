@@ -202,11 +202,21 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
             if mode == "failure":
                 dialog = wait(lambda: next((node for node in windows(env) if node["name"] == "Captures"), None),
                               "portal failure dialog")
+                # The dialog can map before History finishes remapping. A late
+                # root commit can cover it after Sway's earlier focus command;
+                # Wayland does not implement the dialog's always-on-top hint.
+                # Settle the restored workspace before arranging this private
+                # review scene, rather than clicking an obscured OK button.
+                wait(shown, "failure restored all three workspace windows")
+                focus_history()
+                wait(button, "failure released capture at the restored size")
                 subprocess.run(["swaymsg", f'[con_id={dialog["id"]}] move position 450 180, focus'],
                                env=env, check=True, stdout=subprocess.DEVNULL)
                 # The tree reports mapping before the compositor presents the
                 # first frame. Keep the dialog above the restored editor for review.
                 time.sleep(.5)
+                assert next(node for node in windows(env) if node["id"] == dialog["id"])["focused"], \
+                    "failure dialog must own input before OK"
                 shot("failure-dialog")
                 rect = next(node for node in windows(env) if node["id"] == dialog["id"])["rect"]
                 click(rect["x"] + rect["width"] - 60, rect["y"] + rect["height"] - 36)
