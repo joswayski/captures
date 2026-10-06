@@ -5,9 +5,10 @@
 //! `apps/desktop/ui/src/App.tsx` and `apps/desktop/ui/src/lib/releaseNotes.ts`.
 //! Both native hosts render [`present`] so their copy stays identical.
 //!
-//! The native rewrite has no signed updater yet. [`fixture`] and [`stub_next`]
-//! are a deterministic, injectable status source for workbench fixtures: they
-//! never download, verify or install anything.
+//! Explicit signed development checks reuse this layout/notes through
+//! `updater::checks`, with check-only copy/actions and no install/restart route.
+//! [`fixture`] and [`stub_next`] remain a separate deterministic status source;
+//! they never download, verify or install anything.
 use serde::{Deserialize, Serialize};
 
 pub const CARD_WIDTH: f64 = 400.0;

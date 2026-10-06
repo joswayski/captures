@@ -67,6 +67,9 @@ final class UpdateCheckModel {
     private var timer: Timer?
     private var closed = false
     private(set) var presentation: [String: Any] = [:]
+    private(set) var notice: [String: Any]?
+    private(set) var generation = 0
+    private(set) var showChangelog = true
     private(set) var busy = false
     var didChange: (() -> Void)?
 
@@ -84,7 +87,7 @@ final class UpdateCheckModel {
         busy = true
         var accepted = false
         do {
-            let reply = try transport.request(["operation": "check"])
+            let reply = try transport.request(["operation": "check", "show_changelog": showChangelog])
             try apply(reply)
             accepted = reply["accepted"] as? Bool == true
         } catch {
@@ -100,7 +103,14 @@ final class UpdateCheckModel {
 
     func poll() {
         guard !closed, busy else { return }
-        do { try apply(transport.request(["operation": "poll"])) }
+        do { try apply(transport.request(["operation": "poll", "show_changelog": showChangelog])) }
+        catch { presentation["status"] = error.localizedDescription; presentation["failed"] = true; didChange?() }
+    }
+
+    func setShowChangelog(_ show: Bool) {
+        guard !closed, show != showChangelog else { return }
+        showChangelog = show
+        do { try apply(transport.request(["operation": "poll", "show_changelog": show])) }
         catch { presentation["status"] = error.localizedDescription; presentation["failed"] = true; didChange?() }
     }
 
@@ -108,8 +118,13 @@ final class UpdateCheckModel {
         guard let checking = reply["checking"] as? Bool,
               let copy = reply["presentation"] as? [String: Any],
               copy["status"] is String, copy["enabled"] is Bool else { throw AppBridgeError.invalidResponse }
+        let nextNotice = reply["notice"] as? [String: Any]
+        let nextGeneration = reply["generation"] as? Int ?? 0
         let changed = !NSDictionary(dictionary: presentation).isEqual(to: copy)
+            || generation != nextGeneration
+            || !NSDictionary(dictionary: notice ?? [:]).isEqual(to: nextNotice ?? [:])
         busy = checking; presentation = copy
+        notice = nextNotice; generation = nextGeneration
         if !busy { timer?.invalidate(); timer = nil }
         if changed { didChange?() }
     }

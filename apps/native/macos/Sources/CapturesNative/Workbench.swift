@@ -950,7 +950,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         theme = options.theme
         historyCount = options.historyCount
         super.init()
-        options.nativeUpdateChecks?.didChange = { [weak self] in self?.preferencesController?.refreshUpdateChecks() }
+        options.nativeUpdateChecks?.didChange = { [weak self] in
+            self?.preferencesController?.refreshUpdateChecks()
+            self?.refreshLiveUpdateNotice()
+        }
         if let file = options.nativeUpdateReadyFile, let token = options.nativeUpdateReadyToken,
            let acknowledgement = try? UpdateHealthAcknowledgement(file: file, token: token) {
             updateHealth = UpdateHealthCoordinator(acknowledgement: acknowledgement) {
@@ -1201,6 +1204,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         preferencesController?.restyle()
         feedbackController?.restyle(tokens)
         sharingController?.restyle(tokens)
+        updateNotice?.restyle(tokens)
         renderPermissionSheet()
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
@@ -1221,6 +1225,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             sheet.title = "Capture permissions"
             sheet.isReleasedWhenClosed = false
             permissionSheet = sheet
+            refreshLiveUpdateNotice()
             renderPermissionSheet()
             liveController?.setPermissionsVisible(true)
             // The permissions sheet sits over Capture History.
@@ -1248,6 +1253,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         permissionSheet = nil
         permissionController = nil
         liveController?.setPermissionsVisible(false)
+        refreshLiveUpdateNotice()
         drainOpenImages()
     }
 
@@ -1514,7 +1520,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         table = nil
         regionSelector = nil
         windowSelector = nil
-        if scene != "update" {
+        if scene != "update" && !options.live {
             updateNotice?.close(); updateNotice = nil; updateNoticeSettings = nil
         }
         if !options.live {
@@ -1596,6 +1602,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 captureStateChanged: { [weak self] busy in
                     self?.captureBusy = busy
                     self?.updateShortcutState()
+                    self?.refreshLiveUpdateNotice()
                     if !busy {
                         DispatchQueue.main.async { [weak self] in
                             self?.rebuildRenderedLiveWorkspaceIfNeeded()
@@ -1679,11 +1686,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.liveStyleRevision += 1
                     self.feedbackController?.restyle(self.tokens)
                     self.sharingController?.restyle(self.tokens)
+                    self.updateNotice?.restyle(self.tokens)
                 }
                 let chosen = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 self.window.appearance = chosen
                 self.appWindows.window(.preferences)?.appearance = chosen
             }, settingsChanged: { [weak self] settings in
+                self?.options.nativeUpdateChecks?.setShowChangelog(settings.bool("show_update_changelog", true))
                 guard let enabled = settings["show_mini_previews"] as? Bool,
                       let placement = settings["mini_preview_placement"] as? String,
                       let include = settings["include_mini_previews_in_captures"] as? Bool
@@ -1692,6 +1701,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     placement: placement, includeInCaptures: include))
             }, settingsPersisted: { [weak self] settings in
                 self?.updateCaptureShortcuts(settings: settings)
+                self?.options.nativeUpdateChecks?.setShowChangelog(settings.bool("show_update_changelog", true))
             }, shortcutRecordingChanged: { [weak self] _ in
                 self?.updateShortcutState()
             }, showHistory: { [weak self] in self?.showHistory() },
@@ -1806,6 +1816,34 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             content.addSubview(button)
         }
         if updateNotice == nil { showUpdateNotice(options.updateState ?? "available") }
+    }
+
+    private func refreshLiveUpdateNotice() {
+        guard options.live, let checks = options.nativeUpdateChecks else { return }
+        let suspended = !onboardingReady || terminating || captureBusy || permissionSheet != nil
+        guard !suspended else {
+            updateNotice?.setSuspended(true); return
+        }
+        guard let presentation = checks.notice else { return }
+        if updateNotice == nil {
+            let controller = UpdateNoticeController(tokens: tokens, tray: "none")
+            controller.statusItemFrame = { [weak self] in self?.statusItem?.button?.window?.frame }
+            controller.model.checkAgain = { [weak self] in
+                guard let self, !self.captureBusy, !self.terminating, self.permissionSheet == nil else { return }
+                self.options.nativeUpdateChecks?.check()
+            }
+            controller.model.openPullRequest = { value in
+                guard let url = URL(string: value) else { return false }
+                return NSWorkspace.shared.open(url)
+            }
+            controller.model.persistShowChangelog = { [weak self] show in
+                self?.preferencesController?.setShowUpdateChangelog(show)
+            }
+            updateNotice = controller
+        }
+        updateNotice?.setSuspended(false)
+        do { try updateNotice?.model.receiveCheck(presentation, generation: checks.generation) }
+        catch { Metrics.write(["event": "update-notice-error", "error": error.localizedDescription]) }
     }
 
     private func showUpdateNotice(_ fixture: String) {

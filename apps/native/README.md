@@ -50,14 +50,19 @@ Up to date or an error with retry. State survives closing Preferences. Busy
 input cannot queue overlapping requests; there is no idle polling timer. Quit
 cancels/joins pending HTTP; a currently blocked request can take up to 60 seconds.
 These actions never download, install, replace an app or activate a channel.
-The update-notice windows below remain simulated fixtures, not the live checker.
+Checks also drive the native update notice, with authenticated release notes and
+Check again/Try again actions. Hide/What's new uses the existing changelog setting.
+Dismissing while checking keeps its eventual result hidden; only a new explicit
+check reveals it again. Capture/setup/permission UI suspends notice presentation.
+AppKit anchors at the real status item; wgpu uses the existing no-tray fallback,
+not a fabricated tray location. The simulated workbench scenes below remain separate.
 
 ## Native update acquisition diagnostic
 
 `captures_app::updater` implements shared signed-manifest checks and bounded,
 streamed downloads and temporary package staging without Tauri. It is **not an
 enabled installed-app updater**: only the explicit metadata checks above connect
-to native UI; the update notice remains a fixture. There is no bundled native
+to native UI and its check notice. There is no bundled native
 signing key, release endpoint or installed-app
 updater. The explicit development-package helper below can replace and launch only
 a selected stopped development package with a new empty or explicitly imported

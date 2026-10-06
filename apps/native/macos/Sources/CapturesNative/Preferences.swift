@@ -947,6 +947,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         else { reveal("updates") }
     }
 
+    func setShowUpdateChangelog(_ show: Bool) {
+        guard settings["show_update_changelog"] as? Bool != show else { return }
+        settings["show_update_changelog"] = show
+        changed(rerender: false)
+        refreshUpdateChecks()
+    }
+
     /// Shipping `preferences-target`: scroll a setting row to the middle of the
     /// view and highlight it for `PREFERENCE_HIGHLIGHT` (2.4 s).
     func revealSetting(_ key: String) {

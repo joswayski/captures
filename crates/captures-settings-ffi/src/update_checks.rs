@@ -29,8 +29,8 @@ struct Configuration {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
-    Check {},
-    Poll {},
+    Check { show_changelog: Option<bool> },
+    Poll { show_changelog: Option<bool> },
 }
 
 /// Construct an idle checker from explicit configuration, without HTTP.
@@ -93,9 +93,15 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
                 .map_err(|_| "Invalid update-check command.")?;
             let worker = &mut unsafe { &mut *handle }.worker;
             worker.poll();
-            let accepted = matches!(request, Request::Check {}) && worker.check();
+            let show_changelog = match request {
+                Request::Check { show_changelog } | Request::Poll { show_changelog } => {
+                    show_changelog.unwrap_or(true)
+                }
+            };
+            let accepted = matches!(request, Request::Check { .. }) && worker.check();
             Ok(json!({"accepted":accepted, "checking":worker.checking(),
-                "status":worker.status(), "presentation":worker.presentation()}))
+                "status":worker.status(), "presentation":worker.presentation(),
+                "generation":worker.generation(), "notice":worker.notice(show_changelog)}))
         })();
         match result {
             Ok(result) => json!({"ok":true, "result":result}),
@@ -155,6 +161,8 @@ mod tests {
             "Native development 2026.9.99"
         );
         assert_eq!(reply["result"]["checking"], false);
+        assert_eq!(reply["result"]["generation"], 0);
+        assert!(reply["result"]["notice"].is_null());
         assert!(!reply.to_string().contains("private-endpoint"));
         for request in [
             r#"{"operation":"install"}"#,

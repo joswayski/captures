@@ -453,8 +453,10 @@ Both native workbenches also render the Preview update notice (release notes,
 download progress, restart countdown and errors) from a simulated status source.
 An [explicit development launch](apps/native/README.md#native-preferences-update-checks)
 can connect Preferences and tray **Check for Updates** to a pinned, signed endpoint.
-Checks show progress, newer versions, up-to-date results and errors without automatic
-requests, package downloads or installation. No default endpoint/key or native
+Checks also drive a real native notice with signed release notes, up-to-date results
+and retryable errors. Dismissing a pending check keeps its result hidden until another
+explicit check. No automatic requests, package downloads or installation occur.
+No default endpoint/key or native
 update channel is enabled. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
 checks signed native manifests, verifies downloads and can validate unpacked native

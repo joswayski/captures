@@ -1842,8 +1842,7 @@ The worker retains state across Preferences closure, refuses overlapping work
 and cancels/joins on termination without publishing a late response. AppKit polls
 only while busy and refreshes just the Updates card, preserving other controls.
 wgpu publishes on root wakes, including when Preferences is closed. No native UI
-downloads, installs, launches a replacement or activates a channel. Update-notice
-status sources remain fixtures.
+downloads, installs, launches a replacement or activates a channel.
 
 | Platform | Check-only UI implementation / verification |
 | --- | --- |
@@ -1855,6 +1854,33 @@ status sources remain fixtures.
 [Invocation and limits](../apps/native/README.md#native-preferences-update-checks)
 remain development-only. This does not close signed installation, distribution,
 physical parity or the Notices/updates acceptance gate. Tauri still ships.
+
+### Native notices from signed development checks
+
+Both hosts now drive their update notice from the real metadata worker, sharing
+signed release-note parsing/layout and explicit development-only copy. No idle
+notice or automatic check is created. Check again/Try again route to that worker;
+no live action can enter the fixture download/restart simulation or offer a
+shipping download fallback. Explicit release-note PR links open the browser;
+fixture links remain inert.
+
+A per-check generation, not the result/status, controls reveal: dismissing during
+Checking keeps completion hidden, while the next explicit Check reopens it.
+Hide/What's new follows and persists the existing changelog preference. Capture,
+setup and permission UI suspend presentation without discarding pending state.
+AppKit uses the real status-item frame and restyles the card with appearance;
+wgpu uses no-tray fallback placement, never a fabricated tray rectangle, and
+includes live notices in the Windows tray-click dismissal policy.
+
+| Platform | Signed notice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Rust/C ABI source, AppKit model/controller/tray anchor and lifecycle implemented; XCTest dismissal/source-isolation/link-routing regression added; this slice's host execution/physical acceptance pending. The preceding check slice passes macOS CI (574 XCTest cases, six existing skips, no failures) and development packaging |
+| Windows | Same shared source, wgpu notice/action routing and tray dismissal implemented; portable regressions pass; this slice's Windows execution/physical acceptance pending |
+| X11 | Shared/host regressions and real signed loopback live input pass in dark/normal, dark/minimum with notes collapsed, and light/minimum: held checking, dismissal through completion, explicit recheck reveal, available/up-to-date, signature failure and notice-button retry, accepted pending-check Quit, unchanged settings and no artifact HTTP; renders inspected |
+| Wayland | Same source and wgpu UI; renderer regression asserts no notice viewport while suspended and correct restore/dismissal; actual compositor/physical notice acceptance open |
+
+No channel, installation, distribution or cutover is enabled by this slice.
+Workbench fixture scenes remain a separate simulated source.
 
 ### Native update package staging: temporary validation, no installation
 
