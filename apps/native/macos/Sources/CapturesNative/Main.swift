@@ -15,6 +15,7 @@ struct Options {
     var settingsFile: String?
     var nativeUpdateReadyFile: String?
     var nativeUpdateReadyToken: String?
+    var nativeUpdateChecks: UpdateCheckModel?
     var screenshot: String?
     /// Workbench update notice fixture (stub status source; no updater).
     var updateState: String?
@@ -25,6 +26,9 @@ struct Options {
     init(_ arguments: [String], bundled: Bool = false) throws {
         live = bundled
         var explicitLive = false
+        var updateEndpoint: String?
+        var updateKeyFile: String?
+        var updateCurrentVersion: String?
         var iterator = arguments.makeIterator()
         while let argument = iterator.next() {
             switch argument {
@@ -58,6 +62,15 @@ struct Options {
             case "--native-update-ready-token":
                 guard nativeUpdateReadyToken == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 nativeUpdateReadyToken = value
+            case "--native-update-manifest-url":
+                guard updateEndpoint == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                updateEndpoint = value
+            case "--native-update-public-key-file":
+                guard updateKeyFile == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                updateKeyFile = value
+            case "--native-update-current-version":
+                guard updateCurrentVersion == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                updateCurrentVersion = value
             case "--screenshot":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 screenshot = value
@@ -91,6 +104,16 @@ struct Options {
                   !exercise, !referenceChips, openMedia.isEmpty,
                   updateState == nil, updateTray == nil, scene == "preferences", screenshot == nil
             else { throw Usage.invalid }
+        }
+        if updateEndpoint != nil || updateKeyFile != nil || updateCurrentVersion != nil {
+            guard explicitLive, let endpoint = updateEndpoint, let keyFile = updateKeyFile,
+                  let version = updateCurrentVersion, !hasHealth, scene == "preferences",
+                  let historyRoot, historyRoot.hasPrefix("/"),
+                  let settingsFile, settingsFile.hasPrefix("/"), openMedia.isEmpty
+            else { throw Usage.invalid }
+            nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(configuration: [
+                "endpoint": endpoint, "key_file": keyFile, "renderer": "appkit", "current_version": version,
+            ]))
         }
     }
     enum Usage: Error { case invalid }
@@ -128,6 +151,7 @@ struct Options {
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
         } catch Options.Usage.invalid {
+            FileHandle.standardError.write(Data("Development metadata checks: explicit --live --history-root ABSOLUTE_PATH --settings-file ABSOLUTE_PATH --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (check only; no health launch or media open).\n".utf8))
             FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--settings-file PATH] [--native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|sharing|region|window|update|idle] [--update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date] [--update-tray top|bottom|none] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
             exit(1)
         } catch {

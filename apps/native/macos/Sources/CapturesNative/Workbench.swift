@@ -484,6 +484,7 @@ final class LiveStatusActions: NSObject {
     private let historyAction: () -> Void
     private let preferencesAction: () -> Void
     private let feedbackAction: () -> Void
+    private let updateCheckAction: (() -> Void)?
     private let outputFolderAction: () -> Void
     private let quitAction: () -> Void
     /// `captureShortcutSignature` order: New Capture, Screenshot Region/Window/
@@ -495,9 +496,11 @@ final class LiveStatusActions: NSObject {
          record: @escaping (UnifiedCaptureTarget) -> Void = { _ in },
          history: @escaping () -> Void, preferences: @escaping () -> Void,
          feedback: @escaping () -> Void = {},
+         checkUpdates: (() -> Void)? = nil,
          outputFolder: @escaping () -> Void, quit: @escaping () -> Void) {
         newCaptureAction = newCapture; captureAction = capture; recordAction = record
         historyAction = history; preferencesAction = preferences; feedbackAction = feedback
+        updateCheckAction = checkUpdates
         outputFolderAction = outputFolder; quitAction = quit
     }
 
@@ -511,6 +514,7 @@ final class LiveStatusActions: NSObject {
     @objc func showHistory() { historyAction() }
     @objc func showPreferences() { preferencesAction() }
     @objc func sendFeedback() { feedbackAction() }
+    @objc func checkUpdates() { updateCheckAction?() }
     @objc func openOutputFolder() { outputFolderAction() }
     @objc func quit() { quitAction() }
 
@@ -530,9 +534,9 @@ final class LiveStatusActions: NSObject {
         add("Open Save Location", action: #selector(openOutputFolder), to: menu)
         add("Preferences", action: #selector(showPreferences), to: menu)
         add("Send Feedback…", action: #selector(sendFeedback), to: menu)
-        // Signed updates are not connected yet; keep the shipping row visible.
-        let updates = NSMenuItem(title: "Check for Updates…", action: nil, keyEquivalent: "")
-        updates.isEnabled = false
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: "")
+        updates.target = self
+        updates.isEnabled = updateCheckAction != nil
         menu.addItem(updates)
         menu.addItem(.separator())
         add("Quit Captures", action: #selector(quit), to: menu)
@@ -946,6 +950,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         theme = options.theme
         historyCount = options.historyCount
         super.init()
+        options.nativeUpdateChecks?.didChange = { [weak self] in self?.preferencesController?.refreshUpdateChecks() }
         if let file = options.nativeUpdateReadyFile, let token = options.nativeUpdateReadyToken,
            let acknowledgement = try? UpdateHealthAcknowledgement(file: file, token: token) {
             updateHealth = UpdateHealthCoordinator(acknowledgement: acknowledgement) {
@@ -1111,12 +1116,17 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     sender.reply(toApplicationShouldTerminate: false); return
                 }
                 self.nativeInstance?.stopAccepting()
+                var remaining = 2
                 let drained = { [weak self] in
+                    remaining -= 1
+                    guard remaining == 0 else { return }
                     guard let self else { return }
                     self.finishTermination(); self.terminationPending = false
                     sender.reply(toApplicationShouldTerminate: true)
                 }
                 if let sharing = self.sharingController { sharing.model.shutdown(completion: drained) }
+                else { drained() }
+                if let checks = self.options.nativeUpdateChecks { checks.shutdown(completion: drained) }
                 else { drained() }
             }
             if let liveController = self.liveController {
@@ -1690,6 +1700,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                loginItemService: options.live && !options.exercise
                 ? NativeLoginItemService(historyRoot: options.historyRoot,
                                          settingsFile: options.settingsFile) : nil,
+               updateChecks: options.nativeUpdateChecks,
                initialAppearance: options.appearanceOverride ? options.appearance : nil,
                initialTheme: options.themeOverride ? options.theme : nil)
         } catch {
@@ -1849,6 +1860,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             self?.showPreferences()
         }, feedback: { [weak self] in
             self?.showFeedback()
+        }, checkUpdates: options.nativeUpdateChecks == nil ? nil : { [weak self] in
+            guard let self, self.onboardingReady, !self.terminating, !self.captureBusy,
+                  self.window.attachedSheet == nil else { return }
+            self.showPreferences()
+            self.options.nativeUpdateChecks?.check()
+            self.preferencesController?.revealUpdates()
         }, outputFolder: { [weak self] in
             self?.openOutputFolder()
         }, quit: {

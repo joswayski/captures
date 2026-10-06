@@ -21,6 +21,7 @@ mod selection;
 mod sharing;
 mod shortcuts;
 mod tray_notice;
+mod update_checks;
 mod update_notice;
 mod window;
 

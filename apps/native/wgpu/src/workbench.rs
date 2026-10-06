@@ -226,6 +226,10 @@ impl Workbench {
             options.theme_override.then(|| options.theme.clone()),
             shortcut_input,
         );
+        let updates_enabled = options.native_update_checks.is_some();
+        if let Some(client) = options.native_update_checks.take() {
+            preferences_state.connect_update_checks(client, &cc.egui_ctx);
+        }
         let crash_review_pending = crash
             .as_ref()
             .is_some_and(|session| session.preview().is_some())
@@ -259,7 +263,7 @@ impl Workbench {
             .then(|| Live::new(cc.egui_ctx.clone(), options.history_root.clone()));
         let (tray, tray_error) = if options.live {
             // Accelerators refresh once saved settings load (tray_shortcuts_generation).
-            match Tray::new(cc.egui_ctx.clone(), Default::default()) {
+            match Tray::new(cc.egui_ctx.clone(), Default::default(), updates_enabled) {
                 Ok(tray) => (Some(tray), None),
                 Err(error) => (
                     None,
@@ -558,6 +562,10 @@ impl Workbench {
             }
             TrayAction::History => self.show_root(ctx),
             TrayAction::Preferences => self.preferences.open(ctx),
+            TrayAction::CheckUpdates => {
+                self.preferences_state.check_updates();
+                self.preferences.open(ctx);
+            }
             // Shipping's left-click opens Preferences once no notice is up.
             #[cfg(target_os = "windows")]
             TrayAction::LeftClick => self.preferences.open(ctx),

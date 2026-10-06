@@ -12,6 +12,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --history-count 0..10000 --exercise --quit-after SECONDS\n\
   --capture-controls-recording --hud-state unmuted|muted|busy|no-microphone|saving|failed\n\
   --settings-file PATH\n\
+  --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (explicit live profile; check only)\n\
   --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (health launches only)\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
@@ -122,6 +123,7 @@ pub struct Options {
     /// would, instead of shipping's launch Preferences window.
     pub open_history: bool,
     pub native_update_health: Option<captures_app::updater::HealthAcknowledgement>,
+    pub native_update_checks: Option<captures_app::updater::UpdateClient>,
 }
 
 impl Options {
@@ -151,9 +153,13 @@ impl Options {
             open_preferences: false,
             open_history: false,
             native_update_health: None,
+            native_update_checks: None,
         };
         let mut native_update_ready_file = None;
         let mut native_update_ready_token = None;
+        let mut update_endpoint = None;
+        let mut update_key_file = None;
+        let mut update_current_version = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -263,6 +269,23 @@ impl Options {
                 "--settings-file" => {
                     options.settings_file = Some(args.next().ok_or("Missing settings path")?.into())
                 }
+                "--native-update-manifest-url"
+                | "--native-update-public-key-file"
+                | "--native-update-current-version" => {
+                    let slot = match arg.as_str() {
+                        "--native-update-manifest-url" => &mut update_endpoint,
+                        "--native-update-public-key-file" => &mut update_key_file,
+                        _ => &mut update_current_version,
+                    };
+                    if slot.is_some() {
+                        return Err("Duplicate native update-check option".into());
+                    }
+                    *slot = Some(
+                        args.next()
+                            .filter(|v| !v.is_empty())
+                            .ok_or("Missing native update-check value")?,
+                    );
+                }
                 "--native-update-ready-file" => {
                     if native_update_ready_file.is_some() {
                         return Err("Duplicate update ready file".into());
@@ -370,6 +393,41 @@ impl Options {
                     .into(),
             ),
         }
+        match (update_endpoint, update_key_file, update_current_version) {
+            (None, None, None) => {}
+            (Some(endpoint), Some(key_file), Some(version)) => {
+                let explicit_paths = options
+                    .history_root
+                    .as_ref()
+                    .zip(options.settings_file.as_ref())
+                    .is_some_and(|(history, settings)| {
+                        history.is_absolute() && settings.is_absolute()
+                    });
+                if !options.live
+                    || !explicit_paths
+                    || options.scene != Scene::Preferences
+                    || options.native_update_health.is_some()
+                    || !options.open_media.is_empty()
+                {
+                    return Err("Native update checks require plain --live with explicit absolute --history-root and --settings-file; no health launch or media open".into());
+                }
+                options.native_update_checks = Some(
+                    captures_app::updater::checks::client_from_key_file(
+                        &endpoint,
+                        PathBuf::from(key_file).as_path(),
+                        captures_app::updater::Renderer::Wgpu,
+                        &version,
+                    )
+                    .map_err(|error| error.to_string())?,
+                );
+            }
+            _ => {
+                return Err(
+                    "The manifest URL, public key file and current version must appear together"
+                        .into(),
+                );
+            }
+        }
         Ok(options)
     }
 }
@@ -385,6 +443,58 @@ mod tests {
     fn live_previews_accept_explicit_reduced_motion() {
         let options = parse(&["--live", "--reduced-motion"]).unwrap();
         assert!(options.live && options.reduced_motion);
+    }
+
+    #[test]
+    fn update_checks_require_complete_explicit_configuration_without_fixtures_or_health() {
+        let root = tempfile::tempdir().unwrap();
+        let key = root.path().join("public.key");
+        std::fs::write(&key, "untrusted comment: minisign public key E7620F1842B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3").unwrap();
+        let args = vec![
+            "--live".into(),
+            "--history-root".into(),
+            root.path().join("history").display().to_string(),
+            "--settings-file".into(),
+            root.path().join("settings.json").display().to_string(),
+            "--native-update-manifest-url".into(),
+            "http://127.0.0.1:9/native.json".into(),
+            "--native-update-public-key-file".into(),
+            key.display().to_string(),
+            "--native-update-current-version".into(),
+            "2026.9.99".into(),
+        ];
+        assert!(
+            Options::parse(args.clone())
+                .unwrap()
+                .native_update_checks
+                .is_some()
+        );
+        assert!(parse(&["--live"]).unwrap().native_update_checks.is_none());
+        for extra in [
+            vec!["--scene", "idle"],
+            vec!["--scene", "update"],
+            vec!["--exercise"],
+            vec!["--open-media", "/tmp/capture.png"],
+            vec!["--native-update-current-version", "2026.9.99"],
+            vec![
+                "--native-update-ready-file",
+                "/tmp/ready",
+                "--native-update-ready-token",
+                "73147c85-13e0-4a67-b129-5e7ead486dc1",
+            ],
+        ] {
+            let mut invalid = args.clone();
+            invalid.extend(extra.into_iter().map(String::from));
+            assert!(Options::parse(invalid).is_err());
+        }
+        assert!(Options::parse(args[1..].to_vec()).is_err());
+        assert!(Options::parse(args[..args.len() - 2].to_vec()).is_err());
+        let mut invalid = args;
+        invalid[2] = "relative".into();
+        assert!(Options::parse(invalid).is_err());
+        assert!(
+            !root.path().join("settings.json").exists() && !root.path().join("history").exists()
+        );
     }
 
     #[test]

@@ -451,7 +451,11 @@ notice offers Save file, then Show in Folder after saving a permanent copy. Dism
 or letting it expire preserves History and exports; failed saves can be retried.
 Both native workbenches also render the Preview update notice (release notes,
 download progress, restart countdown and errors) from a simulated status source.
-Native app update actions remain unavailable. A separate opt-in
+An [explicit development launch](apps/native/README.md#native-preferences-update-checks)
+can connect Preferences and tray **Check for Updates** to a pinned, signed endpoint.
+Checks show progress, newer versions, up-to-date results and errors without automatic
+requests, package downloads or installation. No default endpoint/key or native
+update channel is enabled. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
 checks signed native manifests, verifies downloads and can validate unpacked native
 packages in temporary storage. It never installs or replaces an app, and no native
@@ -510,7 +514,8 @@ acceptance remains open; [development setup/removal](DEVELOPMENT.md#native-devel
 documents the platform entries and conflict recovery.
 Native capture shortcuts remain available while Preferences is focused, except
 while a shortcut recorder is active. Updates keep the version and **Native
-development** identity visible; signed native updates remain unavailable.
+development** identity visible; signed checks require explicit development
+configuration, and app installation remains unavailable.
 Fixture launches remain independent. Optional unsigned development packages provide
 Open With metadata for these six formats on macOS, Windows and Linux, under a separate
 **Captures Native Development** identity. Staging does not install them or change

@@ -10,6 +10,7 @@
 //! confirm its private readiness. No GUI calls replacement, discovers installed
 //! data, registers it or activates a channel.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
+pub mod checks;
 mod health;
 mod installation;
 mod staging;
@@ -173,6 +174,16 @@ pub struct UpdateClient {
     target: Target,
     current_version: Version,
     loopback: bool,
+}
+
+impl std::fmt::Debug for UpdateClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateClient")
+            .field("renderer", &self.renderer)
+            .field("target", &self.target)
+            .field("current_version", &self.current_version)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Only a successfully authenticated, newer, matching manifest creates this.
@@ -498,7 +509,7 @@ mod tests {
     // SHA-256 independently calculated with Python hashlib, not the verifier.
     const PAYLOAD_HASH: &str = "d2820340a902904952ed3ce50313a4867f8717eadfbbc24378a863d52d2009cf";
 
-    fn manifest(url: &str) -> Value {
+    pub(super) fn manifest(url: &str) -> Value {
         json!({
             "schema": 1,
             "identity": DEVELOPMENT_IDENTITY,
@@ -511,7 +522,7 @@ mod tests {
         })
     }
 
-    fn signed(value: &Value) -> (String, Vec<u8>, Vec<u8>) {
+    pub(super) fn signed(value: &Value) -> (String, Vec<u8>, Vec<u8>) {
         let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
         let bytes = serde_json::to_vec(value).unwrap();
         let signature = minisign::sign(None, &pair.sk, Cursor::new(&bytes), None, None).unwrap();
@@ -901,7 +912,7 @@ mod tests {
         }
     }
 
-    fn serve(
+    pub(super) fn serve(
         listener: TcpListener,
         responses: Vec<(u16, Vec<u8>)>,
     ) -> thread::JoinHandle<Vec<String>> {
