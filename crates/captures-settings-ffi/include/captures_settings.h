@@ -703,6 +703,15 @@ char *captures_editor_wand_loupe_v1(const CapturesEditorSession *session, double
 bool captures_editor_frame_pixels_v1(const CapturesEditorFrame *frame, CapturesRegionPixels *output);
 void captures_editor_frame_free_v1(CapturesEditorFrame *frame);
 
+/* Decode a file through the shared bounded import decoder on a decode worker.
+ * UTF-8 NUL-terminated path is borrowed for the call; no session is accessed,
+ * no edit is published and no file is written. External SVG resources and
+ * host fonts are never loaded. NULL output refuses decoding; otherwise writes
+ * owned {ok:true,result:{}} or {ok:false,error} JSON freed with settings_free_v1.
+ * Failure returns NULL. Success returns an independent immutable frame, borrowed
+ * with frame_pixels_v1 and freed exactly once with frame_free_v1 after all reads. */
+CapturesEditorFrame *captures_editor_decode_image_v1(const char *path, char **output);
+
 /* Worker-only uncommitted drawing render. Accepts create_closed_shape,
  * create_open_shape, create_freehand_path or paint_image_background requests.
  * Brush requests contain the complete gesture, rendered from published assets.

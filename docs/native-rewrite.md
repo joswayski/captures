@@ -3253,7 +3253,7 @@ pixels, undo/redo, draft restore and light/dark/minimum layouts are exercised on
 private X11. Windows/Wayland presentation remains unverified; AppKit style controls
 are described below. Physical input/accessibility acceptance stays open.
 
-The wgpu Add images action picks PNG/JPEG/WebP/TIFF/GIF/BMP files independently
+The wgpu Add images action picks PNG/JPEG/WebP/TIFF/GIF/BMP/SVG files independently
 of the session worker. The worker bounds encoded input and decoded dimensions,
 normalizes EXIF orientation and supplies owned RGBA to the shared import command.
 Shipping decodes Add images and dropped layers in the webview, which color-manages
@@ -3280,7 +3280,7 @@ and the unused byte of legacy 32-bit BI_RGB discarded. V5 embedded RGB ICC profi
 convert through the existing pipeline. Calibrated/linked/unknown BMP descriptions
 fail recoverably instead of silently importing wrong colors; linked profiles never
 cause filesystem/network reads. ImageIO supplies AppKit's GIF/BMP decoding and color
-management. AVIF, SVG and HEIC layer parity remains open. Analytic fixtures in
+management. AVIF, HEIC and broader SVG layer parity remains open. Analytic fixtures in
 `captures-app` cover GIF first-frame offset/transparency/later-frame exclusion,
 BMP row direction/alpha/profile bounds, ICC transport through PNG, JPEG, WebP, TIFF and BMP plus
 grayscale alpha, a generated CMYK lut16 profile through Adobe CMYK and YCCK JPEGs
@@ -3291,6 +3291,24 @@ undo/redo, detached draft reopening and normal/minimum captures. AppKit has matc
 offset-GIF and asymmetric-BMP ImageIO tests; macOS CI and physical acceptance status
 are recorded in its PR. Windows and Wayland share the implementation; their physical
 dialogs/input/rendering are unverified. This does not complete a platform parity gate.
+The SVG follow-up accepts self-contained vector/text documents through shared resvg
+on both hosts (AppKit uses `captures_editor_decode_image_v1` and the existing retained
+frame ownership). It rasterizes intrinsic size/viewBox into straight-alpha sRGB RGBA;
+only bundled Liberation/Nunito faces are loaded, with substitution for unavailable
+faces. Root dimensions must be explicit absolute lengths: a Chromium image reference
+probe confirmed that browser defaults for omitted/viewBox-only sizes differ from
+resvg's standalone bounds. Cargo disables system fonts, raster-image and SVGZ defaults. XML rejects DTD
+entities and is bounded to 4 MiB, 32,768 nodes and 32 element levels; output is bounded
+to 4,194,304 pixels and the existing side limit. Image/feImage, foreignObject and use
+references fail recoverably before resource resolution or expansion, rather than
+silently publishing partial content. Both image resolvers reject all resources.
+Broader SVG parity is explicitly unfinished. Shared tests independently check viewBox,
+offsets, alpha, generic font mapping and resource/size/depth/node failures; the ABI
+retains exact pixels after removing a Unicode-named source and returns owned errors.
+Private-X11 picker/pixel/Undo/Redo/detached-reopen checks include SVG in both appearances.
+AppKit XCTest covers the same asymmetric SVG and conversion error; its first compile
+is macOS CI, not physical acceptance. Windows and Wayland share the implementation
+but remain presentation-unverified. No platform parity gate closes.
 The returned stable ID selects the new layer. Cancellation, decode failures and
 late results after close preserve the editor; a completed selection waits for
 already accepted edits before importing. Imports do not write a draft or History

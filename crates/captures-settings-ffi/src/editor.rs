@@ -1251,6 +1251,39 @@ pub unsafe extern "C" fn captures_editor_wand_loupe_v1(
     })
 }
 
+/// Decode an imported file on a host's decode worker into an independent frame.
+/// Does not access a session, publish an edit, write files or resolve resources.
+///
+/// # Safety
+/// Path is readable NUL-terminated UTF-8. Non-null output is aligned writable
+/// pointer storage. Null output refuses decoding. Free response JSON with
+/// settings_free_v1 and pixels with frame_free_v1 after all borrows finish.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_decode_image_v1(
+    path: *const c_char,
+    output: *mut *mut c_char,
+) -> *mut Arc<RgbaImage> {
+    if output.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable UTF-8 path storage for this call.
+        let path = PathBuf::from(unsafe { text(path) }?);
+        captures_app::editor_image_decode::decode_import(&path)
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    let (frame, value) = match result {
+        Ok(pixels) => (
+            Box::into_raw(Box::new(Arc::new(pixels))),
+            json!({"ok":true,"result":{}}),
+        ),
+        Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
+    };
+    // SAFETY: caller supplies writable output pointer storage.
+    unsafe { output.write(response(value)) };
+    frame
+}
+
 /// Retain the current frame without copying pixels; null input returns null.
 ///
 /// # Safety
@@ -2730,6 +2763,60 @@ mod tests {
         assert_eq!(json!(session.snapshot()), before);
         assert!(Arc::ptr_eq(&pixels, &session.pixels()));
         assert!(!data.path().join("drafts").exists());
+    }
+
+    #[test]
+    fn decode_import_abi_owns_pixels_after_source_removal_and_returns_errors() {
+        let data = tempfile::tempdir().unwrap();
+        let file = data.path().join("vector é.SVG");
+        std::fs::write(
+            &file,
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3">
+            <rect x="1" y="0" width="1" height="1" fill="#0b49d3"/>
+        </svg>"##,
+        )
+        .unwrap();
+        let path = CString::new(file.to_str().unwrap()).unwrap();
+        // SAFETY: readable retained path, separate writable outputs; each
+        // returned JSON/frame is freed once after all pixel borrows end.
+        unsafe {
+            assert!(captures_editor_decode_image_v1(path.as_ptr(), ptr::null_mut()).is_null());
+            let mut response = ptr::null_mut();
+            let frame = captures_editor_decode_image_v1(path.as_ptr(), &mut response);
+            assert_eq!(take_json(response)["ok"], true);
+            assert!(!frame.is_null());
+            std::fs::remove_file(&file).unwrap();
+            let mut pixels = MaybeUninit::uninit();
+            assert!(captures_editor_frame_pixels_v1(frame, pixels.as_mut_ptr()));
+            let pixels = pixels.assume_init();
+            assert_eq!(
+                (
+                    pixels.width,
+                    pixels.height,
+                    pixels.bytes_per_row,
+                    pixels.length
+                ),
+                (2, 3, 8, 24)
+            );
+            assert_eq!(
+                std::slice::from_raw_parts(pixels.data, pixels.length),
+                [
+                    0, 0, 0, 0, 11, 73, 211, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                ]
+            );
+            captures_editor_frame_free_v1(frame);
+            for invalid in [ptr::null(), path.as_ptr()] {
+                assert!(captures_editor_decode_image_v1(invalid, &mut response).is_null());
+                assert_eq!(take_json(response)["ok"], false);
+            }
+            std::fs::write(&file, "<svg broken").unwrap();
+            assert!(captures_editor_decode_image_v1(path.as_ptr(), &mut response).is_null());
+            assert_eq!(
+                take_json(response)["error"],
+                "vector é.SVG could not be loaded."
+            );
+            captures_editor_frame_free_v1(ptr::null_mut());
+        }
     }
 
     #[test]

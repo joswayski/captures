@@ -4852,7 +4852,9 @@ fn drop_guides_place_imports_where_the_guide_shows() {
     assert_eq!(imported.base().y, 0.);
     editor.execute(Request::Undo).unwrap();
     assert_eq!(editor.snapshot().document, &before);
-    for path in ["a.JPG", "a.gif", "a.GIF", "a.bmp", "a.BMP"] {
+    for path in [
+        "a.JPG", "a.gif", "a.GIF", "a.bmp", "a.BMP", "a.svg", "a.SVG",
+    ] {
         assert!(captures_app::editor_session::is_supported_image_path(
             Path::new(path)
         ));

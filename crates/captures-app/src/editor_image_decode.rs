@@ -10,6 +10,7 @@ use std::{
     fs::File,
     io::{Cursor, Read},
     path::Path,
+    sync::{Arc, OnceLock},
 };
 
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, RgbaImage};
@@ -73,25 +74,28 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
             error.to_string()
         }
     };
-    let format = image::guess_format(&bytes)
-        .ok()
-        .filter(|format| {
-            matches!(
+    let format = match image::guess_format(&bytes) {
+        Ok(format) => Some(format),
+        Err(_) if import => return decode_svg(&bytes, &not_loaded()),
+        Err(_) => None,
+    }
+    .filter(|format| {
+        matches!(
+            format,
+            ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP
+        ) || (import
+            && matches!(
                 format,
-                ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP
-            ) || (import
-                && matches!(
-                    format,
-                    ImageFormat::Tiff | ImageFormat::Gif | ImageFormat::Bmp
-                ))
-        })
-        .ok_or_else(|| {
-            if import {
-                not_loaded()
-            } else {
-                UNSUPPORTED_OPEN_MESSAGE.to_owned()
-            }
-        })?;
+                ImageFormat::Tiff | ImageFormat::Gif | ImageFormat::Bmp
+            ))
+    })
+    .ok_or_else(|| {
+        if import {
+            not_loaded()
+        } else {
+            UNSUPPORTED_OPEN_MESSAGE.to_owned()
+        }
+    })?;
     let mut decoder = ImageReader::with_format(Cursor::new(&bytes), format)
         .into_decoder()
         .map_err(failed)?;
@@ -189,6 +193,121 @@ const UNSUPPORTED_COLOR_SPACE: &str =
 
 fn color_error(error: String) -> String {
     format!("Cannot convert this image's color profile to sRGB: {error}")
+}
+
+/// Self-contained vector/text SVGs. Reject resource-bearing documents before
+/// usvg decodes data URLs or silently drops unsupported content. No system
+/// fonts, external resources, SVGZ expansion or embedded raster decoding.
+fn decode_svg(bytes: &[u8], not_loaded: &str) -> Result<RgbaImage, String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| not_loaded.to_owned())?;
+    if !text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with('<')
+    {
+        return Err(not_loaded.to_owned());
+    }
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err("SVG imports are limited to 4 MiB. Convert this image to PNG first.".into());
+    }
+    let xml = roxmltree::Document::parse_with_options(
+        text,
+        roxmltree::ParsingOptions {
+            allow_dtd: false,
+            nodes_limit: 32_768,
+            entity_resolver: None,
+        },
+    )
+    .map_err(|_| not_loaded.to_owned())?;
+    if !xml
+        .root_element()
+        .has_tag_name(("http://www.w3.org/2000/svg", "svg"))
+    {
+        return Err(not_loaded.to_owned());
+    }
+    // Browser image sizing for relative/omitted dimensions differs from usvg's
+    // standalone defaults. Do not silently import a different natural size.
+    for attribute in ["width", "height"] {
+        let absolute = xml
+            .root_element()
+            .attribute(attribute)
+            .and_then(|value| value.parse::<svgtypes::Length>().ok())
+            .is_some_and(|length| {
+                length.number > 0.
+                    && matches!(
+                        length.unit,
+                        svgtypes::LengthUnit::None
+                            | svgtypes::LengthUnit::Px
+                            | svgtypes::LengthUnit::In
+                            | svgtypes::LengthUnit::Cm
+                            | svgtypes::LengthUnit::Mm
+                            | svgtypes::LengthUnit::Pt
+                            | svgtypes::LengthUnit::Pc
+                    )
+            });
+        if !absolute {
+            return Err("SVG imports need explicit absolute width and height. Set their dimensions or convert to PNG first.".into());
+        }
+    }
+    for node in xml.descendants().filter(roxmltree::Node::is_element) {
+        if node.ancestors().take(34).count() > 33 {
+            return Err("This SVG is too deeply nested. Convert it to PNG first.".into());
+        }
+        if matches!(
+            node.tag_name().name(),
+            "image" | "feImage" | "foreignObject" | "use"
+        ) {
+            return Err("This SVG contains images, HTML content or reusable references. Convert it to PNG first.".into());
+        }
+    }
+    static FONTS: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
+    let mut options = resvg::usvg::Options {
+        font_family: "Liberation Sans".into(),
+        fontdb: FONTS
+            .get_or_init(|| {
+                let mut database = resvg::usvg::fontdb::Database::new();
+                for bytes in crate::editor_fonts::bundled().files.values() {
+                    database.load_font_data(bytes.to_vec());
+                }
+                database.set_sans_serif_family("Liberation Sans");
+                database.set_serif_family("Liberation Serif");
+                database.set_monospace_family("Liberation Mono");
+                Arc::new(database)
+            })
+            .clone(),
+        ..Default::default()
+    };
+    // Neither resolver may inherit usvg's filesystem-reading defaults.
+    options.image_href_resolver = resvg::usvg::ImageHrefResolver {
+        resolve_data: Box::new(|_, _, _| None),
+        resolve_string: Box::new(|_, _| None),
+    };
+    let tree =
+        resvg::usvg::Tree::from_xmltree(&xml, &options).map_err(|_| not_loaded.to_owned())?;
+    let size = tree.size();
+    if size.width() > MAX_RENDER_DIMENSION as f32 || size.height() > MAX_RENDER_DIMENSION as f32 {
+        return Err(format!(
+            "Images are limited to {MAX_RENDER_DIMENSION} pixels per side and {MAX_RENDER_PIXELS} total pixels."
+        ));
+    }
+    let integer = size.to_int_size();
+    // Vector compositing/filter intermediates are in addition to final pixels.
+    if u64::from(integer.width()) * u64::from(integer.height()) > 4_194_304 {
+        return Err("SVG imports are limited to 4,194,304 pixels. Convert it to PNG first.".into());
+    }
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(integer.width(), integer.height())
+        .ok_or_else(|| not_loaded.to_owned())?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    RgbaImage::from_raw(
+        integer.width(),
+        integer.height(),
+        pixmap.take_demultiplied(),
+    )
+    .ok_or_else(|| not_loaded.to_owned())
 }
 
 /// BITMAPV4/V5 color descriptions, which image's decoder does not expose.
@@ -467,7 +586,7 @@ mod tests {
         ProfileClass, RenderingIntent, ToneReprCurve,
     };
 
-    use super::{UNSUPPORTED_OPEN_MESSAGE, decode_import, decode_opened_image};
+    use super::{UNSUPPORTED_OPEN_MESSAGE, decode_import, decode_opened_image, decode_svg};
 
     fn close(actual: u8, expected: u8, tolerance: u8, what: &str) {
         assert!(
@@ -812,6 +931,143 @@ mod tests {
             encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
         });
         assert_eq!(decode_bytes(&srgb_chunk).as_raw(), &samples);
+    }
+
+    #[test]
+    fn svg_import_rasterizes_viewbox_offsets_and_straight_alpha() {
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("vector.SVG");
+        let svg =
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="4" viewBox="0 0 6 8">
+            <rect x="2" y="4" width="2" height="2" fill="#0b49d3" opacity="0.5"/>
+            <path d="M4 0H6V2H4Z" fill="#359711"/>
+        </svg>"##;
+        fs::write(&path, svg).unwrap();
+        let pixels = decode_import(&path).unwrap();
+        assert_eq!(pixels.dimensions(), (3, 4));
+        for y in 0..4 {
+            for x in 0..3 {
+                let actual = pixels.get_pixel(x, y).0;
+                match (x, y) {
+                    (1, 2) => {
+                        for (actual, expected) in actual.into_iter().zip([11, 73, 211, 128]) {
+                            close(actual, expected, 1, "SVG straight alpha");
+                        }
+                    }
+                    (2, 0) => assert_eq!(actual, [53, 151, 17, 255]),
+                    _ => assert_eq!(actual, [0, 0, 0, 0], "{x},{y}"),
+                }
+            }
+        }
+        assert_eq!(fs::read(&path).unwrap(), svg);
+        assert_eq!(
+            decode_opened_image(&path).unwrap_err(),
+            UNSUPPORTED_OPEN_MESSAGE
+        );
+        // Content, not the extension, determines decoding.
+        let alias = data.path().join("vector.png");
+        fs::write(&alias, svg).unwrap();
+        assert_eq!(decode_import(&alias).unwrap(), pixels);
+    }
+
+    #[test]
+    fn svg_text_uses_only_bundled_faces_and_generic_family_mapping() {
+        let svg = |family| {
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="32">
+            <text x="3" y="25" font-size="24" font-family="{family}" fill="#0b49d3">A7</text>
+        </svg>"##
+            )
+        };
+        let sans = decode_svg(svg("sans-serif").as_bytes(), "invalid").unwrap();
+        assert_eq!(
+            sans,
+            decode_svg(svg("Liberation Sans").as_bytes(), "invalid").unwrap()
+        );
+        assert!(sans.pixels().filter(|pixel| pixel.0[3] == 255).count() > 20);
+        assert_eq!(sans.get_pixel(100, 10).0, [0, 0, 0, 0]);
+        assert_ne!(
+            sans,
+            decode_svg(svg("monospace").as_bytes(), "invalid").unwrap()
+        );
+    }
+
+    #[test]
+    fn svg_resources_and_allocation_amplification_fail_before_rasterization() {
+        let wrap = |body: &str| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"
+            xmlns:xlink="http://www.w3.org/1999/xlink" width="3" height="4">{body}</svg>"#
+            )
+        };
+        for body in [
+            r#"<image href="/tmp/private.png" width="3" height="4"/>"#,
+            r#"<image xlink:href="https://example.invalid/image.png" width="3" height="4"/>"#,
+            r#"<image href="data:image/svg+xml;base64,PHN2Zy8+" width="3" height="4"/>"#,
+            r#"<foreignObject width="3" height="4"><div>HTML</div></foreignObject>"#,
+            r##"<defs><path id="repeat" d="M0 0H3V4Z"/></defs><use href="#repeat"/>"##,
+            r#"<filter id="f"><feImage href="secret.png"/></filter>"#,
+        ] {
+            assert!(
+                decode_svg(wrap(body).as_bytes(), "invalid")
+                    .unwrap_err()
+                    .contains("Convert")
+            );
+        }
+        for document in [
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16385\" height=\"1\"/>",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2049\" height=\"2048\"/>",
+        ] {
+            assert!(
+                decode_svg(document.as_bytes(), "invalid")
+                    .unwrap_err()
+                    .contains("pixels")
+            );
+        }
+        for dimensions in [
+            "",
+            "viewBox='0 0 6 8'",
+            "width='3'",
+            "width='100%' height='4'",
+            "width='2em' height='4'",
+            "width='bad' height='4'",
+        ] {
+            let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' {dimensions}/>");
+            assert!(
+                decode_svg(svg.as_bytes(), "invalid")
+                    .unwrap_err()
+                    .contains("absolute")
+            );
+        }
+        assert!(
+            decode_svg(wrap(&" ".repeat(4 * 1024 * 1024)).as_bytes(), "invalid")
+                .unwrap_err()
+                .contains("4 MiB")
+        );
+        // Exactly the byte limit and 32 element levels remain accepted.
+        let at_limit = wrap(&" ".repeat(4 * 1024 * 1024 - wrap("").len()));
+        assert_eq!(
+            decode_svg(at_limit.as_bytes(), "invalid")
+                .unwrap()
+                .dimensions(),
+            (3, 4)
+        );
+        let at_depth = wrap(&format!("{}{}", "<g>".repeat(31), "</g>".repeat(31)));
+        assert!(decode_svg(at_depth.as_bytes(), "invalid").is_ok());
+        assert!(
+            decode_svg(
+                wrap(&format!("{}{}", "<g>".repeat(32), "</g>".repeat(32))).as_bytes(),
+                "invalid"
+            )
+            .unwrap_err()
+            .contains("nested")
+        );
+        assert_eq!(
+            decode_svg(wrap(&"<path/>".repeat(32_768)).as_bytes(), "invalid").unwrap_err(),
+            "invalid"
+        );
+        assert_eq!(decode_svg(b"<!DOCTYPE svg [<!ENTITY external SYSTEM 'file:///tmp/private'>]><svg xmlns='http://www.w3.org/2000/svg'>&external;</svg>", "invalid").unwrap_err(), "invalid");
+        assert_eq!(decode_svg(b"<not-svg/>", "invalid").unwrap_err(), "invalid");
     }
 
     #[test]

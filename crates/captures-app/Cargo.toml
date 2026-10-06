@@ -26,10 +26,13 @@ file-id = "0.2.3"
 flate2 = "1"
 plist = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+resvg = { version = "0.48.1", default-features = false, features = ["text"] }
+roxmltree = "0.21"
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
+svgtypes = "0.16"
 tar = "0.4"
 tempfile.workspace = true
 thiserror.workspace = true

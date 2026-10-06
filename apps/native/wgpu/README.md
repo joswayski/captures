@@ -200,7 +200,7 @@ blocked until composition ends. This first composing field uses the UI font and
 is unrotated; the document's pinned-font styled pixels remain authoritative.
 It is not Tauri's WYSIWYG input layout. Physical input, IME, accessibility,
 Windows and Wayland presentation still require acceptance.
-Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP picker without blocking draft
+Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP/SVG picker without blocking draft
 saves or close. The worker bounds and decodes each file, honors EXIF orientation,
 then imports below the selected visible image using shared placement/expansion.
 Undo/redo and saved drafts own the imported pixels; the external file is never
@@ -213,7 +213,16 @@ linked profiles never trigger filesystem/network reads. Legacy 32-bit BI_RGB is 
 Supported ICC and PNG gamma/chromaticity/CICP metadata convert to sRGB with straight
 alpha preserved; untagged images assume sRGB. Unsupported/malformed profiles return
 recoverable errors. Import normalizes to 8-bit RGBA, not HDR/wide-gamut editing.
-AVIF, SVG and HEIC layer parity remains open.
+SVG imports rasterize self-contained vectors/text using only bundled editor fonts;
+unavailable faces may substitute. Both hosts use the shared resvg decoder, not a
+browser or OS SVG renderer. Explicit absolute width and height are required;
+omitted/relative dimensions have browser defaults that differ from resvg's.
+Input is limited to 4 MiB, 32,768 XML nodes, 32 element
+levels and 4,194,304 output pixels, with the editor's 16,384-pixel side limit.
+Images, HTML/foreignObject, reusable use references, DTD entities and SVGZ are not
+accepted. Resource-bearing documents fail before data-URI decoding or filesystem
+access; external image resolvers are disabled and system fonts are never loaded.
+Convert unsupported SVGs to PNG first. AVIF, HEIC and broader SVG layer parity remain open.
 The bottom export bar's **Export settings** disclosure offers output size,
 Preserve/Compress/Maximum quality, custom PNG palette sizes and an optional hard
 byte limit; the format is the filename's suffix menu. **Est. size** re-encodes on a

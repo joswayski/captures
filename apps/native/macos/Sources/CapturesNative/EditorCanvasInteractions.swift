@@ -118,7 +118,7 @@ enum NativeEditorCanvas {
     static let curveMarks = ["Left", "Straight", "Right"]
     static let curveHelp = "Drag the curve dots to reshape. Double-click the path to add more points; double-click a point to remove it."
     static let dropImage = "Drop image"
-    static let dropUnsupported = "Drop PNG, JPEG, WebP, TIFF, GIF, or BMP image files."
+    static let dropUnsupported = "Drop PNG, JPEG, WebP, TIFF, GIF, BMP, or SVG image files."
 
     static func isSupportedImage(_ url: URL) -> Bool {
         guard url.isFileURL, let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return false }
