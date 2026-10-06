@@ -1179,8 +1179,9 @@ final class RecordingEditorTests: XCTestCase {
         for stop in ["focus", "close", "quit", "playback-error", "seek-error", "focus-seeking", "quit-seeking"] {
             let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400))
             worker.deferPlayback = true; worker.deferRequest = true
+            var errors: [String] = []
             let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
-                worker: worker, requestTermination: {})
+                worker: worker, reportError: { errors.append($0) }, requestTermination: {})
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
             let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
@@ -1208,6 +1209,8 @@ final class RecordingEditorTests: XCTestCase {
                 worker.completeRequest(.success(try presentation(position: 1400, revision: 1)))
             } else { XCTAssertTrue(worker.requests.isEmpty, "\(stop) cancels the queued seek") }
             XCTAssertEqual(worker.playbackStarts, [400], "\(stop) cannot restart playback")
+            XCTAssertEqual(errors.count, stop.hasSuffix("error") ? 1 : 0,
+                           "the fixture must deliver the failure instead of cancellation")
             XCTAssertFalse(controller.dirty)
         }
     }
@@ -5314,7 +5317,13 @@ private final class FakeRecordingEditorWorker: RecordingEditorWorking {
         let completion = pendingPlaybackCompletion
         pendingPlaybackStarted = nil; pendingPlaybackFrame = nil; pendingPlaybackCompletion = nil
         pendingPlaybackLoopStart = nil; playbackLapFrameCount = 0
-        completion?(observedPlaybackCancel?.isCancelled == true ? .success(.cancelled) : result)
+        if case .success = result, observedPlaybackCancel?.isCancelled == true {
+            completion?(.success(.cancelled))
+        } else {
+            // A requested stop can race a decoder failure. Do not turn an
+            // explicitly injected failure into a successful cancellation.
+            completion?(result)
+        }
     }
     func sourceFrame(cancel: NativeRecordingEditorCancel,
                      completion: @escaping (Result<RecordingSourceImage, Error>) -> Void) {
