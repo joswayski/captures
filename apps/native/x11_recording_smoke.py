@@ -402,6 +402,10 @@ pcm.!pulse {
             wait(lambda: tooltip_band(hud) != bare, "Retry recording tooltip")
             time.sleep(.2)
             shot(hud, "hud-retry-tooltip")
+            run("xdotool", "mousemove", "--sync", "0", "0")
+            wait(lambda: tooltip_band(hud) == bare, "inline error restored after Retry hover")
+            assert manifest()["state"] == "failed" and manifest()["session_id"] == session_id
+            shot(hud, "hud-retry-error-restored")
 
             # Retry recording restarts at once (no "Restart recording?") and
             # fails again while the microphone is still missing.

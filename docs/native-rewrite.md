@@ -3176,7 +3176,9 @@ cleanup, the inline error line and tooltip placement. Behavior now matches shipp
 - **Styled tooltips.** A fixed-glass tooltip replaces system/egui hover text. It uses
   shipping copy ("Stop and save", "Retry recording", "Hide controls"…) and appears
   under the hovered or focused button, disabled buttons included, with no delay. It
-  fades and slides 3 pt over `--dur-1`, and the last three right-align.
+  fades and slides 3 pt over `--dur-1`, and the last three right-align. Inline errors
+  do not suppress tooltips: like shipping and AppKit, the tooltip may temporarily
+  cover part of the error, which stays intact and reappears when hover/focus ends.
 - wgpu also keeps the HUD window alive, with controls disabled, while pausing,
   resuming or changing the microphone. Previously the window closed and reopened.
 

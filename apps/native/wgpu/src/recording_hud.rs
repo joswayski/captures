@@ -347,10 +347,9 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             .truncate(),
         );
     }
-    // Both use the space below the card; keep an actionable error readable.
-    if view.error.is_none()
-        && let Some((anchor, control, progress)) = tooltip
-    {
+    // Like shipping and AppKit, hover/focus tooltips may temporarily cover the
+    // inline error. Moving away reveals it without clearing the failure.
+    if let Some((anchor, control, progress)) = tooltip {
         paint_tooltip(ui, tokens, anchor, &control, progress, bounds);
     }
     action
@@ -903,6 +902,73 @@ mod tests {
                 .iter()
                 .any(|label| label.contains("microphone device"))
         );
+    }
+
+    #[test]
+    fn inline_errors_do_not_suppress_hover_or_focus_tooltips() {
+        for appearance in ["dark-mustard", "light-mustard"] {
+            let tokens = crate::tokens::load().remove(appearance).unwrap();
+            for (state, index, focused, expected) in [
+                (RecordingState::Failed, 2, false, "Retry recording"),
+                (RecordingState::Failed, 0, false, "Stop and save"),
+                (RecordingState::Paused, 1, false, "Resume recording"),
+                (RecordingState::Failed, 2, true, "Retry recording"),
+            ] {
+                let ctx = egui::Context::default();
+                let mut target = egui::Pos2::ZERO;
+                for frame in 0..5 {
+                    let events = if focused && (frame == 1 || frame == 2) {
+                        // Tab past the draggable background to the first
+                        // enabled button (Retry) in a failed take.
+                        vec![egui::Event::Key {
+                            key: egui::Key::Tab,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }]
+                    } else if !focused && frame == 1 {
+                        vec![egui::Event::PointerMoved(target)]
+                    } else {
+                        vec![]
+                    };
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                            time: Some(f64::from(frame) * 0.2),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            show(
+                                ui,
+                                &tokens,
+                                view(state, Some("The microphone disconnected")),
+                            );
+                        },
+                    );
+                    output.textures_delta.clear();
+                    target = ctx.data(|data| {
+                        data.get_temp::<Vec<Rect>>(control_rects_id()).unwrap()[index].center()
+                    });
+                    if frame == 4 {
+                        let texts: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some(text.galley.text()),
+                                _ => None,
+                            })
+                            .collect();
+                        assert!(texts.contains(&"The microphone disconnected"), "{texts:?}");
+                        assert!(
+                            texts.contains(&expected),
+                            "{appearance} {focused}: {texts:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
