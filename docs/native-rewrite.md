@@ -1520,6 +1520,26 @@ to the compact row. Excluded ranges are dimmed and grips retain the same hit reg
 Generation runs once on the serialized worker after open, with independent cancel
 and retry; failure leaves editing available. Edits/seek retain the source strip and
 never regenerate it or change the accepted preview. Close/quit waits for generation.
+Both native hosts now seek throughout a held, paused timeline-track drag rather
+than waiting for release. One decode runs at a time; only the latest waiting target
+survives, including while a superseded estimate stops. An older result cannot
+rewind the requested playhead. Trim/edit/export remain gated until decoding settles;
+automatic comparison waits for release. Failure drops queued targets, ends the
+gesture and retains the last accepted frame. Scrubbing changes neither dirty state,
+source bytes nor History. This does not add live trim-handle preview or seeking
+during playback, and does not close recording-editor parity.
+The `--scrub` private-X11 check asserts red/green/blue decoded pixels before mouseup,
+missing-source failure, gesture teardown, fresh-press retry, minimum-size input,
+unchanged source/History and clean exit in dark/light, and records the held drag.
+Normal/minimum/error renders and the interaction recording were inspected.
+
+| Platform | Continuous paused track-scrub implementation / verification |
+| --- | --- |
+| AppKit/macOS | Implemented with coalesced C ABI requests and deferred-worker XCTest; execution and physical verification unavailable in this Linux orb |
+| Windows | Implemented through the same wgpu editor; shared tests pass on Linux, Windows input/render verification remains open |
+| X11 | Dark/light private-X11 real input and FFmpeg pixels pass; physical input/accessibility acceptance open |
+| Wayland | Implemented through the same wgpu editor; this slice has no compositor input/render verification, physical acceptance open |
+
 The wgpu host also offers Play/Pause through a persistent shared FFmpeg
 decoder capped at 30 fps and 1280 × 720. Motion frames retain the accepted spatial
 edits but stay separate from session state, dirty identity, estimates and History.
@@ -1745,9 +1765,8 @@ shows shipping's "—", the comparison is hidden, and Save shows shipping's erro
 ("media processing failed: WebM export is not available in the bundled media
 tools", `recording_editor_ui::WEBM_EXPORT_ERROR`) without encoding.
 Deliberate native differences remain: the edited preview decodes after a short
-settle delay rather than on a live `<video>`, renaming or moving while overwriting is
-not supported (Save with the switch off always replaces the original at its path),
-and AppKit keeps a Position slider where wgpu has a Position (ms) field with Seek.
+settle delay rather than on a live `<video>`, and AppKit keeps a Position slider
+where wgpu has a Position (ms) field with Seek.
 Physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and values that have not applied yet gate scrubbing/export. Failed edits keep

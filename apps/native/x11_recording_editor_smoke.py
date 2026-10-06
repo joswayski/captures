@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import select
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -39,6 +40,7 @@ def main():
     parser.add_argument("--comparison", action="store_true", help="Exercise encoded before/after, hide, failure/retry and immutable identity")
     parser.add_argument("--replace-original", action="store_true", help="Exercise Save over the original, cancellation and same-session rebase")
     parser.add_argument("--timeline", action="store_true", help="Exercise graphical trim staging, keyboard input and export")
+    parser.add_argument("--scrub", action="store_true", help="Verify held-drag decoded pixels, failure/retry and minimum-size input")
     parser.add_argument("--thumbnails", action="store_true", help="Exercise source thumbnails, cancellation, failure/retry and trim")
     parser.add_argument("--playback", action="store_true", help="Exercise silent motion, pause/resume, trim EOF, failure and close")
     parser.add_argument("--sound", action="store_true", help="Exercise default-on playback through an isolated PulseAudio sink (not physical audio acceptance)")
@@ -705,6 +707,85 @@ def main():
                 assert all(pixel[channel] > pixel[i] + 40 for i in range(3) if i != channel), (x, pixel)
         wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(), "decode")
         shot(editor, "original")
+        if args.scrub:
+            # A release-only implementation fails: green and blue must decode
+            # while the same mouse button is still held, before any mouseup.
+            track = visible_rect(editor, "Timeline track", whole_control=True)
+            image = visible_rect(editor, "Preview image", whole_control=True)
+            px, py = round(image[0] + (image[2] - image[0]) * .75), round(image[1] + (image[3] - image[1]) * .75)
+            y = (track[1] + track[3]) // 2
+            def pointer(fraction):
+                run("xdotool", "mousemove", "--sync", "--window", editor,
+                    str(round(track[0] + (track[2] - track[0]) * fraction)), str(y))
+            def decoded(name, channel):
+                path = output / f"scrub-{name}.png"
+                def arrived():
+                    run("import", "-window", editor, str(path))
+                    rgb = run("convert", str(path), "-crop", f"1x1+{px}+{py}", "-depth", "8", "rgb:-")
+                    return len(rgb) == 3 and rgb[channel] > 90 and all(rgb[channel] > rgb[i] + 40 for i in range(3) if i != channel)
+                wait(arrived, f"{name} decoded while held")
+            movie = spawn("scrub-video", ["ffmpeg", "-y", "-v", "error", "-f", "x11grab",
+                "-draw_mouse", "1", "-framerate", "15", "-video_size", "980x940",
+                "-i", f"{env['DISPLAY']}+70,40", "-c:v", "libx264", "-preset", "ultrafast",
+                "-crf", "23", "-pix_fmt", "yuv420p", str(output / "scrub.mp4")])
+            pointer(.1)
+            run("xdotool", "mousedown", "1")
+            decoded("red-held", 0)
+            pointer(.48)
+            decoded("green-held", 1)
+            pointer(.82)
+            decoded("blue-held", 2)
+            # A failed decode ends the held gesture and retains accepted pixels.
+            missing = output / "temporarily-moved.mp4"
+            source.rename(missing)
+            try:
+                pointer(.48)
+                wait(lambda: control(editor, "Status")[2] - control(editor, "Status")[0] > 100,
+                    "missing-source seek error")
+                idle(editor)
+                decoded("failed-held", 2)
+            finally:
+                missing.rename(source)
+            pointer(.1)
+            idle(editor)
+            decoded("failure-ended-gesture", 2)
+            run("xdotool", "mouseup", "1", "sleep", ".5")
+            movie.send_signal(signal.SIGINT)
+            movie.wait(timeout=10)
+            assert (output / "scrub.mp4").stat().st_size > 0
+            shot(editor, "scrub-failed")
+            # A fresh press retries; a continued pointer move must not do so.
+            pointer(.48)
+            run("xdotool", "mousedown", "1", "mouseup", "1")
+            decoded("retry", 1)
+            idle(editor)
+            assert control(editor, "Status")[2] == control(editor, "Status")[0]
+            pointer(.82)
+            run("xdotool", "mousedown", "1", "mouseup", "1")
+            decoded("blue-retried", 2)
+            idle(editor)
+            shot(editor, "scrub-normal")
+            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
+            # Minimum-size timeline remains an input target; no numeric Seek.
+            x0, y0, x1, y1 = visible_rect(editor, "Timeline track", whole_control=True)
+            click(editor, (x0 + x1) // 2, (y0 + y1) // 2)
+            idle(editor)
+            visible_rect(editor, "Seek", whole_control=True)
+            shot(editor, "scrub-minimum")
+            dominant(output / "scrub-minimum-preview.png", 1)
+            assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
+            assert not exported() and len(list(history.glob("*/metadata.json"))) == 1
+            close(editor)
+            wait(lambda: not windows("Captures Editor"), "scrubbing does not make the editor dirty")
+            close(root)
+            wait(lambda: app.poll() is not None, "scrub quit")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
+                "checks": ["decode-before-release", "held-red-green-blue", "failure-preserves-frame",
+                    "failure-ends-gesture", "fresh-press-retry", "minimum-track-input",
+                    "source-history-immutable", "no-exports", "clean-close-quit"]}, indent=2) + "\n")
+            print("PASS timeline scrub: held red/green/blue decoded frames, failure/retry, minimum input, immutable source/History and clean quit")
+            return
         if args.export_preferences:
             run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
             settle(editor)
