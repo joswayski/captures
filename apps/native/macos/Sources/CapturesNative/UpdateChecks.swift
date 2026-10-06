@@ -6,7 +6,7 @@ protocol UpdateCheckTransport: AnyObject {
     func shutdown(completion: @escaping () -> Void)
 }
 
-/// Main-thread, read-only commands. HTTP and signed metadata stay in Rust.
+/// Main-thread commands. HTTP and signed package verification stay in Rust.
 final class NativeUpdateCheckTransport: UpdateCheckTransport {
     private var handle: OpaquePointer?
     private var draining = false
@@ -18,7 +18,7 @@ final class NativeUpdateCheckTransport: UpdateCheckTransport {
             captures_update_checks_create_v1($0)
         }
         guard handle != nil else {
-            throw AppBridgeError.backend("Native update-check configuration is invalid. Check the endpoint, public key file and current version.")
+            throw AppBridgeError.backend("Native update-check configuration is invalid. Check the endpoint, public key file, current version and optional staging directory.")
         }
     }
 
@@ -83,11 +83,27 @@ final class UpdateCheckModel {
 
     @discardableResult func check() -> Bool {
         guard enabled else { return false }
+        return command("check")
+    }
+
+    var acquisition: UpdateNoticeButton? { UpdateNoticeButton(presentation["acquisition"]) }
+
+    @discardableResult func acquire(_ action: UpdateNoticeAction) -> Bool {
+        guard !closed, let button = acquisition, button.enabled, button.action == action else { return false }
+        guard action != .downloadVerify || !busy else { return false }
+        switch action {
+        case .downloadVerify: return command("download_verify")
+        case .cancelDownload: return command("cancel_download")
+        default: return false
+        }
+    }
+
+    private func command(_ operation: String) -> Bool {
         // An unread reply is not evidence that an accepted request stopped.
         busy = true
         var accepted = false
         do {
-            let reply = try transport.request(["operation": "check", "show_changelog": showChangelog])
+            let reply = try transport.request(["operation": operation, "show_changelog": showChangelog])
             try apply(reply)
             accepted = reply["accepted"] as? Bool == true
         } catch {

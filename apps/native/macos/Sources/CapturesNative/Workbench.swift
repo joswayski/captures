@@ -1832,6 +1832,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 guard let self, !self.captureBusy, !self.terminating, self.permissionSheet == nil else { return }
                 self.options.nativeUpdateChecks?.check()
             }
+            controller.model.acquire = { [weak self] action in
+                guard let self, !self.captureBusy, !self.terminating, self.permissionSheet == nil else { return }
+                self.options.nativeUpdateChecks?.acquire(action)
+            }
             controller.model.openPullRequest = { value in
                 guard let url = URL(string: value) else { return false }
                 return NSWorkspace.shared.open(url)

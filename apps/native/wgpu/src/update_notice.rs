@@ -544,7 +544,7 @@ impl FixtureTray {
 }
 
 /// Notice host for explicit signed checks or isolated simulated fixtures.
-/// Neither route downloads, installs or relaunches. Only live PR links open URLs.
+/// Only opt-in live acquisition downloads; neither source installs or relaunches.
 pub struct Host {
     live: bool,
     checked_presentation: Option<Presentation>,
@@ -711,6 +711,11 @@ impl Host {
                 self.status = stub_next(status, event);
                 self.simulating = true;
                 self.next_tick = None;
+            }
+            Action::DownloadVerify | Action::CancelDownload => {
+                if self.live {
+                    preferences.acquire_update(action);
+                }
             }
             Action::OpenPullRequest { url } => crate::emit(
                 "update-notice-open-url",

@@ -1845,6 +1845,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         statusLabel.alignment = .right
         statusLabel.identifier = NSUserInterfaceItemIdentifier("updates.status")
         var y = layout.row.maxY
+        if let acquisition = updateChecks?.acquisition {
+            y = divider(y, card)
+            y = utilityRow("Package verification", detail: "Temporary storage only; nothing is installed or executed.",
+                action: acquisition.label, y: y, card: card, enabled: acquisition.enabled,
+                identifier: "updates.acquisition") { [weak self] in self?.updateChecks?.acquire(acquisition.action) }
+        }
         y = divider(y, card)
         let rowCopy = PreferencesPolicy.row("show_update_changelog")
         y = switchRow(["show_update_changelog"], title: rowCopy.title, detail: rowCopy.detail, y: y, card: card)

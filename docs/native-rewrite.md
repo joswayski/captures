@@ -1882,6 +1882,35 @@ includes live notices in the Windows tray-click dismissal policy.
 No channel, installation, distribution or cutover is enabled by this slice.
 Workbench fixture scenes remain a separate simulated source.
 
+### Native development download/verification UI
+
+An additional explicit `--native-update-staging-directory` selects an existing
+absolute scratch directory and enables Download and verify in both hosts'
+Preferences and live notices. Without it the same launches remain metadata-only.
+The retained authenticated capability, signed byte/hash checks and package
+validation run on one worker. Progress, verification, cancellation, retry and
+success are real states; none route to simulated installation/restart.
+
+Cancellation remains busy until pending I/O and temporary cleanup finish. Duplicate
+checks/downloads are refused during work; cancellation neither increments reveal
+generation nor revives a dismissed notice. An explicit download does reveal.
+Retry downloads fresh bytes against the retained signed manifest. Recheck obtains
+new metadata and drops any owned stage; normal quit joins work and drops it too.
+Paths/capabilities are not serialized to hosts. No app/profile path is replaced and
+no downloaded executable runs. Forced termination or filesystem cleanup failure
+can leave owned scratch, never an installed update.
+
+| Platform | Temporary acquisition implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared Rust/C ABI, CLI guard, Preferences/notice routing and busy-only polling implemented; XCTest cancellation/source-isolation/configuration regressions included; this slice's macOS execution and physical acceptance await main CI/host verification |
+| Windows | Same worker, CLI and wgpu integration implemented; portable host/configuration regressions pass; this slice's Windows execution and physical acceptance await main CI/host verification |
+| X11 | Signed real-packager fixtures verify altered artifact rejection/retry, incomplete package rejection, partial progress/cancel/quit, stage ownership and cleanup; real dark/normal and light/minimum UI smokes exercise download/notice cancellation, hash failure/notice retry, validation, hidden completion, recheck/quit cleanup and unchanged operator files/settings; renders inspected |
+| Wayland | Same worker/UI and existing notice-suspension policy; no compositor-specific behavior introduced or accepted; physical/live acquisition acceptance remains open |
+
+This connects acquisition/staging to development UI, not an installed updater.
+External helper/process handoff, signed distribution, channel policy, installed-data
+migration and end-to-end acceptance remain separate. Tauri still ships.
+
 ### Native update package staging: temporary validation, no installation
 
 `VerifiedUpdate::stage` consumes signed/verified bytes, rehashes a private copy,

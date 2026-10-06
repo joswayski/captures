@@ -23,7 +23,7 @@ struct UpdateNoticeBridge: UpdateNoticeTransport {
 }
 
 enum UpdateNoticeAction: Equatable {
-    case dismiss, install, check, showNotes, hideNotes, openDownloadPage
+    case dismiss, install, check, downloadVerify, cancelDownload, showNotes, hideNotes, openDownloadPage
     case openPullRequest(String)
 
     init?(_ value: Any?) {
@@ -32,6 +32,8 @@ enum UpdateNoticeAction: Equatable {
         case "dismiss": self = .dismiss
         case "install": self = .install
         case "check": self = .check
+        case "download_verify": self = .downloadVerify
+        case "cancel_download": self = .cancelDownload
         case "show_notes": self = .showNotes
         case "hide_notes": self = .hideNotes
         case "open_download_page": self = .openDownloadPage
@@ -47,6 +49,8 @@ enum UpdateNoticeAction: Equatable {
         case .dismiss: return "dismiss"
         case .install: return "install"
         case .check: return "check"
+        case .downloadVerify: return "download_verify"
+        case .cancelDownload: return "cancel_download"
         case .showNotes: return "show_notes"
         case .hideNotes: return "hide_notes"
         case .openDownloadPage: return "open_download_page"
@@ -210,7 +214,7 @@ struct UpdateNoticePlacement: Equatable {
 }
 
 /// Notice over either signed development checks or the isolated fixture source.
-/// Neither source can download, install or relaunch from this model.
+/// Only opt-in live acquisition downloads; neither source installs or relaunches.
 final class UpdateNoticeModel {
     /// Matches `captures_app::update_notice::FIXTURES`.
     static let fixtures = ["available", "single", "closing", "manual", "downloading",
@@ -219,6 +223,7 @@ final class UpdateNoticeModel {
     private var checkedPresentation: [String: Any]?
     private var checkGeneration = 0
     var checkAgain: () -> Void = {}
+    var acquire: (UpdateNoticeAction) -> Void = { _ in }
     var openPullRequest: (String) -> Bool = { _ in false }
     private(set) var status: [String: Any]?
     private(set) var visible = false
@@ -310,6 +315,8 @@ final class UpdateNoticeModel {
             }
             simulating = true
             step(action == .install ? "install" : "check")
+        case .downloadVerify, .cancelDownload:
+            if checkedPresentation != nil { acquire(action) }
         case .openPullRequest(let url):
             let opened = checkedPresentation != nil && openPullRequest(url)
             event("update-notice-open-url", ["kind": "pull_request", "url": url, "opened": opened])

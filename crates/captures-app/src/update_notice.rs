@@ -6,7 +6,7 @@
 //! Both native hosts render [`present`] so their copy stays identical.
 //!
 //! Explicit signed development checks reuse this layout/notes through
-//! `updater::checks`, with check-only copy/actions and no install/restart route.
+//! `updater::checks`, with opt-in temporary verification and no install/restart route.
 //! [`fixture`] and [`stub_next`] remain a separate deterministic status source;
 //! they never download, verify or install anything.
 use serde::{Deserialize, Serialize};
@@ -525,6 +525,10 @@ pub enum Action {
     Install,
     /// Check again, or Try again after a check failure.
     Check,
+    /// Explicitly download and stage an authenticated development package.
+    DownloadVerify,
+    /// Cancel temporary acquisition, waiting for I/O and cleanup acknowledgement.
+    CancelDownload,
     /// Persist `show_update_changelog`.
     ShowNotes,
     HideNotes,
