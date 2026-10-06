@@ -697,6 +697,167 @@ fn main() {
         fixture.profile();
     }
 
+    fn shipping_sources(fixture: &Fixture) -> (PathBuf, PathBuf, Vec<u8>, String) {
+        let settings = fixture.directory.path().join("shipping settings é.json");
+        let data = fixture.directory.path().join("shipping data");
+        let preferences = captures_settings::AppSettings {
+            appearance: captures_settings::Appearance::Dark,
+            onboarding_completed: true,
+            launch_at_login: true,
+            recording: captures_settings::RecordingSettings {
+                gif_fps: 27,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&preferences).unwrap();
+        fs::write(&settings, &bytes).unwrap();
+        let image = image::RgbaImage::from_fn(7, 3, |x, y| {
+            image::Rgba([x as u8 * 31, y as u8 * 71, 19, 255])
+        });
+        let capture = crate::persist_screenshot(
+            &data.join("capture-history"),
+            &image,
+            captures_capture::CaptureMode::Region,
+        )
+        .unwrap();
+        (settings, data, bytes, capture.entry.id)
+    }
+
+    #[test]
+    fn imported_profile_waits_for_exact_health_and_preserves_shipping_and_snapshot_bytes() {
+        let (fixture, profile) = fixture("partial");
+        fs::remove_dir(&profile).unwrap();
+        let (settings, data, original, id) = shipping_sources(&fixture);
+        let pixels = fs::read(data.join("capture-history").join(&id).join("capture.png")).unwrap();
+        let pending = fixture.replace();
+        let transaction = pending.paths.transaction.clone();
+        let (settings_copy, data_copy, profile_copy) =
+            (settings.clone(), data.clone(), profile.clone());
+        let launch = thread::spawn(move || {
+            pending.launch_importing(
+                &settings_copy,
+                &data_copy,
+                &profile_copy,
+                Duration::from_secs(10),
+                &CancelToken::default(),
+            )
+        });
+        until(&profile.join("partial-written"));
+        assert!(
+            !launch.is_finished(),
+            "import completion is not startup health"
+        );
+        retained(&fixture, &transaction);
+        assert!(recover_installation(&fixture.destination).is_err());
+        assert_eq!(fs::read(&settings).unwrap(), original);
+        assert_eq!(
+            fs::read(profile.join("source-snapshot/settings.json")).unwrap(),
+            original
+        );
+        assert_eq!(
+            fs::read(profile.join("history").join(&id).join("capture.png")).unwrap(),
+            pixels
+        );
+        let copied = captures_settings::load(&profile.join("settings.json")).unwrap();
+        assert_eq!(copied.recording.gif_fps, 27);
+        assert!(!copied.onboarding_completed && !copied.launch_at_login);
+        assert_eq!(
+            PathBuf::from(copied.output_directory),
+            profile.canonicalize().unwrap().join("exports")
+        );
+        fs::write(profile.join("complete"), []).unwrap();
+        let _running = Running(launch.join().unwrap().unwrap(), profile);
+        assert!(!transaction.exists());
+        assert_eq!(fs::read(&settings).unwrap(), original);
+        assert_eq!(
+            fs::read(data.join("capture-history").join(&id).join("capture.png")).unwrap(),
+            pixels
+        );
+    }
+
+    #[test]
+    fn failed_imported_handoff_and_explicit_package_recovery_retain_the_copied_profile() {
+        let (fixture, profile) = fixture("wrong");
+        fs::remove_dir(&profile).unwrap();
+        let (settings, data, original, id) = shipping_sources(&fixture);
+        let pixels = fs::read(data.join("capture-history").join(&id).join("capture.png")).unwrap();
+        let pending = fixture.replace();
+        let transaction = pending.paths.transaction.clone();
+        let failure = pending
+            .launch_importing(
+                &settings,
+                &data,
+                &profile,
+                Duration::from_secs(1),
+                &CancelToken::default(),
+            )
+            .unwrap_err();
+        let running = Running(failure.process.unwrap(), profile.clone());
+        retained(&fixture, &transaction);
+        let working = fs::read(profile.join("settings.json")).unwrap();
+        drop(running);
+        assert!(recover_installation(&fixture.destination).unwrap());
+        fixture.old();
+        assert_eq!(fs::read(profile.join("settings.json")).unwrap(), working);
+        assert_eq!(
+            fs::read(profile.join("source-snapshot/settings.json")).unwrap(),
+            original
+        );
+        assert_eq!(fs::read(&settings).unwrap(), original);
+        assert_eq!(
+            fs::read(profile.join("history").join(id).join("capture.png")).unwrap(),
+            pixels
+        );
+    }
+
+    #[test]
+    fn invalid_import_targets_sources_and_cancellation_never_start_a_host_or_publish_partial_data()
+    {
+        for mode in [
+            "occupied",
+            "profile-in-package",
+            "data-in-package",
+            "malformed",
+            "cancel",
+        ] {
+            let fixture = Fixture::new();
+            let (settings, mut data, mut original, _) = shipping_sources(&fixture);
+            let pending = fixture.replace();
+            let mut profile = fixture.directory.path().join("new copy");
+            let cancel = CancelToken::default();
+            match mode {
+                "occupied" => {
+                    fs::create_dir(&profile).unwrap();
+                    fs::write(profile.join("sentinel"), b"never overwrite this profile").unwrap();
+                }
+                "profile-in-package" => profile = fixture.destination.join("new copy"),
+                "data-in-package" => data = fixture.destination.clone(),
+                "malformed" => {
+                    original = b"invalid shipping settings".to_vec();
+                    fs::write(&settings, &original).unwrap();
+                }
+                "cancel" => cancel.cancel(),
+                _ => unreachable!(),
+            }
+            let failure = pending
+                .launch_importing(&settings, &data, &profile, Duration::from_secs(1), &cancel)
+                .unwrap_err();
+            assert!(failure.process.is_none(), "{mode}");
+            assert_eq!(fs::read(settings).unwrap(), original, "{mode}");
+            if mode == "occupied" {
+                assert_eq!(
+                    fs::read(profile.join("sentinel")).unwrap(),
+                    b"never overwrite this profile"
+                );
+            } else {
+                assert!(!profile.exists(), "{mode}");
+            }
+            assert!(recover_installation(&fixture.destination).unwrap());
+            fixture.old();
+        }
+    }
+
     #[test]
     fn partial_health_keeps_the_lock_and_backup_until_exact_acknowledgement() {
         let (fixture, profile) = fixture("partial");

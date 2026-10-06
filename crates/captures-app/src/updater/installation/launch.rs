@@ -53,6 +53,41 @@ impl PendingInstallation {
         timeout: Duration,
         cancel: &CancelToken,
     ) -> Result<Child, LaunchFailure> {
+        self.launch_with_sources(profile, None, timeout, cancel)
+    }
+
+    /// Import explicit shipping sources into a NONEXISTENT development profile,
+    /// then use the same startup health protocol as the empty-profile handoff.
+    /// All sources/profile paths must stay outside package/transaction trees.
+    /// All source writers must be stopped and excluded throughout. No installed
+    /// path is discovered and the shipping sources remain unchanged.
+    ///
+    /// A published copy is retained even if startup fails. Package recovery never
+    /// deletes/restores profile data; the source snapshot and unchanged shipping
+    /// profile remain available. A repeated attempt requires another new profile.
+    pub fn launch_importing(
+        self,
+        source_settings_file: &Path,
+        source_data_directory: &Path,
+        new_profile: &Path,
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<Child, LaunchFailure> {
+        self.launch_with_sources(
+            new_profile,
+            Some((source_settings_file, source_data_directory)),
+            timeout,
+            cancel,
+        )
+    }
+
+    fn launch_with_sources(
+        self,
+        profile: &Path,
+        sources: Option<(&Path, &Path)>,
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<Child, LaunchFailure> {
         let _lock = self.paths.lock()?;
         let receipt = self.paths.receipt()?;
         require_id(&receipt, Some(self.id))?;
@@ -63,7 +98,7 @@ impl PendingInstallation {
         if timeout.is_zero() || timeout > Duration::from_secs(120) {
             return Err(Error::Configuration("startup deadline must be within 120 seconds").into());
         }
-        let profile = self.launch_profile(profile)?;
+        let profile = self.launch_profile(profile, sources, cancel)?;
         check_cancel(cancel)?;
         let channel = tempfile::Builder::new()
             .prefix(".captures-native-health-")
@@ -122,25 +157,64 @@ impl PendingInstallation {
         }
     }
 
-    fn launch_profile(&self, profile: &Path) -> Result<PathBuf, Error> {
-        if !profile.is_absolute() || !fs::symlink_metadata(profile)?.is_dir() {
+    fn launch_profile(
+        &self,
+        profile: &Path,
+        sources: Option<(&Path, &Path)>,
+        cancel: &CancelToken,
+    ) -> Result<PathBuf, Error> {
+        if !profile.is_absolute() {
             return Err(Error::Configuration(
-                "startup requires an absolute empty profile directory",
+                "startup requires an explicit absolute development profile",
             ));
         }
-        let profile = fs::canonicalize(profile)?;
-        if [
+        let profile = if sources.is_some() {
+            let name = profile
+                .file_name()
+                .ok_or(Error::Configuration("invalid new profile path"))?;
+            profile
+                .parent()
+                .ok_or(Error::Configuration("invalid new profile parent"))?
+                .canonicalize()?
+                .join(name)
+        } else {
+            if !fs::symlink_metadata(profile)?.is_dir() {
+                return Err(Error::Configuration(
+                    "startup requires an empty profile directory",
+                ));
+            }
+            fs::canonicalize(profile)?
+        };
+        let trees = [
             &self.paths.package,
             &self.paths.transaction,
             &self.paths.garbage(),
-        ]
-        .iter()
-        .any(|tree| profile.starts_with(tree))
-            || fs::read_dir(&profile)?.next().is_some()
-        {
+        ];
+        if trees.iter().any(|tree| profile.starts_with(tree)) {
             return Err(Error::Configuration(
-                "startup profile must be empty and outside package trees",
+                "startup profile must be outside package trees",
             ));
+        }
+        if let Some((settings, data)) = sources {
+            for source in [settings, data] {
+                if !source.is_absolute() {
+                    return Err(Error::Configuration(
+                        "import sources must be explicit absolute paths",
+                    ));
+                }
+                let source = source.canonicalize()?;
+                if trees
+                    .iter()
+                    .any(|tree| source.starts_with(tree) || tree.starts_with(&source))
+                {
+                    return Err(Error::Configuration(
+                        "import sources must be outside package trees",
+                    ));
+                }
+            }
+            crate::profile_import::import_shipping_profile(settings, data, &profile, cancel)?;
+        } else if fs::read_dir(&profile)?.next().is_some() {
+            return Err(Error::Configuration("startup profile must be empty"));
         }
         Ok(profile)
     }
