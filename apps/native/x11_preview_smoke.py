@@ -302,7 +302,23 @@ def main():
             run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
             shot(root, "motion-foreground")
             run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
-            wait(lambda: app.poll() is not None, "motion workspace closes")
+            try:
+                wait(lambda: app.poll() is not None, "motion workspace closes")
+            except AssertionError:
+                # Diagnostics only: record where the window manager's close went.
+                def probe(*command):
+                    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=5)
+                    return f"$ {' '.join(command)} -> {result.returncode}\n{result.stdout}{result.stderr}"
+                active = subprocess.run(["xdotool", "getactivewindow"], env=env,
+                                        capture_output=True, text=True, timeout=5).stdout.strip()
+                report = [probe("xdotool", "getactivewindow", "getwindowname"),
+                          probe("xprop", "-id", root, "WM_PROTOCOLS", "_NET_WM_STATE", "WM_STATE"),
+                          probe("xprop", "-root", "_NET_ACTIVE_WINDOW", "_NET_CLIENT_LIST"),
+                          probe("xdotool", "search", "--onlyvisible", "--name", "."),
+                          f"motion window {root}, active window {active or 'none'}"]
+                (output / "motion-close-diagnostics.txt").write_text("\n".join(report))
+                print("\n".join(report), flush=True)
+                raise
             assert app.returncode == 0
             focus.terminate()
             calls = portal.calls
