@@ -2661,6 +2661,29 @@ def main():
             blur_click()
             save_layers(lambda values: len(values) == 1, "clicking away from blank text adds no layer")
 
+            for width, height, name in ((1000, 800, "normal"), (760, 540, "minimum")):
+                run("xdotool", "windowsize", "--sync", editor, str(width), str(height), "sleep", ".3")
+                begin_input((80, 60))
+                primary = "PRIMARY one\nλ two".encode()
+                subprocess.run(["xclip", "-selection", "primary", "-i"], input=primary,
+                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               check=True, timeout=10)
+                subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"NOT PRIMARY",
+                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               check=True, timeout=10)
+                x, y = document_point((80, 60))
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y),
+                    "sleep", ".3", "click", "2", "sleep", ".6", "key", "ctrl+a", "ctrl+c")
+                wait(lambda: run("xclip", "-selection", "clipboard", "-o") == primary,
+                     f"middle click pastes PRIMARY once, not CLIPBOARD, at {name}")
+                shot(editor, f"text-input-primary-{name}")
+                run("xdotool", "key", "Escape", "sleep", ".3")
+                save_layers(lambda values: len(values) == 2 and values[-1]["text"] == primary.decode(),
+                            "PRIMARY reaches one normal text transaction")
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                save_layers(lambda values: len(values) == 1, "PRIMARY one undo step")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800", "sleep", ".3")
+
             before = draft_bytes()
             begin_input((80, 60))
             # One paste avoids flooding X11 with thousands of synthetic key events.
@@ -3301,9 +3324,12 @@ def main():
                          "text-rotated-inline-pointer-word-minimum"):
                 document_pixel(name, 310, 200, (249, 238, 204), tolerance=1)
                 document_pixel(name, 380, 205, (247, 247, 245), tolerance=1)
-            # Nonprimary press places a caret too; primary selection paste is
-            # not implemented by egui-winit. Reset Copy to a different value so
-            # an unchanged selection or lost focus cannot satisfy the check.
+            # Keep PRIMARY empty for this placement-only regression. The
+            # text-input smoke exercises its real middle-click paste.
+            subprocess.run(["xclip", "-selection", "primary", "-i"], input=b"",
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=True, timeout=10)
+            # Reset Copy so an unchanged selection/lost focus cannot pass.
             for width, height, size_name in ((1000, 800, "normal"), (760, 540, "minimum")):
                 run("xdotool", "windowsize", "--sync", editor, str(width), str(height), "sleep", ".3")
                 for button, button_name in (("2", "middle"), ("3", "secondary")):

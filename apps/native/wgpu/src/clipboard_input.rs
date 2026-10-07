@@ -13,6 +13,9 @@ use winit::{
     window::WindowId,
 };
 
+#[cfg(target_os = "linux")]
+pub const FOCUS_EPOCH: &str = "native-paste-focus-epoch";
+
 #[derive(Clone, Default)]
 pub struct PasteInput(Arc<Mutex<State>>);
 
@@ -21,11 +24,19 @@ struct State {
     modifiers: HashMap<WindowId, ModifiersState>,
     pending: HashMap<WindowId, egui::Modifiers>,
     redrawing: Option<WindowId>,
+    #[cfg(target_os = "linux")]
+    focus_epoch: u64,
 }
 
 impl PasteInput {
     pub fn begin_event(&self, window: WindowId, event: &WindowEvent) {
         let mut state = self.0.lock().unwrap();
+        // A blur/refocus pair may arrive between redraws. RawInput.focused
+        // alone cannot detect that an asynchronous paste lost its owner.
+        #[cfg(target_os = "linux")]
+        if matches!(event, WindowEvent::Focused(_) | WindowEvent::Destroyed) {
+            state.focus_epoch = state.focus_epoch.wrapping_add(1);
+        }
         match event {
             WindowEvent::RedrawRequested => state.redrawing = Some(window),
             WindowEvent::ModifiersChanged(value) => {
@@ -62,6 +73,11 @@ impl PasteInput {
 
     pub fn end_event(&self) {
         self.0.lock().unwrap().redrawing = None;
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn focus_epoch(&self) -> u64 {
+        self.0.lock().unwrap().focus_epoch
     }
 
     pub fn append(&self, input: &mut egui::RawInput) {
@@ -105,6 +121,22 @@ impl PasteInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_blur_refocus_between_redraws_changes_the_paste_epoch() {
+        let bridge = PasteInput::default();
+        let window = WindowId::from(1);
+        let before = bridge.focus_epoch();
+        bridge.begin_event(window, &WindowEvent::Focused(false));
+        bridge.end_event();
+        bridge.begin_event(window, &WindowEvent::Focused(true));
+        bridge.end_event();
+        bridge.begin_event(window, &WindowEvent::RedrawRequested);
+        assert_ne!(bridge.focus_epoch(), before);
+        assert_eq!(bridge.focus_epoch(), 2);
+        bridge.end_event();
+    }
 
     #[test]
     fn paste_is_window_scoped_once_and_cleared_on_blur() {

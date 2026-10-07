@@ -21,6 +21,8 @@ mod outbound_drag;
 mod preferences;
 mod preferences_widgets;
 mod preferences_window;
+#[cfg(target_os = "linux")]
+mod primary_selection;
 mod primitives;
 mod recording;
 mod recording_editor;
@@ -405,6 +407,10 @@ impl InputApplication<'_> {
 }
 
 fn main() -> eframe::Result {
+    #[cfg(target_os = "linux")]
+    if let Some(result) = primary_selection::helper(std::env::args().skip(1)) {
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     if std::env::args().nth(1).as_deref() == Some("--font-license") {
         print!("{}", captures_app::editor_fonts::NOTICE);
         return Ok(());

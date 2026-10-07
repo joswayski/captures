@@ -105,6 +105,13 @@ jobs:
           cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin captures-wgpu-workbench
           python apps/native/wayland_visibility_smoke.py
           /usr/bin/python3 apps/native/wayland_native_capture_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe --screenshots native-wayland-capture
+      - name: Read Linux PRIMARY and paste through the native text editor
+        if: runner.os == 'Linux'
+        run: |
+          python apps/native/primary_selection_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench
+          for appearance in dark light; do
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --text-input-only --appearance "$appearance" --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --output "$RUNNER_TEMP/native-primary-$appearance"
+          done
       - name: Exercise Wayland resident startup, child windows and real tray recovery
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/wayland_lifecycle_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe

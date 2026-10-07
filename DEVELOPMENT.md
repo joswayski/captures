@@ -447,7 +447,13 @@ exercise real Text controls; `--text-draft-only` retains the synthetic-font regr
 Use `--text-defaults-only` for pre-placement style/size/color, centered boxes,
 unchanged drafts while configuring, undo/redo and default reset after reopening.
 Use `--text-input-only` for transient composing, preview-error clipboard ownership,
-outlined glyphs with selection/caret and rotation, unchanged drafts, undo and quit.
+outlined glyphs with selection/caret and rotation, middle-click PRIMARY at normal/
+minimum size, unchanged drafts, undo and quit.
+Run `python3 apps/native/primary_selection_smoke.py --binary
+apps/native/wgpu/target/debug/captures-wgpu-workbench` for private X11/Wayland
+PRIMARY transport, UTF-8/64 KiB boundaries, backend rejection, resource ceilings
+and parent-death cleanup. It needs Xvfb, Sway and xclip/wl-clipboard; use the pinned
+compositor PATH described above on Debian 12. This is not physical input acceptance.
 Use `--properties-heading-only` for pinned image/shape/Text/Crop titles, actual
 field scrolling at minimum size, and unchanged drafts/originals.
 The `--canvas-interactions-only` suite also checks locked-line Curve/Straighten

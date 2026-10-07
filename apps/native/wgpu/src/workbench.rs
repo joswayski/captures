@@ -112,6 +112,8 @@ pub struct Workbench {
     shortcut_error: Option<String>,
     shortcut_suspension_error: Option<String>,
     paste_input: crate::clipboard_input::PasteInput,
+    #[cfg(target_os = "linux")]
+    primary_selection: crate::primary_selection::Reader,
     action_tx: Sender<Result<(), String>>,
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
@@ -156,15 +158,32 @@ impl Workbench {
         crate::ui_fonts::install(&cc.egui_ctx);
         crate::primitives::install_focus_ring(&cc.egui_ctx);
         #[cfg(target_os = "linux")]
-        {
+        let primary_selection = {
+            use crate::primary_selection::{Backend, Reader};
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            let wayland = cc
+            let backend = cc
                 .winit_window()
                 .and_then(|window| window.window_handle().ok())
-                .is_some_and(|handle| matches!(handle.as_raw(), RawWindowHandle::Wayland(_)));
-            cc.egui_ctx
-                .data_mut(|data| data.insert_temp(egui::Id::unique("wayland-surface"), wayland));
-        }
+                .and_then(|handle| match handle.as_raw() {
+                    RawWindowHandle::Wayland(_) => Some(Backend::Wayland),
+                    RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_) => Some(Backend::X11),
+                    _ => None,
+                });
+            cc.egui_ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::unique("wayland-surface"),
+                    matches!(backend, Some(Backend::Wayland)),
+                )
+            });
+            let reader = Reader::new(backend);
+            cc.egui_ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::unique(crate::primary_selection::ID),
+                    reader.clone(),
+                )
+            });
+            reader
+        };
         if let Some(instance) = &instance {
             let wake = cc.egui_ctx.clone();
             // The socket worker can wake while an editor owns the current
@@ -383,6 +402,8 @@ impl Workbench {
             shortcut_error: None,
             shortcut_suspension_error: None,
             paste_input,
+            #[cfg(target_os = "linux")]
+            primary_selection,
             action_tx,
             action_rx,
             action_error: update_error,
@@ -790,6 +811,8 @@ impl Workbench {
         if self.quitting {
             return;
         }
+        #[cfg(target_os = "linux")]
+        self.primary_selection.cancel();
         if let Some(live) = &self.live
             && let Err(error) = live.flush_editors(ctx)
         {
@@ -799,6 +822,8 @@ impl Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
+        #[cfg(target_os = "linux")]
+        self.primary_selection.shutdown();
         self.quitting = true;
         if let Some(instance) = &mut self.instance {
             instance.stop_accepting();
@@ -1587,6 +1612,13 @@ impl eframe::App for Workbench {
             })
         });
         self.paste_input.append(input);
+        #[cfg(target_os = "linux")]
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::unique(crate::clipboard_input::FOCUS_EPOCH),
+                self.paste_input.focus_epoch(),
+            )
+        });
     }
 
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
@@ -2292,6 +2324,8 @@ impl eframe::App for Workbench {
     }
 
     fn on_exit(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.primary_selection.shutdown();
         self.preferences_state.flush();
         if let Some(live) = &mut self.live {
             live.flush();

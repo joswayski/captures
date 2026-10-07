@@ -31,12 +31,36 @@ pub(super) struct InlineText {
     focus: bool,
     ime_preedit: bool,
     rotated_drag: bool,
+    #[cfg(target_os = "linux")]
+    primary: Option<PrimaryPaste>,
     first_frame: Option<u64>,
     close_after: bool,
     previous_selection: Option<String>,
     previous_document: Arc<Document>,
     previous_output: Option<(egui::TextureHandle, u64)>,
     outline: outline::Outline,
+}
+
+#[cfg(target_os = "linux")]
+struct PrimaryPaste {
+    pending: crate::primary_selection::Pending,
+    text: String,
+    cursor: Option<egui::text::CCursorRange>,
+    focus_epoch: u64,
+    frame: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn focus_epoch(ctx: &egui::Context) -> u64 {
+    ctx.data(|data| data.get_temp(egui::Id::unique(crate::clipboard_input::FOCUS_EPOCH)))
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
+impl InlineText {
+    pub(super) fn cancel_primary(&mut self) {
+        self.primary.take();
+    }
 }
 
 impl View {
@@ -85,6 +109,8 @@ impl View {
             focus: true,
             ime_preedit: false,
             rotated_drag: false,
+            #[cfg(target_os = "linux")]
+            primary: None,
             first_frame: None,
             close_after: false,
             previous_selection: self.selected_layer.clone(),
@@ -109,6 +135,8 @@ impl View {
 
     pub(super) fn finish_inline(&mut self, commit: bool) {
         if let Some(input) = &mut self.inline {
+            #[cfg(target_os = "linux")]
+            input.cancel_primary();
             if input.phase == Some(Phase::Finish) {
                 return;
             }
@@ -455,6 +483,10 @@ pub(super) fn show(
     let frame_nr = ui.ctx().cumulative_frame_nr();
     let first_frame = *input.first_frame.get_or_insert(frame_nr) == frame_nr;
     let blocked = input.blocked;
+    #[cfg(target_os = "linux")]
+    let mut primary_error = None;
+    #[cfg(target_os = "linux")]
+    let mut primary_gesture = None;
     // A backend may deliver Escape alongside a preedit dismissal/commit. That
     // key belongs to the IME, not the document's Finish action.
     let mut ime_owned_escape = input.ime_preedit;
@@ -493,6 +525,18 @@ pub(super) fn show(
     } else {
         geometry.frame
     };
+    // An empty/boxed label's padding is wider than TextEdit's glyph area.
+    // A Linux middle press belongs to the full inline frame, not click-away.
+    let pointer_adapter = rotated
+        || (cfg!(target_os = "linux")
+            && ui.input(|i| {
+                (i.pointer.button_pressed(egui::PointerButton::Middle)
+                    || i.pointer.button_down(egui::PointerButton::Middle)
+                    || i.pointer.button_released(egui::PointerButton::Middle))
+                    && i.pointer.interact_pos().is_some_and(|pos| {
+                        available.contains(pos) && geometry.frame.contains(unrotate(pos))
+                    })
+            }));
     let text_color = geometry.format.color;
     let separate_ink = rotated || geometry.outline_width.is_some();
     let mut lost_focus = false;
@@ -557,7 +601,7 @@ pub(super) fn show(
             // The pointer adapter is a separate widget. TextEdit must not blur
             // and collapse its anchor before handling same-frame keyboard input.
             // Actual click-away is handled below using the rotated frame.
-            let focus_policy = rotated.then(|| {
+            let focus_policy = pointer_adapter.then(|| {
                 ui.ctx().options_mut(|options| {
                     std::mem::replace(
                         &mut options.input_options.surrender_focus_on,
@@ -565,6 +609,60 @@ pub(super) fn show(
                     )
                 })
             });
+            #[cfg(target_os = "linux")]
+            let pasted = {
+                let cursor = egui::text_edit::TextEditState::load(ui.ctx(), input_id)
+                    .and_then(|state| state.cursor.char_range());
+                if input.primary.as_ref().is_some_and(|paste| {
+                    paste.text != input.text
+                        || paste.cursor != cursor
+                        || paste.focus_epoch != focus_epoch(ui.ctx())
+                        || input.focus
+                        || input.finish.is_some()
+                        || finishing
+                        || input.ime_preedit
+                        || !ui.memory(|memory| memory.has_focus(input_id))
+                        || ui.input(|i| {
+                            !i.focused
+                                || i.events.iter().any(|event| {
+                                    matches!(
+                                        event,
+                                        egui::Event::Text(_)
+                                            | egui::Event::Paste(_)
+                                            | egui::Event::Cut
+                                            | egui::Event::Ime(_)
+                                            | egui::Event::WindowFocused(_)
+                                            | egui::Event::Key { pressed: true, .. }
+                                            | egui::Event::PointerButton { pressed: true, .. }
+                                    )
+                                })
+                        })
+                }) {
+                    // Cancellation is monotonic: changing back or refocusing
+                    // does not resurrect the old request.
+                    input.primary.take();
+                }
+                if ui.ctx().current_pass_index() == 0
+                    && let Some(paste) = &input.primary
+                    && frame_nr > paste.frame
+                    && let Some(result) = paste.pending.poll()
+                {
+                    input.primary.take();
+                    match result {
+                        Ok(text) if !text.is_empty() => {
+                            ui.input_mut(|i| i.events.push(egui::Event::Paste(text)));
+                            true
+                        }
+                        Ok(_) => false,
+                        Err(error) => {
+                            primary_error = Some(error);
+                            false
+                        }
+                    }
+                } else {
+                    false
+                }
+            };
             let mut output = ui
                 .scope_builder(egui::UiBuilder::new().max_rect(geometry.content), |ui| {
                     egui::TextEdit::multiline(&mut input.text)
@@ -586,6 +684,16 @@ pub(super) fn show(
                         .show(ui)
                 })
                 .inner;
+            #[cfg(target_os = "linux")]
+            if pasted {
+                // No incoming Paste can coexist with delivery (guard above).
+                // Only this TextEdit sees the temporary event, never another
+                // field, another viewport, or a discarded layout pass.
+                ui.input_mut(|i| {
+                    i.events
+                        .retain(|event| !matches!(event, egui::Event::Paste(_)))
+                });
+            }
             if let Some(policy) = focus_policy {
                 ui.ctx()
                     .options_mut(|options| options.input_options.surrender_focus_on = policy);
@@ -604,7 +712,7 @@ pub(super) fn show(
                     None
                 };
             let mut pointer_interacted = false;
-            if rotated && !finishing {
+            if pointer_adapter && !finishing {
                 // This later response owns pointer hits instead of TextEdit's
                 // axis-aligned box. Reject its empty corners, and keep only an
                 // accepted primary gesture alive when dragging outside the box.
@@ -675,6 +783,31 @@ pub(super) fn show(
             if input.focus {
                 field.request_focus();
                 input.focus = false;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let cursor = egui::text_edit::TextEditState::load(ui.ctx(), input_id)
+                    .and_then(|state| state.cursor.char_range());
+                if input.primary.as_ref().is_some_and(|paste| {
+                    paste.text != input.text || paste.cursor != cursor || !field.has_focus()
+                }) {
+                    input.primary.take();
+                }
+                if ui.ctx().current_pass_index() == 0
+                    && !finishing
+                    && input.finish.is_none()
+                    && !input.ime_preedit
+                    && field.has_focus()
+                    && ui.input(|i| {
+                        i.focused
+                            && i.pointer.button_pressed(egui::PointerButton::Middle)
+                            && i.pointer.interact_pos().is_some_and(|pos| {
+                                available.contains(pos) && geometry.frame.contains(unrotate(pos))
+                            })
+                    })
+                {
+                    primary_gesture = Some(cursor);
+                }
             }
             if field.changed() {
                 input.blocked = false;
@@ -756,7 +889,7 @@ pub(super) fn show(
             }
         })
         .response;
-    let clicked_elsewhere = if rotated {
+    let clicked_elsewhere = if pointer_adapter {
         ui.input(|i| {
             i.pointer.any_pressed()
                 && i.pointer.interact_pos().is_some_and(|pos| {
@@ -783,12 +916,225 @@ pub(super) fn show(
         ui.memory_mut(|memory| memory.surrender_focus(input_id));
         view.finish_inline(commit);
     }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(error) = primary_error {
+            view.error = Some(error);
+        }
+        if let Some(cursor) = primary_gesture
+            && let Some(input) = &mut view.inline
+            && input.finish.is_none()
+            && !view.close_requested
+            && !view.closed
+            && let Some(reader) = ui.ctx().data(|data| {
+                data.get_temp::<crate::primary_selection::Reader>(egui::Id::unique(
+                    crate::primary_selection::ID,
+                ))
+            })
+        {
+            input.primary = Some(PrimaryPaste {
+                pending: reader.request(ui.ctx().clone(), ui.ctx().viewport_id()),
+                text: input.text.clone(),
+                cursor,
+                focus_epoch: focus_epoch(ui.ctx()),
+                frame: frame_nr,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::tests::presented_text;
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn primary_paste_delivers_once_at_the_placed_caret_and_cancels_stale_intent() {
+        for angle in [0_f32, std::f32::consts::FRAC_PI_2, -0.53] {
+            for case in [
+                "deliver",
+                "padding",
+                "text",
+                "caret",
+                "focus",
+                "native-focus",
+                "ime",
+                "finish",
+                "close",
+                "quit",
+                "error",
+            ] {
+                if case == "padding" && angle != 0. {
+                    continue;
+                }
+                let ctx = egui::Context::default();
+                crate::ui_fonts::install(&ctx);
+                let tokens = crate::tokens::load()["light-mustard"].clone();
+                tokens.apply(&ctx, true);
+                ctx.data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::unique(crate::primary_selection::ID),
+                        crate::primary_selection::Reader::new(None),
+                    )
+                });
+                let initial = if case == "padding" {
+                    ""
+                } else {
+                    "One two\nalpha beta"
+                };
+                let mut presented = presented_text("label", initial);
+                let document = Arc::make_mut(&mut presented.document);
+                document.width = 640.;
+                document.height = 360.;
+                let Element::Text(element) = document.elements.last_mut().unwrap() else {
+                    unreachable!()
+                };
+                element.base.x = 200.;
+                element.base.y = 80.;
+                element.base.rotation = Some(angle as f64);
+                element.font_family = "mono".into();
+                element.font_size = 30.;
+                element.width = 220.;
+                element.auto_width = Some(false);
+                if case == "padding" {
+                    element.auto_width = Some(true);
+                    element.background = Some("#f7f7f5".into());
+                }
+                presented.pixels = Arc::new(RgbaImage::new(640, 360));
+                let mut view = View::default();
+                view.receive(&ctx, Ok(presented));
+                let (tx, jobs) = mpsc::channel();
+                view.begin_inline(&tx, TextInputTarget::Existing { id: "label".into() });
+                assert!(matches!(
+                    jobs.try_recv(),
+                    Ok(Job::Apply(Request::BeginTextInput { .. }))
+                ));
+                let clock = std::cell::Cell::new(0.);
+                let frame = |view: &mut View, events, discard| {
+                    clock.set(clock.get() + 0.05);
+                    let mut field = egui::Id::NULL;
+                    let mut output = ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960., 700.))),
+                        time: Some(clock.get()), focused: true, events, ..Default::default()
+                    }, |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            field = ui.scope_id().with((&view.inline.as_ref().unwrap().id, "canvas-text-input"));
+                            let available = ui.available_rect_before_wrap();
+                            show(ui, &tokens, view, available, egui::Rect::from_min_size(egui::pos2(40., 30.), egui::vec2(640., 360.)));
+                            assert!(!ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Paste(text) if text == "PRIMARY\n"))), "temporary paste leaked");
+                        });
+                        if discard && ctx.current_pass_index() == 0 { ctx.request_discard("PRIMARY multi-pass"); }
+                    });
+                    output.textures_delta.clear();
+                    field
+                };
+                frame(&mut view, vec![], false);
+                frame(&mut view, vec![], false);
+                // Independent Mono boundary: index 2, pivot (310,118.55).
+                let (dx, dy) = (236. - 310., 101. - 118.55);
+                let pos = egui::pos2(
+                    40. + 310. + angle.cos() * dx - angle.sin() * dy,
+                    30. + 118.55 + angle.sin() * dx + angle.cos() * dy,
+                );
+                let pos = if case == "padding" {
+                    egui::pos2(241., 111.)
+                } else {
+                    pos
+                };
+                frame(&mut view, vec![egui::Event::PointerMoved(pos)], false);
+                let button = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Middle,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                let field = frame(&mut view, vec![button(true)], true);
+                assert_eq!(
+                    view.inline.as_ref().unwrap().text,
+                    initial,
+                    "no paste on initiating pass"
+                );
+                let paste = view
+                    .inline
+                    .as_mut()
+                    .unwrap()
+                    .primary
+                    .as_mut()
+                    .expect("middle press starts a read");
+                assert_eq!(
+                    paste.cursor.unwrap().primary.index.0,
+                    if case == "padding" { 0 } else { 2 },
+                    "angle {angle}"
+                );
+                paste.pending = crate::primary_selection::Pending::ready(if case == "error" {
+                    Err("unavailable fixture".into())
+                } else {
+                    Ok("PRIMARY\n".into())
+                });
+                let mut events = vec![button(false)];
+                match case {
+                    "text" => events.push(egui::Event::Text("X".into())),
+                    "caret" => events.push(egui::Event::Key {
+                        key: egui::Key::ArrowRight,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }),
+                    "focus" => ctx.memory_mut(|memory| {
+                        memory.surrender_focus(field);
+                        memory.request_focus(egui::Id::unique("other field"));
+                    }),
+                    "native-focus" => ctx.data_mut(|data| {
+                        data.insert_temp(
+                            egui::Id::unique(crate::clipboard_input::FOCUS_EPOCH),
+                            2_u64,
+                        );
+                    }),
+                    "ime" => events.push(egui::Event::Ime(egui::ImeEvent::Commit("λ".into()))),
+                    "finish" => view.finish_inline(true),
+                    "close" => {
+                        assert!(view.close_inline());
+                    }
+                    "quit" => view.inline.as_mut().unwrap().cancel_primary(),
+                    _ => {}
+                }
+                frame(&mut view, events, true);
+                let text = view.inline.as_ref().unwrap().text.clone();
+                if case == "deliver" {
+                    assert_eq!(text, "OnPRIMARY\ne two\nalpha beta");
+                    assert!(view.inline.as_ref().unwrap().finish.is_none());
+                } else if case == "padding" {
+                    assert_eq!(text, "PRIMARY\n");
+                    assert!(view.inline.as_ref().unwrap().finish.is_none());
+                } else {
+                    assert!(
+                        !text.contains("PRIMARY"),
+                        "stale {case}, angle {angle}: {text:?}"
+                    );
+                }
+                assert!(view.inline.as_ref().unwrap().primary.is_none());
+                if case == "error" {
+                    assert_eq!(view.error.as_deref(), Some("unavailable fixture"));
+                    assert_eq!(text, "One two\nalpha beta");
+                }
+                if case == "text" {
+                    assert_eq!(text, "OnXe two\nalpha beta");
+                    // Returning to the old contents must not revive delivery.
+                    view.inline.as_mut().unwrap().text = "One two\nalpha beta".into();
+                }
+                frame(&mut view, vec![], true);
+                if case != "text" {
+                    assert_eq!(view.inline.as_ref().unwrap().text, text);
+                }
+                assert!(
+                    jobs.try_recv().is_err(),
+                    "paste remains local until normal worker drain"
+                );
+            }
+        }
+    }
 
     fn setup() -> (egui::Context, View, Sender<Job>, Receiver<Job>) {
         let ctx = egui::Context::default();
