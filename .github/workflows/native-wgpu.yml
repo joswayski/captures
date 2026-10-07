@@ -200,6 +200,12 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+      # Every Linux smoke shard waits on this build, so install packages while
+      # the toolchains and Rust cache are restored; only cargo needs them.
+      - name: Install Linux windowing and software-rendering test dependencies
+        id: linux-deps
+        background: true
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libasound2-plugins pulseaudio libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -211,9 +217,9 @@ jobs:
           toolchain: 1.95.0
           components: rustfmt, clippy
           cache-workspaces: apps/native/wgpu
-      - name: Install Linux windowing and software-rendering test dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libasound2-plugins pulseaudio libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
       - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
+      - name: Wait for the Linux dependencies
+        wait: linux-deps
       - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
       - uses: actions/upload-artifact@v4
         with:
