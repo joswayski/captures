@@ -2815,6 +2815,13 @@ def main():
                                   math.pi / 2, abs_tol=1e-6), "outlined label rotated")[-1]
             before = draft_bytes()
             begin_input((center_x, center_y))
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"BOLD",
+                 "rotated outlined selection preserves the buffer")
+            shot(editor, "text-input-outline-rotated-selected")
+            resize_editor(760, 540, "sleep", ".3")
+            shot(editor, "text-input-outline-rotated-selected-minimum")
+            resize_editor(1000, 1001, "sleep", ".3")
             run("xdotool", "key", "ctrl+End", "Left", "sleep", ".2")
             shot(editor, "text-input-outline-rotated")
             run("xdotool", "key", "Escape", "sleep", ".3")
@@ -2868,7 +2875,8 @@ def main():
                            "outlined-wide-stroke-preview", "outlined-wide-stroke-undo",
                            "outlined-preview-no-draft", "outlined-input-style", "outlined-selection-clipboard",
                            "outlined-unchanged-no-draft", "outlined-bold-and-create-undo",
-                           "outlined-rotated-input", "outlined-rotation-undo",
+                           "outlined-rotated-input", "outlined-rotated-selection-clipboard",
+                           "outlined-rotated-selection-minimum", "outlined-rotation-undo",
                            "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text input: transient typing, multiline, existing hit, undo, minimum and quit")
@@ -3232,6 +3240,21 @@ def main():
             run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
                 "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".5")
             shot(editor, "text-rotated-inline")
+            run("xdotool", "key", "ctrl+a", "ctrl+c", "sleep", ".2")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"L\nfi",
+                 "rotated multiline selection preserves the buffer")
+            shot(editor, "text-rotated-inline-selected")
+            run("xdotool", "windowsize", "--sync", editor, "760", "540", "sleep", ".3")
+            shot(editor, "text-rotated-inline-selected-minimum")
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800", "key", "ctrl+End",
+                "sleep", ".3")
+            shot(editor, "text-rotated-inline-cleared")
+            # Spaces inside the two turned rows, away from the glyphs/caret.
+            # 20% mustard (#ffca28) over the fixture's #f7f7f5 plate.
+            for x, y in ((380, 205), (310, 200)):
+                for name in ("text-rotated-inline-selected", "text-rotated-inline-selected-minimum"):
+                    document_pixel(name, x, y, (249, 238, 204), tolerance=1)
+                document_pixel("text-rotated-inline-cleared", x, y, (247, 247, 245), tolerance=1)
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: math.isclose(values[1].get("rotation", 0), math.pi / 2, abs_tol=1e-6)
                         and values[1]["text"] == "L\nfi", "rotated inline edit round trip")
@@ -3268,7 +3291,9 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["text-draft-restored", "font-bytes-preserved", "text-canvas-move-undo",
                            "text-canvas-resize-undo", "text-canvas-rotation-undo",
-                           "rotated-inline-round-trip", "text-minimum-reopen",
+                           "rotated-inline-round-trip", "rotated-inline-selection-clipboard",
+                           "rotated-inline-selection-minimum", "rotated-inline-selection-pixels-and-clear",
+                           "text-minimum-reopen",
                            "text-clipboard-dimensions-and-ink", "text-plate-and-original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native text draft: fonts, move/rotate/undo, save/reopen, minimum, clipboard pixels")

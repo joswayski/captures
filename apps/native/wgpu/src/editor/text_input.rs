@@ -416,9 +416,9 @@ fn inline_galley(
 /// commit; Enter inserts a new line. The session preview omits this layer
 /// while the input is active.
 ///
-/// Rotated labels paint their glyphs, plate and caret rotated about the frame
-/// centre; the selection highlight and pointer caret placement use the
-/// unrotated box (egui text fields cannot rotate). Outlined labels replace
+/// Rotated labels paint their glyphs, plate, selection and caret rotated about
+/// the frame centre; pointer caret placement still uses the unrotated box
+/// (egui text fields cannot rotate). Outlined labels replace
 /// only the visible glyph ink with cached, hollow atlas-derived strokes.
 pub(super) fn show(
     ui: &mut egui::Ui,
@@ -583,6 +583,34 @@ pub(super) fn show(
             }
             if separate_ink {
                 let origin = output.galley_pos - egui::vec2(output.galley.rect.left(), 0.);
+                if rotated
+                    && field.has_focus()
+                    && let Some(range) = output.cursor_range
+                    && !range.is_empty()
+                {
+                    // Keep TextEdit's selection state, but paint its row backgrounds
+                    // in the same coordinate space as our separate glyph ink.
+                    let mut selected = output.galley.clone();
+                    let mut visuals = ui.visuals().clone();
+                    visuals.selection.bg_fill = tokens.color("theme-accent").gamma_multiply(0.2);
+                    visuals.selection.stroke.color = egui::Color32::TRANSPARENT;
+                    egui::text_selection::visuals::paint_text_selection(
+                        &mut selected,
+                        &visuals,
+                        &range,
+                        None,
+                    );
+                    let mut shape = egui::epaint::TextShape::new(
+                        rotate(origin),
+                        selected,
+                        egui::Color32::TRANSPARENT,
+                    );
+                    // Only glyphs are overridden, not selection-background vertices.
+                    // Outlined input must keep its hollow ink in the separate pass.
+                    shape.override_text_color = Some(egui::Color32::TRANSPARENT);
+                    shape.angle = geometry.angle;
+                    painter.add(shape);
+                }
                 if let Some(width) = geometry.outline_width {
                     input.outline.paint(
                         &painter,
@@ -666,6 +694,169 @@ mod tests {
         presented.active_text_input =
             Some((view.inline.as_ref().unwrap().id.clone(), "label".into()));
         view.receive(ctx, Ok(presented));
+    }
+
+    #[test]
+    fn selected_inline_rows_rotate_with_the_ink_without_changing_the_buffer() {
+        for (theme, angle, outlined, scale) in [
+            ("light-mustard", 0., false, 1.),
+            ("dark-mustard", std::f32::consts::FRAC_PI_2, false, 1.),
+            ("light-mustard", -0.43, false, 0.65),
+            ("dark-mustard", 0.71, true, 1.3),
+        ] {
+            let ctx = egui::Context::default();
+            let tokens = crate::tokens::load()[theme].clone();
+            tokens.apply(&ctx, true);
+            crate::ui_fonts::install(&ctx);
+            let mut presented = presented_text("label", "Wide ABCD\nhi");
+            let document = Arc::make_mut(&mut presented.document);
+            document.width = 640.;
+            document.height = 360.;
+            let Element::Text(element) = document.elements.last_mut().unwrap() else {
+                unreachable!()
+            };
+            element.base.x = 200.;
+            element.base.y = 80.;
+            element.base.rotation = Some(angle as f64);
+            element.font_family = "sans".into();
+            element.width = 220.;
+            element.auto_width = Some(false);
+            element.outlined = outlined;
+            presented.pixels = Arc::new(RgbaImage::new(640, 360));
+            let mut view = View::default();
+            view.receive(&ctx, Ok(presented));
+            let (tx, jobs) = mpsc::channel();
+            view.begin_inline(&tx, TextInputTarget::Existing { id: "label".into() });
+            assert!(matches!(
+                jobs.try_recv(),
+                Ok(Job::Apply(Request::BeginTextInput { .. }))
+            ));
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(960., 700.),
+                        )),
+                        time: Some(ctx.cumulative_frame_nr() as f64),
+                        focused: true,
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let area = ui.available_rect_before_wrap();
+                            let preview = egui::Rect::from_min_size(
+                                egui::pos2(40., 30.),
+                                egui::vec2(640., 360.) * scale,
+                            );
+                            show(ui, &tokens, view, area, preview);
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let key = |key, modifiers| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![]);
+            let output = frame(
+                &mut view,
+                vec![
+                    key(egui::Key::A, egui::Modifiers::COMMAND),
+                    egui::Event::Copy,
+                ],
+            );
+            assert!(
+                output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .any(|command| matches!(
+                        command, egui::OutputCommand::CopyText(text) if text == "Wide ABCD\nhi"
+                    ))
+            );
+            let highlight = tokens.color("theme-accent").gamma_multiply(0.2);
+            let points: Vec<_> = ctx
+                .tessellate(output.shapes, output.pixels_per_point)
+                .into_iter()
+                .flat_map(|clipped| match clipped.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => mesh.vertices,
+                    _ => vec![],
+                })
+                .filter(|vertex| vertex.color == highlight)
+                .map(|vertex| vertex.pos)
+                .collect();
+            assert_eq!(
+                points.len(),
+                8,
+                "two visible selected rows: {theme}, {angle}, {outlined}"
+            );
+            let mut widths = vec![];
+            for quad in points.chunks_exact(4) {
+                // Inverse rotation must recover an axis-aligned rectangle.
+                // The 220px frame contains two 40px rows plus the 32px font's
+                // 7% optical top padding. Compute its pivot independently.
+                let pivot = egui::pos2(
+                    40. + 310. * scale,
+                    30. + (80. + (80. + 32. * 0.07) / 2.) * scale,
+                );
+                let local: Vec<_> = quad
+                    .iter()
+                    .map(|point| {
+                        let offset = *point - pivot;
+                        egui::pos2(
+                            angle.cos() * offset.x + angle.sin() * offset.y,
+                            -angle.sin() * offset.x + angle.cos() * offset.y,
+                        ) + pivot.to_vec2()
+                    })
+                    .collect();
+                let bounds = egui::Rect::from_points(&local);
+                assert!(
+                    (bounds.left() - (40. + 200. * scale)).abs() < 1.,
+                    "selection must share the glyph origin, not just its angle: {bounds:?}"
+                );
+                for point in local {
+                    assert!(
+                        (point.x - bounds.left()).abs() < 0.01
+                            || (point.x - bounds.right()).abs() < 0.01
+                    );
+                    assert!(
+                        (point.y - bounds.top()).abs() < 0.01
+                            || (point.y - bounds.bottom()).abs() < 0.01
+                    );
+                }
+                widths.push(bounds.width());
+            }
+            assert!(
+                widths[0] > widths[1] * 2.,
+                "selection follows asymmetric rows, not the whole frame"
+            );
+            let cleared = frame(
+                &mut view,
+                vec![key(egui::Key::End, egui::Modifiers::COMMAND)],
+            );
+            assert!(
+                !ctx.tessellate(cleared.shapes, cleared.pixels_per_point)
+                    .iter()
+                    .any(|clipped| {
+                        matches!(&clipped.primitive, egui::epaint::Primitive::Mesh(mesh)
+                    if mesh.vertices.iter().any(|vertex| vertex.color == highlight))
+                    }),
+                "collapsing the range removes the highlight"
+            );
+            assert_eq!(view.inline.as_ref().unwrap().text, "Wide ABCD\nhi");
+            assert!(
+                jobs.try_recv().is_err(),
+                "selection does not edit or finish the document"
+            );
+        }
     }
 
     #[test]
