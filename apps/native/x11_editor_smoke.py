@@ -3301,6 +3301,24 @@ def main():
                          "text-rotated-inline-pointer-word-minimum"):
                 document_pixel(name, 310, 200, (249, 238, 204), tolerance=1)
                 document_pixel(name, 380, 205, (247, 247, 245), tolerance=1)
+            # Nonprimary press places a caret too; primary selection paste is
+            # not implemented by egui-winit. Reset Copy to a different value so
+            # an unchanged selection or lost focus cannot satisfy the check.
+            for width, height, size_name in ((1000, 800, "normal"), (760, 540, "minimum")):
+                run("xdotool", "windowsize", "--sync", editor, str(width), str(height), "sleep", ".3")
+                for button, button_name in (("2", "middle"), ("3", "secondary")):
+                    run("xdotool", "key", "ctrl+a", "ctrl+c")
+                    wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"L\nfi",
+                         "whole-buffer baseline before nonprimary placement")
+                    x, y = document_point((310, 170))  # Before fi on the turned second row.
+                    run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y),
+                        "sleep", ".2", "click", button, "sleep", ".2", "key", "ctrl+shift+End", "ctrl+c")
+                    wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"fi",
+                         f"{button_name} press places the turned caret at {size_name} size")
+                    name = f"text-rotated-inline-{button_name}-{size_name}"
+                    shot(editor, name)
+                    document_pixel(name, 310, 200, (249, 238, 204), tolerance=1)
+                    document_pixel(name, 380, 205, (247, 247, 245), tolerance=1)
             run("xdotool", "windowsize", "--sync", editor, "1000", "800", "key", "ctrl+a", "ctrl+c")
             wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"L\nfi",
                  "pointer gestures preserve the full multiline buffer")

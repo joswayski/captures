@@ -208,13 +208,15 @@ composition ends. The composing field uses the layer's bundled font, size,
 colour, alignment, opacity, plate and rotation. Selection row highlights and
 the caret rotate with the glyphs. Primary clicks, Shift-clicks, double/triple-clicks
 and drag selection map to the turned glyphs, retaining TextEdit's keyboard/clipboard
-handling. Outlined input approximates hollow strokes from the shaped glyph atlas,
+handling. Middle/secondary presses place or Shift-extend the caret on the turned
+text without arming primary drag selection. Outlined input approximates hollow strokes from the shaped glyph atlas,
 without restoring glyph fill during selection; saved pixels use the contour renderer.
 IME field/caret bounds rotate around the same frame centre, including same-frame
 pointer changes and multiline refits; composition handling remains in TextEdit.
 The pinned egui-winit backend uses the field bounds for the OS candidate area,
 not the caret bounds. Candidate-window presentation remains OS/compositor-controlled.
-Rotated middle-button placement and physical candidate-window verification remain open.
+Linux primary-selection paste is not connected by the pinned egui-winit backend;
+middle presses do not substitute the ordinary clipboard. Physical candidate-window verification remains open.
 Physical input, IME, accessibility,
 Windows and Wayland presentation still require acceptance.
 Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP/SVG picker without blocking draft

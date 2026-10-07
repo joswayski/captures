@@ -616,12 +616,16 @@ pub(super) fn show(
                 if ui.ctx().current_pass_index() == 0 {
                     if let Some(pos) = pointer_response.interact_pointer_pos() {
                         let local = unrotate(pos);
+                        let pressed_inside = ui.input(|i| i.pointer.any_pressed())
+                            && pointer_response.hovered()
+                            && available.contains(pos)
+                            && geometry.frame.contains(local);
                         if ui.input(|i| i.pointer.primary_pressed()) {
-                            input.rotated_drag = pointer_response.hovered()
-                                && available.contains(pos)
-                                && geometry.frame.contains(local);
+                            input.rotated_drag = pressed_inside;
                         }
-                        if input.rotated_drag {
+                        // TextEdit places its caret on any button press; only
+                        // accepted primary gestures continue selection outside.
+                        if input.rotated_drag || pressed_inside {
                             let origin =
                                 output.galley_pos - egui::vec2(output.galley.rect.left(), 0.);
                             let cursor = output.galley.cursor_from_pos(local - origin);
@@ -1103,6 +1107,7 @@ mod tests {
                 Ok(Job::Apply(Request::BeginTextInput { .. }))
             ));
             let clock = std::cell::Cell::new(0_f64);
+            let input_field = std::cell::Cell::new(egui::Id::NULL);
             let frame = |view: &mut View, mut events: Vec<egui::Event>| {
                 clock.set(clock.get() + 0.05);
                 let modifiers = events
@@ -1127,6 +1132,10 @@ mod tests {
                     |ui| {
                         egui::CentralPanel::default().show(ui, |ui| {
                             let area = ui.available_rect_before_wrap();
+                            input_field.set(
+                                ui.scope_id()
+                                    .with((&view.inline.as_ref().unwrap().id, "canvas-text-input")),
+                            );
                             show(
                                 ui,
                                 &tokens,
@@ -1218,6 +1227,60 @@ mod tests {
             copy(&mut view, "alpha");
             fast_click(&mut view, word, egui::Modifiers::NONE);
             copy(&mut view, "alpha beta");
+            // TextEdit places the caret on any button press, not just primary
+            // clicks. Match that on turned text without adding nonprimary drag
+            // selection or pasting from a different clipboard selection.
+            for pointer_button in [egui::PointerButton::Middle, egui::PointerButton::Secondary] {
+                clock.set(clock.get() + 1.);
+                let start = pointer(236., 101.);
+                let nonprimary = |pos, pressed, modifiers| egui::Event::PointerButton {
+                    pos,
+                    button: pointer_button,
+                    pressed,
+                    modifiers,
+                };
+                frame(&mut view, vec![egui::Event::PointerMoved(start)]);
+                frame(
+                    &mut view,
+                    vec![nonprimary(start, true, egui::Modifiers::NONE)],
+                );
+                let range = egui::text_edit::TextEditState::load(&ctx, input_field.get())
+                    .unwrap()
+                    .cursor
+                    .char_range()
+                    .unwrap();
+                assert_eq!(
+                    (range.primary.index.0, range.secondary.index.0),
+                    (2, 2),
+                    "press {pointer_button:?}, angle {angle}, focus {}, finish {:?}",
+                    ctx.text_edit_focused(),
+                    view.inline.as_ref().unwrap().finish
+                );
+                assert!(!view.inline.as_ref().unwrap().rotated_drag);
+                frame(
+                    &mut view,
+                    vec![nonprimary(start, false, egui::Modifiers::NONE)],
+                );
+                let end = pointer(290., 138.);
+                frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+                frame(
+                    &mut view,
+                    vec![nonprimary(end, true, egui::Modifiers::SHIFT)],
+                );
+                let range = egui::text_edit::TextEditState::load(&ctx, input_field.get())
+                    .unwrap()
+                    .cursor
+                    .char_range()
+                    .unwrap();
+                assert_eq!((range.primary.index.0, range.secondary.index.0), (13, 2));
+                frame(
+                    &mut view,
+                    vec![nonprimary(end, false, egui::Modifiers::SHIFT)],
+                );
+                copy(&mut view, "e two\nalpha");
+                assert!(ctx.text_edit_focused());
+                assert!(view.inline.as_ref().unwrap().finish.is_none());
+            }
             assert_eq!(view.inline.as_ref().unwrap().text, "One two\nalpha beta");
             assert!(
                 jobs.try_recv().is_err(),
