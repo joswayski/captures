@@ -1,10 +1,10 @@
 name: Self-hosted Mac fallback
 
 # If a job has waited more than an hour for a self-hosted machine (the Mac or the
-# Windows PC) that is not online (asleep, closed or off), cancel its run and
-# re-run it. Re-runs always go to GitHub-hosted runners (see mac-route.yml).
-# Jobs that are only waiting their turn on an online, busy machine keep waiting:
-# that hardware is the point. A run that a newer run of the same workflow on the
+# Windows PC) and no runner with its label is working through jobs (asleep,
+# closed, off, or online but stuck idle), cancel its run and re-run it. Re-runs
+# always go to GitHub-hosted runners (see mac-route.yml). Jobs only waiting their
+# turn behind a busy runner keep waiting: that hardware is the point. A run that a newer run of the same workflow on the
 # same branch already supersedes is only cancelled, so the re-run can never
 # displace newer work in a concurrency group.
 on:
@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   fallback:
-    name: Move jobs stuck on offline self-hosted machines to GitHub-hosted runners
+    name: Move jobs stuck on offline or idle self-hosted machines to GitHub-hosted runners
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -33,16 +33,18 @@ jobs:
         run: |
           set -euo pipefail
           export CUTOFF=$(( $(date +%s) - MAX_WAIT_MINUTES * 60 ))
-          # Labels of this repository's online self-hosted runners. Without the
-          # token (or on an API error) none count as online, so every long wait
-          # falls back, as before.
-          online=""
+          # Labels of this repository's self-hosted runners that are online and
+          # running a job. A job queued an hour behind one of them is just
+          # waiting its turn; an idle online runner with an hour-old job queued
+          # for it is stuck. Without the token (or on an API error) none count,
+          # so every long wait falls back, as before.
+          working=""
           if [[ -n "${RUNNER_TOKEN:-}" ]]; then
-            online="$(GH_TOKEN="$RUNNER_TOKEN" gh api "repos/$REPO/actions/runners?per_page=100" \
-              --jq '[.runners[] | select(.status == "online") | .labels[].name] | unique | join(" ")' 2>/dev/null)" || online=""
+            working="$(GH_TOKEN="$RUNNER_TOKEN" gh api "repos/$REPO/actions/runners?per_page=100" \
+              --jq '[.runners[] | select(.status == "online" and .busy) | .labels[].name] | unique | join(" ")' 2>/dev/null)" || working=""
           fi
-          export ONLINE=" $online "
-          echo "Online self-hosted runner labels:${ONLINE}"
+          export WORKING=" $working "
+          echo "Labels with a busy self-hosted runner:${WORKING}"
           for status in queued in_progress; do
             gh api "repos/$REPO/actions/runs?status=$status&per_page=100" \
               --jq '.workflow_runs[] | select(.run_attempt == 1) | "\(.id) \(.workflow_id) \(.head_branch)"'
@@ -51,9 +53,9 @@ jobs:
               [.jobs[] | select(.status == "queued")
                        | select(any(.labels[]; startswith("josemac") or startswith("josewin") or startswith("joselinux")))
                        | select((.created_at | fromdateiso8601) < ($ENV.CUTOFF | tonumber))
-                       | select(any(.labels[]; . as $label | ($label | startswith("jose")) and ($ENV.ONLINE | contains(" " + $label + " ") | not)))] | length')"
+                       | select(any(.labels[]; . as $label | ($label | startswith("jose")) and ($ENV.WORKING | contains(" " + $label + " ") | not)))] | length')"
             (( stuck > 0 )) || continue
-            echo "Run $run has $stuck job(s) waiting over ${MAX_WAIT_MINUTES}m for an offline self-hosted machine; cancelling."
+            echo "Run $run has $stuck job(s) waiting over ${MAX_WAIT_MINUTES}m with no busy self-hosted runner for them; cancelling."
             gh api -X POST "repos/$REPO/actions/runs/$run/cancel" >/dev/null || continue
             for _ in $(seq 36); do
               [[ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status)" == completed ]] && break
