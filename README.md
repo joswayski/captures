@@ -619,7 +619,7 @@ in the layer's own bundled face, size, colour, plate and position. Typing previe
 without saving or adding undo steps; clicking away or Escape commits one edit, Return
 inserts a line, and clearing the box discards it. AppKit rotates the box with the
 layer; the Windows/Linux box rotates its glyphs, plate, selection highlights and
-caret but keeps pointer caret placement unrotated. Both draw outlined labels
+caret, and primary pointer clicks/drags select the rotated text. Both draw outlined labels
 approximately. Physical macOS, Windows, Wayland, IME and accessibility acceptance
 remain unverified.
 This is not Tauri system-font equivalence: the four families use the bundled faces

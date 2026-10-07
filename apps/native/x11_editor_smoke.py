@@ -2824,6 +2824,21 @@ def main():
             resize_editor(1000, 1001, "sleep", ".3")
             run("xdotool", "key", "ctrl+End", "Left", "sleep", ".2")
             shot(editor, "text-input-outline-rotated")
+            run("xdotool", "key", "ctrl+End", "shift+Left", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"D",
+                 "one-character selection before pointer word selection")
+            x, y = document_point((center_x, center_y))
+            run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
+                "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".2", "key", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"BOLD",
+                 "rotated outlined pointer selects the word")
+            shot(editor, "text-input-outline-rotated-pointer-word")
+            # 20% mustard over the blue margin and green O counter. A filled
+            # selected glyph or an absent background fails these independent RGBs.
+            document_pixel("text-input-outline-rotated-pointer-word", center_x - 37, center_y,
+                           (83, 128, 141), tolerance=1)
+            document_pixel("text-input-outline-rotated-pointer-word", center_x + 3, center_y - 20,
+                           (88, 166, 98), tolerance=1)
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: values[-1] == rotated, "unchanged rotated outlined input")
             assert draft_bytes() == before
@@ -2876,7 +2891,8 @@ def main():
                            "outlined-preview-no-draft", "outlined-input-style", "outlined-selection-clipboard",
                            "outlined-unchanged-no-draft", "outlined-bold-and-create-undo",
                            "outlined-rotated-input", "outlined-rotated-selection-clipboard",
-                           "outlined-rotated-selection-minimum", "outlined-rotation-undo",
+                           "outlined-rotated-selection-minimum", "outlined-rotated-pointer-word",
+                           "outlined-rotation-undo",
                            "blank-existing-delete", "delete-undo-redo", "quit-latest-buffer", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text input: transient typing, multiline, existing hit, undo, minimum and quit")
@@ -3255,6 +3271,39 @@ def main():
                 for name in ("text-rotated-inline-selected", "text-rotated-inline-selected-minimum"):
                     document_pixel(name, x, y, (249, 238, 204), tolerance=1)
                 document_pixel("text-rotated-inline-cleared", x, y, (247, 247, 245), tolerance=1)
+            x, y = document_point((310, 200))  # Second row after the quarter-turn.
+            run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
+                "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".2", "key", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"fi",
+                 "turned pointer selects only the second-row word")
+            shot(editor, "text-rotated-inline-pointer-word")
+            run("xdotool", "key", "ctrl+a", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"L\nfi",
+                 "whole-buffer selection before pointer drag")
+            start, end = document_point((310, 170)), document_point((310, 300))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "sleep", ".4", "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".2", "mouseup", "1", "key", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"fi",
+                 "turned drag beyond the frame preserves second-row selection")
+            shot(editor, "text-rotated-inline-pointer-drag")
+            run("xdotool", "windowsize", "--sync", editor, "760", "540", "sleep", ".3")
+            run("xdotool", "key", "ctrl+a", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"L\nfi",
+                 "whole-buffer selection before minimum pointer selection")
+            x, y = document_point((310, 200))
+            run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",
+                "click", "--repeat", "2", "--delay", "120", "1", "sleep", ".2", "key", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"fi",
+                 "turned pointer word selection at minimum size")
+            shot(editor, "text-rotated-inline-pointer-word-minimum")
+            for name in ("text-rotated-inline-pointer-word", "text-rotated-inline-pointer-drag",
+                         "text-rotated-inline-pointer-word-minimum"):
+                document_pixel(name, 310, 200, (249, 238, 204), tolerance=1)
+                document_pixel(name, 380, 205, (247, 247, 245), tolerance=1)
+            run("xdotool", "windowsize", "--sync", editor, "1000", "800", "key", "ctrl+a", "ctrl+c")
+            wait(lambda: run("xclip", "-selection", "clipboard", "-o") == b"L\nfi",
+                 "pointer gestures preserve the full multiline buffer")
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: math.isclose(values[1].get("rotation", 0), math.pi / 2, abs_tol=1e-6)
                         and values[1]["text"] == "L\nfi", "rotated inline edit round trip")
@@ -3293,6 +3342,8 @@ def main():
                            "text-canvas-resize-undo", "text-canvas-rotation-undo",
                            "rotated-inline-round-trip", "rotated-inline-selection-clipboard",
                            "rotated-inline-selection-minimum", "rotated-inline-selection-pixels-and-clear",
+                           "rotated-inline-pointer-word", "rotated-inline-pointer-drag-outside",
+                           "rotated-inline-pointer-word-minimum",
                            "text-minimum-reopen",
                            "text-clipboard-dimensions-and-ink", "text-plate-and-original-unchanged"],
             }, indent=2) + "\n")
