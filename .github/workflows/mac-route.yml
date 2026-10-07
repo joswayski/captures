@@ -1,13 +1,16 @@
-name: Choose macOS runner
+name: Choose self-hosted runners
 
-# Called by workflows with macOS jobs. Those jobs run on the self-hosted Mac
-# (label "josemac", see joswayski/infrastructure ci/mac-runner) only when all
-# of these hold, and on GitHub-hosted macOS otherwise:
-#   - the repository variable SELF_HOSTED_MAC is "on" (the kill switch),
+# Called by workflows with jobs that can run on the self-hosted machines
+# (joswayski/infrastructure: the Mac, label "josemac", see ci/mac-runner; the
+# Windows PC, labels "josewin" and "joselinux", see docs/windows-ci-runner.md).
+# Each output is 'true' only when all of these hold, and jobs use
+# GitHub-hosted runners otherwise:
+#   - the repository variable (SELF_HOSTED_MAC, SELF_HOSTED_WINDOWS or
+#     SELF_HOSTED_LINUX) is "on" (the kill switch),
 #   - the run is a push or manual run on main (never a pull request or fork),
 #   - it is the first attempt (re-runs, including the fallback watchdog's,
 #     go to GitHub-hosted runners),
-#   - a "josemac" runner is online, checked with MAC_RUNNER_STATUS_TOKEN
+#   - a runner with that label is online, checked with MAC_RUNNER_STATUS_TOKEN
 #     (fine-grained token with read access to this repo's Administration).
 # This step never fails: any error means GitHub-hosted.
 on:
@@ -16,51 +19,67 @@ on:
       mac:
         description: "'true' when macOS jobs should run on the self-hosted Mac"
         value: ${{ jobs.route.outputs.mac }}
+      windows:
+        description: "'true' when Windows jobs should run on the self-hosted Windows PC"
+        value: ${{ jobs.route.outputs.windows }}
+      linux:
+        description: "'true' when Linux jobs should run in the self-hosted Linux VM"
+        value: ${{ jobs.route.outputs.linux }}
 
 permissions: {}
 
 jobs:
   route:
-    name: Choose macOS runner
+    name: Choose self-hosted runners
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       mac: ${{ steps.route.outputs.mac }}
+      windows: ${{ steps.route.outputs.windows }}
+      linux: ${{ steps.route.outputs.linux }}
     steps:
       - id: route
         env:
-          ENABLED: ${{ vars.SELF_HOSTED_MAC }}
+          MAC: ${{ vars.SELF_HOSTED_MAC }}
+          WINDOWS: ${{ vars.SELF_HOSTED_WINDOWS }}
+          LINUX: ${{ vars.SELF_HOSTED_LINUX }}
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           ATTEMPT: ${{ github.run_attempt }}
           REPO: ${{ github.repository }}
           TOKEN: ${{ secrets.MAC_RUNNER_STATUS_TOKEN }}
         run: |
-          mac=false
-          if [[ "$ENABLED" != on ]]; then
-            reason="repository variable SELF_HOSTED_MAC is not 'on'"
-          elif [[ "$EVENT" != push && "$EVENT" != workflow_dispatch ]] || [[ "$REF" != refs/heads/main ]]; then
-            reason="only pushes and manual runs on main use the self-hosted Mac"
-          elif (( ATTEMPT > 1 )); then
-            reason="re-runs use GitHub-hosted runners"
-          elif [[ -z "$TOKEN" ]]; then
-            reason="secret MAC_RUNNER_STATUS_TOKEN is not set"
-          else
-            online="$(curl -fsS --max-time 20 \
+          runners=""
+          if [[ -n "$TOKEN" ]]; then
+            runners="$(curl -fsS --max-time 20 \
               -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' \
-              "https://api.github.com/repos/$REPO/actions/runners?per_page=100" \
-              | jq '[.runners[] | select(.status == "online") | select(any(.labels[]; .name == "josemac"))] | length' \
-              2>/dev/null)" || online=""
-            if [[ -z "$online" ]]; then
+              "https://api.github.com/repos/$REPO/actions/runners?per_page=100" 2>/dev/null)" || runners=""
+          fi
+          route() { # output enabled label description
+            local output="$1" enabled="$2" label="$3" what="$4" use=false reason online
+            if [[ "$enabled" != on ]]; then
+              reason="its repository variable is not 'on'"
+            elif [[ "$EVENT" != push && "$EVENT" != workflow_dispatch ]] || [[ "$REF" != refs/heads/main ]]; then
+              reason="only pushes and manual runs on main use self-hosted runners"
+            elif (( ATTEMPT > 1 )); then
+              reason="re-runs use GitHub-hosted runners"
+            elif [[ -z "$TOKEN" ]]; then
+              reason="secret MAC_RUNNER_STATUS_TOKEN is not set"
+            elif ! online="$(jq --arg label "$label" \
+              '[.runners[] | select(.status == "online") | select(any(.labels[]; .name == $label))] | length' \
+              <<<"$runners" 2>/dev/null)" || [[ -z "$online" ]]; then
               reason="could not read runner status"
             elif (( online > 0 )); then
-              mac=true
-              reason="$online self-hosted Mac runner(s) online"
+              use=true
+              reason="$online '$label' runner(s) online"
             else
-              reason="no self-hosted Mac runner is online"
+              reason="no '$label' runner is online"
             fi
-          fi
-          echo "mac=$mac" >> "$GITHUB_OUTPUT"
-          where=GitHub-hosted
-          [[ "$mac" == true ]] && where="the self-hosted Mac"
-          echo "macOS jobs run on $where: $reason" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$output=$use" >> "$GITHUB_OUTPUT"
+            local where=GitHub-hosted
+            [[ "$use" == true ]] && where="self-hosted ($label)"
+            echo "$what jobs run on $where: $reason" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          route mac "$MAC" josemac macOS
+          route windows "$WINDOWS" josewin Windows
+          route linux "$LINUX" joselinux Linux
