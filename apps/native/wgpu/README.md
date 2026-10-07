@@ -210,7 +210,11 @@ the caret rotate with the glyphs. Primary clicks, Shift-clicks, double/triple-cl
 and drag selection map to the turned glyphs, retaining TextEdit's keyboard/clipboard
 handling. Outlined input approximates hollow strokes from the shaped glyph atlas,
 without restoring glyph fill during selection; saved pixels use the contour renderer.
-Rotated middle-button placement and native IME candidate placement remain open.
+IME field/caret bounds rotate around the same frame centre, including same-frame
+pointer changes and multiline refits; composition handling remains in TextEdit.
+The pinned egui-winit backend uses the field bounds for the OS candidate area,
+not the caret bounds. Candidate-window presentation remains OS/compositor-controlled.
+Rotated middle-button placement and physical candidate-window verification remain open.
 Physical input, IME, accessibility,
 Windows and Wayland presentation still require acceptance.
 Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP/SVG picker without blocking draft

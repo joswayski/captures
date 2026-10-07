@@ -1522,6 +1522,21 @@ AppKit's existing transformed editor is unchanged. Windows and Wayland share the
 implementation but physical-host acceptance remains open. Rotated middle-button
 placement, native IME candidate placement and physical IME/accessibility still
 require follow-up; this does not close the input parity gate.
+The IME placement follow-up rotates both field and caret metadata into axis-aligned
+bounds about the same frame-centre pivot as the glyphs. It refreshes the caret after
+single-pass pointer changes, preserving TextEdit's cursor padding/empty-row fallback,
+purpose and composition interruption. Only the current viewport's owning interactive
+field can adapt its output; initial focus requests and finishing fields cannot
+transform another field's IME metadata. Each layout pass starts with fresh TextEdit
+output, so a discarded pass does not rotate the bounds twice.
+The pinned egui-winit integration consumes the field rectangle, not the caret
+rectangle; OS/compositor policy still places the actual candidate window. Regression
+tests use independent closed-form centres/extents for positive/negative quarter turns
+and asymmetric oblique angles/scales, a child viewport, single-pass pointer changes,
+preedit/commit and multiline refits. Exact composed text, no document jobs, unrelated
+password-field output and focused-but-finishing output are checked. AppKit retains
+its transformed NSTextView path. Windows, X11 and Wayland share the metadata fix;
+physical candidate-window, IME and accessibility acceptance remains open.
 Masks reuse unchanged raster pixels, invalidate changed width/DPI or recycled
 atlas coordinates, and retain only the current visible glyph set on layout changes.
 The raster stencil is a live-input approximation, not contour-equivalent export;

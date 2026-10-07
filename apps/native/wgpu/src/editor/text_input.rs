@@ -480,14 +480,16 @@ pub(super) fn show(
     let rotation = egui::emath::Rot2::from_angle(geometry.angle);
     let rotate = |point: egui::Pos2| pivot + rotation * (point - pivot);
     let unrotate = |point: egui::Pos2| pivot + rotation.inverse() * (point - pivot);
-    let hit_bounds = if rotated {
+    let rotate_rect = |rect: egui::Rect| {
         egui::Rect::from_points(&[
-            rotate(geometry.frame.left_top()),
-            rotate(geometry.frame.right_top()),
-            rotate(geometry.frame.right_bottom()),
-            rotate(geometry.frame.left_bottom()),
+            rotate(rect.left_top()),
+            rotate(rect.right_top()),
+            rotate(rect.right_bottom()),
+            rotate(rect.left_bottom()),
         ])
-        .union(geometry.frame)
+    };
+    let hit_bounds = if rotated {
+        rotate_rect(geometry.frame).union(geometry.frame)
     } else {
         geometry.frame
     };
@@ -589,6 +591,18 @@ pub(super) fn show(
                     .options_mut(|options| options.input_options.surrender_focus_on = policy);
             }
             let field = &output.response.response;
+            // Only adapt metadata this field could have emitted, before the
+            // pointer adapter or initial focus request changes IME ownership.
+            let ime_caret =
+                if rotated && !finishing && ui.memory(|memory| memory.owns_ime_events(input_id)) {
+                    output
+                        .state
+                        .cursor
+                        .range(&output.galley)
+                        .map(|range| output.galley.pos_from_cursor(range.primary))
+                } else {
+                    None
+                };
             let mut pointer_interacted = false;
             if rotated && !finishing {
                 // This later response owns pointer hits instead of TextEdit's
@@ -627,6 +641,24 @@ pub(super) fn show(
                     }
                     input.rotated_drag &= ui.input(|i| i.pointer.primary_down());
                 }
+            }
+            if let Some(previous_caret) = ime_caret {
+                ui.output_mut(|platform| {
+                    if let Some(ime) = &mut platform.ime {
+                        if pointer_interacted && let Some(range) = output.cursor_range {
+                            // TextEdit emitted before our pointer update. Retain
+                            // its cursor padding/empty-row fallback, but move it
+                            // to the same uniform-format galley caret we paint.
+                            let caret = output.galley.pos_from_cursor(range.primary);
+                            ime.cursor_rect =
+                                ime.cursor_rect.translate(caret.min - previous_caret.min);
+                        }
+                        // egui-winit consumes rect; other integrations can use
+                        // cursor_rect. Keep purpose and interruption unchanged.
+                        ime.rect = rotate_rect(ime.rect);
+                        ime.cursor_rect = rotate_rect(ime.cursor_rect);
+                    }
+                });
             }
             field.widget_info(|| {
                 egui::WidgetInfo::text_edit(
@@ -773,6 +805,262 @@ mod tests {
         presented.active_text_input =
             Some((view.inline.as_ref().unwrap().id.clone(), "label".into()));
         view.receive(ctx, Ok(presented));
+    }
+
+    #[test]
+    fn inline_ime_placement_rotates_current_field_and_caret_without_changing_composition() {
+        for (angle, scale) in [
+            (std::f32::consts::FRAC_PI_2, 1_f32),
+            (-std::f32::consts::FRAC_PI_2, 0.75),
+            (0.61, 1.3),
+            (-0.37, 0.9),
+        ] {
+            let run = |angle: f32| {
+                let ctx = egui::Context::default();
+                crate::ui_fonts::install(&ctx);
+                let tokens = crate::tokens::load()["light-mustard"].clone();
+                tokens.apply(&ctx, true);
+                let mut presented = presented_text("label", "One two\nalpha beta");
+                let document = Arc::make_mut(&mut presented.document);
+                document.width = 640.;
+                document.height = 360.;
+                let Element::Text(element) = document.elements.last_mut().unwrap() else {
+                    unreachable!()
+                };
+                element.base.x = 200.;
+                element.base.y = 80.;
+                element.base.rotation = Some(angle as f64);
+                element.font_family = "mono".into();
+                element.font_size = 30.;
+                element.width = 220.;
+                element.auto_width = Some(false);
+                element.outlined = true;
+                presented.pixels = Arc::new(RgbaImage::new(640, 360));
+                let mut view = View::default();
+                view.receive(&ctx, Ok(presented));
+                let (tx, jobs) = mpsc::channel();
+                view.begin_inline(&tx, TextInputTarget::Existing { id: "label".into() });
+                assert!(matches!(
+                    jobs.try_recv(),
+                    Ok(Job::Apply(Request::BeginTextInput { .. }))
+                ));
+                let child = egui::ViewportId::from_hash_of("rotated-ime-editor");
+                let clock = std::cell::Cell::new(0_f64);
+                let force_discard = std::cell::Cell::new(true);
+                let frame = |view: &mut View, events| {
+                    clock.set(clock.get() + 1.);
+                    let mut raw = egui::RawInput {
+                        viewport_id: child,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(960., 700.),
+                        )),
+                        time: Some(clock.get()),
+                        focused: true,
+                        events,
+                        ..Default::default()
+                    };
+                    raw.viewports.insert(
+                        child,
+                        egui::ViewportInfo {
+                            parent: Some(egui::ViewportId::ROOT),
+                            ..Default::default()
+                        },
+                    );
+                    let mut output = ctx.run_ui(raw, |ui| {
+                        assert_eq!(ui.ctx().viewport_id(), child);
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            show(
+                                ui,
+                                &tokens,
+                                view,
+                                ui.available_rect_before_wrap(),
+                                egui::Rect::from_min_size(
+                                    egui::pos2(40., 30.),
+                                    egui::vec2(640., 360.) * scale,
+                                ),
+                            );
+                        });
+                        if force_discard.get() && ctx.current_pass_index() == 0 {
+                            ctx.request_discard("IME refit multi-pass");
+                        }
+                    });
+                    output.textures_delta.clear();
+                    if force_discard.get() {
+                        assert_eq!(output.platform_output.num_completed_passes, 2);
+                    } else {
+                        assert_eq!(output.platform_output.num_completed_passes, 1);
+                    }
+                    (
+                        output.platform_output.ime,
+                        view.inline.as_ref().unwrap().text.split('\n').count(),
+                    )
+                };
+                frame(&mut view, vec![]);
+                frame(&mut view, vec![]);
+                // Independent mono cursor 2 on row one, around the asymmetric
+                // 220 × (75 + 2.1) frame's centre, not around the content origin.
+                let point = egui::pos2(
+                    40. + (310. + angle.cos() * -74. - angle.sin() * -17.55) * scale,
+                    30. + (118.55 + angle.sin() * -74. + angle.cos() * -17.55) * scale,
+                );
+                let button = |pressed| egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame(&mut view, vec![egui::Event::PointerMoved(point)]);
+                // Pointer metadata must be current even without another pass.
+                force_discard.set(false);
+                let pressed = frame(&mut view, vec![button(true)]);
+                let mut outputs = vec![(pressed.0.unwrap(), pressed.1)];
+                let released = frame(&mut view, vec![button(false)]);
+                outputs.push((released.0.unwrap(), released.1));
+                force_discard.set(true);
+                for events in [
+                    vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                        text: "候補".into(),
+                        active_range_chars: None,
+                    })],
+                    vec![egui::Event::Ime(egui::ImeEvent::Commit("漢".into()))],
+                    vec![egui::Event::Text("\nthird".into())],
+                ] {
+                    let output = frame(&mut view, events);
+                    outputs.push((output.0.unwrap(), output.1));
+                }
+                assert!(jobs.try_recv().is_err());
+                assert!(view.inline.as_ref().unwrap().finish.is_none());
+                (outputs, view.inline.unwrap().text)
+            };
+            let (plain, plain_text) = run(0.);
+            let (turned, turned_text) = run(angle);
+            assert_eq!(
+                turned_text, plain_text,
+                "composition semantics stay in TextEdit"
+            );
+            assert_eq!(plain_text, "On漢\nthirde two\nalpha beta");
+            assert_eq!(plain[0].1, 2);
+            assert_eq!(plain.last().unwrap().1, 3);
+            for ((plain, rows), (turned, turned_rows)) in plain.iter().zip(&turned) {
+                assert_eq!(rows, turned_rows);
+                // Derive AABB centre/extents in closed form rather than using
+                // the implementation's four-corner transform. The frame is
+                // 220px wide, each row is 37.5px tall, and optical top padding
+                // is 7% of the 30px type. TextEdit's atom is not the whole frame.
+                let pivot = egui::pos2(
+                    40. + 310. * scale,
+                    30. + (80. + (37.5 * *rows as f32 + 2.1) / 2.) * scale,
+                );
+                let expected = |rect: egui::Rect| {
+                    let offset = rect.center() - pivot;
+                    let center = pivot
+                        + egui::vec2(
+                            angle.cos() * offset.x - angle.sin() * offset.y,
+                            angle.sin() * offset.x + angle.cos() * offset.y,
+                        );
+                    let size = egui::vec2(
+                        angle.cos().abs() * rect.width() + angle.sin().abs() * rect.height(),
+                        angle.sin().abs() * rect.width() + angle.cos().abs() * rect.height(),
+                    );
+                    egui::Rect::from_center_size(center, size)
+                };
+                for (actual, expected) in [
+                    (turned.rect, expected(plain.rect)),
+                    (turned.cursor_rect, expected(plain.cursor_rect)),
+                ] {
+                    assert!(
+                        actual.min.distance(expected.min) < 0.02
+                            && actual.max.distance(expected.max) < 0.02,
+                        "angle {angle}, scale {scale}: expected {expected:?}, got {actual:?}"
+                    );
+                }
+                assert_eq!(turned.purpose, plain.purpose);
+                assert_eq!(
+                    turned.should_interrupt_composition,
+                    plain.should_interrupt_composition
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inline_ime_adapter_does_not_rotate_another_fields_output_or_a_finishing_field() {
+        let (ctx, mut view, _, _) = setup();
+        crate::ui_fonts::install(&ctx);
+        let tokens = crate::tokens::load()["light-mustard"].clone();
+        tokens.apply(&ctx, true);
+        let Element::Text(element) = Arc::make_mut(&mut view.presented.as_mut().unwrap().document)
+            .elements
+            .last_mut()
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        element.base.rotation = Some(0.61);
+        let mut password = "other input".to_owned();
+        for (frame, finishing) in [false, false, false, true].into_iter().enumerate() {
+            if finishing {
+                view.inline.as_mut().unwrap().phase = Some(Phase::Finish);
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(960., 700.),
+                    )),
+                    focused: true,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let other = egui::TextEdit::singleline(&mut password)
+                            .id_source("other-ime-owner")
+                            .password(true)
+                            .show(ui);
+                        other.response.response.request_focus();
+                        let mut before = ui.ctx().output(|output| output.ime);
+                        if frame == 2 {
+                            assert_eq!(before.unwrap().purpose, egui::IMEPurpose::Password);
+                        }
+                        if finishing {
+                            let id = ui
+                                .scope_id()
+                                .with((&view.inline.as_ref().unwrap().id, "canvas-text-input"));
+                            ui.memory_mut(|memory| memory.request_focus(id));
+                            // A finishing, noninteractive field must leave even
+                            // existing output untouched, despite retained focus.
+                            before = Some(egui::output::IMEOutput {
+                                purpose: egui::IMEPurpose::Password,
+                                rect: egui::Rect::from_min_size(
+                                    egui::pos2(71., 29.),
+                                    egui::vec2(91., 23.),
+                                ),
+                                cursor_rect: egui::Rect::from_min_size(
+                                    egui::pos2(111., 31.),
+                                    egui::vec2(3., 19.),
+                                ),
+                                should_interrupt_composition: true,
+                            });
+                            ui.output_mut(|output| output.ime = before);
+                        }
+                        show(
+                            ui,
+                            &tokens,
+                            &mut view,
+                            ui.available_rect_before_wrap(),
+                            egui::Rect::from_min_size(egui::pos2(40., 70.), egui::vec2(640., 360.)),
+                        );
+                        assert_eq!(ui.ctx().output(|output| output.ime), before);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            if let Some(ime) = output.platform_output.ime {
+                assert_eq!(ime.purpose, egui::IMEPurpose::Password);
+            }
+            view.inline.as_mut().unwrap().focus = false;
+        }
     }
 
     #[test]
