@@ -839,6 +839,19 @@ final class TokenSlider: NSSlider {
         set { super.cellClass = newValue }
     }
 
+    /// Continuous actions from one mouseDown share a gesture identity;
+    /// keyboard/accessibility actions outside tracking remain discrete.
+    private(set) var pointerGesture: UInt64 = 0
+    private(set) var isPointerTracking = false
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        pointerGesture += 1
+        isPointerTracking = true
+        defer { isPointerTracking = false }
+        super.mouseDown(with: event)
+    }
+
     var tokens: Tokens? {
         get { (cell as? TokenSliderCell)?.tokens }
         set { (cell as? TokenSliderCell)?.tokens = newValue; focusRingType = .none; needsDisplay = true }

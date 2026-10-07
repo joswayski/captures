@@ -555,8 +555,10 @@ struct View {
     trim_hover_since: Option<f64>,
     /// The Wand loupe's rendered magnifier, keyed by sampled source/pixel.
     wand_loupe: Option<canvas::LoupeTexture>,
-    /// Curve slider value while dragging, committed once on release.
+    /// Curve slider input retained across older worker receipts.
     curve_bend: Option<(String, f64)>,
+    /// A held Curve slider gesture shares one live undo key.
+    curve_drag: Option<String>,
     history_changed: bool,
     original_replaced: bool,
     selected_layer: Option<String>,
@@ -682,6 +684,7 @@ impl Default for View {
             trim_hover_since: None,
             wand_loupe: None,
             curve_bend: None,
+            curve_drag: None,
             history_changed: false,
             original_replaced: false,
             selected_layer: None,
@@ -1064,6 +1067,7 @@ impl View {
                 self.inline_failed();
                 self.live_queue.clear();
                 self.curve_bend = None;
+                self.curve_drag = None;
                 // A rejected explicit text Apply keeps the user's staged composition.
                 if !self.text_apply_pending {
                     self.select_layer_exact(self.selected_layer.clone());
@@ -1651,6 +1655,7 @@ impl View {
         self.selected_layer = layer.map(|element| element.base().id.clone());
         if previous_layer != self.selected_layer {
             self.curve_bend = None;
+            self.curve_drag = None;
         }
         // Live style edits still queued keep the fields the user is changing.
         let keep = !self.live_queue.is_empty() && previous_layer == self.selected_layer;
@@ -1700,6 +1705,7 @@ impl View {
             self.annotation = None;
             self.text = None;
             self.curve_bend = None;
+            self.curve_drag = None;
             self.layer_opacity = 100.;
             self.layer_geometry = [1., 1., 0., 0.];
         } else {
@@ -13220,6 +13226,192 @@ mod tests {
             egui::Color32::TRANSPARENT,
             "clipped to a circle"
         );
+    }
+
+    #[test]
+    fn curve_slider_previews_while_held_and_coalesces_each_drag_separately() {
+        use captures_app::editor_canvas::CurveEdit;
+        for appearance in ["light-mustard", "dark-mustard"] {
+            for kind in [OpenShapeKind::Line, OpenShapeKind::Arrow] {
+                for locked in [false, true] {
+                    let ctx = egui::Context::default();
+                    ctx.enable_accesskit();
+                    let tokens = crate::tokens::load().remove(appearance).unwrap();
+                    let (mut view, id) = canvas_view(
+                        &ctx,
+                        Point { x: 20., y: 50. },
+                        Point { x: 180., y: 50. },
+                        kind,
+                    );
+                    let document = Arc::make_mut(&mut view.presented.as_mut().unwrap().document);
+                    let Element::Shape(shape) = document.elements.last_mut().unwrap() else {
+                        panic!()
+                    };
+                    shape.base.locked = locked;
+                    let (tx, rx) = mpsc::channel();
+                    let frame = |view: &mut View, events| {
+                        let document = view.presented.as_ref().unwrap().document.clone();
+                        let Element::Shape(shape) = document.elements.last().unwrap() else {
+                            panic!()
+                        };
+                        let before = ctx.cumulative_pass_nr();
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(320., 200.),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                canvas::show_curve_controls(ui, &tokens, view, &tx, shape);
+                                if ctx.current_pass_index() == 0 {
+                                    ctx.request_discard("Curve gesture multi-pass");
+                                }
+                            },
+                        );
+                        assert_eq!(
+                            ctx.cumulative_pass_nr() - before,
+                            2,
+                            "exercise both layout passes"
+                        );
+                        output.textures_delta.clear();
+                        output
+                    };
+                    frame(&mut view, vec![]);
+                    let output = frame(&mut view, vec![]);
+                    let bounds = output
+                        .platform_output
+                        .accesskit_update
+                        .as_ref()
+                        .unwrap()
+                        .nodes
+                        .iter()
+                        .find(|(_, node)| node.label() == Some("Curve"))
+                        .unwrap()
+                        .1
+                        .bounds()
+                        .unwrap();
+                    let point = |fraction: f64| {
+                        egui::pos2(
+                            (bounds.x0 + 7. + fraction * (bounds.x1 - bounds.x0 - 14.)) as f32,
+                            ((bounds.y0 + bounds.y1) / 2.) as f32,
+                        )
+                    };
+                    let button = |fraction, pressed| egui::Event::PointerButton {
+                        pos: point(fraction),
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    let take = |expected: f64| {
+                        let Ok(Job::Apply(Request::Live { key, request })) = rx.try_recv() else {
+                            panic!("Curve must preview before pointer release");
+                        };
+                        assert!(matches!(*request, Request::Layer {
+                            id: ref target, edit: LayerEdit::Curve { edit: CurveEdit::Bend { bend } },
+                        } if target == &id && bend == expected / 100.));
+                        key
+                    };
+                    let accept = |view: &mut View, bend: f64| {
+                        let mut document = (*view.presented.as_ref().unwrap().document).clone();
+                        document
+                            .edit_layer(
+                                &id,
+                                LayerEdit::Curve {
+                                    edit: CurveEdit::Bend { bend: bend / 100. },
+                                },
+                            )
+                            .unwrap();
+                        let mut accepted = presented(false);
+                        accepted.document = Arc::new(document);
+                        view.receive(&ctx, Ok(accepted));
+                    };
+                    frame(&mut view, vec![egui::Event::PointerMoved(point(0.5))]);
+                    frame(&mut view, vec![button(0.5, true)]);
+                    frame(&mut view, vec![button(0.5, false)]);
+                    assert!(rx.try_recv().is_err(), "the unchanged midpoint is a no-op");
+                    frame(
+                        &mut view,
+                        vec![egui::Event::PointerMoved(point(0.25)), button(0.25, true)],
+                    );
+                    let first = take(-50.);
+                    assert!(ctx.input(|input| input.pointer.primary_down()));
+                    for fraction in [0.65, 0.8] {
+                        frame(&mut view, vec![egui::Event::PointerMoved(point(fraction))]);
+                    }
+                    assert_eq!(
+                        view.live_queue.len(),
+                        1,
+                        "one latest value waits behind the worker"
+                    );
+                    accept(&mut view, -50.);
+                    assert_eq!(
+                        view.curve_bend,
+                        Some((id.clone(), 60.)),
+                        "old receipts retain newer input"
+                    );
+                    view.flush_live(&tx);
+                    assert_eq!(take(60.), first, "one pointer gesture shares an undo key");
+                    accept(&mut view, 60.);
+                    frame(&mut view, vec![egui::Event::PointerMoved(point(0.2))]);
+                    assert_eq!(
+                        take(-60.),
+                        first,
+                        "a settled worker does not end a held gesture"
+                    );
+                    frame(&mut view, vec![button(0.2, false)]);
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "release must not submit a duplicate"
+                    );
+                    frame(
+                        &mut view,
+                        vec![egui::Event::PointerMoved(point(0.9)), button(0.9, true)],
+                    );
+                    frame(&mut view, vec![button(0.9, false)]);
+                    assert_eq!(view.live_queue.len(), 1);
+                    accept(&mut view, -60.);
+                    view.flush_live(&tx);
+                    let second = take(80.);
+                    assert_ne!(second, first, "a second drag is a separate undo step");
+                    frame(
+                        &mut view,
+                        vec![egui::Key::Home, egui::Key::End, egui::Key::ArrowLeft]
+                            .into_iter()
+                            .map(|key| egui::Event::Key {
+                                key,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            })
+                            .collect(),
+                    );
+                    assert_eq!(
+                        view.live_queue.len(),
+                        3,
+                        "same-frame keys stay discrete and ordered"
+                    );
+                    let mut previous = second;
+                    for (accepted, next) in [(80., -100.), (-100., 100.), (100., 99.)] {
+                        accept(&mut view, accepted);
+                        view.flush_live(&tx);
+                        let key = take(next);
+                        assert_ne!(key, previous);
+                        previous = key;
+                    }
+                    view.receive(&ctx, Err("rejected curve".into()));
+                    assert!(view.curve_bend.is_none() && view.live_queue.is_empty());
+                    frame(&mut view, vec![]);
+                    assert!(
+                        rx.try_recv().is_err(),
+                        "failure cannot resubmit stale input"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

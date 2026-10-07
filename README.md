@@ -773,8 +773,10 @@ the path to add a point and double-click a point to remove it. Layers offers a C
 slider for straight or single-bend strokes and Straighten for multi-point ones. Curves
 survive saves and drafts. Like shipping, Curve and Straighten remain available in
 Properties on locked or hidden layers; locked layers still reject canvas-dot edits.
-Curve controls keep keyboard focus while edits run in the background. Consecutive
-steps apply in order, with a separate undo step for each key or slider release.
+Curve slider drags update the canvas while held and form one undo step per gesture;
+only the newest pending drag value waits for the worker. Controls keep keyboard
+focus while edits run. Keyboard steps apply in order with their own undo steps,
+and Straighten remains a separate action.
 A selected layer that hangs past the canvas shows an
 **Expand canvas** action; hovering previews the grown canvas and one click grows it as
 a single undo step. Dropping PNG, JPEG, WebP, TIFF, GIF, BMP or SVG files on the canvas adds image

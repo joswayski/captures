@@ -3404,9 +3404,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         layerContent.addSubview(annotationControls)
         curveControls = EditorCurveControls(tokens: tokens, width: Self.contentWidth)
-        curveControls.apply = { [weak self] edit in
+        curveControls.apply = { [weak self] edit, gesture in
             guard let self, let id = self.selectedLayer?.id else { return }
-            self.liveEdit(key: self.liveOnceKey("curve:\(id)"), request: ["operation": "layer", "id": id,
+            let key = gesture.map { "curve:\(id):pointer:\($0)" } ?? self.liveOnceKey("curve:\(id)")
+            self.liveEdit(key: key, request: ["operation": "layer", "id": id,
                 "edit": ["action": "curve", "edit": edit]])
         }
         curveControls.resized = { [weak self] _ in self?.layoutLayerInspectorTail() }
@@ -6676,7 +6677,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.curveHandles = selectionOverlay.resizeEnabled ? curve : nil
         selectionOverlay.expandPreview = selectedLayer.flatMap { state.snapshot?.canvasExpand[$0.id] }
         if !liveQueue.contains(where: { layerID != nil && $0.key.hasPrefix("curve:\(layerID!):") }) {
-            curveControls?.setHandles(curve)
+            curveControls?.setHandles(curve, layerID: layerID)
         }
         publishLayerGeometry()
         if layerMenuID != nil && layerMenuID != selectedLayerID { closeLayerMenu() }
