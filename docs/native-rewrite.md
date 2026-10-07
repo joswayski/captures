@@ -1494,7 +1494,7 @@ colour, opacity, plate, padding, alignment and rotation, with the accent outline
 `--s-3` outside it, while the session preview omits that layer. Typing refits the
 frame before presenting the new glyphs, without waiting for another input event.
 Rotated labels rotate their glyphs, plate, selection row highlights and caret;
-pointer caret placement still uses egui's unrotated box. Outlined input paints hollow grayscale strokes
+primary pointer selection maps back into the galley's coordinates. Outlined input paints hollow grayscale strokes
 of the actual shaped atlas glyphs, retaining ligatures, fallback, advances and
 caret layout. Selection retains its background without restoring glyph fill.
 The selection regression checks asymmetric multiline rows at zero, quarter-turn
@@ -1505,6 +1505,23 @@ smokes exercise rotated selection at normal/minimum sizes, Copy, unchanged draft
 and selected/cleared background pixels. AppKit already rotates its whole text editor
 and is unchanged; Windows and Wayland share the wgpu implementation but this slice
 has no physical-host verification. No text/input acceptance gate is closed.
+The subsequent pointer slice uses egui's public cursor controller for primary
+click, Shift-click, double/triple-click and drag selection. An accepted drag keeps
+its anchor outside the rotated frame; empty bounding-box corners finish composition
+instead of moving the caret. TextEdit retains keyboard/IME/clipboard handling.
+Its automatic focus-surrender policy is disabled only during that field's `show`
+and immediately restored: the separate pointer response must not collapse a
+Shift-click anchor or drop typing delivered with a release. No global input events
+are rewritten and no egui fork is added. The regression checks independently
+placed multiline mono cursors at zero/quarter-turn/oblique angles and different
+canvas scales, forced layout passes, exact Copy ranges, release-frame typing,
+unchanged document jobs and restoration of a non-default focus policy. Dark/light
+private-X11 font-draft smokes check turned word/drag selection at normal/minimum
+sizes and an unchanged draft; the Text-input smoke checks outlined word selection.
+AppKit's existing transformed editor is unchanged. Windows and Wayland share the
+implementation but physical-host acceptance remains open. Rotated middle-button
+placement, native IME candidate placement and physical IME/accessibility still
+require follow-up; this does not close the input parity gate.
 Masks reuse unchanged raster pixels, invalidate changed width/DPI or recycled
 atlas coordinates, and retain only the current visible glyph set on layout changes.
 The raster stencil is a live-input approximation, not contour-equivalent export;

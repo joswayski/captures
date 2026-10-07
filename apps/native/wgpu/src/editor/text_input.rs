@@ -30,6 +30,7 @@ pub(super) struct InlineText {
     blocked: bool,
     focus: bool,
     ime_preedit: bool,
+    rotated_drag: bool,
     first_frame: Option<u64>,
     close_after: bool,
     previous_selection: Option<String>,
@@ -83,6 +84,7 @@ impl View {
             blocked: false,
             focus: true,
             ime_preedit: false,
+            rotated_drag: false,
             first_frame: None,
             close_after: false,
             previous_selection: self.selected_layer.clone(),
@@ -417,8 +419,8 @@ fn inline_galley(
 /// while the input is active.
 ///
 /// Rotated labels paint their glyphs, plate, selection and caret rotated about
-/// the frame centre; pointer caret placement still uses the unrotated box
-/// (egui text fields cannot rotate). Outlined labels replace
+/// the frame centre. Pointer selection maps back to the unrotated galley while
+/// TextEdit keeps keyboard/IME/clipboard ownership. Outlined labels replace
 /// only the visible glyph ink with cached, hollow atlas-derived strokes.
 pub(super) fn show(
     ui: &mut egui::Ui,
@@ -477,15 +479,30 @@ pub(super) fn show(
     let pivot = geometry.frame.center();
     let rotation = egui::emath::Rot2::from_angle(geometry.angle);
     let rotate = |point: egui::Pos2| pivot + rotation * (point - pivot);
+    let unrotate = |point: egui::Pos2| pivot + rotation.inverse() * (point - pivot);
+    let hit_bounds = if rotated {
+        egui::Rect::from_points(&[
+            rotate(geometry.frame.left_top()),
+            rotate(geometry.frame.right_top()),
+            rotate(geometry.frame.right_bottom()),
+            rotate(geometry.frame.left_bottom()),
+        ])
+        .union(geometry.frame)
+    } else {
+        geometry.frame
+    };
     let text_color = geometry.format.color;
     let separate_ink = rotated || geometry.outline_width.is_some();
     let mut lost_focus = false;
     let response = egui::Area::new(ui.scope_id().with((&input.id, "canvas-text-frame")))
         .order(egui::Order::Foreground)
-        .fixed_pos(geometry.frame.min)
+        .fixed_pos(hit_bounds.min)
         .constrain(false)
         .show(ui.ctx(), |ui| {
             ui.set_clip_rect(available);
+            if rotated {
+                ui.set_min_size(hit_bounds.size());
+            }
             let painter = ui.painter().clone();
             painter.add(
                 egui::epaint::RectShape::stroke(
@@ -535,7 +552,18 @@ pub(super) fn show(
             let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _: f32| {
                 inline_galley(ui.ctx(), buffer.as_str(), &format, halign, auto_width, wrap)
             };
-            let output = ui
+            // The pointer adapter is a separate widget. TextEdit must not blur
+            // and collapse its anchor before handling same-frame keyboard input.
+            // Actual click-away is handled below using the rotated frame.
+            let focus_policy = rotated.then(|| {
+                ui.ctx().options_mut(|options| {
+                    std::mem::replace(
+                        &mut options.input_options.surrender_focus_on,
+                        egui::SurrenderFocusOn::Never,
+                    )
+                })
+            });
+            let mut output = ui
                 .scope_builder(egui::UiBuilder::new().max_rect(geometry.content), |ui| {
                     egui::TextEdit::multiline(&mut input.text)
                         .id(input_id)
@@ -556,7 +584,50 @@ pub(super) fn show(
                         .show(ui)
                 })
                 .inner;
+            if let Some(policy) = focus_policy {
+                ui.ctx()
+                    .options_mut(|options| options.input_options.surrender_focus_on = policy);
+            }
             let field = &output.response.response;
+            let mut pointer_interacted = false;
+            if rotated && !finishing {
+                // This later response owns pointer hits instead of TextEdit's
+                // axis-aligned box. Reject its empty corners, and keep only an
+                // accepted primary gesture alive when dragging outside the box.
+                let pointer_response = ui.interact(
+                    hit_bounds,
+                    input_id.with("rotated-pointer"),
+                    egui::Sense::click_and_drag(),
+                );
+                if ui.ctx().current_pass_index() == 0 {
+                    if let Some(pos) = pointer_response.interact_pointer_pos() {
+                        let local = unrotate(pos);
+                        if ui.input(|i| i.pointer.primary_pressed()) {
+                            input.rotated_drag = pointer_response.hovered()
+                                && available.contains(pos)
+                                && geometry.frame.contains(local);
+                        }
+                        if input.rotated_drag {
+                            let origin =
+                                output.galley_pos - egui::vec2(output.galley.rect.left(), 0.);
+                            let cursor = output.galley.cursor_from_pos(local - origin);
+                            pointer_interacted = output.state.cursor.pointer_interaction(
+                                ui,
+                                &pointer_response,
+                                cursor,
+                                &output.galley,
+                                ui.input(|i| i.pointer.primary_down()),
+                            );
+                            if pointer_interacted {
+                                output.cursor_range = output.state.cursor.range(&output.galley);
+                                output.state.store(ui.ctx(), input_id);
+                                field.request_focus();
+                            }
+                        }
+                    }
+                    input.rotated_drag &= ui.input(|i| i.pointer.primary_down());
+                }
+            }
             field.widget_info(|| {
                 egui::WidgetInfo::text_edit(
                     true,
@@ -576,7 +647,7 @@ pub(super) fn show(
                 // after a later pointer event or cursor blink.
                 ui.ctx().request_discard("inline typing refits its frame");
             }
-            lost_focus = field.lost_focus();
+            lost_focus = field.lost_focus() && !pointer_interacted;
             if field.has_focus() {
                 // The accent outline is the indicator (`outline: 0` on the textarea).
                 crate::primitives::focus_indicated(ui.ctx());
@@ -649,15 +720,23 @@ pub(super) fn show(
             }
         })
         .response;
+    let clicked_elsewhere = if rotated {
+        ui.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer.interact_pos().is_some_and(|pos| {
+                    !available.contains(pos) || !geometry.frame.contains(unrotate(pos))
+                })
+        })
+    } else {
+        response.clicked_elsewhere()
+    };
     let mut finish = None;
     if ui.ctx().current_pass_index() == 0 && !finishing && !first_frame {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if !ime_owned_escape {
                 finish = Some(true);
             }
-        } else if !blocked
-            && (!ui.input(|i| i.focused) || response.clicked_elsewhere() || lost_focus)
-        {
+        } else if !blocked && (!ui.input(|i| i.focused) || clicked_elsewhere || lost_focus) {
             finish.get_or_insert(true);
         }
     }
@@ -694,6 +773,206 @@ mod tests {
         presented.active_text_input =
             Some((view.inline.as_ref().unwrap().id.clone(), "label".into()));
         view.receive(ctx, Ok(presented));
+    }
+
+    #[test]
+    fn inline_pointer_selection_uses_rotated_galley_coordinates_and_keeps_text_focus() {
+        for (angle, scale, outlined) in [
+            (0_f32, 1_f32, false),
+            (std::f32::consts::FRAC_PI_2, 1., false),
+            (-0.53, 0.75, true),
+            (0.64, 1.3, false),
+        ] {
+            let ctx = egui::Context::default();
+            crate::ui_fonts::install(&ctx);
+            let tokens = crate::tokens::load()["light-mustard"].clone();
+            tokens.apply(&ctx, true);
+            ctx.options_mut(|options| {
+                options.input_options.surrender_focus_on = egui::SurrenderFocusOn::Presses
+            });
+            let mut presented = presented_text("label", "One two\nalpha beta");
+            let document = Arc::make_mut(&mut presented.document);
+            document.width = 640.;
+            document.height = 360.;
+            let Element::Text(element) = document.elements.last_mut().unwrap() else {
+                unreachable!()
+            };
+            element.base.x = 200.;
+            element.base.y = 80.;
+            element.base.rotation = Some(angle as f64);
+            element.font_family = "mono".into();
+            element.font_size = 30.;
+            element.width = 220.;
+            element.auto_width = Some(false);
+            element.outlined = outlined;
+            presented.pixels = Arc::new(RgbaImage::new(640, 360));
+            let mut view = View::default();
+            view.receive(&ctx, Ok(presented));
+            let (tx, jobs) = mpsc::channel();
+            view.begin_inline(&tx, TextInputTarget::Existing { id: "label".into() });
+            assert!(matches!(
+                jobs.try_recv(),
+                Ok(Job::Apply(Request::BeginTextInput { .. }))
+            ));
+            let clock = std::cell::Cell::new(0_f64);
+            let frame = |view: &mut View, mut events: Vec<egui::Event>| {
+                clock.set(clock.get() + 0.05);
+                let modifiers = events
+                    .iter()
+                    .find_map(|event| match event {
+                        egui::Event::PointerButton { modifiers, .. } => Some(*modifiers),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                events.insert(0, egui::Event::ModifiersChanged(modifiers));
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(960., 700.),
+                        )),
+                        time: Some(clock.get()),
+                        focused: true,
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let area = ui.available_rect_before_wrap();
+                            show(
+                                ui,
+                                &tokens,
+                                view,
+                                area,
+                                egui::Rect::from_min_size(
+                                    egui::pos2(40., 30.),
+                                    egui::vec2(640., 360.) * scale,
+                                ),
+                            );
+                        });
+                        if ctx.current_pass_index() == 0 {
+                            ctx.request_discard("pointer selection multi-pass");
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            // Independent 220px frame, two 37.5px rows and 2.1px optical padding.
+            // Liberation Mono's 30px ASCII advance is 18px; use cursor boundaries,
+            // not the implementation's galley cursor positions, as pointer inputs.
+            let pointer = |x: f32, y: f32| {
+                let (dx, dy) = (x - 310., y - 118.55);
+                egui::pos2(
+                    40. + (310. + angle.cos() * dx - angle.sin() * dy) * scale,
+                    30. + (118.55 + angle.sin() * dx + angle.cos() * dy) * scale,
+                )
+            };
+            let button = |pos, pressed, modifiers| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            let fast_click = |view: &mut View, pos, modifiers| {
+                frame(view, vec![egui::Event::PointerMoved(pos)]);
+                frame(view, vec![button(pos, true, modifiers)]);
+                frame(view, vec![button(pos, false, modifiers)]);
+            };
+            let click = |view: &mut View, pos, modifiers| {
+                clock.set(clock.get() + 1.);
+                fast_click(view, pos, modifiers);
+            };
+            let copy = |view: &mut View, expected: &str| {
+                let output = frame(view, vec![egui::Event::Copy]);
+                assert!(
+                    output
+                        .platform_output
+                        .commands
+                        .iter()
+                        .any(|command| matches!(
+                            command, egui::OutputCommand::CopyText(text) if text == expected
+                        )),
+                    "angle {angle}, scale {scale}: expected selection {expected:?}, commands {:?}",
+                    output.platform_output.commands
+                );
+            };
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![]);
+            click(&mut view, pointer(236., 101.), egui::Modifiers::NONE);
+            assert!(
+                view.inline.as_ref().unwrap().finish.is_none(),
+                "a rotated click is not click-away"
+            );
+            assert!(ctx.text_edit_focused());
+            click(&mut view, pointer(290., 138.), egui::Modifiers::SHIFT);
+            assert!(
+                ctx.text_edit_focused(),
+                "Shift-click keeps text focus: angle {angle}, finish {:?}",
+                view.inline.as_ref().unwrap().finish
+            );
+            copy(&mut view, "e two\nalpha");
+            // The accepted drag owns selection even beyond the rotated frame.
+            let start = pointer(200., 138.);
+            frame(&mut view, vec![egui::Event::PointerMoved(start)]);
+            frame(&mut view, vec![button(start, true, egui::Modifiers::NONE)]);
+            let end = pointer(560., 138.);
+            frame(&mut view, vec![egui::Event::PointerMoved(end)]);
+            frame(&mut view, vec![button(end, false, egui::Modifiers::NONE)]);
+            copy(&mut view, "alpha beta");
+            assert!(
+                view.inline.as_ref().unwrap().finish.is_none(),
+                "dragging outside does not commit"
+            );
+            let word = pointer(254., 138.);
+            click(&mut view, word, egui::Modifiers::NONE);
+            fast_click(&mut view, word, egui::Modifiers::NONE);
+            copy(&mut view, "alpha");
+            fast_click(&mut view, word, egui::Modifiers::NONE);
+            copy(&mut view, "alpha beta");
+            assert_eq!(view.inline.as_ref().unwrap().text, "One two\nalpha beta");
+            assert!(
+                jobs.try_recv().is_err(),
+                "pointer selection sends no document jobs"
+            );
+            assert!(ctx.text_edit_focused());
+            // A release can share a frame with typing. Do not lose that event
+            // to temporary blur, or move the next typed character before it.
+            clock.set(clock.get() + 1.);
+            frame(&mut view, vec![egui::Event::PointerMoved(word)]);
+            frame(&mut view, vec![button(word, true, egui::Modifiers::NONE)]);
+            frame(
+                &mut view,
+                vec![
+                    button(word, false, egui::Modifiers::NONE),
+                    egui::Event::Text("!".into()),
+                ],
+            );
+            frame(&mut view, vec![egui::Event::Text("?".into())]);
+            assert_eq!(view.inline.as_ref().unwrap().text, "One two\nalp!?ha beta");
+            assert_eq!(
+                ctx.options(|options| options.input_options.surrender_focus_on),
+                egui::SurrenderFocusOn::Presses
+            );
+            if angle != 0. && angle != std::f32::consts::FRAC_PI_2 {
+                let bounds = egui::Rect::from_points(&[
+                    pointer(200., 80.),
+                    pointer(420., 80.),
+                    pointer(420., 157.1),
+                    pointer(200., 157.1),
+                ]);
+                click(
+                    &mut view,
+                    bounds.min + egui::vec2(1., 1.),
+                    egui::Modifiers::NONE,
+                );
+                assert_eq!(
+                    view.inline.as_ref().unwrap().finish,
+                    Some(true),
+                    "an empty AABB corner is click-away"
+                );
+            }
+        }
     }
 
     #[test]

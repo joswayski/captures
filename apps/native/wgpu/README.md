@@ -206,9 +206,11 @@ deletes that layer. Normal quit finishes the latest buffer before saving its dra
 Failed renders retain input for retry, and output actions are blocked until
 composition ends. The composing field uses the layer's bundled font, size,
 colour, alignment, opacity, plate and rotation. Selection row highlights and
-the caret rotate with the glyphs; pointer caret placement still uses the unrotated
-box. Outlined input approximates hollow strokes from the shaped glyph atlas,
+the caret rotate with the glyphs. Primary clicks, Shift-clicks, double/triple-clicks
+and drag selection map to the turned glyphs, retaining TextEdit's keyboard/clipboard
+handling. Outlined input approximates hollow strokes from the shaped glyph atlas,
 without restoring glyph fill during selection; saved pixels use the contour renderer.
+Rotated middle-button placement and native IME candidate placement remain open.
 Physical input, IME, accessibility,
 Windows and Wayland presentation still require acceptance.
 Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP/SVG picker without blocking draft
