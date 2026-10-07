@@ -457,7 +457,9 @@ compositor PATH described above on Debian 12. This is not physical input accepta
 Use `--properties-heading-only` for pinned image/shape/Text/Crop titles, actual
 field scrolling at minimum size, and unchanged drafts/originals.
 The `--canvas-interactions-only` suite also checks locked-line Curve/Straighten
-Properties, exact geometry and undo, while canvas curve gestures stay blocked.
+Properties: held-drag pixels and draft geometry in both normal/minimum windows,
+one undo step per pointer gesture, and individually ordered keyboard steps, while
+locked canvas curve gestures stay blocked. Run it in both appearances.
 Use `--output-presets-only` to exercise native compression presets and their
 descriptions, the automatic before/after comparison with a dragged split handle,
 Page Up/Home keys and Hide/Show, folder reveals after each Save, exact Highest

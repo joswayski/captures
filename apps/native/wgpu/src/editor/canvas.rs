@@ -794,7 +794,7 @@ pub(super) fn curve_drag_preview(
 
 /// Inspector Curve section: slider for straight/single-control strokes,
 /// Straighten for multi-point strokes, and the shipping help line. Slider
-/// changes commit once on release.
+/// drags preview live with one undo key; keyboard steps remain discrete.
 pub(super) fn show_curve_controls(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -832,22 +832,24 @@ pub(super) fn show_curve_controls(
         if response.changed() || !steps.is_empty() {
             view.curve_bend = Some((shape.base.id.clone(), value));
         }
-        // Pointer drags commit once on release; keyboard steps commit at once.
-        let released = response.drag_stopped()
-            || response.clicked()
-            || (response.changed() && !response.is_pointer_button_down_on());
-        if released
-            && steps.is_empty()
-            && let Some((_, value)) = view.curve_bend.as_ref()
-            && (view.pending || *value != handles.bend_percent)
-        {
-            edits.push(CurveEdit::Bend { bend: value / 100. });
+        if response.is_pointer_button_down_on() {
+            if view.curve_drag.is_none() || ui.input(|input| input.pointer.primary_pressed()) {
+                view.curve_drag = Some(view.live_once(&format!("curve:{}", shape.base.id)));
+            }
+        } else {
+            view.curve_drag = None;
         }
-        edits.extend(
-            steps
-                .into_iter()
-                .map(|value| CurveEdit::Bend { bend: value / 100. }),
-        );
+        if response.changed() && steps.is_empty() {
+            let key = view
+                .curve_drag
+                .clone()
+                .unwrap_or_else(|| view.live_once(&format!("curve:{}", shape.base.id)));
+            edits.push((key, CurveEdit::Bend { bend: value / 100. }));
+        }
+        for value in steps {
+            let key = view.live_once(&format!("curve:{}", shape.base.id));
+            edits.push((key, CurveEdit::Bend { bend: value / 100. }));
+        }
     } else {
         // Shipping `.screenshot-property-actions` with one button.
         let width = ((ui.available_width() - tokens.number("s-3")) / 2.).floor();
@@ -855,16 +857,17 @@ pub(super) fn show_curve_controls(
             .clicked()
         {
             view.curve_bend = None;
-            edits.push(CurveEdit::Straighten);
+            view.curve_drag = None;
+            let key = view.live_once(&format!("curve:{}", shape.base.id));
+            edits.push((key, CurveEdit::Straighten));
         }
     }
-    for edit in edits {
+    for (key, edit) in edits {
         let id = shape.base.id.clone();
-        let key = view.live_once(&format!("curve:{id}"));
         view.pending_layer_selection = Some(id.clone());
         view.invalidate_output();
-        // Keep focus and retain every discrete property change in arrival
-        // order, with its own undo step, using the existing worker queue.
+        // Keep focus and queue only the latest drag value. Discrete changes
+        // have unique keys, so the worker retains their arrival order.
         view.live_edit(
             tx,
             key,

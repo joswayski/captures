@@ -506,14 +506,27 @@ removal. Core tests cover exact geometry, undo and draft retention; host tests
 check usable fields without canvas dots, and the X11 canvas suite exercises the
 locked-line commands. Physical macOS/Windows/Wayland acceptance remains open.
 Both hosts now keep Curve Properties enabled and focused during worker edits.
-Discrete keyboard steps, slider releases and Straighten actions use the existing
-ordered live-edit queue with separate undo keys, including keys received together
-in one wgpu frame and changes that return to the original value. Clamped no-ops
-do not enqueue an edit. Staged values survive older receipts; failures discard
-queued edits and restore the last accepted value.
-wgpu focus tests and AppKit deferred-worker XCTest cover consecutive input;
-private-X11 light/dark checks apply Home plus three Right keys without refocusing
-and undo every change exactly. Platform accessibility/IME acceptance stays open.
+Slider drags preview the edited pixels while held, sharing one undo key per pointer
+gesture and coalescing only adjacent pending values from that gesture. A second
+drag owns another key. Discrete keyboard steps and Straighten actions retain
+separate ordered keys, including keys received together in one wgpu frame and
+changes that return to the original value. Clamped no-ops and unchanged releases
+do not enqueue an edit. Staged values survive older receipts, including an idle
+worker during tracking; failures discard queued edits and restore the last accepted
+value. Canvas-dot gestures still preview handles and commit on release.
+wgpu light/dark Line/Arrow and locked/unlocked tests and AppKit native-tracking,
+deferred-worker XCTest cover pointer grouping and consecutive input. Private-X11
+light/dark normal/minimum tests independently check held-drag draft geometry and
+rendered pixels, whole-gesture undo/redo, two separate drags, Home plus three Right
+keys without refocusing, and exact undo of each key. Platform accessibility/IME
+acceptance stays open.
+
+| Platform | Live Curve slider implementation / verification |
+| --- | --- |
+| AppKit/macOS | Continuous native slider and per-tracking undo key; XCTest coverage added; physical verification unavailable in this Linux orb |
+| Windows | Shared wgpu path and egui input tests; native Windows CI/physical acceptance remain separate |
+| X11 | Real pointer, keyboard, draft, pixel and undo checks at normal/minimum sizes in both appearances; physical acceptance open |
+| Wayland | Shared wgpu path and egui input tests; compositor/physical slider acceptance unverified |
 
 Both hosts release inline text's keyboard focus when Escape finishes, so the
 first document Undo is not owned by a hidden text editor. Click-away preserves

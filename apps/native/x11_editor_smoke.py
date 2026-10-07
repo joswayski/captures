@@ -2321,6 +2321,59 @@ def main():
             end_click(80, 82)
             save_layers(lambda values: values[-1]["controls"] == [], "straighten before bending")
             properties_end()
+
+            # Real held-input preview, not a release-only value/readout. One
+            # drag contains multiple rendered/draft states but one undo step;
+            # another drag must not amend that first step.
+            for width, height, label in [(1200, 701, "normal"), (760, 540, "minimum")]:
+                if label == "minimum":
+                    run("xdotool", "windowsize", "--sync", editor, str(width), str(height))
+                    assert window_size() == (760, 540), "exercise the native minimum, not a grown legacy fixture"
+                else:
+                    resize_editor(width, height)
+                properties_end()
+                y = window_size()[1] - export_bar_height() - 96
+
+                def move_curve(fraction):
+                    # 1px panel frame + 8px inset + 7px thumb radius;
+                    # the frame removes one pixel from the 304px track.
+                    x = inspector_x(round(16 + fraction * (INSPECTOR_CONTENT - 15)))
+                    run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y))
+
+                def held_bend(control_y, pixel_y, name):
+                    expected = dict(locked, controls=[{"x": 380, "y": control_y}])
+                    assert save_layers(lambda values: values[-1] == expected,
+                                       "Curve draft changes while pointer is still down")[-1] == expected
+                    settled_pixel(name, (380, pixel_y), stroke, 8)
+
+                move_curve(0.5)
+                run("xdotool", "mousedown", "1")
+                try:
+                    move_curve(0.75)
+                    held_bend(350, 250, f"curve-held-{label}")  # +50%: control at y=350, Q midpoint y=250.
+                    move_curve(0.375)
+                    held_bend(50, 100, f"curve-held-return-{label}")  # -25%.
+                finally:
+                    run("xdotool", "mouseup", "1")
+                toolbar_click("undo")
+                save_layers(lambda values: values[-1] == dict(locked, controls=[]), "whole first drag undo")
+                toolbar_click("redo")
+                save_layers(lambda values: values[-1] == dict(locked, controls=[{"x": 380, "y": 50}]),
+                            "whole first drag redo")
+                properties_end()
+                move_curve(0.375)
+                run("xdotool", "mousedown", "1")
+                try:
+                    move_curve(0.6)
+                    held_bend(230, 190, f"curve-held-second-{label}")  # +20%.
+                finally:
+                    run("xdotool", "mouseup", "1")
+                for controls in ([{"x": 380, "y": 50}], []):
+                    toolbar_click("undo")
+                    save_layers(lambda values: values[-1] == dict(locked, controls=controls),
+                                "each pointer gesture is its own undo step")
+            resize_editor(1200, 701)
+            properties_end()
             shot(editor, "locked-curve-slider")
             # Keep focus through worker edits: Home is -100%, then three Right
             # keys reach -97%, each with its own undo step.
@@ -2417,6 +2470,7 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["curve-starter-drag", "curve-point-double-click-remove", "curve-undo-redo",
                            "locked-canvas-curve-guard", "locked-properties-straighten", "locked-properties-bend",
+                           "curve-held-preview-pixels-and-draft-normal-minimum", "curve-one-undo-per-pointer-gesture",
                            "curve-keyboard-focus-through-worker", "curve-discrete-key-undo", "locked-properties-undo",
                            "expand-canvas-action", "expand-canvas-single-undo", "xdnd-drop-guide-top",
                            "xdnd-drop-placed-above", "drop-single-undo", "curve-draft-reopen",

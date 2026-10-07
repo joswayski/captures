@@ -288,11 +288,11 @@ final class EditorDropGuideView: NSView {
     }
 }
 
-/// Inspector Curve section: a slider for straight/single-control strokes that
-/// commits once on release, Straighten for multi-point strokes, and help copy.
+/// Inspector Curve section: live slider preview with one undo key per pointer
+/// gesture, discrete keyboard steps, Straighten for multi-point strokes and help.
 final class EditorCurveControls: NSView {
     override var isFlipped: Bool { true }
-    var apply: ([String: Any]) -> Void = { _ in }
+    var apply: ([String: Any], UInt64?) -> Void = { _, _ in }
     var resized: (CGFloat) -> Void = { _ in }
     private let tokens: Tokens
     private let heading = NSTextField(labelWithString: NativeEditorCanvas.curveLabel)
@@ -304,6 +304,7 @@ final class EditorCurveControls: NSView {
     private let help = NSTextField(wrappingLabelWithString: NativeEditorCanvas.curveHelp)
     private(set) var handles: NativeCurveHandles?
     private var stagedBend: Double?
+    private var layerID: String?
     private var ready = false
 
     init(tokens: Tokens, width: CGFloat = ScreenshotEditorController.contentWidth) {
@@ -321,9 +322,9 @@ final class EditorCurveControls: NSView {
         addSubview(bendValue)
         bendSlider.frame = NSRect(x: 0, y: 26, width: width, height: 24)
         bendSlider.tokens = tokens
-        bendSlider.isContinuous = false
+        bendSlider.isContinuous = true
         bendSlider.numberOfTickMarks = 3
-        bendSlider.target = self; bendSlider.action = #selector(bendReleased)
+        bendSlider.target = self; bendSlider.action = #selector(bendChanged)
         bendSlider.setAccessibilityLabel(NativeEditorCanvas.curveLabel)
         addSubview(bendSlider)
         for (index, title) in NativeEditorCanvas.curveMarks.enumerated() {
@@ -336,7 +337,7 @@ final class EditorCurveControls: NSView {
         straightenButton = CaptureButton("Straighten line", frame: NSRect(x: 0, y: 26, width: width, height: 30),
                                          tokens: tokens) { [weak self] in
             guard let self, self.ready else { return }
-            self.apply(["kind": "straighten"])
+            self.apply(["kind": "straighten"], nil)
         }
         addSubview(straightenButton)
         help.font = .systemFont(ofSize: 11); help.textColor = tokens.color("text-muted")
@@ -347,17 +348,24 @@ final class EditorCurveControls: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func setHandles(_ value: NativeCurveHandles?) {
+    func setHandles(_ value: NativeCurveHandles?, layerID: String? = nil) {
+        // A receipt can arrive during native slider tracking even with no
+        // queued value. Keep the pointer's input, not the older document.
+        let keepInput = layerID != nil && layerID == self.layerID
+            && bendSlider.isPointerTracking && value?.slider == true
+        self.layerID = layerID
         handles = value
-        stagedBend = nil
+        if !keepInput { stagedBend = nil }
         isHidden = value == nil
         let slider = value?.slider ?? true
         bendSlider.isHidden = !slider; bendValue.isHidden = !slider
         marks.forEach { $0.isHidden = !slider }
         straightenButton.isHidden = slider
         if let value {
-            bendSlider.doubleValue = value.bendPercent
-            bendValue.stringValue = "\(Int(value.bendPercent))%"
+            if !keepInput {
+                bendSlider.doubleValue = value.bendPercent
+                bendValue.stringValue = "\(Int(value.bendPercent))%"
+            }
             straightenButton.title = value.straightenLabel
             straightenButton.setAccessibilityLabel(value.straightenLabel)
         }
@@ -375,12 +383,13 @@ final class EditorCurveControls: NSView {
         straightenButton.isEnabled = ready && handles != nil
     }
 
-    @objc private func bendReleased() {
+    @objc private func bendChanged() {
         guard ready, let handles else { return }
         let percent = bendSlider.doubleValue.rounded()
         bendValue.stringValue = "\(Int(percent))%"
         guard percent != (stagedBend ?? handles.bendPercent) else { return }
         stagedBend = percent
-        apply(["kind": "bend", "bend": percent / 100])
+        apply(["kind": "bend", "bend": percent / 100],
+              bendSlider.isPointerTracking ? bendSlider.pointerGesture : nil)
     }
 }
