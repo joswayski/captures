@@ -39,8 +39,13 @@ def main():
         base = os.environ.copy()
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "SWAYSOCK"):
             base.pop(key, None)
-        base.update(XDG_RUNTIME_DIR=str(runtime), XDG_CONFIG_HOME=str(root / "config"),
-                    XDG_DATA_HOME=str(root / "data"), XDG_CACHE_HOME=str(root / "cache"))
+        # The compositors and clipboard owners get their own XDG directories, so
+        # the profile check below only sees what the helper itself created.
+        tools = root / "tools"
+        base.update(XDG_RUNTIME_DIR=str(runtime), XDG_CONFIG_HOME=str(tools / "config"),
+                    XDG_DATA_HOME=str(tools / "data"), XDG_CACHE_HOME=str(tools / "cache"))
+        private = dict(XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
+                       XDG_CACHE_HOME=str(root / "cache"))
         owners = []
         servers = []
         logs = []
@@ -66,7 +71,7 @@ def main():
             def helper(backend, env, parent=None):
                 return subprocess.run([binary, "--native-primary-selection", backend,
                                        str(os.getpid() if parent is None else parent)],
-                                      env=env, capture_output=True, timeout=4)
+                                      env=dict(env, **private), capture_output=True, timeout=4)
 
             def owner(backend, env, payload, primary):
                 command = (["xclip", "-quiet", "-selection", "primary" if primary else "clipboard", "-i"]
@@ -116,7 +121,7 @@ def main():
                 server.listen()
                 server.settimeout(3)
                 process = subprocess.Popen([binary, "--native-primary-selection", "wayland", str(os.getpid())],
-                                           env=dict(wayland, WAYLAND_DISPLAY="blocked-wayland"),
+                                           env=dict(wayland, WAYLAND_DISPLAY="blocked-wayland", **private),
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 owners.append(process)
                 connection, _ = server.accept()
@@ -134,7 +139,7 @@ def main():
                     "child=subprocess.Popen([sys.argv[1],'--native-primary-selection','wayland',str(os.getpid())],"
                     "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
                     "print(child.pid,flush=True); time.sleep(20)", str(binary)],
-                    env=dict(wayland, WAYLAND_DISPLAY="blocked-wayland"), stdout=subprocess.PIPE)
+                    env=dict(wayland, WAYLAND_DISPLAY="blocked-wayland", **private), stdout=subprocess.PIPE)
                 owners.append(parent)
                 assert select.select([parent.stdout], [], [], 3)[0], "parent fixture readiness"
                 child_pid = int(parent.stdout.readline())
@@ -150,8 +155,8 @@ def main():
                         time.sleep(.01)
                 finally:
                     connection.close()
-            for directory in ("config", "data", "cache"):
-                assert not (root / directory).exists(), "private helper entered normal app startup"
+            created = [directory for directory in ("config", "data", "cache") if (root / directory).exists()]
+            assert not created, f"private helper entered normal app startup (created {created})"
             print("PASS stalled helper resource ceilings, parent-death cleanup and no profile startup", flush=True)
         finally:
             for process in reversed(owners):
