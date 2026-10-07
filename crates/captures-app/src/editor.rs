@@ -1767,6 +1767,15 @@ impl Document {
     /// duplication. Hidden layers remain editable from the panel. Rejected
     /// requests do not mutate.
     pub fn edit_layer(&mut self, id: &str, edit: LayerEdit) -> Result<(), String> {
+        self.edit_layer_with_canvas_expansion(id, edit, true)
+    }
+
+    pub(crate) fn edit_layer_with_canvas_expansion(
+        &mut self,
+        id: &str,
+        edit: LayerEdit,
+        expand_canvas: bool,
+    ) -> Result<(), String> {
         let Some(index) = self
             .elements
             .iter()
@@ -1859,7 +1868,7 @@ impl Document {
                     })?;
                     let bounds = painted_bounds(&preview.element)?;
                     self.elements[index] = preview.element;
-                    if fully_outside_canvas(bounds, self.width, self.height) {
+                    if expand_canvas && fully_outside_canvas(bounds, self.width, self.height) {
                         self.expand_canvas_to_bounds(bounds);
                     }
                 }
@@ -1871,7 +1880,7 @@ impl Document {
                     self.elements[index].selection_bounds()?;
                     self.elements[index].base_mut().rotation = (radians != 0.).then_some(radians);
                     let bounds = painted_bounds(&self.elements[index])?;
-                    if fully_outside_canvas(bounds, self.width, self.height) {
+                    if expand_canvas && fully_outside_canvas(bounds, self.width, self.height) {
                         self.expand_canvas_to_bounds(bounds);
                     }
                 }
@@ -1894,7 +1903,7 @@ impl Document {
                     let mut next = self.clone();
                     next.elements[index] = preview.element;
                     let bounds = painted_bounds(&next.elements[index])?;
-                    if fully_outside_canvas(bounds, next.width, next.height) {
+                    if expand_canvas && fully_outside_canvas(bounds, next.width, next.height) {
                         next.expand_canvas_to_bounds(bounds);
                     }
                     *self = next;
