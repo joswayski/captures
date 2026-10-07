@@ -280,9 +280,16 @@ def cases(binary, root, env, bus, screenshots, pointer):
                         elif mode == "tray-loss":
                             # Stop only this private compositor's real tray client.
                             candidates = subprocess.check_output(["pgrep", "-x", "swaybar"], text=True).split()
+
+                            def environment(pid):
+                                # A Swaybar that is exiting (or another user's)
+                                # cannot be read and is not this compositor's.
+                                try:
+                                    return Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+                                except OSError:
+                                    return []
                             tray_pids = [int(pid) for pid in candidates
-                                         if f'SWAYSOCK={env["SWAYSOCK"]}'.encode()
-                                         in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")]
+                                         if f'SWAYSOCK={env["SWAYSOCK"]}'.encode() in environment(pid)]
                             assert len(tray_pids) == 1, "private Swaybar not identified"
                             os.kill(tray_pids[0], signal.SIGTERM)
                             wait(lambda: not watcher(bus), "real tray host removed")
