@@ -45,8 +45,11 @@ jobs:
               [[ "$(gh api "repos/$REPO/actions/runs/$run" --jq .status)" == completed ]] && break
               sleep 5
             done
-            latest="$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$branch&per_page=1" --jq '.workflow_runs[0].id')"
-            if [[ "$latest" != "$run" ]]; then
+            # Only a newer run (higher ID) supersedes this one. The first listed
+            # run is not reliable: the list can briefly omit a just-cancelled run.
+            latest="$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$branch&per_page=20" \
+              --jq "[.workflow_runs[].id | select(. > $run)] | max // empty")"
+            if [[ -n "$latest" ]]; then
               echo "Run $run is superseded by run $latest; not re-running."
               continue
             fi
