@@ -8430,6 +8430,22 @@ private final class DrawToolChoice {
     }
 }
 
+/// Script the cell's synchronous tracking loop without posting events to the
+/// window server. The real TokenSlider.mouseDown still owns gesture identity.
+private final class ScriptedCurveSliderCell: NSSliderCell {
+    var values: [Double] = []
+
+    override func trackMouse(with event: NSEvent, in cellFrame: NSRect,
+                             of controlView: NSView, untilMouseUp flag: Bool) -> Bool {
+        guard let slider = controlView as? NSSlider else { return false }
+        for value in values {
+            slider.doubleValue = value
+            _ = slider.sendAction(slider.action, to: slider.target)
+        }
+        return true
+    }
+}
+
 private final class FakeEditorWorker: EditorWorking {
     var snapshot: NativeEditorSnapshot
     var requests: [[String: Any]] = []
@@ -8876,6 +8892,16 @@ extension ScreenshotEditorTests {
         let slider = curve.bendSlider
         slider.scrollToVisible(slider.bounds)
         XCTAssertTrue(controller.window.makeFirstResponder(slider))
+        // NSApp.postEvent does not guarantee that AppKit's slider tracking
+        // consumes synthetic drags. Test our tracking/queue policy through the
+        // cell seam; real pointer delivery remains a physical-host gate.
+        let target = slider.target
+        let action = slider.action
+        let cell = ScriptedCurveSliderCell()
+        cell.minValue = slider.minValue; cell.maxValue = slider.maxValue
+        cell.doubleValue = slider.doubleValue; cell.isContinuous = slider.isContinuous
+        slider.cell = cell
+        slider.target = target; slider.action = action
         worker.deferRequests = true
         let apply = curve.apply
         defer { curve.apply = apply }
@@ -8887,34 +8913,27 @@ extension ScreenshotEditorTests {
             XCTAssertEqual(slider.doubleValue, input, "a receipt during tracking must retain pointer input")
             apply(edit, gesture)
         }
-        func mouse(_ type: NSEvent.EventType, _ fraction: CGFloat) throws -> NSEvent {
-            try XCTUnwrap(NSEvent.mouseEvent(with: type,
-                location: slider.convert(NSPoint(x: 7 + fraction * (slider.bounds.width - 14),
-                                                y: slider.bounds.midY), to: nil),
+        func drag(_ values: [Double]) throws {
+            cell.values = values
+            let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,
+                location: slider.convert(NSPoint(x: slider.bounds.midX, y: slider.bounds.midY), to: nil),
                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: controller.window.windowNumber, context: nil,
-                eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1))
-        }
-        func drag(_ start: CGFloat, _ values: [CGFloat]) throws {
-            // NSSlider owns its tracking loop. Supply real drag/up events to
-            // that loop; actions must be continuous, not a release callback.
-            NSApp.postEvent(try mouse(.leftMouseUp, try XCTUnwrap(values.last)), atStart: true)
-            for value in values.reversed() {
-                NSApp.postEvent(try mouse(.leftMouseDragged, value), atStart: true)
-            }
-            slider.mouseDown(with: try mouse(.leftMouseDown, start))
+                eventNumber: 0, clickCount: 1, pressure: 1))
+            slider.mouseDown(with: down)
             XCTAssertFalse(slider.isPointerTracking)
         }
         func bend() throws -> Double {
             let edit = try XCTUnwrap((worker.requests.last?["edit"] as? [String: Any])?["edit"] as? [String: Any])
             return try XCTUnwrap(edit["bend"] as? Double) * 100
         }
-        try drag(0.25, [0.8, 0.6])
+        try drag([-50, 60, 20])
         XCTAssertEqual(worker.requests.count, 1, "only one job runs; later pointer values coalesce")
         let first = try XCTUnwrap(worker.liveKeys.last)
         XCTAssertTrue(first.hasPrefix("curve:line:pointer:"))
         let latest = slider.doubleValue.rounded()
-        XCTAssertNotEqual(try bend(), latest, "the pending first sample must differ from the latest input")
+        XCTAssertEqual(try bend(), -50, "the first sample is in flight")
+        XCTAssertEqual(latest, 20, "tracking retains the latest sample")
         worker.completePending(with: snapshot(id: "shot", layers: [line],
             extra: ["curve_handles": ["line": curveHandlesValue(bend: try bend())]]))
         waitUntil { worker.requests.count == 2 && controller.state.busy }
@@ -8926,7 +8945,7 @@ extension ScreenshotEditorTests {
         waitUntil { !controller.state.busy }
         XCTAssertEqual(worker.requests.count, 2, "release did not enqueue a duplicate")
         XCTAssertTrue(controller.window.firstResponder === slider)
-        try drag(0.1, [0.9])
+        try drag([-80, 80])
         XCTAssertEqual(worker.requests.count, 3)
         let second = try XCTUnwrap(worker.liveKeys.last)
         XCTAssertNotEqual(first, second, "a second drag owns a new undo step")

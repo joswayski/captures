@@ -12182,7 +12182,11 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
         let mut live = Live::new(ctx.clone(), Some(root.path().into()));
-        live.flow = Some(CaptureFlow::begin(5).unwrap());
+        let flow = CaptureFlow::begin_for_test(5).unwrap();
+        assert!(flow.is_current());
+        assert_eq!(flow.countdown().remaining(Instant::now()), 5);
+        let generation = flow.generation();
+        live.flow = Some(flow);
         live.capture_phase = Some(CapturePhase::DisplayCountdown);
         live.countdown_target = Some(CaptureTarget {
             monitor: 0,
@@ -12202,6 +12206,8 @@ mod tests {
         output.textures_delta.clear();
         assert!(declared);
         live.flush();
+        drop(live);
+        assert!(!captures_app::capture_flow::is_current(generation));
     }
 
     #[test]

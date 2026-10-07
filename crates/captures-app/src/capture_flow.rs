@@ -273,6 +273,22 @@ pub struct CaptureFlow {
 }
 
 impl CaptureFlow {
+    /// Own the real process gate and clock without OS hooks or a session watcher.
+    /// Only native host unit tests enable this fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_for_test(seconds: u8) -> Result<Self, String> {
+        if seconds > 10 {
+            return Err("Unsupported screenshot countdown".into());
+        }
+        Ok(Self {
+            generation: GATE.begin()?,
+            countdown: Countdown::new(Instant::now(), seconds),
+            manager: None,
+            escape_registered: false,
+            _event_loop_thread: PhantomData,
+        })
+    }
+
     #[cfg(target_os = "linux")]
     pub fn begin_portal(seconds: u8) -> Result<Self, String> {
         if seconds > 10 {
@@ -469,13 +485,7 @@ mod tests {
     fn portal_recording_handoff_restart_and_child_refusal_preserve_ownership() {
         // Exercise the manager-free lifecycle without a real desktop-session
         // watcher; the resident Wayland smoke covers begin_portal on D-Bus.
-        let mut flow = CaptureFlow {
-            generation: GATE.begin().unwrap(),
-            countdown: Countdown::new(Instant::now(), 0),
-            manager: None,
-            escape_registered: false,
-            _event_loop_thread: PhantomData,
-        };
+        let mut flow = CaptureFlow::begin_for_test(0).unwrap();
         assert!(flow.start_countdown(11).is_err());
         flow.start_countdown(3).unwrap();
         assert_eq!(flow.countdown().remaining(Instant::now()), 3);

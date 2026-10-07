@@ -514,9 +514,14 @@ changes that return to the original value. Clamped no-ops and unchanged releases
 do not enqueue an edit. Staged values survive older receipts, including an idle
 worker during tracking; failures discard queued edits and restore the last accepted
 value. Canvas-dot gestures still preview handles and commit on release.
-wgpu light/dark Line/Arrow and locked/unlocked tests and AppKit native-tracking,
-deferred-worker XCTest cover pointer grouping and consecutive input. Private-X11
-light/dark normal/minimum tests independently check held-drag draft geometry and
+wgpu light/dark Line/Arrow and locked/unlocked tests and AppKit scripted-cell
+tracking with deferred-worker XCTest cover pointer grouping and consecutive input.
+The AppKit fixture invokes the real slider's gesture wrapper without relying on
+synthetic window-server drag delivery; physical pointer tracking remains unverified.
+Native viewport unit tests own a real process capture gate and countdown through a
+dev-dependency-only `test-support` fixture, without registering Escape or watching
+the desktop session. Production registration/session failure handling is unchanged.
+Private-X11 light/dark normal/minimum tests independently check held-drag draft geometry and
 rendered pixels, whole-gesture undo/redo, two separate drags, Home plus three Right
 keys without refocusing, and exact undo of each key. Platform accessibility/IME
 acceptance stays open.

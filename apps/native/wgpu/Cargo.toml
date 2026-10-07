@@ -44,6 +44,9 @@ tempfile = "3"
 winit = { version = "=0.30.13", default-features = false }
 earcutr = "0.5"
 
+[dev-dependencies]
+captures-app = { path = "../../../crates/captures-app", features = ["test-support"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 captures-recording-xcap = { path = "../../../crates/captures-recording-xcap" }
 dbus = "0.9"

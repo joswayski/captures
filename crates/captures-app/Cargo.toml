@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+# Desktop-free capture guards for native host unit tests; not a runtime mode.
+test-support = []
+
 [dependencies]
 captures-capture = { path = "../captures-capture" }
 captures-feedback = { path = "../captures-feedback" }
