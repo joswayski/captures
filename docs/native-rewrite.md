@@ -1537,6 +1537,18 @@ preedit/commit and multiline refits. Exact composed text, no document jobs, unre
 password-field output and focused-but-finishing output are checked. AppKit retains
 its transformed NSTextView path. Windows, X11 and Wayland share the metadata fix;
 physical candidate-window, IME and accessibility acceptance remains open.
+The nonprimary placement follow-up maps middle/secondary presses through the same
+inverse rotation as primary input. It matches TextEdit's press-time caret/Shift
+extension, with only accepted primary gestures arming continued drag selection.
+Independent mono cursor offsets and exact Copy ranges cover both buttons at zero,
+quarter-turn and oblique angles/scales, ordinary/outlined text and discarded passes.
+Dark/light private-X11 font-draft smokes use real middle/secondary presses at
+normal/minimum sizes, checking independent selected/unselected row pixels, different
+clipboard baselines and byte-identical drafts. Renders were inspected.
+No document jobs are produced. AppKit keeps native NSTextView handling; Windows,
+X11 and Wayland share the adapter. Linux primary-selection paste remains absent
+from the pinned egui-winit integration; placement does not silently paste the
+ordinary clipboard. Physical input/IME/accessibility gates remain open.
 Masks reuse unchanged raster pixels, invalidate changed width/DPI or recycled
 atlas coordinates, and retain only the current visible glyph set on layout changes.
 The raster stencil is a live-input approximation, not contour-equivalent export;
