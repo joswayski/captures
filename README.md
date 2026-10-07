@@ -621,9 +621,11 @@ inserts a line, and clearing the box discards it. AppKit rotates the box with th
 layer; the Windows/Linux box rotates its glyphs, plate, selection highlights and
 caret. Pointer presses target the rotated text; primary drags select it. Its IME placement
 bounds follow that rotation; the operating system controls the candidate window.
-Both draw outlined labels approximately. Native Linux primary-selection paste is
-not connected. Physical macOS, Windows, Wayland, IME and accessibility acceptance
-remain unverified.
+Both draw outlined labels approximately. The Linux on-canvas box accepts middle-click
+PRIMARY text on X11 and Wayland compositors with data-control support. Reads are
+limited to 64 KiB and two seconds; changing input or focus cancels delayed pastes.
+Unavailable PRIMARY never substitutes the ordinary clipboard. Physical macOS,
+Windows, Wayland, IME and accessibility acceptance remain unverified.
 This is not Tauri system-font equivalence: the four families use the bundled faces
 rather than the operating system's, installed fonts only fill in missing characters,
 and fonts are never imported or downloaded.

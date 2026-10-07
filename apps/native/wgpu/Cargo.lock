@@ -1069,6 +1069,7 @@ dependencies = [
  "moxcms",
  "png 0.18.1",
  "rfd",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "tempfile",

@@ -215,8 +215,16 @@ IME field/caret bounds rotate around the same frame centre, including same-frame
 pointer changes and multiline refits; composition handling remains in TextEdit.
 The pinned egui-winit backend uses the field bounds for the OS candidate area,
 not the caret bounds. Candidate-window presentation remains OS/compositor-controlled.
-Linux primary-selection paste is not connected by the pinned egui-winit backend;
-middle presses do not substitute the ordinary clipboard. Physical candidate-window verification remains open.
+Linux middle-click PRIMARY is connected by a separate bounded helper: 64 KiB
+UTF-8, a two-second absolute deadline, one child and one latest queued request.
+The actual X11/Wayland backend is used, with no CLIPBOARD or X11 fallback after
+Wayland failure. Wayland requires compositor data-control support. Input,
+selection, composition, focus, Finish/close and Quit cancel stale delivery;
+the padded box retains middle-press/release ownership. Normal Ctrl/Cmd-V and
+image clipboard behavior are unchanged. `primary_selection_smoke.py` verifies
+independent private X11/Wayland owners and helper resource/parent-death cleanup;
+`x11_editor_smoke.py --text-input-only` exercises real normal/minimum paste,
+text transaction and Undo. Physical candidate-window verification remains open.
 Physical input, IME, accessibility,
 Windows and Wayland presentation still require acceptance.
 Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP/SVG picker without blocking draft

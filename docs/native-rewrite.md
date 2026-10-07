@@ -1549,6 +1549,39 @@ No document jobs are produced. AppKit keeps native NSTextView handling; Windows,
 X11 and Wayland share the adapter. Linux primary-selection paste remains absent
 from the pinned egui-winit integration; placement does not silently paste the
 ordinary clipboard. Physical input/IME/accessibility gates remain open.
+The PRIMARY follow-up connects Linux on-canvas middle-click paste separately from
+egui-winit's ordinary clipboard. A private same-executable helper reads only the
+actual window backend's PRIMARY, with Wayland's X11 fallback disabled. One supervisor
+owns at most one child and one replaceable latest request. Its absolute two-second
+deadline includes queue/drain time; UTF-8 output is capped at 64 KiB without truncation.
+arboard's internal read/initialization is not cancellable, so the helper sets a
+512 MiB address-space ceiling, disables core dumps and limits CPU time to two
+seconds before display access. The memory tuning is verified on these private
+fixtures, not every desktop; it is not an exact RSS bound or pre-exec loader sandbox.
+Parent death kills the child; cancellation/failure reaps it before another starts.
+Delivery belongs to the initiating inline field after caret placement. Input,
+selection, composition, widget/native focus, Finish, close and Quit invalidate it;
+blur/refocus between redraws cannot revive a result. Failed Quit permits a new
+gesture but never an old reply. Only that TextEdit sees one temporary Paste event,
+not another field/viewport or a repeated layout pass. Empty boxed-label padding
+retains ownership through the middle-button release. Normal Ctrl/Cmd-V and image
+clipboard paths are unchanged. Missing PRIMARY/data-control never substitutes
+CLIPBOARD or falls back to another display backend.
+Private X11/headless-Sway helper checks compare distinct PRIMARY/CLIPBOARD values,
+repeat reads, exact UTF-8/byte boundaries, overflow, wrong-parent/backend rejection,
+stalled-helper resource limits and parent-death cleanup. Shared UI tests cover
+asymmetric caret insertion, rotation, discarded passes, ready-result/input races,
+focus/composition/Finish/close/Quit cancellation and padded empty input. Private-X11
+dark/light normal/minimum editor smokes verify multiline PRIMARY, one normal
+transaction and Undo; renders are inspected. No physical input gate is closed.
+
+| Platform | PRIMARY slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Native NSTextView behavior retained; Linux helper/UI path explicitly gated; no physical verification in this orb |
+| Windows | Existing clipboard/button behavior retained; Linux PRIMARY path explicitly gated; physical acceptance open |
+| X11 | Private real-pointer normal/minimum editor and independent selection-owner checks; physical acceptance open |
+| Wayland | Shared inline adapter implemented; private Sway data-control transport exercised; compositor UI, GNOME/KDE and physical acceptance open |
+
 Masks reuse unchanged raster pixels, invalidate changed width/DPI or recycled
 atlas coordinates, and retain only the current visible glyph set on layout changes.
 The raster stencil is a live-input approximation, not contour-equivalent export;

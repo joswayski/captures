@@ -2084,6 +2084,10 @@ impl Editor {
     pub fn flush(&self, ctx: &egui::Context) -> Result<(), String> {
         {
             let mut view = self.view.lock().unwrap();
+            #[cfg(target_os = "linux")]
+            if let Some(input) = &mut view.inline {
+                input.cancel_primary();
+            }
             if view.closed {
                 return Ok(());
             }
