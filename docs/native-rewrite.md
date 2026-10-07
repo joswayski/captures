@@ -1493,10 +1493,18 @@ Done/Cancel). The box is painted in the layer's transform: bundled face, size,
 colour, opacity, plate, padding, alignment and rotation, with the accent outline
 `--s-3` outside it, while the session preview omits that layer. Typing refits the
 frame before presenting the new glyphs, without waiting for another input event.
-Rotated labels rotate their glyphs, plate and caret, but egui keeps the selection highlight and
-pointer caret placement unrotated. Outlined input paints hollow grayscale strokes
+Rotated labels rotate their glyphs, plate, selection row highlights and caret;
+pointer caret placement still uses egui's unrotated box. Outlined input paints hollow grayscale strokes
 of the actual shaped atlas glyphs, retaining ligatures, fallback, advances and
 caret layout. Selection retains its background without restoring glyph fill.
+The selection regression checks asymmetric multiline rows at zero, quarter-turn
+and positive/negative oblique angles, different canvas scales, and ordinary/outlined
+ink. It independently checks the row geometry, exact Copy buffer, clearing the
+range and absence of document jobs. Dark/light private-X11 Text-input and font-draft
+smokes exercise rotated selection at normal/minimum sizes, Copy, unchanged drafts,
+and selected/cleared background pixels. AppKit already rotates its whole text editor
+and is unchanged; Windows and Wayland share the wgpu implementation but this slice
+has no physical-host verification. No text/input acceptance gate is closed.
 Masks reuse unchanged raster pixels, invalidate changed width/DPI or recycled
 atlas coordinates, and retain only the current visible glyph set on layout changes.
 The raster stencil is a live-input approximation, not contour-equivalent export;

@@ -199,14 +199,17 @@ Applying styles invalidates encoded previews without writing files or drafts.
 Text placement opens an on-canvas multiline composing field; clicking existing
 visible, unlocked text with the Text tool or double-clicking it with Select edits
 that layer. Single clicks still select, and drags still move/resize. Typing previews shared
-Rust pixels without saving a draft or adding undo steps. Done, Escape, clicking
-outside, or closing finishes the latest text as one edit; Cancel restores the
-previous document and output. Blank new text creates nothing; blank existing text
+Rust pixels without saving a draft or adding undo steps. Escape, clicking outside,
+or closing finishes the latest text as one edit; there are no Done/Cancel controls.
+Blank new text creates nothing; blank existing text
 deletes that layer. Normal quit finishes the latest buffer before saving its draft.
-Failed renders retain input for retry or cancellation, and output actions are
-blocked until composition ends. This first composing field uses the UI font and
-is unrotated; the document's pinned-font styled pixels remain authoritative.
-It is not Tauri's WYSIWYG input layout. Physical input, IME, accessibility,
+Failed renders retain input for retry, and output actions are blocked until
+composition ends. The composing field uses the layer's bundled font, size,
+colour, alignment, opacity, plate and rotation. Selection row highlights and
+the caret rotate with the glyphs; pointer caret placement still uses the unrotated
+box. Outlined input approximates hollow strokes from the shaped glyph atlas,
+without restoring glyph fill during selection; saved pixels use the contour renderer.
+Physical input, IME, accessibility,
 Windows and Wayland presentation still require acceptance.
 Add images opens a multi-file PNG/JPEG/WebP/TIFF/GIF/BMP/SVG picker without blocking draft
 saves or close. The worker bounds and decodes each file, honors EXIF orientation,
