@@ -506,7 +506,9 @@ update channel is enabled. An explicit [development helper](apps/native/README.m
 can replace a stopped development package and test startup with a new empty
 profile or an explicitly imported isolated copy, or recover a failed replacement
 after all app processes stop. It does not update installed copies or reuse their
-profiles. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
+profiles. Its optional Preferences visibility intent is development-only; fresh
+profiles still require setup, and automatic installed Settings restoration is not
+connected. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
 also available separately, copies explicitly selected shipping settings, retained
 History and drafts with an original-data snapshot. Shipping data and exports stay
 unchanged, copied profiles survive failed startup and package recovery, and the

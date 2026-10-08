@@ -726,6 +726,17 @@ fn main() {
     let bytes = format!("{token}\n");
     let mut descendant = None;
     match profile.file_name().unwrap().to_str().unwrap() {
+        "restart-visible" | "restart-closed" => {
+            let marker = file.with_extension("restart.json");
+            let intent = fs::read(&marker).unwrap();
+            let visible = profile.file_name().unwrap() == "restart-visible";
+            assert_eq!(intent, format!("{{\"restore_preferences\":{visible}}}").as_bytes());
+            assert!(fs::read(&file).unwrap().is_empty());
+            fs::write(profile.join("restart-observed"), intent).unwrap();
+            fs::remove_file(marker).unwrap();
+            fs::write(&file, &bytes).unwrap();
+        }
+        "restart-ignored" => { fs::write(&file, &bytes).unwrap(); }
         "partial" => {
             fs::write(&file, &bytes.as_bytes()[..9]).unwrap();
             fs::write(profile.join("partial-written"), b"ready").unwrap();
@@ -835,6 +846,49 @@ fn main() {
         )
         .unwrap();
         (settings, data, bytes, capture.entry.id)
+    }
+
+    #[test]
+    fn explicit_restart_visibility_crosses_the_private_health_handoff() {
+        for (visible, mode) in [(true, "restart-visible"), (false, "restart-closed")] {
+            let (fixture, profile) = fixture(mode);
+            let pending = fixture.replace().with_restart_preferences(visible);
+            let transaction = pending.paths.transaction.clone();
+            let running = Running(
+                pending
+                    .launch(&profile, Duration::from_secs(10), &CancelToken::default())
+                    .unwrap(),
+                profile.clone(),
+            );
+            assert_eq!(
+                fs::read(profile.join("restart-observed")).unwrap(),
+                format!("{{\"restore_preferences\":{visible}}}").as_bytes()
+            );
+            assert!(
+                !transaction.exists(),
+                "visibility intent alone is not confirmation"
+            );
+            fixture.profile();
+            drop(running);
+        }
+    }
+
+    #[test]
+    fn a_healthy_peer_ignoring_restart_intent_cannot_confirm_replacement() {
+        let (fixture, profile) = fixture("restart-ignored");
+        let pending = fixture.replace().with_restart_preferences(true);
+        let transaction = pending.paths.transaction.clone();
+        let failure = pending
+            .launch(&profile, Duration::from_secs(10), &CancelToken::default())
+            .unwrap_err();
+        assert!(matches!(
+            failure.error,
+            Error::Installation("host did not consume restart intent")
+        ));
+        retained(&fixture, &transaction);
+        drop(Running(failure.process.unwrap(), profile));
+        assert!(recover_installation(&fixture.destination).unwrap());
+        fixture.old();
     }
 
     #[test]

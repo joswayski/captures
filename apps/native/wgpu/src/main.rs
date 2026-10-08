@@ -421,7 +421,7 @@ fn main() -> eframe::Result {
         eprintln!("Captures could not start: {error}");
         std::process::exit(1);
     });
-    let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
+    let mut options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
         eprintln!("{error}\n{}", options::USAGE);
         std::process::exit(2);
     });
@@ -452,6 +452,20 @@ fn main() -> eframe::Result {
     } else {
         None
     };
+    // A forwarded secondary must never consume the primary's restart intent.
+    if let Some(health) = &options.native_update_health {
+        match health.take_restart_preferences() {
+            Ok(Some(visible)) => {
+                options.scene = Scene::Idle;
+                options.native_update_restore_preferences = visible;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Captures could not start: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     // Forwarded secondaries returned above; fixture scenes never touch markers.
     let crash = instance.as_ref().and_then(|_| {
         match captures_app::crash::Session::start(

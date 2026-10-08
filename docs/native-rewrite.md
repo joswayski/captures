@@ -2353,6 +2353,38 @@ This slice does not close distribution or Notices/updates acceptance. Installed-
 handoff/recovery, OS installers/signing, channel publication and installed-data
 backup/migration remain open. Tauri still ships; no release or cutover is activated.
 
+### Development restart Preferences intent, not installed restoration
+
+The native helper can carry explicit `--restore-preferences true|false` in a
+bounded private JSON sidecar next to its attempt-specific health file. AppKit and
+wgpu consume it once, after primary election and before window startup. With a
+completed isolated profile, true restores Preferences beside the unchanged ready
+notice; false/legacy empty intent stays tray-only. Absent intent preserves ordinary
+launch routing. Setup, pending permission capture and media-open priority remain.
+Forwarded secondaries do not consume the marker or acknowledge health.
+
+Intent consumption is not readiness. The helper still requires exact live health,
+packaged tools and the existing confirmation checks; an old peer that ignores the
+marker cannot confirm replacement and retains the backup for manual recovery.
+Malformed, oversized, occupied-health and linked-file inputs retain the marker.
+Shared transport/FFI tests verify true/false/legacy/one-shot behavior and backup
+recovery. The focused `x11_onboarding_smoke.py --update-restart-only` uses injected
+private markers and real windows, checking both appearances, notice expiry with
+Preferences retained, no repeated restore, setup priority and secondary exclusion.
+
+**Automatic installed restoration remains open.** The helper accepts an operator
+value, not a GUI snapshot; its fresh empty/imported profiles need setup, which wins
+over restoration. A future GUI updater must snapshot actual Preferences visibility
+at successful-update shutdown, not focus or update-click origin, matching shipping
+PR #1025. This slice enables neither GUI installation nor installed-profile writes.
+
+| Platform | Restart-intent implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared marker/FFI and primary launch routing implemented; Swift one-shot and launch-priority tests added, not executed in this Linux orb |
+| Windows | Shared marker and wgpu routing implemented; shared transport tests run on Linux, Windows execution/rendering unverified |
+| X11 | Real optimized native host passed all six focused private-X11 cases with injected markers and disposable profiles; dark/light Preferences plus notice inspected; not a signed install |
+| Wayland | Shared marker and wgpu routing implemented; live Wayland restart handoff/rendering unverified |
+
 ### Cooperative development-package busy guard
 
 Both packaged hosts now acquire shared package-root ownership before profile,

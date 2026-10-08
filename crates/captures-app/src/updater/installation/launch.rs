@@ -106,6 +106,9 @@ impl PendingInstallation {
         let mut ready = tempfile::NamedTempFile::new_in(channel.path())?;
         let token = uuid::Uuid::new_v4().to_string();
         let expected = format!("{token}\n").into_bytes();
+        if let Some(visible) = self.restore_preferences {
+            super::super::health::write_restart_preferences(ready.path(), visible)?;
+        }
         let log = File::options()
             .write(true)
             .create_new(true)
@@ -137,6 +140,15 @@ impl PendingInstallation {
         let result = self
             .wait_for_startup(&mut child, ready.as_file_mut(), &expected, timeout, cancel)
             .and_then(|()| {
+                if self.restore_preferences.is_some() {
+                    match fs::symlink_metadata(ready.path().with_extension("restart.json")) {
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                        Ok(_) => {
+                            return Err(Error::Installation("host did not consume restart intent"));
+                        }
+                    }
+                }
                 self.confirm_locked(|| {
                     check_cancel(cancel)?;
                     if child.try_wait()?.is_some() {
