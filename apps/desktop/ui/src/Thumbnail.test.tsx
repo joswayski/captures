@@ -1614,18 +1614,22 @@ describe("Thumbnail", () => {
       expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
       expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
       expect(arriving!.style.getPropertyValue("--thumbnail-clear-opacity")).toBe("0.63");
-      expect(arriving!.style.getPropertyValue("--thumbnail-clear-transform"))
-        .toBe("translateY(9px) scale(0.99)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-transform")).toBe(
+        "translateY(9px) scale(0.99)",
+      );
       expect(arriving!.style.getPropertyValue("--thumbnail-clear-filter")).toBe("blur(1.8px)");
-      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-filter"))
-        .toBe("blur(1.25px) brightness(0.72)");
-      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-transform"))
-        .toBe("scale(1.008)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-filter")).toBe(
+        "blur(1.25px) brightness(0.72)",
+      );
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-transform")).toBe(
+        "scale(1.008)",
+      );
       expect(resting!.style.getPropertyValue("--thumbnail-clear-opacity")).toBe("1");
       expect(resting!.style.getPropertyValue("--thumbnail-clear-transform")).toBe("none");
       expect(resting!.style.getPropertyValue("--thumbnail-clear-filter")).toBe("none");
-      expect(resting!.style.getPropertyValue("--thumbnail-clear-image-filter"))
-        .toBe("blur(0px) brightness(1)");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-image-filter")).toBe(
+        "blur(0px) brightness(1)",
+      );
       expect(resting!.style.getPropertyValue("--thumbnail-clear-image-transform")).toBe("none");
       expect(minimize.closest(".thumbnail-stack-toolbar")).toHaveClass(
         "thumbnail-stack-toolbar-clearing",
