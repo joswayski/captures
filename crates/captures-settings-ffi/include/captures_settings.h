@@ -16,10 +16,14 @@ CapturesPackageUse *captures_package_use_current_v1(void);
 void captures_package_use_free_v1(CapturesPackageUse *handle);
 
 /* Explicit signed development update checks, with no HTTP until Check.
- * create takes {endpoint,key_file,renderer,current_version,staging_directory?}; pins the public
+ * create takes {endpoint,key_file,renderer,current_version,staging_directory?,base_archive?}; pins the public
  * Minisign key (regular UTF-8 file, <=8 KiB), development identity and host target.
  * The optional existing absolute scratch directory enables explicit temporary
- * acquisition; without it, checks remain read-only. No installation/execution,
+ * acquisition; without it, checks remain read-only. An optional absolute retained
+ * base archive requires staging; signed delta reconstruction falls back to full
+ * acquisition when incompatible. Construction does not read the base archive.
+ * Downloading status includes actual downloaded/total bytes, including fallback resets.
+ * No installation/execution,
  * default endpoint/channel or profile access. Owned stage cleanup on recheck/free.
  * Nonblocking serialized UI-thread requests: {operation:"check"|"poll"|"download_verify"|"cancel_download",
  * show_changelog?:bool}. Replies contain {accepted,checking,status,presentation,

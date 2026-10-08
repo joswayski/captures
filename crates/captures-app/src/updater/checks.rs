@@ -71,6 +71,7 @@ pub enum CheckStatus {
     Downloading {
         release: ReleaseInfo,
         downloaded: u64,
+        total: u64,
     },
     Verifying {
         release: ReleaseInfo,
@@ -108,7 +109,7 @@ enum Job {
 
 enum Event {
     Finished(CheckStatus),
-    Progress(u64),
+    Progress(u64, u64),
     Verifying,
 }
 
@@ -174,9 +175,9 @@ impl CheckWorker {
                         };
                         let release = update.info().clone();
                         let result = update
-                            .download(directory, &token, |received, _| {
+                            .download(directory, &token, |received, total| {
                                 if !cancelled.is_cancelled() && !token.is_cancelled() {
-                                    let _ = finished.send(Event::Progress(received));
+                                    let _ = finished.send(Event::Progress(received, total));
                                     wake();
                                 }
                             })
@@ -265,6 +266,7 @@ impl CheckWorker {
         if accepted {
             self.generation += 1;
             self.status = CheckStatus::Downloading {
+                total: release.size,
                 release,
                 downloaded: 0,
             };
@@ -316,15 +318,17 @@ impl CheckWorker {
                     self.status = status;
                     self.operation_cancel = None;
                 }
-                Event::Progress(downloaded) => {
+                Event::Progress(downloaded, total) => {
                     let CheckStatus::Downloading {
                         downloaded: current,
+                        total: current_total,
                         ..
                     } = &mut self.status
                     else {
                         continue;
                     };
                     *current = downloaded;
+                    *current_total = total;
                 }
                 Event::Verifying => {
                     let CheckStatus::Downloading { release, .. } = &self.status else {
@@ -375,13 +379,14 @@ impl CheckWorker {
             CheckStatus::Downloading {
                 release,
                 downloaded,
+                total,
             } => UpdateStatus::Downloading {
                 current_version,
                 current_display_version,
                 version: release.version.clone(),
                 display_version: release.version.clone(),
                 downloaded: *downloaded,
-                total: Some(release.size),
+                total: Some(*total),
             },
             CheckStatus::Verifying { .. } | CheckStatus::Cancelling { .. } => {
                 UpdateStatus::Checking {
@@ -514,9 +519,8 @@ impl CheckWorker {
                 format!("Development update {} available", release.version)
             }
             CheckStatus::Downloading {
-                release,
-                downloaded,
-            } => format!("Downloading {} of {} bytes", downloaded, release.size),
+                downloaded, total, ..
+            } => format!("Downloading {downloaded} of {total} bytes"),
             CheckStatus::Verifying { .. } => "Verifying package…".into(),
             CheckStatus::Cancelling { .. } => "Cancelling; waiting for I/O…".into(),
             CheckStatus::Staged { release } => {
@@ -644,6 +648,47 @@ mod tests {
         artifact["size"] = serde_json::json!(body.len());
         artifact["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(body)));
         signed(&value)
+    }
+
+    #[test]
+    fn progress_publication_uses_patch_total_and_resets_to_full_total_without_a_new_generation() {
+        let (key, _, _) = signed(&manifest("https://example.invalid/full"));
+        let (mut worker, _) = worker("https://example.invalid/manifest", &key, "2026.9.99");
+        let (events, results) = mpsc::channel();
+        worker.results = results;
+        worker.status = CheckStatus::Downloading {
+            release: ReleaseInfo {
+                renderer: Renderer::Wgpu,
+                target: Target::LinuxX64,
+                version: "2026.10.50".into(),
+                notes: None,
+                size: 10_000,
+            },
+            downloaded: 0,
+            total: 10_000,
+        };
+        for (downloaded, total, percent) in [(200, 400, 50), (0, 10_000, 0), (2500, 10_000, 25)] {
+            events.send(Event::Progress(downloaded, total)).unwrap();
+            assert!(worker.poll());
+            assert_eq!(
+                worker.presentation().status,
+                format!("Downloading {downloaded} of {total} bytes")
+            );
+            let shown = worker.notice(true).unwrap().download.unwrap();
+            assert_eq!(shown.percent, Some(percent));
+            assert!(
+                shown
+                    .accessible_value
+                    .ends_with(&format!("{percent}% downloaded"))
+            );
+            assert_eq!(worker.generation(), 0);
+        }
+        events.send(Event::Verifying).unwrap();
+        assert!(worker.poll());
+        events.send(Event::Progress(400, 400)).unwrap();
+        assert!(!worker.poll());
+        assert!(matches!(worker.status(), CheckStatus::Verifying { .. }));
+        worker.shutdown();
     }
 
     #[test]

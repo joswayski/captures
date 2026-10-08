@@ -72,6 +72,13 @@ Cancel pins busy state until pending I/O and cleanup finish; blocked HTTP can ta
 up to 60 seconds. Retrying downloads fresh bytes against the same authenticated
 metadata. Check Now obtains fresh metadata and drops any retained stage.
 
+Add `--native-update-base-archive /absolute/retained-full-archive` alongside staging
+to opt into the shared incremental path. Both native hosts use the same authenticated
+schema-2 descriptor described below. Construction does not read that archive;
+missing/changed/incompatible bases use the signed full download. Progress displays
+the actual patch byte total and resets to the full total on fallback. No installed
+package or profile is discovered or used as a base.
+
 Normal Quit cancels update work and waits for cleanup without joining pending HTTP
 on the UI thread. AppKit waits off-main. wgpu retires its native windows and keeps
 the event loop running until the worker finishes. Both retain profile election and
@@ -145,6 +152,92 @@ cancelled downloads never produce a verified file. Tests use disposable in-memor
 keys and private loopback data, not release keys or public services. Signature and
 version checks do not establish channel freshness, installed-data migration,
 OS signing or physical-platform acceptance.
+
+### Incremental acquisition and offline patch creation
+
+Schema 1 remains full-only. Schema 2 keeps the same complete artifact fields and
+adds an optional `delta` inside that target's artifact:
+
+```json
+{
+  "format": "bsdiff40",
+  "base_version": "2026.9.99",
+  "base_size": 72593105,
+  "base_sha256": "REPLACE_WITH_EXACT_BASE_ARCHIVE_SHA256",
+  "url": "https://example.invalid/native-development.bsdiff",
+  "size": 59059418,
+  "sha256": "REPLACE_WITH_EXACT_PATCH_SHA256"
+}
+```
+
+These are illustrative development values, not a published release. The signed
+artifact's existing renderer/target/version/size/SHA-256 bind the complete target;
+the descriptor binds the exact base version/bytes and patch URL/bytes. Sign the
+complete schema-2 manifest's exact bytes with Minisign. Missing, unparseable,
+unsupported or incompatible descriptors, unavailable/corrupt bases or patches,
+and patches at least as large as the full archive fall back to the independently
+authenticated full artifact. Signature failure never starts either acquisition.
+Cancellation never starts a fallback.
+
+The updater hashes an owned base snapshot, verifies the patch, validates bounded
+BSDIFF40 header/control records, reconstructs privately with a bounded cancellable
+writer, then verifies the **complete signed target**. Existing staging rehashes and
+validates package contents; replacement/health/rollback remain unchanged. Base
+archives are never modified. `qbsdiff` 1.4.4 is an MIT-licensed BSDIFF40 codec, not
+an updater framework; `bzip2` decodes its controls. Acquisition retains the base and
+patch in memory. Artifact limits are not a low-memory guarantee.
+
+An offline helper generates a patch, verifies its byte-exact round trip, and emits
+**unsigned** delta/target metadata. It never overwrites an output, signs a release,
+publishes or installs. Generation uses whole-file inputs and a suffix array, so
+measure its memory cost for your actual packages:
+
+```sh
+cargo build -p captures-app --bin native_update_patch
+target/debug/native_update_patch \
+  --base-archive "$ABSOLUTE_RETAINED_FULL_ARCHIVE" \
+  --target-archive "$ABSOLUTE_NEW_FULL_ARCHIVE" --base-version 2026.9.99 \
+  --patch-url "$NATIVE_TEST_PATCH_URL" --output "$ABSOLUTE_NEW_PATCH_FILE"
+```
+
+Copy `delta` into the matching artifact and use `target` to check its full size/hash
+before signing. Publish a delta only when the emitted `smaller` is true. The
+diagnostic and stopped-development helper accept `--base-archive ABSOLUTE_PATH`;
+the GUI flag additionally requires explicit staging. No retention policy, production
+channel, automatic installed upgrade or installed Preferences snapshot is enabled.
+
+`native_delta_smoke.py` tests actual explicitly supplied `package.py` archives with
+fresh, disposable in-memory signing keys. Build the offline tool, its test executable
+(`cargo test -p captures-app --bin native_update_patch --no-run` prints its path), and
+`native_update_probe`, then run:
+
+```sh
+python3 apps/native/native_delta_smoke.py \
+  --patch-tool "$ABSOLUTE_PATCH_TOOL" --signing-test "$ABSOLUTE_PATCH_TEST_EXECUTABLE" \
+  --probe "$ABSOLUTE_NATIVE_UPDATE_PROBE" \
+  --base-archive "$ABSOLUTE_RETAINED_FULL_ARCHIVE" \
+  --target-archive "$ABSOLUTE_NEW_FULL_ARCHIVE" --output "$ABSOLUTE_NEW_EVIDENCE_DIRECTORY"
+```
+
+Use `--renderer appkit` for AppKit archives. On Linux, optional `--gui ABSOLUTE_HOST`
+also exercises signed acquisition on private X11, holding real patch/full HTTP
+responses to assert both published byte totals and notice percentages, then checks
+staging, actual Ctrl+Q and cleanup. It requires the X11 smoke dependencies in
+[DEVELOPMENT.md](../../DEVELOPMENT.md). Use `--existing-patch ABSOLUTE_PATH` to reuse
+an already generated patch during fixture iteration; acquisition still verifies it
+against the exact base/target, and generation timing is then omitted.
+This fixture never accepts or stores a release private key. The ignored Rust signing
+fixture is invoked explicitly by this script, not by ordinary test runs.
+
+The October 2026 unoptimized Linux comparison used actual Rust 1.95/debug0 host
+builds (restart-intent source → incremental source), pinned FFmpeg/FFprobe 8.1.2,
+and the real source/licenses. Base/full/patch: **72,593,105 / 72,698,750 / 59,059,418
+bytes**; saving **13,639,332 bytes (18.76%)**. Generation: 109.16 s, 545,624 KiB peak
+RSS. Delta acquisition plus staging: 25.62 s, 144,244 KiB peak RSS; full acquisition
+plus staging: 9.63 s, 11,400 KiB peak RSS on private loopback. These are validation
+builds, not release-performance acceptance. Compressed archives do not guarantee
+large patch savings for small source diffs. macOS/Windows actual built-size and
+runtime comparisons and physical Wayland acceptance remain open.
 
 Staging consumes a verified download, rehashes a private copy, and extracts only
 inside an owned temporary directory. It accepts `package.py`'s current single-root

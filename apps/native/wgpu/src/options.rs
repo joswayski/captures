@@ -14,6 +14,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --settings-file PATH\n\
   --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (explicit live profile; check only)\n\
   --native-update-staging-directory ABSOLUTE_PATH (existing scratch directory; enables explicit temporary download/verification, never installation)\n\
+  --native-update-base-archive ABSOLUTE_PATH (optional retained archive for authenticated delta acquisition; requires staging)\n\
   --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (health launches only)\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
@@ -166,6 +167,7 @@ impl Options {
         let mut update_endpoint = None;
         let mut update_key_file = None;
         let mut update_current_version = None;
+        let mut update_base_archive: Option<PathBuf> = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -274,6 +276,12 @@ impl Options {
                 }
                 "--settings-file" => {
                     options.settings_file = Some(args.next().ok_or("Missing settings path")?.into())
+                }
+                "--native-update-base-archive" => {
+                    if update_base_archive.is_some() {
+                        return Err("Duplicate native update base archive".into());
+                    }
+                    update_base_archive = Some(args.next().ok_or("Missing base archive")?.into());
                 }
                 "--native-update-staging-directory" => {
                     if options.native_update_staging_directory.is_some() {
@@ -454,6 +462,17 @@ impl Options {
             captures_app::updater::checks::validate_staging_directory(path)
                 .map_err(|e| e.to_string())?;
         }
+        if let Some(path) = update_base_archive {
+            if options.native_update_staging_directory.is_none() {
+                return Err("Delta acquisition requires a native update staging directory".into());
+            }
+            options.native_update_checks = options
+                .native_update_checks
+                .take()
+                .map(|client| client.with_base_archive(path))
+                .transpose()
+                .map_err(|error| error.to_string())?;
+        }
         Ok(options)
     }
 }
@@ -525,6 +544,28 @@ mod tests {
                 .as_deref(),
             Some(root.path())
         );
+        let base = root
+            .path()
+            .join("unread-missing-base")
+            .display()
+            .to_string();
+        let mut delta = staged.clone();
+        delta.extend(["--native-update-base-archive".into(), base.clone()]);
+        assert!(
+            Options::parse(delta.clone())
+                .unwrap()
+                .native_update_checks
+                .is_some()
+        );
+        delta.extend(["--native-update-base-archive".into(), base.clone()]);
+        assert!(Options::parse(delta).is_err());
+        let mut unstaged = args.clone();
+        unstaged.extend(["--native-update-base-archive".into(), base]);
+        assert!(Options::parse(unstaged).is_err());
+        let mut relative = staged.clone();
+        relative.extend(["--native-update-base-archive".into(), "relative".into()]);
+        assert!(Options::parse(relative).is_err());
+        assert!(!root.path().join("unread-missing-base").exists());
         assert!(
             parse(&[
                 "--live",

@@ -32,6 +32,7 @@ struct Options {
         var updateKeyFile: String?
         var updateCurrentVersion: String?
         var updateStagingDirectory: String?
+        var updateBaseArchive: String?
         var iterator = arguments.makeIterator()
         while let argument = iterator.next() {
             switch argument {
@@ -77,6 +78,9 @@ struct Options {
             case "--native-update-staging-directory":
                 guard updateStagingDirectory == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 updateStagingDirectory = value
+            case "--native-update-base-archive":
+                guard updateBaseArchive == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                updateBaseArchive = value
             case "--screenshot":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 screenshot = value
@@ -111,7 +115,7 @@ struct Options {
                   updateState == nil, updateTray == nil, scene == "preferences", screenshot == nil
             else { throw Usage.invalid }
         }
-        if updateEndpoint != nil || updateKeyFile != nil || updateCurrentVersion != nil || updateStagingDirectory != nil {
+        if updateEndpoint != nil || updateKeyFile != nil || updateCurrentVersion != nil || updateStagingDirectory != nil || updateBaseArchive != nil {
             guard explicitLive, let endpoint = updateEndpoint, let keyFile = updateKeyFile,
                   let version = updateCurrentVersion, !hasHealth, scene == "preferences",
                   let historyRoot, historyRoot.hasPrefix("/"),
@@ -121,6 +125,10 @@ struct Options {
                 "endpoint": endpoint, "key_file": keyFile, "renderer": "appkit", "current_version": version,
             ]
             if let updateStagingDirectory { configuration["staging_directory"] = updateStagingDirectory }
+            if let updateBaseArchive {
+                guard updateStagingDirectory != nil else { throw Usage.invalid }
+                configuration["base_archive"] = updateBaseArchive
+            }
             nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(configuration: configuration))
         }
     }
@@ -180,6 +188,7 @@ struct Options {
         } catch Options.Usage.invalid {
             FileHandle.standardError.write(Data("Development metadata checks: explicit --live --history-root ABSOLUTE_PATH --settings-file ABSOLUTE_PATH --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (check only; no health launch or media open).\n".utf8))
             FileHandle.standardError.write(Data("Optional --native-update-staging-directory ABSOLUTE_PATH enables explicit temporary download/verification in an existing scratch directory, never installation.\n".utf8))
+            FileHandle.standardError.write(Data("Optional --native-update-base-archive ABSOLUTE_PATH enables authenticated delta acquisition with full fallback; requires staging.\n".utf8))
             FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--settings-file PATH] [--native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|sharing|region|window|update|idle] [--update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date] [--update-tray top|bottom|none] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
             exit(1)
         } catch {

@@ -139,6 +139,17 @@ final class UpdateChecksTests: XCTestCase {
         let staged = try Options(base + flags + ["--native-update-staging-directory", directory.path])
         defer { staged.nativeUpdateChecks?.shutdown {} }
         XCTAssertNotNil(staged.nativeUpdateChecks)
+        let retained = directory.appendingPathComponent("unread-missing-base").path
+        let deltaFlags = ["--native-update-staging-directory", directory.path,
+                          "--native-update-base-archive", retained]
+        let delta = try Options(base + flags + deltaFlags)
+        defer { delta.nativeUpdateChecks?.shutdown {} }
+        XCTAssertNotNil(delta.nativeUpdateChecks)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: retained))
+        XCTAssertThrowsError(try Options(base + flags + ["--native-update-base-archive", retained]))
+        XCTAssertThrowsError(try Options(base + flags + ["--native-update-staging-directory", directory.path,
+            "--native-update-base-archive", "relative"]))
+        XCTAssertThrowsError(try Options(base + flags + deltaFlags + ["--native-update-base-archive", retained]))
         for path in ["relative", directory.appendingPathComponent("missing").path, key.path] {
             XCTAssertThrowsError(try Options(base + flags + ["--native-update-staging-directory", path]))
         }

@@ -11,6 +11,7 @@
 //! data, registers it or activates a channel.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
 pub mod checks;
+mod delta;
 mod health;
 mod installation;
 mod staging;
@@ -21,7 +22,7 @@ pub use staging::StagedUpdate;
 use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -153,6 +154,7 @@ struct Artifact {
     url: String,
     size: u64,
     sha256: String,
+    delta: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -174,6 +176,7 @@ pub struct UpdateClient {
     target: Target,
     current_version: Version,
     loopback: bool,
+    base_archive: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for UpdateClient {
@@ -192,6 +195,8 @@ pub struct PendingUpdate {
     info: ReleaseInfo,
     url: Url,
     hash: [u8; 32],
+    delta: Option<delta::Candidate>,
+    base_archive: Option<PathBuf>,
 }
 
 /// Verified bytes, not an installed update. Dropping removes the private file.
@@ -246,7 +251,19 @@ impl UpdateClient {
             target,
             current_version,
             loopback,
+            base_archive: None,
         })
+    }
+
+    /// An explicit retained archive, never an installed package/profile discovered
+    /// by the updater. Construction performs no file access. Missing, changed or
+    /// incompatible bytes fall back to the authenticated full download.
+    pub fn with_base_archive(mut self, path: PathBuf) -> Result<Self, Error> {
+        if !path.is_absolute() {
+            return Err(Error::Configuration("delta base archive must be absolute"));
+        }
+        self.base_archive = Some(path);
+        Ok(self)
     }
 
     pub fn check(&self, cancel: &CancelToken) -> Result<Option<PendingUpdate>, Error> {
@@ -273,7 +290,7 @@ impl UpdateClient {
             .verify(bytes, &signature, false)
             .map_err(|_| Error::Signature)?;
         let manifest: Manifest = serde_json::from_slice(bytes).map_err(|_| Error::Manifest)?;
-        if manifest.schema != 1 {
+        if !matches!(manifest.schema, 1 | 2) {
             return Err(Error::Schema);
         }
         if manifest.identity != DEVELOPMENT_IDENTITY {
@@ -297,6 +314,21 @@ impl UpdateClient {
         if version.cmp_precedence(&self.current_version).is_le() {
             return Ok(None);
         }
+        // Schema 1 remains full-only. Unsupported/incompatible delta descriptors do
+        // not remove the independently authenticated full-artifact capability.
+        let delta = (manifest.schema == 2)
+            .then(|| {
+                artifact.delta.as_ref().and_then(|description| {
+                    delta::Candidate::new(
+                        description,
+                        &self.current_version,
+                        artifact.size,
+                        self.loopback,
+                    )
+                    .ok()
+                })
+            })
+            .flatten();
         Ok(Some(PendingUpdate {
             client: self.download.clone(),
             info: ReleaseInfo {
@@ -308,6 +340,8 @@ impl UpdateClient {
             },
             url,
             hash,
+            delta,
+            base_archive: self.base_archive.clone(),
         }))
     }
 }
@@ -324,8 +358,18 @@ impl PendingUpdate {
         &self,
         directory: &Path,
         cancel: &CancelToken,
-        progress: impl FnMut(u64, u64),
+        mut progress: impl FnMut(u64, u64),
     ) -> Result<VerifiedUpdate, Error> {
+        check_cancel(cancel)?;
+        if let (Some(delta), Some(base)) = (&self.delta, &self.base_archive) {
+            match delta.download(self, base, directory, cancel, &mut progress) {
+                Ok(verified) => return Ok(verified),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(_) => check_cancel(cancel)?,
+            }
+        }
+        // Also resets byte progress and total after an unsuccessful patch.
+        progress(0, self.info.size);
         check_cancel(cancel)?;
         let response = self
             .client
@@ -594,7 +638,7 @@ mod tests {
         for (field, replacement) in [
             ("identity", json!("es.captur.app")),
             ("renderer", json!("appkit")),
-            ("schema", json!(2)),
+            ("schema", json!(3)),
             ("version", json!("not a version")),
         ] {
             let mut value = manifest("https://example.invalid/native.tar");

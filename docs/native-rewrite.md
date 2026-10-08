@@ -2143,6 +2143,61 @@ input. AppKit has XCTest coverage and compiles in macOS CI only. macOS, Windows
 and Wayland presentation, placement at a real tray icon, focus and accessibility
 are unverified. The Notices/updates gate stays open.
 
+### Incremental native acquisition: connected, distribution acceptance open
+
+Shared `captures_app::updater` accepts signed schema-2 BSDIFF40 descriptors alongside
+the complete artifact. They bind exact base version/size/SHA-256, patch URL/size/hash,
+and the existing complete target/renderer/platform/version. A supplied absolute
+retained archive is opt-in, never an installed package/profile discovered by the
+updater. Both hosts expose `--native-update-base-archive` with explicit staging;
+the diagnostic and stopped-development helper expose `--base-archive`.
+
+The small MIT `qbsdiff` codec handles BSDIFF40, not updater orchestration. The updater
+owns a hashed base snapshot, verifies the patch, prevalidates signed header/control
+bounds, reconstructs through a bounded cancellable writer, then verifies the entire
+target. Normal staging rehash/package validation and replacement/health/rollback
+are unchanged. Absent, unparseable, incompatible, corrupt or wrong bases/patches and
+patches no smaller than full use the signed full artifact. Signature failure never
+fetches an artifact; cancellation never falls back. Schema 1 stays full-only. Download byte
+totals reflect patch vs full, including reset on fallback and accessible percentages.
+
+Tests exercise asymmetric reconstruction, initial source seeks, header/control
+overflow and zero-output inflation, wrong/missing/nonregular base, descriptor
+compatibility/size boundaries, tampering, complete-target mismatch, authenticated
+fallback, cancellation and owned cleanup. Real-packager ZIP/tar fixtures stage all
+four target layouts; host replacement/recovery preserves the previous executable
+and separate settings/History fixtures. These portable layouts do not verify hosts.
+The offline `native_update_patch` generator emits unsigned metadata after exact
+round-trip validation; it never overwrites, signs/publishes releases or installs.
+
+`native_delta_smoke.py` verifies actual built archives using fresh in-memory test
+keys and loopback only: valid patch, wrong/missing base, tampered patch, no size
+saving, legacy metadata, signature tampering and tampered full fallback. Source
+hashes and pre-existing scratch data stay unchanged; all probe-owned storage is
+removed. Optional private-X11 input exercises the real worker's patch/full progress,
+temporary verification and Ctrl+Q cleanup, not simulated install/restart.
+
+| Platform | Implementation / current verification |
+| --- | --- |
+| AppKit/macOS | Shared acquisition and FFI/host flag connected; portable ARM64/x64 ZIP reconstruction/staging tested on Linux; Swift tests, actual built-byte comparison and macOS runtime unverified |
+| Windows/wgpu | Shared acquisition and host flag connected; portable Windows ZIP reconstruction/staging tested on Linux; Windows runtime and actual built-byte comparison unverified |
+| X11/wgpu | Complete built Linux archives pass signed diagnostic/staging and real private-X11 patch/full progress, temporary verification, Ctrl+Q and cleanup; captures inspected; host replacement/recovery regression passes; physical and release-performance acceptance open |
+| Wayland/wgpu | Same Linux artifact/shared acquisition; no live Wayland incremental runtime verification in this slice; physical acceptance open |
+
+Unoptimized Rust 1.95/debug0 Linux development archives (restart-intent source →
+incremental source), including pinned FFmpeg/FFprobe 8.1.2 and source/licenses:
+base **72,593,105 bytes**, full **72,698,750 bytes**, patch **59,059,418 bytes**;
+saving **13,639,332 bytes (18.76%)**. Generation cost: **109.16 s / 545,624 KiB peak
+RSS**. Delta acquisition plus staging: **25.62 s / 144,244 KiB**; full acquisition
+plus staging: **9.63 s / 11,400 KiB** on loopback. Bandwidth savings cost local CPU,
+memory and temporary storage; these are validation builds, not a release benchmark.
+Compressed archives and small source diffs do not guarantee large patch savings.
+
+Production distribution, signing, installed-data migration, retained-base policy,
+automatic installed Settings restoration, physical/accessibility/mixed-DPI/renderer
+acceptance and Tauri cutover remain separate open gates. No production channel,
+GUI installer, installed-profile writes or shipping Tauri updater changes.
+
 ### Signed native update acquisition: backend and opt-in diagnostic only
 
 Shared `captures_app::updater` now authenticates byte-exact Minisign v1 manifests,
