@@ -6,8 +6,8 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PNG_MAXIMUM_COLOR_STEPS, composite_onto_white, encode_jpeg, encode_png_export,
-    encode_png_export_dithered, encode_webp, png_palette_colors_for_quality,
+    PNG_MAXIMUM_COLOR_STEPS, composite_onto_white, encode_jpeg, encode_png_export, encode_webp,
+    png::encode_png_quantized, png_palette_colors_for_quality,
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -197,7 +197,9 @@ pub fn encode_export(image: &RgbaImage, options: ExportOptions) -> Result<Vec<u8
                 // Dither first (matches Compress), then posterize if diffusion
                 // noise prevents an indexed image from meeting the hard cap.
                 for dither in [true, false] {
-                    let candidate = encode_png_export_dithered(image, true, Some(colors), dither)?;
+                    // Preserve already exceeds the cap, so its comparison encode
+                    // cannot win. Avoid repeating it for every palette attempt.
+                    let candidate = encode_png_quantized(image, colors, dither)?;
                     let fits = encoded_len(&candidate) <= maximum;
                     if fits {
                         best = Some(candidate);
@@ -507,6 +509,76 @@ mod tests {
             )
             .unwrap();
             assert_eq!(fingerprint(&bytes), expected, "{format:?} {quality:?}");
+        }
+    }
+
+    #[test]
+    fn png_budget_search_matches_the_original_compress_candidates_byte_for_byte() {
+        let fixtures = [
+            fixture(),
+            RgbaImage::from_fn(73, 41, |x, y| {
+                Rgba([(x * 29) as u8, (y * 31) as u8, (x * y) as u8, 255])
+            }),
+            RgbaImage::from_fn(73, 41, |x, y| {
+                Rgba([
+                    (x * 29) as u8,
+                    (y * 31) as u8,
+                    (x * y) as u8,
+                    if x < 17 { 0 } else { 255 },
+                ])
+            }),
+            RgbaImage::from_pixel(73, 41, Rgba([17, 91, 203, 128])),
+        ];
+        for image in fixtures {
+            let preserve = captures_history::encode_png(&image).unwrap();
+            // Use the unchanged public Compress encoder as the old search's
+            // oracle, including its lossless-size comparison and fallback.
+            let candidates: Vec<_> = PNG_MAXIMUM_COLOR_STEPS
+                .into_iter()
+                .flat_map(|colors| {
+                    [true, false].map(|dither| {
+                        crate::encode_png_export_dithered(&image, true, Some(colors), dither)
+                            .unwrap()
+                    })
+                })
+                .collect();
+            let smallest = candidates.iter().map(Vec::len).min().unwrap();
+            for maximum in [
+                preserve.len(),
+                preserve.len() - 1,
+                candidates[0].len(),
+                candidates[1].len(),
+                smallest,
+                smallest - 1,
+                0,
+            ] {
+                let expected = if preserve.len() <= maximum {
+                    Some(&preserve)
+                } else {
+                    candidates.iter().find(|bytes| bytes.len() <= maximum)
+                };
+                let actual = encode_export(
+                    &image,
+                    ExportOptions {
+                        format: ExportFormat::Png,
+                        quality: ExportQuality::Maximum,
+                        quality_value: 100,
+                        max_size_bytes: Some(maximum as u64),
+                        png: PngOptions::default(),
+                        size: ExportSize::Original,
+                    },
+                );
+                match actual {
+                    Ok(bytes) => assert_eq!(Some(&bytes), expected, "cap {maximum}"),
+                    Err(error) => {
+                        assert!(expected.is_none(), "cap {maximum}: {error}");
+                        assert_eq!(
+                            error,
+                            "the PNG is larger than the requested maximum even after reducing colors; reduce the output size, raise the limit, or switch to JPEG for more aggressive size control"
+                        );
+                    }
+                }
+            }
         }
     }
 
