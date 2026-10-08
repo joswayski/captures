@@ -406,11 +406,11 @@ html:not(.thumbnail-native-tracking) .thumbnail-card:hover img,
   transform: scale(1.015);
 }
 
-/* Lock the hovered look on exit so clearing hover never flashes a sharp preview. */
+/* Close/Delete lock the hovered look; Clear all holds each image as rendered. */
 .thumbnail-card[class*="thumbnail-exit-"] img {
   transition: none;
-  filter: blur(2px) brightness(0.5);
-  transform: scale(1.015);
+  filter: var(--thumbnail-clear-image-filter, blur(2px) brightness(0.5));
+  transform: var(--thumbnail-clear-image-transform, scale(1.015));
 }
 
 .thumbnail-bottom-bar {
@@ -1732,8 +1732,9 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
     flex-basis: 160px;
     height: 160px;
     margin-bottom: 0;
-    opacity: 1;
-    transform: translateX(0);
+    opacity: var(--thumbnail-clear-opacity, 1);
+    transform: var(--thumbnail-clear-transform, translateX(0));
+    filter: var(--thumbnail-clear-filter, none);
   }
   44%,
   100% {
@@ -1742,28 +1743,31 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
     margin-bottom: 0;
     opacity: 0;
     transform: translateX(var(--thumbnail-dismiss-x));
+    filter: none;
   }
 }
 
 /*
  * Stepped url() filters — SVG feGaussianBlur cannot be interpolated smoothly
- * from CSS. Start from the locked hover look so dismiss never flashes sharp.
+ * from CSS. Preserve Clear all's captured filter under every streak step so
+ * neither its stagger wait nor swapping to an SVG filter changes brightness.
+ * Single Close keeps its existing locked hover start.
  */
 @keyframes thumbnail-dismiss-streak {
   0% {
-    filter: blur(2px) brightness(0.5);
-    transform: scale(1.015);
+    filter: var(--thumbnail-clear-image-filter, blur(2px) brightness(0.5));
+    transform: var(--thumbnail-clear-image-transform, scale(1.015));
   }
   18% {
-    filter: url(#thumbnail-motion-blur-a);
+    filter: url(#thumbnail-motion-blur-a) var(--thumbnail-clear-image-filter, brightness(1));
     transform: scaleX(1.04);
   }
   48% {
-    filter: url(#thumbnail-motion-blur-b);
+    filter: url(#thumbnail-motion-blur-b) var(--thumbnail-clear-image-filter, brightness(1));
     transform: scaleX(1.09);
   }
   100% {
-    filter: url(#thumbnail-motion-blur-c);
+    filter: url(#thumbnail-motion-blur-c) var(--thumbnail-clear-image-filter, brightness(1));
     transform: scaleX(1.13);
   }
 }
@@ -1896,10 +1900,12 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
  * Slot settle is suppressed while the whole live pile is leaving. */
 .thumbnail-stack-clearing > .thumbnail-card.thumbnail-exit-dismiss {
   animation-delay: var(--thumbnail-clear-delay, 0ms);
+  animation-fill-mode: both;
 }
 
 .thumbnail-stack-clearing > .thumbnail-card.thumbnail-exit-dismiss img {
   animation-delay: var(--thumbnail-clear-delay, 0ms);
+  animation-fill-mode: both;
 }
 
 .thumbnail-stack-clearing ~ .thumbnail-overflow-cue {
@@ -2962,8 +2968,8 @@ html:has(.thumbnail-card.thumbnail-file-dragging) * {
 
   .thumbnail-card.thumbnail-exit-dismiss img {
     animation: none;
-    filter: blur(2px) brightness(0.5);
-    transform: scale(1.015);
+    filter: var(--thumbnail-clear-image-filter, blur(2px) brightness(0.5));
+    transform: var(--thumbnail-clear-image-transform, scale(1.015));
   }
 
   .thumbnail-card.thumbnail-drop-rejected,
