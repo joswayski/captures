@@ -1584,6 +1584,19 @@ describe("Thumbnail", () => {
     expect(clear.compareDocumentPosition(minimize) & Node.DOCUMENT_POSITION_FOLLOWING)
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
+    // Different presentation states catch a blanket hovered/resting snapshot.
+    const [arriving, resting] = screen.getAllByRole("article");
+    arriving!.style.opacity = "0.63";
+    arriving!.style.transform = "translateY(9px) scale(0.99)";
+    arriving!.style.filter = "blur(1.8px)";
+    arriving!.querySelector("img")!.style.filter = "blur(1.25px) brightness(0.72)";
+    arriving!.querySelector("img")!.style.transform = "scale(1.008)";
+    resting!.style.opacity = "1";
+    resting!.style.transform = "none";
+    resting!.style.filter = "none";
+    resting!.querySelector("img")!.style.filter = "blur(0px) brightness(1)";
+    resting!.querySelector("img")!.style.transform = "none";
+
     vi.useFakeTimers();
     try {
       await act(async () => {
@@ -1596,6 +1609,20 @@ describe("Thumbnail", () => {
       expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
       expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
       expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-opacity")).toBe("0.63");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-transform"))
+        .toBe("translateY(9px) scale(0.99)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-filter")).toBe("blur(1.8px)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-filter"))
+        .toBe("blur(1.25px) brightness(0.72)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-transform"))
+        .toBe("scale(1.008)");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-opacity")).toBe("1");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-transform")).toBe("none");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-filter")).toBe("none");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-image-filter"))
+        .toBe("blur(0px) brightness(1)");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-image-transform")).toBe("none");
       expect(minimize.closest(".thumbnail-stack-toolbar")).toHaveClass(
         "thumbnail-stack-toolbar-clearing",
       );
