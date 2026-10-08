@@ -3,6 +3,7 @@
   "plugins": ["eslint", "typescript", "react", "react-hooks"],
   "categories": { "correctness": "error" },
   "env": { "browser": true, "node": true },
+  "rules": { "react/rules-of-hooks": "error" },
   "overrides": [
     {
       "files": ["apps/web/src/useImageZoom.ts"],

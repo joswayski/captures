@@ -25,7 +25,7 @@ import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
 
 const screenshotEditorStyles = readFileSync(
-  resolve(process.cwd(), "ui/src/styles/editor-image.css"),
+  resolve(import.meta.dirname, "./styles/editor-image.css"),
   "utf8",
 );
 

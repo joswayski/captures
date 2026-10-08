@@ -83,10 +83,18 @@ import {
 } from "./thumbnailLayout";
 
 const thumbnailStyles = readFileSync(
-  resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
+  resolve(import.meta.dirname, "../styles/mini-preview.css"),
   "utf8",
 );
-const designTokens = readFileSync(resolve(process.cwd(), "../../shared/design.css"), "utf8");
+const designTokens = readFileSync(
+  resolve(import.meta.dirname, "../../../../../shared/design.css"),
+  "utf8",
+);
+// Selector assertions ignore line wrapping, but retain descendant whitespace.
+const unwrappedStyles = thumbnailStyles
+  .replace(/\s+/g, " ")
+  .replace(/\(\s+/g, "(")
+  .replace(/\s+\)/g, ")");
 
 function card(partial: Partial<ThumbnailStackCardMotionState>): ThumbnailStackCardMotionState {
   return {
@@ -133,12 +141,12 @@ describe("thumbnail stack layout", () => {
     const minimizeRun = thumbnailStyles.match(
       /^\.thumbnail-stack-minimizing\.thumbnail-stack-minimize-run > \.thumbnail-card\s*\{([\s\S]*?)\n\}/m,
     );
-    const hoverFan = thumbnailStyles.match(
+    const hoverFan = unwrappedStyles.match(
       /\.thumbnail-stack-minimized\.thumbnail-stack-hover-ready:not\(\.thumbnail-stack-hover-latched\):not\(\.thumbnail-stack-dragging\):not\(\.thumbnail-stack-pressing\):has\(\.thumbnail-collapsed-hit-target:hover:not\(\[data-thumbnail-hover-stale\]\)\)/,
     );
 
     const pressing = thumbnailStyles.match(
-      /\.thumbnail-stack-minimized\.thumbnail-stack-pressing > \.thumbnail-card,\s*\n\.thumbnail-stack-minimized\.thumbnail-stack-dragging:not\(\.thumbnail-stack-drag-sway\) > \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
+      /\.thumbnail-stack-minimized\.thumbnail-stack-pressing > \.thumbnail-card,\s*\n\.thumbnail-stack-minimized\.thumbnail-stack-dragging:not\(\s*\.thumbnail-stack-drag-sway\s*\)\s+> \.thumbnail-card\s*\{([\s\S]*?)\n\}/,
     );
 
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-pile-depth/);
@@ -157,21 +165,21 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack-compact:not\(\.thumbnail-stack-expanding\) > \.thumbnail-card\s*\{[^}]*bottom:\s*var\(--thumbnail-collapsed-padding, 52px\)/,
     );
     expect(thumbnailStyles).toMatch(/--thumbnail-collapsed-content-y/);
-    expect(thumbnailStyles).toMatch(/translate:\s*0 calc\(/);
+    expect(thumbnailStyles).toMatch(/translate:\s*0\s+calc\(/);
     expect(thumbnailStyles).toMatch(/html:has\(\.thumbnail-stack\)[\s\S]*?overflow:\s*hidden/);
     expect(thumbnailStyles).toMatch(
-      /\(\s*var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\+ var\(--thumbnail-stack-peek-jitter, 0px\)\s*\) \* var\(--thumbnail-stack-gravity, 1\)/,
+      /\(\s*var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\+ var\(--thumbnail-stack-peek-jitter, 0px\)\s*\) \*\s+var\(--thumbnail-stack-gravity, 1\)/,
     );
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-hover-transform/);
     expect(compactCard?.[1]).toMatch(/rotateZ\(0deg\)/);
     expect(compactCard?.[1]).toMatch(/--thumbnail-stack-expanded-transform/);
     expect(compactCard?.[1]).not.toMatch(/transform\s+var\(--stack-fan-dur\)/);
     expect(hoverReady?.[1]).toMatch(
-      /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
+      /transform\s+var\(--stack-fan-dur\)\s+calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
     expect(pressing?.[1]).toMatch(/transition:/);
     expect(pressing?.[1]).toMatch(
-      /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
+      /transform\s+var\(--stack-fan-dur\)\s+calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
     expect(pressing?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-hover-transform\)/);
     expect(pressing?.[1]).toMatch(/theme-accent-rgb/);
@@ -236,11 +244,11 @@ describe("thumbnail stack layout", () => {
     // Must tie the arrived-card animation guard, then win by source order.
     const expansion =
       ".thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)";
-    expect(thumbnailStyles.split(`${expansion} {`)[1]?.split("}")[0]).toContain(
+    expect(unwrappedStyles.split(`${expansion} {`)[1]?.split("}")[0]).toContain(
       "animation: thumbnail-card-expand 0.52s var(--ease-standard) both",
     );
-    expect(thumbnailStyles.indexOf(expansion)).toBeGreaterThan(
-      thumbnailStyles.indexOf(
+    expect(unwrappedStyles.indexOf(expansion)).toBeGreaterThan(
+      unwrappedStyles.indexOf(
         ".thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)",
       ),
     );
@@ -339,7 +347,7 @@ describe("thumbnail stack layout", () => {
     applyThumbnailStackGravity(stack, 1);
     expect(stack.style.getPropertyValue(THUMBNAIL_STACK_CENTER_PROXIMITY_VAR)).toBe("0");
     expect(thumbnailStyles).toMatch(
-      /\(\s*var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\+ var\(--thumbnail-stack-peek-jitter, 0px\)\s*\) \* var\(--thumbnail-stack-gravity, 1\)/,
+      /\(\s*var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\+ var\(--thumbnail-stack-peek-jitter, 0px\)\s*\) \*\s+var\(--thumbnail-stack-gravity, 1\)/,
     );
     expect(thumbnailStyles).not.toMatch(/--thumbnail-stack-skew-y/);
   });
@@ -449,10 +457,10 @@ describe("thumbnail stack layout", () => {
     // Close can still slide the card out with the motion-blur streak, and skip
     // drop-reject so a self-drop is not held still.
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)\s*\{\s*animation:\s*none;/,
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\s*\.thumbnail-drop-rejected\s*\)\s*\{\s*animation:\s*none;/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)\s*\{\s*animation:\s*none;/,
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\s*\.thumbnail-drop-rejected\s*\)\s*\{\s*animation:\s*none;/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-exit-dismiss\s*\{[^}]*animation:\s*thumbnail-dismiss/,
@@ -559,9 +567,9 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
     );
-    expect(thumbnailStyles).toMatch(/html:has\(\.thumbnail-card:hover\):not\(:has\(/);
+    expect(thumbnailStyles).toMatch(/html:has\(\.thumbnail-card:hover\):not\(\s*:has\(/);
     expect(thumbnailStyles).toMatch(
-      /html:has\(\.thumbnail-card:hover\):not\(:has\([\s\S]*?cursor:\s*var\(--thumbnail-grab-cursor, grab\)/,
+      /html:has\(\.thumbnail-card:hover\):not\(\s*:has\([\s\S]*?cursor:\s*var\(--thumbnail-grab-cursor, grab\)/,
     );
     expect(thumbnailStyles).toMatch(
       /html:not\(:has\(\.thumbnail-stack-dragging\)\):not\(:has\(\.thumbnail-card\.thumbnail-file-dragging\)\):has\(\s*:is\(\s*\.thumbnail-stack-toolbar/,
@@ -570,7 +578,7 @@ describe("thumbnail stack layout", () => {
       /html:not\(:has\(\.thumbnail-stack-dragging\)\):not\(:has\(\.thumbnail-card\.thumbnail-file-dragging\)\):has\([\s\S]*?\) \*\s*\{[\s\S]*?cursor:\s*pointer !important/,
     );
     expect(thumbnailStyles).toMatch(
-      /html\.thumbnail-native-tracking:not\(:has\(\.thumbnail-stack-dragging\)\) :is\(\.thumbnail-stack-toolbar/,
+      /html\.thumbnail-native-tracking:not\(:has\(\.thumbnail-stack-dragging\)\)\s+:is\(\s*\.thumbnail-stack-toolbar/,
     );
     expect(thumbnailStyles).toMatch(
       /html:has\(\.thumbnail-stack-dragging\),\s*\nhtml:has\(\.thumbnail-stack-dragging\) \*,\s*\nhtml:has\(\.thumbnail-card\.thumbnail-file-dragging\),\s*\nhtml:has\(\.thumbnail-card\.thumbnail-file-dragging\) \*\s*\{[\s\S]*?cursor:\s*-webkit-grabbing !important/,
@@ -638,14 +646,14 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar\s*\{[\s\S]*?--thumbnail-minimize-slide:\s*1/,
     );
-    expect(thumbnailStyles).toMatch(
+    expect(unwrappedStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:hover/,
     );
-    expect(thumbnailStyles).toMatch(
+    expect(unwrappedStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer/,
     );
     expect(thumbnailStyles).toMatch(/\.thumbnail-stack-toolbar\s*\{[\s\S]*?cursor:\s*pointer/);
-    expect(thumbnailStyles).toMatch(
+    expect(unwrappedStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:active/,
     );
     expect(thumbnailStyles).toMatch(
@@ -784,7 +792,7 @@ describe("thumbnail stack layout", () => {
     expect(envelope(6)).toBeLessThan(envelope(2));
     expect(Math.abs(thumbnailStackPeekJitterPx(6))).toBeLessThanOrEqual(envelope(6) + 1e-12);
     expect(thumbnailStyles).toMatch(
-      /\(\s*var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\n\s*\+ var\(--thumbnail-stack-peek-jitter, 0px\)\s*\) \* var\(--thumbnail-stack-gravity, 1\)/,
+      /\(\s*var\(--thumbnail-stack-pile-depth, 0\) \* -13px\s*\+ var\(--thumbnail-stack-peek-jitter, 0px\)\s*\) \*\s+var\(--thumbnail-stack-gravity, 1\)/,
     );
   });
 
@@ -799,7 +807,7 @@ describe("thumbnail stack layout", () => {
     expect(Math.abs(second)).toBeLessThanOrEqual(THUMBNAIL_STACK_LAYER_ROTATION_MAX_DEG);
     expect(Math.sign(first)).not.toBe(Math.sign(second));
     expect(thumbnailStyles).toMatch(
-      /var\(--thumbnail-stack-layer-rotation, 0\)\s*\n\s*\* var\(--thumbnail-stack-center-proximity, 0\)/,
+      /var\(--thumbnail-stack-layer-rotation, 0\)\s*\* var\(--thumbnail-stack-center-proximity, 0\)/,
     );
   });
 
@@ -913,13 +921,13 @@ describe("thumbnail stack layout", () => {
 
   it("keeps keyboard-focused card actions visible while hover is locked", () => {
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card:hover:not\(:focus-within\)/,
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]\s+\.thumbnail-card:hover:not\(:focus-within\)/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card\[data-thumbnail-native-active="true"\]:not\(:focus-within\)/,
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]\s+\.thumbnail-card\[data-thumbnail-native-active="true"\]:not\(:focus-within\)/,
     );
     expect(thumbnailStyles).not.toMatch(
-      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\] \.thumbnail-card:focus-within/,
+      /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]\s+\.thumbnail-card:focus-within/,
     );
     expect(thumbnailStyles).toMatch(
       /html:not\(\.thumbnail-native-tracking\) \.icon-button\.delete:hover/,
@@ -1293,10 +1301,10 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-card\.thumbnail-stack-shifting\.thumbnail-exiting\s*\{[^}]*filter:\s*none/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack:not\(\.thumbnail-stack-anchor-top\) \.thumbnail-card:not\(\.thumbnail-exiting\):has\(~ \.thumbnail-exit-delete\.thumbnail-exit-dust\)::before/,
+      /\.thumbnail-stack:not\(\.thumbnail-stack-anchor-top\)\s+\.thumbnail-card:not\(\.thumbnail-exiting\):has\(\s*~ \.thumbnail-exit-delete\.thumbnail-exit-dust\s*\)::before/,
     );
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-anchor-top \.thumbnail-exit-delete\.thumbnail-exit-dust ~ \.thumbnail-card:not\(\.thumbnail-exiting\)::before/,
+      /\.thumbnail-stack-anchor-top\s+\.thumbnail-exit-delete\.thumbnail-exit-dust\s+~ \.thumbnail-card:not\(\s*\.thumbnail-exiting\s*\)::before/,
     );
   });
 

@@ -15,7 +15,7 @@ import {
 } from "./recordingEditor";
 
 const editorVideoStyles = readFileSync(
-  resolve(process.cwd(), "ui/src/styles/editor-video.css"),
+  resolve(import.meta.dirname, "../styles/editor-video.css"),
   "utf8",
 );
 
