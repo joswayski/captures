@@ -1,5 +1,6 @@
-//! Explicit handoff to a development host using a new disposable profile.
+//! Explicit handoff to a development host using an isolated development profile.
 use super::*;
+use crate::profile_import::PreparedDevelopmentProfile;
 use std::{
     io::{Seek, SeekFrom},
     process::{Child, Command, Stdio},
@@ -53,7 +54,7 @@ impl PendingInstallation {
         timeout: Duration,
         cancel: &CancelToken,
     ) -> Result<Child, LaunchFailure> {
-        self.launch_with_sources(profile, None, timeout, cancel)
+        self.launch_with_sources(profile, None, None, timeout, cancel)
     }
 
     /// Import explicit shipping sources into a NONEXISTENT development profile,
@@ -76,15 +77,33 @@ impl PendingInstallation {
         self.launch_with_sources(
             new_profile,
             Some((source_settings_file, source_data_directory)),
+            None,
             timeout,
             cancel,
         )
+    }
+
+    /// Reuse an explicitly prepared development profile, preserving its working
+    /// settings/data. Prepare its retained snapshot BEFORE package replacement;
+    /// exclude every profile writer and app launch throughout. This never enrolls
+    /// arbitrary/installed profiles. Recheck both working and snapshot bytes
+    /// before spawning, then require the same one-shot live health acknowledgement.
+    /// Failure retains the snapshot and package transaction; package recovery
+    /// does not roll back data migrations. Logs use a fresh `startup-UUID.log`.
+    pub fn launch_existing(
+        self,
+        profile: &PreparedDevelopmentProfile,
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<Child, LaunchFailure> {
+        self.launch_with_sources(profile.root(), None, Some(profile), timeout, cancel)
     }
 
     fn launch_with_sources(
         self,
         profile: &Path,
         sources: Option<(&Path, &Path)>,
+        existing: Option<&PreparedDevelopmentProfile>,
         timeout: Duration,
         cancel: &CancelToken,
     ) -> Result<Child, LaunchFailure> {
@@ -98,7 +117,8 @@ impl PendingInstallation {
         if timeout.is_zero() || timeout > Duration::from_secs(120) {
             return Err(Error::Configuration("startup deadline must be within 120 seconds").into());
         }
-        let profile = self.launch_profile(profile, sources, cancel)?;
+        check_cancel(cancel)?;
+        let profile = self.launch_profile(profile, sources, existing, cancel)?;
         check_cancel(cancel)?;
         let channel = tempfile::Builder::new()
             .prefix(".captures-native-health-")
@@ -112,7 +132,11 @@ impl PendingInstallation {
         let log = File::options()
             .write(true)
             .create_new(true)
-            .open(profile.join("startup.log"))?;
+            .open(profile.join(if existing.is_some() {
+                format!("startup-{}.log", uuid::Uuid::new_v4())
+            } else {
+                "startup.log".into()
+            }))?;
         let mut child = Command::new(
             self.paths
                 .package
@@ -173,6 +197,7 @@ impl PendingInstallation {
         &self,
         profile: &Path,
         sources: Option<(&Path, &Path)>,
+        existing: Option<&PreparedDevelopmentProfile>,
         cancel: &CancelToken,
     ) -> Result<PathBuf, Error> {
         if !profile.is_absolute() {
@@ -202,12 +227,21 @@ impl PendingInstallation {
             &self.paths.transaction,
             &self.paths.garbage(),
         ];
-        if trees.iter().any(|tree| profile.starts_with(tree)) {
+        if trees.iter().any(|tree| {
+            profile.starts_with(tree)
+                || existing.is_some_and(|existing| {
+                    tree.starts_with(&profile)
+                        || existing.snapshot().starts_with(tree)
+                        || tree.starts_with(existing.snapshot())
+                })
+        }) {
             return Err(Error::Configuration(
                 "startup profile must be outside package trees",
             ));
         }
-        if let Some((settings, data)) = sources {
+        if let Some(existing) = existing {
+            existing.verify(cancel)?;
+        } else if let Some((settings, data)) = sources {
             for source in [settings, data] {
                 if !source.is_absolute() {
                     return Err(Error::Configuration(
@@ -227,6 +261,8 @@ impl PendingInstallation {
             crate::profile_import::import_shipping_profile(settings, data, &profile, cancel)?;
         } else if fs::read_dir(&profile)?.next().is_some() {
             return Err(Error::Configuration("startup profile must be empty"));
+        } else {
+            crate::profile_import::mark_development_profile(&profile, &profile)?;
         }
         Ok(profile)
     }

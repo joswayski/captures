@@ -313,7 +313,7 @@ Build `native_update_helper` in the shared workspace and run it **outside** the
 package. Quit every native app process first and prevent other launches until the
 handoff finishes. Supply your own signed test endpoint/key and the package **root**
 (not the executable or macOS `.app`). Create a new empty profile directory outside
-the package, transaction and cleanup trees; existing profiles are rejected.
+the package, transaction and cleanup trees for the empty-profile mode below.
 
 ```sh
 cargo build -p captures-app --bin native_update_helper
@@ -343,13 +343,74 @@ target/debug/native_update_helper \
   --all-app-processes-stopped --health-timeout-seconds 60
 ```
 
-The two profile modes are exclusive. Import uses the [offline copy contract](#explicit-offline-development-profile-import),
+The profile modes are exclusive. Import uses the [offline copy contract](#explicit-offline-development-profile-import),
 including storage limits, a byte-preserving source snapshot, export isolation and
 fresh setup for the new identity. Sources cannot overlap package/transaction/cleanup
 trees. The package operation lock remains held during import and startup.
 Completing import alone never confirms the replacement: it must pass the same
 exact-token, packaged-tools and live-root health checks as the empty-profile mode.
 An import failure leaves the replacement unconfirmed and does not launch a host.
+
+To restart with existing development settings, History and drafts, select a profile
+created by this version of the empty-profile helper or offline importer. Those
+new profiles carry a bounded `.captures-native-development-profile.json` marker
+bound to their canonical root and development identity. Arbitrary, older unmarked,
+copied/moved and installed profiles are not silently enrolled. The marker prevents
+accidental reuse; it is not authentication against a malicious same-user writer.
+Reuse also requires an existing valid `settings.json`; a new empty profile whose
+first-run host has not saved settings cannot use this mode yet.
+Stop every app/data writer and exclude launches throughout:
+
+```sh
+target/debug/native_update_helper \
+  --manifest-url "$NATIVE_TEST_MANIFEST_URL" --public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
+  --renderer wgpu --current-version 2026.10.51 \
+  --stopped-development-package "$ABSOLUTE_NATIVE_PACKAGE_ROOT" \
+  --existing-development-profile "$ABSOLUTE_ENROLLED_NATIVE_PROFILE" \
+  --all-app-processes-stopped --health-timeout-seconds 60
+```
+
+Before package activation, this mode makes a retained private sibling
+`.captures-native-pre-update-*` snapshot of byte-exact settings, History (including
+its local diagnostics), editor drafts, recording recovery and the development
+marker. External exports, OS credentials, root startup logs and previous snapshots
+are not copied. It uses the importer's 100,000-entry/64 GiB limits, bounded JSON,
+streaming hashes and link/special-file rejection. Preparation does not load/write
+settings migrations or reset setup, exports or permissions. Original and snapshot
+bytes are rechecked before activation and again before startup. Profile and snapshot
+must be disjoint from package/transaction/cleanup trees; parents must stay trusted.
+Each reuse creates `startup-UUID.log` without overwriting an old log. Success/failure
+JSON reports `profile_snapshot`; prelaunch activation errors also report the retained
+path. Snapshots survive confirmation, failure and explicit package recovery. Keep
+them for manual offline data recovery; **package rollback cannot undo a new host's
+data migration**, and the helper never automatically copies a snapshot back.
+Budget additional disk space equal to the copied data for each retained snapshot;
+repeated streaming verification can take time on large profiles.
+Preparation is not process detection or cross-platform power-loss durability.
+
+For real-host Linux/X11 verification, supply explicit built package roots with
+their packaged media tools, the shared helper/importer and `native_update_patch`'s
+Cargo **test executable** (build with `cargo test -p captures-app --bin
+native_update_patch --no-run --message-format=json`; use the test artifact's
+`executable` field). The fixture copies packages, generates an ephemeral loopback
+signing key, and creates only disposable profiles/XDG configuration:
+
+```sh
+/usr/bin/python3 apps/native/native_profile_restart_smoke.py \
+  --helper "$ABSOLUTE_NATIVE_UPDATE_HELPER" --importer "$ABSOLUTE_NATIVE_PROFILE_IMPORT" \
+  --signing-test "$ABSOLUTE_PATCH_TEST_EXECUTABLE" \
+  --base-package "$ABSOLUTE_BASE_NATIVE_PACKAGE_ROOT" \
+  --target-package "$ABSOLUTE_TARGET_NATIVE_PACKAGE_ROOT" \
+  --output "$NEW_ABSOLUTE_FIXTURE_OUTPUT"
+```
+
+It requires the existing private-X11 smoke dependencies, including Xfce's real
+SNI tray. Dark/light restored Preferences and closed intent verify signed health,
+exact pre-update bytes, preserved old logs and retained snapshots. Visible hosts
+exit through real Ctrl+Q with status zero; the closed fixture is terminated after
+verification. Draft/recovery bytes here are opaque sentinels; real editor-draft
+semantics are covered by Rust regressions. This is software-X11 development
+verification, not physical sign-in, installed updating or OS-signing acceptance.
 
 Optionally add `--restore-preferences true|false` to carry an **operator-supplied**
 Preferences visibility value through the development handoff. A private one-shot
@@ -362,8 +423,9 @@ Malformed, oversized or linked markers are retained and fail primary startup.
 
 **This is not automatic installed Settings restoration.** There is no native GUI
 successful-update shutdown boundary to snapshot visibility yet. The helper's new
-empty/imported profiles require setup, which takes priority over restoration;
-permission-recovery capture and explicit media-open routing also keep their priority.
+empty/imported profiles require setup, which takes priority over restoration.
+Existing enrolled profiles retain their setup state and can use the completed-profile
+route; permission-recovery capture and explicit media-open routing keep their priority.
 Injected markers with completed isolated profiles exercise the window routing only.
 A future GUI updater must snapshot actual Preferences visibility immediately before
 successful-update shutdown, not focus or the origin of the update click. No installed
@@ -371,9 +433,10 @@ profile, global marker or production update channel is discovered by this protoc
 
 The helper acquires/stages signed bytes, activates the replacement and launches
 the packaged executable directly. It disables system-shortcut takeover and passes
-only the new history/settings paths. AppKit and wgpu acknowledge only as the elected
-primary, after workspace initialization/render submission, a successful settings
-load and verification of the exact packaged `binaries/ffmpeg-<target>` and FFprobe.
+only the explicitly selected history/settings paths. AppKit and wgpu acknowledge
+only as the elected primary, after workspace initialization/render submission,
+a successful settings load and verification of the exact packaged
+`binaries/ffmpeg-<target>` and FFprobe.
 Readiness never substitutes PATH, environment overrides or checkout tools, and
 requests no capture permission. The private, attempt-specific file contains exactly
 one canonical lowercase UUIDv4 followed by a newline; replacing its path, partial
@@ -381,7 +444,8 @@ bytes, another token or a late response cannot confirm the update. This checks
 startup, not physical frame presentation, accessibility or capture acceptance.
 
 On success, JSON reports `confirmed` and the process ID; the new GUI stays running
-with diagnostics in the new profile's `startup.log`. The operation lock remains
+with diagnostics in `startup.log` (new profiles) or a fresh `startup-UUID.log`
+(existing profiles). The operation lock remains
 held through acknowledgement and confirmation, with root liveness/cancellation
 rechecked after rehashing immediately before committing confirmation. **Startup
 failure retains the transaction and old package; no automatic post-launch rollback.**

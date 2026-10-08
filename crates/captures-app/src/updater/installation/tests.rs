@@ -892,6 +892,161 @@ fn main() {
     }
 
     #[test]
+    fn existing_profile_waits_for_health_preserving_completed_settings_drafts_and_old_logs() {
+        let (fixture, profile) = fixture("partial");
+        fs::remove_dir(&profile).unwrap();
+        let (settings, data, _, id) = shipping_sources(&fixture);
+        crate::profile_import::import_shipping_profile(
+            &settings,
+            &data,
+            &profile,
+            &CancelToken::default(),
+        )
+        .unwrap();
+        let mut preferences = captures_settings::load(&profile.join("settings.json")).unwrap();
+        preferences.onboarding_completed = true;
+        preferences.output_directory = fixture
+            .directory
+            .path()
+            .join("external exports")
+            .to_string_lossy()
+            .into_owned();
+        captures_settings::write_atomic(&profile.join("settings.json"), &preferences).unwrap();
+        fs::create_dir(profile.join("editor-drafts")).unwrap();
+        fs::write(
+            profile.join("editor-drafts/retained.bin"),
+            b"accepted unsaved edits\0\xff",
+        )
+        .unwrap();
+        fs::write(
+            profile.join("startup.log"),
+            b"original startup log must not be truncated",
+        )
+        .unwrap();
+        let original = fs::read(profile.join("settings.json")).unwrap();
+        let pixels = fs::read(profile.join("history").join(&id).join("capture.png")).unwrap();
+        let prepared =
+            crate::profile_import::prepare_development_profile(&profile, &CancelToken::default())
+                .unwrap();
+        let snapshot = prepared.snapshot().to_owned();
+        let pending = fixture.replace();
+        let transaction = pending.paths.transaction.clone();
+        let launch = thread::spawn(move || {
+            pending.launch_existing(&prepared, Duration::from_secs(10), &CancelToken::default())
+        });
+        until(&profile.join("partial-written"));
+        assert!(!launch.is_finished(), "profile reuse is not startup health");
+        retained(&fixture, &transaction);
+        assert_eq!(fs::read(profile.join("settings.json")).unwrap(), original);
+        assert_eq!(fs::read(snapshot.join("settings.json")).unwrap(), original);
+        assert_eq!(
+            fs::read(snapshot.join("history").join(&id).join("capture.png")).unwrap(),
+            pixels
+        );
+        assert_eq!(
+            fs::read(snapshot.join("editor-drafts/retained.bin")).unwrap(),
+            b"accepted unsaved edits\0\xff"
+        );
+        fs::write(profile.join("complete"), []).unwrap();
+        let running = Running(launch.join().unwrap().unwrap(), profile.clone());
+        assert!(!transaction.exists());
+        assert_eq!(
+            fs::read(profile.join("startup.log")).unwrap(),
+            b"original startup log must not be truncated"
+        );
+        assert_eq!(
+            fs::read_dir(&profile)
+                .unwrap()
+                .filter(|entry| entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("startup-"))
+                .count(),
+            1
+        );
+        drop(running);
+        assert!(
+            snapshot.is_dir(),
+            "confirmed package cleanup must retain data snapshot"
+        );
+    }
+
+    #[test]
+    fn existing_profile_invalid_health_retains_data_snapshot_through_package_recovery() {
+        let (fixture, profile) = fixture("wrong");
+        fs::remove_dir(&profile).unwrap();
+        let (settings, data, _, _) = shipping_sources(&fixture);
+        crate::profile_import::import_shipping_profile(
+            &settings,
+            &data,
+            &profile,
+            &CancelToken::default(),
+        )
+        .unwrap();
+        let prepared =
+            crate::profile_import::prepare_development_profile(&profile, &CancelToken::default())
+                .unwrap();
+        let original = fs::read(profile.join("settings.json")).unwrap();
+        let pending = fixture.replace();
+        let transaction = pending.paths.transaction.clone();
+        let failure = pending
+            .launch_existing(&prepared, Duration::from_secs(10), &CancelToken::default())
+            .unwrap_err();
+        assert!(matches!(
+            failure.error,
+            Error::Installation("invalid startup acknowledgement")
+        ));
+        retained(&fixture, &transaction);
+        drop(Running(failure.process.unwrap(), profile.clone()));
+        // Stand in for a new host's migration. Package recovery must NOT silently
+        // overwrite user data; its exact pre-update bytes remain separately saved.
+        fs::write(profile.join("settings.json"), b"new host migration").unwrap();
+        assert!(recover_installation(&fixture.destination).unwrap());
+        fixture.old();
+        assert_eq!(
+            fs::read(profile.join("settings.json")).unwrap(),
+            b"new host migration"
+        );
+        assert_eq!(
+            fs::read(prepared.snapshot().join("settings.json")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn changed_existing_snapshot_cannot_launch_and_keeps_package_backup() {
+        let (fixture, profile) = fixture("partial");
+        fs::remove_dir(&profile).unwrap();
+        let (settings, data, _, _) = shipping_sources(&fixture);
+        crate::profile_import::import_shipping_profile(
+            &settings,
+            &data,
+            &profile,
+            &CancelToken::default(),
+        )
+        .unwrap();
+        let prepared =
+            crate::profile_import::prepare_development_profile(&profile, &CancelToken::default())
+                .unwrap();
+        fs::write(
+            prepared.snapshot().join("settings.json"),
+            b"tampered snapshot",
+        )
+        .unwrap();
+        let pending = fixture.replace();
+        let transaction = pending.paths.transaction.clone();
+        let failure = pending
+            .launch_existing(&prepared, Duration::from_secs(10), &CancelToken::default())
+            .unwrap_err();
+        assert!(matches!(failure.error, Error::ProfileImport(_)));
+        assert!(failure.process.is_none());
+        assert!(!profile.join("partial-written").exists());
+        retained(&fixture, &transaction);
+    }
+
+    #[test]
     fn imported_profile_waits_for_exact_health_and_preserves_shipping_and_snapshot_bytes() {
         let (fixture, profile) = fixture("partial");
         fs::remove_dir(&profile).unwrap();

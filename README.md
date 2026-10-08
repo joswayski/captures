@@ -506,9 +506,11 @@ checks signed native manifests, verifies downloads and can validate unpacked nat
 packages in temporary storage. It never installs or replaces an app, and no native
 update channel is enabled. An explicit [development helper](apps/native/README.md#opt-in-development-helper-and-startup-health)
 can replace a stopped development package and test startup with a new empty
-profile or an explicitly imported isolated copy, or recover a failed replacement
-after all app processes stop. It does not update installed copies or reuse their
-profiles. Its optional Preferences visibility intent is development-only; fresh
+profile, an explicitly imported isolated copy, or an existing enrolled development
+profile with a retained pre-update data snapshot. It can also recover a failed
+package replacement after all app processes stop; package recovery does not restore
+profile data. It does not update installed copies or reuse their profiles.
+Its optional Preferences visibility intent is development-only; fresh
 profiles still require setup, and automatic installed Settings restoration is not
 connected. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
 also available separately, copies explicitly selected shipping settings, retained

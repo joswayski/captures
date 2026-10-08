@@ -1,11 +1,14 @@
 //! Explicit stopped-development-package replacement, never a shipping updater.
 use std::{fs, path::PathBuf, time::Duration};
 
-use captures_app::updater::{Renderer, Target, UpdateClient, recover_installation};
+use captures_app::{
+    profile_import::{prepare_development_profile, validate_development_profile},
+    updater::{Renderer, Target, UpdateClient, recover_installation},
+};
 use captures_media::CancelToken;
 use serde_json::json;
 
-const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false] [--base-archive ABSOLUTE_PATH]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
+const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped | --existing-development-profile ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false] [--base-archive ABSOLUTE_PATH]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1)) {
@@ -46,6 +49,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let mut destination = None;
     let mut profile = None;
     let mut new_profile = None;
+    let mut existing_profile = None;
     let mut source_settings = None;
     let mut source_data = None;
     let mut stopped = false;
@@ -77,6 +81,9 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
             "--new-development-profile" if new_profile.is_none() => {
                 new_profile = Some(PathBuf::from(value))
             }
+            "--existing-development-profile" if existing_profile.is_none() => {
+                existing_profile = Some(PathBuf::from(value))
+            }
             "--source-settings-file" if source_settings.is_none() => {
                 source_settings = Some(PathBuf::from(value))
             }
@@ -102,11 +109,19 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let version = version.ok_or(USAGE)?;
     let renderer = renderer.ok_or(USAGE)?;
     let destination = destination.ok_or(USAGE)?;
-    let (profile, sources) = match (profile, new_profile, source_settings, source_data, stopped) {
-        (Some(profile), None, None, None, _) => (profile, None),
-        (None, Some(profile), Some(settings), Some(data), true) => {
-            (profile, Some((settings, data)))
+    let (profile, sources, reuse) = match (
+        profile,
+        new_profile,
+        existing_profile,
+        source_settings,
+        source_data,
+        stopped,
+    ) {
+        (Some(profile), None, None, None, None, _) => (profile, None, false),
+        (None, Some(profile), None, Some(settings), Some(data), true) => {
+            (profile, Some((settings, data)), false)
         }
+        (None, None, Some(profile), None, None, true) => (profile, None, true),
         _ => return Err(USAGE.into()),
     };
     if !destination.is_absolute() || !profile.is_absolute() {
@@ -119,7 +134,9 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         return Err("The development package must be an existing directory, not a link.".into());
     }
     let destination = fs::canonicalize(destination).map_err(|error| error.to_string())?;
-    let profile = if let Some((settings, data)) = &sources {
+    let profile = if reuse {
+        validate_development_profile(&profile).map_err(|error| error.to_string())?
+    } else if let Some((settings, data)) = &sources {
         let name = profile.file_name().ok_or(USAGE)?;
         let profile = profile
             .parent()
@@ -168,7 +185,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         }
         fs::canonicalize(profile).map_err(|error| error.to_string())?
     };
-    if profile.starts_with(&destination) {
+    if profile.starts_with(&destination) || (reuse && destination.starts_with(&profile)) {
         return Err("The test profile must stay outside the development package.".into());
     }
     let target = Target::current_host().ok_or("This native update target is not supported.")?;
@@ -193,14 +210,36 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         .and_then(|verified| verified.stage(scratch.path(), &cancel))
         .map_err(|error| error.to_string())?;
     let release = staged.info().clone();
+    // Snapshot before activation: a launched newer host can migrate working data.
+    // Package rollback alone cannot undo those writes.
+    let prepared = if reuse {
+        Some(prepare_development_profile(&profile, &cancel).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    let snapshot = prepared.as_ref().map(|profile| profile.snapshot());
+    let retained_error = |error: String| match snapshot {
+        Some(snapshot) => format!(
+            "{error} Pre-update profile snapshot retained at {}.",
+            snapshot.display()
+        ),
+        None => error,
+    };
+    if let Some(prepared) = &prepared {
+        prepared
+            .verify(&cancel)
+            .map_err(|error| retained_error(error.to_string()))?;
+    }
     let pending = staged
         .replace(&destination, &cancel)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| retained_error(error.to_string()))?;
     let pending = match restore_preferences {
         Some(visible) => pending.with_restart_preferences(visible),
         None => pending,
     };
-    let launched = if let Some((settings, data)) = &sources {
+    let launched = if let Some(prepared) = &prepared {
+        pending.launch_existing(prepared, timeout, &cancel)
+    } else if let Some((settings, data)) = &sources {
         pending.launch_importing(settings, data, &profile, timeout, &cancel)
     } else {
         pending.launch(&profile, timeout, &cancel)
@@ -210,7 +249,9 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
             println!(
                 "{}",
                 json!({"state":"confirmed","release":release,"process_id":child.id(),
-                "profile":if sources.is_some() { "new isolated imported development profile; shipping sources unchanged" }
+                "profile_snapshot":snapshot,
+                "profile":if reuse { "existing enrolled development profile; pre-update data snapshot retained" }
+                    else if sources.is_some() { "new isolated imported development profile; shipping sources unchanged" }
                     else { "new disposable test profile; no installed data imported" }})
             );
             // Dropping Child leaves the acknowledged GUI running; there is no pipe
@@ -221,10 +262,11 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
             println!(
                 "{}",
                 json!({"state":"handoff_failed","process_id":failure.process.as_ref().map(|child| child.id()),
+                "profile_snapshot":snapshot,
                 "manual_recovery":true,"recovery_requires_all_app_processes_stopped":true})
             );
             Err(format!(
-                "{} No automatic rollback was attempted. Stop every app process before explicit recovery; inspect the retained transaction and test profile startup.log if created. Published profile copies are retained.",
+                "{} No automatic rollback was attempted. Stop every app process before explicit recovery; inspect the retained transaction and profile startup*.log if created. Published profile copies/snapshots are retained; package recovery does not restore profile data.",
                 failure.error
             ))
         }
@@ -309,6 +351,28 @@ mod tests {
                 "--restore-preferences",
                 "false",
             ],
+            vec!["--existing-development-profile", "/existing"],
+            vec![
+                "--existing-development-profile",
+                "/existing",
+                "--empty-test-profile",
+                "/empty",
+                "--all-app-processes-stopped",
+            ],
+            vec![
+                "--existing-development-profile",
+                "/existing",
+                "--source-settings-file",
+                "/settings",
+                "--all-app-processes-stopped",
+            ],
+            vec![
+                "--existing-development-profile",
+                "/existing",
+                "--existing-development-profile",
+                "/other",
+                "--all-app-processes-stopped",
+            ],
             vec!["--all-app-processes-stopped", "--all-app-processes-stopped"],
         ] {
             assert!(
@@ -317,6 +381,49 @@ mod tests {
                     .contains(USAGE)
             );
         }
+    }
+
+    #[test]
+    fn existing_mode_rejects_unenrolled_profiles_before_network_or_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        let profile = root.path().join("arbitrary profile");
+        fs::create_dir(&package).unwrap();
+        fs::create_dir(&profile).unwrap();
+        fs::write(package.join("sentinel"), b"keep original package").unwrap();
+        let settings = serde_json::to_vec(&captures_settings::AppSettings::default()).unwrap();
+        fs::write(profile.join("settings.json"), &settings).unwrap();
+        let error = run([
+            "--manifest-url".into(),
+            "https://example.invalid/manifest".into(),
+            "--public-key-file".into(),
+            root.path()
+                .join("nonexistent-key")
+                .to_string_lossy()
+                .into_owned(),
+            "--current-version".into(),
+            "1.0.0".into(),
+            "--renderer".into(),
+            "wgpu".into(),
+            "--stopped-development-package".into(),
+            package.to_string_lossy().into_owned(),
+            "--existing-development-profile".into(),
+            profile.to_string_lossy().into_owned(),
+            "--all-app-processes-stopped".into(),
+        ]
+        .into_iter())
+        .unwrap_err();
+        assert!(error.contains("not enrolled"), "{error}");
+        assert_eq!(
+            fs::read(package.join("sentinel")).unwrap(),
+            b"keep original package"
+        );
+        assert_eq!(fs::read(profile.join("settings.json")).unwrap(), settings);
+        assert_eq!(
+            fs::read_dir(&profile).unwrap().count(),
+            1,
+            "must not enroll arbitrary data"
+        );
     }
 
     #[test]
