@@ -6,6 +6,7 @@
     "**/.build/**",
     "**/.output/**",
     "**/dist/**",
+    "apps/native/wgpu/vendor/**",
     "apps/web/src/routeTree.gen.ts",
     "**/public/**"
   ]
