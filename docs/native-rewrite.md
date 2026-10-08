@@ -725,6 +725,26 @@ draws the same track and thumb on its NSSliders and keeps the editable volume
 percent fields. The maximum file size field stays a plain text field on both hosts.
 Physical focus-visibility and scroller checks on macOS and Windows remain open.
 
+Custom selects now expose their popup state and options through each host's
+accessibility API. wgpu publishes expanded/collapsed comboboxes, their controlled
+listbox and active descendant, and selected/disabled listbox options with their
+descriptions instead of toggle buttons. Assistive option focus updates the same
+active index as keys; Click chooses through the existing path. Pointer opening and
+accepted choices focus the trigger, and canvas keys wait until the canvas regains
+focus. AppKit retains one AX row per option, exposing selection, enabled state,
+description, screen frame and active focus; Press calls the existing chooser.
+The popup links its custom list and announces active/value/layout changes.
+Disabling it closes the list; retained closed/replaced rows cannot act.
+
+| Platform | Custom-select accessibility implementation / verification |
+| --- | --- |
+| AppKit/macOS | AX rows and popup relationships implemented; XCTest covers all three styles, stable identity, active versus selected state, disabled/stale actions and focus retention; macOS execution and VoiceOver acceptance pending |
+| Windows | Same wgpu AccessKit implementation; all-style tree/action and editor regressions pass in the Linux orb; Narrator and physical input unverified |
+| X11 | All-style AccessKit tree/action and editor regressions pass; real input/render regression recorded in the slice PR; physical Orca acceptance open |
+| Wayland | Same wgpu AccessKit implementation; tree/action tests do not establish AT-SPI/compositor acceptance |
+
+No screen-reader or platform parity gate closes from these synthetic action tests.
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,

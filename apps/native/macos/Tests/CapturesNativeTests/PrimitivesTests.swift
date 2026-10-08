@@ -137,6 +137,82 @@ final class PrimitivesTests: XCTestCase {
         window.display()
     }
 
+    func testTokenSelectAccessibilityRowsAreStableActionableAndTrackActiveSelection() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        for style in [TokenSelectStyle.field, .glass, .inline] {
+            let frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+            let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = Surface(frame: frame)
+            window.contentView = root
+            let select = ClosurePopUpButton(frame: NSRect(x: 20, y: 20, width: 200, height: 32), pullsDown: false)
+            select.tokens = tokens; select.selectStyle = style
+            select.setAccessibilityLabel("Numbers")
+            select.addItems(withTitles: ["One", "Two", "Three"])
+            select.menu?.autoenablesItems = false
+            select.item(at: 1)?.isEnabled = false
+            select.item(at: 2)?.toolTip = "The third option"
+            root.addSubview(select)
+            defer { select.closeListbox() }
+            var changed: [Int] = []
+            select.bindChange { changed.append($0) }
+            _ = window.makeFirstResponder(select)
+            let responder = window.firstResponder
+            XCTAssertFalse(select.isAccessibilityExpanded())
+            XCTAssertTrue(select.accessibilityLinkedUIElements()?.isEmpty == true)
+            XCTAssertTrue(select.accessibilityPerformShowMenu())
+            let list = try XCTUnwrap(select.listbox)
+            XCTAssertEqual(list.accessibilityRole(), .list)
+            XCTAssertEqual(list.accessibilityLabel(), "Numbers")
+            XCTAssertTrue(select.isAccessibilityExpanded())
+            XCTAssertTrue(select.accessibilityLinkedUIElements()?.first as? NSView === list)
+            let rows = try XCTUnwrap(list.accessibilityChildren() as? [NSAccessibilityElement])
+            let repeated = try XCTUnwrap(list.accessibilityChildren() as? [NSAccessibilityElement])
+            XCTAssertEqual(rows.count, 3)
+            for index in rows.indices {
+                XCTAssertTrue(rows[index] === repeated[index], "AX rows retain their identity while open")
+                XCTAssertEqual(rows[index].accessibilityRole(), .row)
+                XCTAssertTrue(rows[index].accessibilityParent() as? NSView === list)
+                XCTAssertGreaterThan(rows[index].accessibilityFrame().width, 0)
+            }
+            XCTAssertEqual(rows.map { $0.accessibilityLabel() }, ["One", "Two", "Three"])
+            XCTAssertTrue(rows[0].isAccessibilitySelected())
+            XCTAssertFalse(rows[2].isAccessibilitySelected())
+            XCTAssertFalse(rows[1].isAccessibilityEnabled())
+            XCTAssertEqual(rows[2].accessibilityHelp(), "The third option")
+            XCTAssertTrue(list.accessibilitySelectedChildren()?.first as? NSAccessibilityElement === rows[0])
+            XCTAssertFalse(rows[1].accessibilityPerformPress())
+            rows[2].setAccessibilityFocused(true)
+            XCTAssertEqual(list.active, 2)
+            XCTAssertTrue(rows[2].isAccessibilityFocused())
+            XCTAssertTrue(select.accessibilityFocusedUIElement() as? NSAccessibilityElement === rows[2])
+            XCTAssertEqual(select.indexOfSelectedItem, 0, "assistive focus does not select")
+            XCTAssertTrue(window.firstResponder === responder, "active navigation retains keyboard focus")
+            rows[1].setAccessibilityFocused(true)
+            XCTAssertEqual(list.active, 2, "disabled rows cannot become active")
+            XCTAssertTrue(changed.isEmpty)
+            XCTAssertTrue(rows[2].accessibilityPerformPress())
+            XCTAssertEqual(changed, [2])
+            XCTAssertEqual(select.indexOfSelectedItem, 2)
+            XCTAssertFalse(select.isAccessibilityExpanded())
+            XCTAssertTrue(select.accessibilityLinkedUIElements()?.isEmpty == true)
+            XCTAssertFalse(rows[0].accessibilityPerformPress(), "closed rows cannot act")
+            XCTAssertTrue(select.accessibilityPerformShowMenu())
+            XCTAssertFalse(rows[2].accessibilityPerformPress(), "old rows cannot act on a replacement list")
+            let replacement = try XCTUnwrap(select.listbox)
+            let newRows = try XCTUnwrap(replacement.accessibilityChildren() as? [NSAccessibilityElement])
+            XCTAssertTrue(newRows[2].isAccessibilitySelected())
+            select.isEnabled = false
+            XCTAssertFalse(select.isListboxOpen, "disabling the owner closes its child panel")
+            XCTAssertFalse(select.isAccessibilityExpanded())
+            XCTAssertFalse(newRows[2].accessibilityPerformPress())
+            XCTAssertFalse(select.accessibilityPerformShowMenu())
+            XCTAssertEqual(changed, [2])
+        }
+    }
+
     func testNumberFieldStepsWithinBoundsAndNamesItsSteppers() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
