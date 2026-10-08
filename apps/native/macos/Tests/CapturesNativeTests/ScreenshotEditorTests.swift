@@ -31,8 +31,20 @@ final class ScreenshotEditorTests: XCTestCase {
                     "endX": action == "curve" ? 580.0 : 220.0, "endY": action == "curve" ? 150.0 : 140.0,
                     "controls": [], "locked": false, "visible": true, "opacity": 100.0,
                     "blendMode": "source-over", "style": ["color": "#ff3b5c", "fill": NSNull(), "strokeWidth": 8.0]]
+                // Real worker snapshots publish cached selection outlines;
+                // document JSON alone is not the host's transform-grip contract.
+                // Half the 8px stroke plus 1px selection pad extends each edge by 5px;
+                // the horizontal line retains the selection box's 1px minimum height.
+                let outline: [[String: Double]] = action == "curve" ? [
+                    ["x": 175, "y": 145], ["x": 585, "y": 145],
+                    ["x": 585, "y": 156], ["x": 175, "y": 156],
+                ] : [
+                    ["x": 95, "y": 75], ["x": 225, "y": 75],
+                    ["x": 225, "y": 145], ["x": 95, "y": 145],
+                ]
                 let original = snapshot(id: "shot", layers: [element],
-                    extra: action == "curve" ? ["curve_handles": ["front": curveHandlesValue()]] : [:])
+                    extra: ["selection_outlines": ["front": outline],
+                            "curve_handles": action == "curve" ? ["front": curveHandlesValue()] : [:]])
                 let worker = FakeEditorWorker(snapshot: original)
                 worker.deferDrawingPreviews = true
                 let controller = fittedController(worker)
@@ -8834,6 +8846,68 @@ extension ScreenshotEditorTests {
         XCTAssertFalse(moved.slider)
         XCTAssertTrue(NativeEditorCanvas.isSupportedImage(URL(fileURLWithPath: "/tmp/a.PNG")))
         XCTAssertFalse(NativeEditorCanvas.isSupportedImage(URL(fileURLWithPath: "/tmp/notes.txt")))
+    }
+
+    func testRealHeldCanvasCurvePixelsCancelWithoutDraftChangesAtBothSizes() throws {
+        _ = NSApplication.shared
+        for appearance in ["light", "dark"] {
+            let fixture = try makeHistoryFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let worker = EditorWorker()
+            let opened = expectation(description: "curve fixture")
+            worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path, artifactID: fixture.id) {
+                result in XCTAssertNotNil(try? result.get()); opened.fulfill()
+            }
+            wait(for: [opened], timeout: 5)
+            func request(_ object: [String: Any]) throws -> EditorPresentation {
+                let done = expectation(description: "curve request")
+                var response: Result<EditorPresentation, Error>?
+                worker.request(object) { result in response = result; done.fulfill() }
+                wait(for: [done], timeout: 5)
+                return try XCTUnwrap(response).get()
+            }
+            _ = try request(["operation": "resize_canvas", "width": 640, "height": 360])
+            _ = try request(["operation": "create_open_shape", "shape": "line",
+                "start": ["x": 180, "y": 150], "end": ["x": 580, "y": 150],
+                "style": ["color": "#ff3b5c", "fill": NSNull(), "strokeWidth": 8]])
+            _ = try request(["operation": "save_draft", "updated_at_ms": 6000])
+            worker.close(); EditorWorker.flush()
+            let manifest = fixture.drafts.appendingPathComponent(fixture.id).appendingPathComponent("manifest.json")
+            let before = try Data(contentsOf: manifest)
+            let live = EditorWorker()
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["\(appearance)-mustard"]!, worker: live)
+            defer { controller.window.orderOut(nil); live.close(); EditorWorker.flush() }
+            controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+            waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+            try showLayers(in: controller.root)
+            let accepted = controller.state.snapshot
+            for (width, height, label) in [(1000, 646, "normal"), (760, 540, "minimum")] {
+                controller.window.setContentSize(NSSize(width: CGFloat(width), height: CGFloat(height)))
+                controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+                controller.root.layoutSubtreeIfNeeded()
+                let overlay = controller.selectionOverlay
+                let rect = overlay.presentedImageRect, scale = rect.width / 640
+                let start = CGPoint(x: rect.minX + 380 * scale, y: rect.minY + 150 * scale)
+                let end = CGPoint(x: start.x, y: rect.minY + 230 * scale)
+                overlay.begin(at: start); overlay.drag(to: end)
+                waitUntil { overlay.pixelPreviewVisible }
+                // The midpoint between the first two controls is (330,190),
+                // independently distinguishing a curved frame from the old straight line.
+                let frame = try canvasPreviewImage(in: controller.root)
+                XCTAssertEqual(rgba(frame, x: 330, y: 190), [255, 59, 92, 255])
+                XCTAssertEqual(rgba(frame, x: 330, y: 150), [247, 247, 245, 255])
+                XCTAssertEqual(controller.state.snapshot, accepted)
+                XCTAssertEqual(try Data(contentsOf: manifest), before)
+                try render(controller.root, name: "screenshot-editor-curve-active-\(label)-\(appearance)")
+                overlay.cancelGesture()
+                XCTAssertFalse(overlay.pixelPreviewVisible)
+                let restored = try canvasPreviewImage(in: controller.root)
+                XCTAssertEqual(rgba(restored, x: 330, y: 150), [255, 59, 92, 255])
+                XCTAssertEqual(rgba(restored, x: 330, y: 190), [247, 247, 245, 255])
+                XCTAssertEqual(controller.state.snapshot, accepted)
+                XCTAssertEqual(try Data(contentsOf: manifest), before)
+            }
+        }
     }
 
     func testSelectionOverlayCurveDotsDragOnceOnReleaseAndClicksNeverEdit() throws {
