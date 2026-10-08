@@ -310,6 +310,9 @@ impl CaptureControls {
             width: overlay_width,
             height: overlay_height,
         };
+        let mode_before = self.mode;
+        // Shipping cancels the selector with one Escape even with a menu open.
+        let cancel_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
         let menu_mode = self.menu_mode();
         let mut action = match self.mode {
             TargetMode::Region => self
@@ -359,14 +362,6 @@ impl CaptureControls {
                 (clicked && view.auto_start).then(|| self.action_for_target(Target::Display))
             }
         };
-
-        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-            action = Some(Action::Cancel);
-        } else if ui.input(|input| input.key_pressed(egui::Key::Enter))
-            && let Some(target) = self.current_target()
-        {
-            action = Some(self.action_for_target(target));
-        }
 
         let in_flight = self.in_flight;
         let primary = capture_menu::primary_action(
@@ -482,6 +477,14 @@ impl CaptureControls {
                                     if response.clicked() {
                                         let same = self.mode == mode;
                                         self.mode = mode;
+                                        if mode == TargetMode::Window
+                                            && self.window.selected()
+                                                == Some(SelectionTarget::Display)
+                                        {
+                                            // Explicit Window can leave a desktop choice;
+                                            // do not flip back to Display on the next frame.
+                                            self.window.clear_selection_and_hover();
+                                        }
                                         if mode == TargetMode::Display && view.auto_start {
                                             action = Some(self.action_for_target(Target::Display));
                                         } else if same
@@ -649,6 +652,19 @@ impl CaptureControls {
             if self.mode == TargetMode::Region {
                 self.region.cancel_drag();
             }
+        }
+        if self.mode != mode_before {
+            // The surface and indicator were painted before the target click.
+            ui.ctx().request_repaint();
+        }
+        // Selects get first refusal on Return. A target click and Return may arrive in
+        // one pass; confirm the updated target, never the pre-toolbar target.
+        if cancel_pressed {
+            action = Some(Action::Cancel);
+        } else if ui.input(|input| input.key_pressed(egui::Key::Enter))
+            && let Some(target) = self.current_target()
+        {
+            action = Some(self.action_for_target(target));
         }
         if in_flight.is_some() {
             // Shipping ignores starts and switches while one is in flight;
@@ -1797,6 +1813,160 @@ mod tests {
             vec![pointer_button(position, false)],
             panel_id,
         );
+    }
+
+    #[test]
+    fn enter_after_target_toggles_confirms_only_the_selected_region() {
+        let ctx = egui::Context::default();
+        crate::motion::set_reduced(&ctx, true);
+        let panel_id = egui::Id::unique("capture-controls-target-confirm");
+        let size = egui::vec2(1000., 720.);
+        let mut controls = CaptureControls::default();
+        controls.region.exercise(
+            0,
+            Bounds {
+                width: 1000.,
+                height: 720.,
+            },
+        );
+        // exercise(0) drags (120, 90) → (520, 330), not the full display.
+        let expected = Target::Region(Rect {
+            x: 120.,
+            y: 90.,
+            width: 400.,
+            height: 240.,
+        });
+        for _ in 0..4 {
+            render(&ctx, &mut controls, size, vec![], panel_id, false, None);
+        }
+        for label in ["Full screen", "Region"] {
+            let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+            click(
+                &ctx,
+                &mut controls,
+                painted(&texts, label).unwrap().center(),
+                panel_id,
+            );
+        }
+        assert_eq!(controls.mode(), TargetMode::Region);
+        assert_eq!(
+            run_frame(
+                &ctx,
+                &mut controls,
+                size,
+                vec![key(egui::Key::Enter)],
+                panel_id
+            ),
+            Some(Action::Capture(expected)),
+        );
+        assert_eq!(controls.mode(), TargetMode::Region);
+    }
+
+    #[test]
+    fn enter_batched_with_region_click_confirms_the_new_target() {
+        let ctx = egui::Context::default();
+        crate::motion::set_reduced(&ctx, true);
+        let panel_id = egui::Id::unique("capture-controls-batched-confirm");
+        let size = egui::vec2(1000., 720.);
+        let mut controls = CaptureControls::default();
+        controls.region.exercise(
+            0,
+            Bounds {
+                width: 1000.,
+                height: 720.,
+            },
+        );
+        let expected = Target::Region(Rect {
+            x: 120.,
+            y: 90.,
+            width: 400.,
+            height: 240.,
+        });
+        controls.mode = TargetMode::Display;
+        for _ in 0..4 {
+            render(&ctx, &mut controls, size, vec![], panel_id, false, None);
+        }
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        let region = painted(&texts, "Region").unwrap().center();
+        run_frame(
+            &ctx,
+            &mut controls,
+            size,
+            vec![
+                egui::Event::PointerMoved(region),
+                pointer_button(region, true),
+            ],
+            panel_id,
+        );
+        let action = run_frame(
+            &ctx,
+            &mut controls,
+            size,
+            vec![pointer_button(region, false), key(egui::Key::Enter)],
+            panel_id,
+        );
+        assert_eq!(controls.mode(), TargetMode::Region);
+        assert_eq!(action, Some(Action::Capture(expected)));
+    }
+
+    #[test]
+    fn display_select_handles_return_without_starting_capture() {
+        let ctx = egui::Context::default();
+        crate::motion::set_reduced(&ctx, true);
+        let panel_id = egui::Id::unique("capture-controls-select-keys");
+        let size = egui::vec2(1000., 720.);
+        let mut controls = CaptureControls {
+            mode: TargetMode::Display,
+            ..Default::default()
+        };
+        for _ in 0..4 {
+            render(&ctx, &mut controls, size, vec![], panel_id, false, None);
+        }
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        let trigger = texts
+            .iter()
+            .filter(|(text, _)| text == "Fixture display")
+            .map(|(_, rect)| *rect)
+            .max_by(|a, b| a.top().total_cmp(&b.top()))
+            .unwrap();
+        click(&ctx, &mut controls, trigger.center(), panel_id);
+        assert!(egui::Popup::is_any_open(&ctx));
+        assert_eq!(
+            run_frame(
+                &ctx,
+                &mut controls,
+                size,
+                vec![key(egui::Key::Enter)],
+                panel_id
+            ),
+            None
+        );
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert_eq!(controls.in_flight(), None);
+    }
+
+    #[test]
+    fn explicit_window_target_clears_a_stale_desktop_choice() {
+        let ctx = egui::Context::default();
+        crate::motion::set_reduced(&ctx, true);
+        let panel_id = egui::Id::unique("capture-controls-desktop-to-window");
+        let size = egui::vec2(1000., 720.);
+        let mut controls = CaptureControls::default();
+        controls.window.exercise(0, |_| None);
+        controls.mode = TargetMode::Display;
+        for _ in 0..4 {
+            render(&ctx, &mut controls, size, vec![], panel_id, false, None);
+        }
+        let texts = render(&ctx, &mut controls, size, vec![], panel_id, false, None).1;
+        click(
+            &ctx,
+            &mut controls,
+            painted(&texts, "Window").unwrap().center(),
+            panel_id,
+        );
+        assert_eq!(run_frame(&ctx, &mut controls, size, vec![], panel_id), None);
+        assert_eq!(controls.mode(), TargetMode::Window);
+        assert_eq!(controls.window(), None);
     }
 
     #[test]
