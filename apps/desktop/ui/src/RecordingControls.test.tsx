@@ -104,6 +104,59 @@ describe("CustomSelect", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("keeps the selected option visible when opening and navigating a long menu", () => {
+    const scrollIntoView = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    try {
+      render(
+        <CustomSelect
+          value="18"
+          ariaLabel="Long menu"
+          options={Array.from({ length: 20 }, (_, index) => ({
+            value: String(index),
+            label: `Option ${index}`,
+            disabled: index === 19,
+          }))}
+          onChange={vi.fn()}
+        />,
+      );
+      const trigger = screen.getByRole("combobox", { name: "Long menu" });
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+      expect(scrollIntoView.mock.instances.at(-1)).toBe(
+        screen.getByRole("option", { name: "Option 18" }),
+      );
+      fireEvent.keyDown(trigger, { key: "Home" });
+      expect(scrollIntoView.mock.instances.at(-1)).toBe(
+        screen.getByRole("option", { name: "Option 0" }),
+      );
+      fireEvent.keyDown(trigger, { key: "ArrowUp" });
+      expect(scrollIntoView.mock.instances.at(-1)).toBe(
+        screen.getByRole("option", { name: "Option 18" }),
+      );
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", original);
+      else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    }
+  });
+
+  it("retains combobox focus after a pointer press and closes on Tab", () => {
+    render(<DropdownHarness />);
+    const trigger = screen.getByRole("combobox", { name: "Quality" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const option = screen.getByRole("option", { name: "Two" });
+    expect(option).toHaveAttribute("tabindex", "-1");
+    expect(fireEvent.pointerDown(option)).toBe(false);
+    expect(trigger).toHaveFocus();
+    fireEvent.keyDown(trigger, { key: "Tab" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
   it("opens above the trigger when the menu would cross the display edge", () => {
     render(<DropdownHarness />);
     const trigger = screen.getByRole("combobox", { name: "Quality" });

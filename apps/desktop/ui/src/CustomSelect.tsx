@@ -141,6 +141,11 @@ export function CustomSelect({
     };
   }, [open, options.length]);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    listboxRef.current?.children[activeIndex]?.scrollIntoView?.({ block: "nearest" });
+  }, [open, activeIndex, menuLayout.maxHeight]);
+
   const listbox = open && (
     <div
       ref={listboxRef}
@@ -169,9 +174,11 @@ export function CustomSelect({
           id={`${listboxId}-option-${index}`}
           type="button"
           role="option"
+          tabIndex={-1}
           aria-selected={option.value === value}
           disabled={option.disabled}
           className={activeIndex === index ? "active" : ""}
+          onPointerDown={(event) => event.preventDefault()}
           onPointerEnter={() => {
             if (!option.disabled) setActiveIndex(index);
           }}
@@ -224,6 +231,8 @@ export function CustomSelect({
         onKeyDown={(event) => {
           if (event.key === "Escape" && open) {
             event.preventDefault();
+            closeMenu();
+          } else if (event.key === "Tab" && open) {
             closeMenu();
           } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
