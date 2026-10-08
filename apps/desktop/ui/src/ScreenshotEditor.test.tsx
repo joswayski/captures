@@ -2,7 +2,15 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -17,7 +25,7 @@ import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
 
 const screenshotEditorStyles = readFileSync(
-  resolve(process.cwd(), "ui/src/styles/editor-image.css"),
+  resolve(import.meta.dirname, "./styles/editor-image.css"),
   "utf8",
 );
 
@@ -69,7 +77,9 @@ function setCanvasZoomPercent(percent: number) {
   return zoom;
 }
 
-function canvasZoomPercent(zoom: HTMLElement = screen.getByRole("slider", { name: "Canvas zoom" })): number {
+function canvasZoomPercent(
+  zoom: HTMLElement = screen.getByRole("slider", { name: "Canvas zoom" }),
+): number {
   const text = zoom.getAttribute("aria-valuetext") ?? "";
   const match = text.match(/([\d.]+)%/);
   if (!match) {
@@ -128,10 +138,7 @@ function installExportableCanvas(): () => void {
   } as unknown as CanvasRenderingContext2D;
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
 
-  const originalToBlob = Object.getOwnPropertyDescriptor(
-    HTMLCanvasElement.prototype,
-    "toBlob",
-  );
+  const originalToBlob = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "toBlob");
   Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
     configurable: true,
     value: (callback: BlobCallback, type?: string) => {
@@ -404,7 +411,14 @@ describe("ScreenshotEditor", () => {
     expect(screen.queryByRole("button", { name: "Rectangle (R)" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
     const shapesMenu = screen.getByRole("menu", { name: "Shapes" });
-    for (const name of ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"]) {
+    for (const name of [
+      "Rectangle (R)",
+      "Ellipse (O)",
+      "Line (L)",
+      "Triangle",
+      "Diamond (D)",
+      "Star (S)",
+    ]) {
       expect(within(shapesMenu).getByRole("menuitemradio", { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole("button", { name: /Curved arrow/ })).not.toBeInTheDocument();
@@ -441,8 +455,9 @@ describe("ScreenshotEditor", () => {
     );
     expect(screen.queryByRole("menu", { name: "Shapes" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ellipse" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Ellipse", { selector: ".screenshot-properties-heading strong" }))
-      .toBeInTheDocument();
+    expect(
+      screen.getByText("Ellipse", { selector: ".screenshot-properties-heading strong" }),
+    ).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "l" });
     expect(screen.getByRole("button", { name: "Line" })).toHaveAttribute("aria-pressed", "true");
@@ -461,9 +476,13 @@ describe("ScreenshotEditor", () => {
     fireEvent.keyDown(window, { key: "d" });
     expect(screen.getByRole("button", { name: "Diamond" })).toHaveAttribute("aria-pressed", "true");
     chooseShapeTool("Triangle");
-    expect(screen.getByRole("button", { name: "Triangle" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Triangle", { selector: ".screenshot-properties-heading strong" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Triangle" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      screen.getByText("Triangle", { selector: ".screenshot-properties-heading strong" }),
+    ).toBeInTheDocument();
   });
 
   it("previews opaque fills with an optional stroke without disabling line or arrow ink", async () => {
@@ -471,7 +490,8 @@ describe("ScreenshotEditor", () => {
     await screen.findByLabelText("Canvas width");
     chooseShapeTool("Rectangle (R)");
 
-    const preview = () => screen.getByRole("img", { name: "Stroke preview" }).querySelector("rect")!;
+    const preview = () =>
+      screen.getByRole("img", { name: "Stroke preview" }).querySelector("rect")!;
     expect(preview()).toHaveAttribute("fill", "#ff3b5c");
     expect(preview()).toHaveAttribute("stroke-width", "0");
     expect(screen.getByRole("button", { name: "Fill color: #ff3b5c" })).toHaveClass("active");
@@ -480,7 +500,9 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fill color: #2d9cff" }));
     expect(preview()).toHaveAttribute("fill", "#2d9cff");
     fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Stroke width" }), { target: { value: "14" } });
+    fireEvent.change(screen.getByRole("slider", { name: "Stroke width" }), {
+      target: { value: "14" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Stroke color: #36c96b" }));
     expect(preview()).toHaveAttribute("stroke", "#36c96b");
     expect(preview()).toHaveAttribute("fill", "#2d9cff");
@@ -498,8 +520,14 @@ describe("ScreenshotEditor", () => {
       fireEvent.keyDown(window, { key });
       expect(screen.queryByRole("checkbox", { name: "Stroke" })).not.toBeInTheDocument();
       expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("14");
-      expect(Number(screen.getByRole("img", { name: "Stroke preview" })
-        .querySelector("path")?.getAttribute("stroke-width"))).toBeGreaterThan(0);
+      expect(
+        Number(
+          screen
+            .getByRole("img", { name: "Stroke preview" })
+            .querySelector("path")
+            ?.getAttribute("stroke-width"),
+        ),
+      ).toBeGreaterThan(0);
     }
   });
 
@@ -531,7 +559,9 @@ describe("ScreenshotEditor", () => {
       await waitFor(() => expect(fills).toContainEqual({ color: "#2d9cff", opacity: 1 }));
       expect(strokes).not.toContainEqual({ color: "#ff3b5c", width: 8 });
       fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
-      fireEvent.change(screen.getByRole("slider", { name: "Stroke width" }), { target: { value: "18" } });
+      fireEvent.change(screen.getByRole("slider", { name: "Stroke width" }), {
+        target: { value: "18" },
+      });
       fireEvent.click(screen.getByRole("button", { name: "Stroke color: #111318" }));
       fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
       fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
@@ -542,19 +572,27 @@ describe("ScreenshotEditor", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
       expect(screen.queryByRole("slider", { name: "Stroke width" })).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-      fireEvent.click(within(screen.getByRole("region", { name: "Layers" }))
-        .getByRole("button", { name: /^Rectangle/ }));
+      fireEvent.click(
+        within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
+          name: /^Rectangle/,
+        }),
+      );
       expect(screen.getByRole("checkbox", { name: "Stroke" })).toBeChecked();
       expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("18");
       expect(screen.getByRole("button", { name: "Stroke color: #111318" })).toHaveClass("active");
       expect(screen.getByRole("button", { name: "Fill color: #ffffff" })).toHaveClass("active");
       fireEvent.click(screen.getByRole("button", { name: "Redo" }));
-      fireEvent.click(within(screen.getByRole("region", { name: "Layers" }))
-        .getByRole("button", { name: /^Rectangle/ }));
+      fireEvent.click(
+        within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
+          name: /^Rectangle/,
+        }),
+      );
       expect(screen.getByRole("checkbox", { name: "Stroke" })).not.toBeChecked();
       expect(screen.getByRole("slider", { name: "Opacity" })).toHaveValue("100");
       strokes.length = 0;
-      fireEvent.change(screen.getByRole("slider", { name: "Opacity" }), { target: { value: "37" } });
+      fireEvent.change(screen.getByRole("slider", { name: "Opacity" }), {
+        target: { value: "37" },
+      });
       await waitFor(() => expect(fills).toContainEqual({ color: "#ffffff", opacity: 0.37 }));
       expect(strokes).not.toContainEqual({ color: "#111318", width: 18 });
     } finally {
@@ -564,9 +602,9 @@ describe("ScreenshotEditor", () => {
 
   it("uses the crosshair cursor for every Shapes flyout drawing tool", () => {
     for (const tool of ["rectangle", "ellipse", "line", "triangle", "diamond", "star"]) {
-      expect(screenshotEditorStyles).toMatch(new RegExp(
-        `\\.screenshot-canvas\\.tool-${tool},?[\\s\\S]*?cursor: crosshair;`,
-      ));
+      expect(screenshotEditorStyles).toMatch(
+        new RegExp(`\\.screenshot-canvas\\.tool-${tool},?[\\s\\S]*?cursor: crosshair;`),
+      );
       expect(screenshotEditorStyles).toContain(
         `.screenshot-canvas-viewport:has(.screenshot-canvas.tool-${tool})`,
       );
@@ -617,9 +655,11 @@ describe("ScreenshotEditor", () => {
     expect(canvasHeight).toBeEnabled();
     expect(screen.getByRole("group", { name: "Canvas" })).toHaveTextContent("Canvas");
 
-    fireEvent.click(screen.getByRole("button", {
-      name: /Original screenshotLocked background/,
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Original screenshotLocked background/,
+      }),
+    );
 
     const layerWidth = screen.getByLabelText("Layer width");
     const layerHeight = screen.getByLabelText("Layer height");
@@ -648,7 +688,9 @@ describe("ScreenshotEditor", () => {
     expect(layerX).toBeEnabled();
     expect(layerY).toBeEnabled();
     expect(screen.getByRole("button", { name: "Increase Layer height" })).toBeEnabled();
-    expect(screen.getByText("Width and height stay proportional to the image.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Width and height stay proportional to the image."),
+    ).toBeInTheDocument();
 
     fireEvent.change(layerHeight, { target: { value: "450" } });
     expect(layerHeight).toHaveValue(450);
@@ -702,18 +744,28 @@ describe("ScreenshotEditor", () => {
 
     const layers = screen.getByRole("region", { name: "Layers" });
     // Background starts locked; unlock before delete is allowed.
-    fireEvent.click(within(layers).getByRole("button", {
-      name: "Unlock Original screenshot",
-    }));
-    fireEvent.click(screen.getByRole("button", {
-      name: /Original screenshotBackground/,
-    }));
-    fireEvent.click(within(layers).getByRole("button", {
-      name: "Layer settings for Original screenshot",
-    }));
-    fireEvent.click(within(screen.getByRole("dialog", {
-      name: "Layer settings for Original screenshot",
-    })).getByRole("button", { name: /Delete/ }));
+    fireEvent.click(
+      within(layers).getByRole("button", {
+        name: "Unlock Original screenshot",
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Original screenshotBackground/,
+      }),
+    );
+    fireEvent.click(
+      within(layers).getByRole("button", {
+        name: "Layer settings for Original screenshot",
+      }),
+    );
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", {
+          name: "Layer settings for Original screenshot",
+        }),
+      ).getByRole("button", { name: /Delete/ }),
+    );
 
     await waitFor(() => {
       expect(emit).toHaveBeenCalledWith("editor-layers-changed", {
@@ -1034,8 +1086,7 @@ describe("ScreenshotEditor", () => {
     expect(inlineEditor).toHaveFocus();
     expect(inlineEditor).not.toHaveClass("is-placeholder-selected");
     expect(inlineFrame).toBeInTheDocument();
-    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color"))
-      .toBe("#ff3b5c");
+    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color")).toBe("#ff3b5c");
     const initialWidth = Number.parseFloat(inlineFrame.style.width);
     expect(initialWidth).toBeGreaterThan(300);
     fireEvent.change(inlineEditor, {
@@ -1061,8 +1112,7 @@ describe("ScreenshotEditor", () => {
     ).toBeInTheDocument();
 
     fireEvent.blur(inlineEditor);
-    expect(screen.queryByRole("textbox", { name: "Edit text on canvas" }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Edit text on canvas" })).not.toBeInTheDocument();
     fireEvent.pointerDown(canvas, {
       button: 0,
       pointerId: 2,
@@ -1075,8 +1125,9 @@ describe("ScreenshotEditor", () => {
       clientX: 150,
       clientY: 100,
     });
-    expect(await screen.findByRole("textbox", { name: "Edit text on canvas" }))
-      .toHaveValue("Hello from the screenshot editor");
+    expect(await screen.findByRole("textbox", { name: "Edit text on canvas" })).toHaveValue(
+      "Hello from the screenshot editor",
+    );
   });
 
   it("discards a new text layer if you click away without typing", async () => {
@@ -1105,9 +1156,9 @@ describe("ScreenshotEditor", () => {
     });
     expect(inlineEditor).toHaveValue("");
     fireEvent.blur(inlineEditor);
-    expect(screen.queryByRole("textbox", { name: "Edit text on canvas" }))
-      .not.toBeInTheDocument();
-    const layerList = screen.getByRole("region", { name: "Layers" })
+    expect(screen.queryByRole("textbox", { name: "Edit text on canvas" })).not.toBeInTheDocument();
+    const layerList = screen
+      .getByRole("region", { name: "Layers" })
       .querySelector(".screenshot-layer-list")!;
     expect(layerList.children).toHaveLength(1);
   });
@@ -1147,9 +1198,7 @@ describe("ScreenshotEditor", () => {
         return { document: draftDocument, updated_at_ms: 1 };
       }
       if (command === "estimate_screenshot_export") {
-        const colors = Number(
-          (args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 128,
-        );
+        const colors = Number((args as { pngMaxColors?: number } | undefined)?.pngMaxColors ?? 128);
         return Math.max(8_000, Math.round(1_200 * colors));
       }
       const draft = draftCommandResult(String(command));
@@ -1199,13 +1248,14 @@ describe("ScreenshotEditor", () => {
       "Mono Box",
       "Rounded Box",
     ]) {
-      expect(screen.getByRole("menuitemradio", { name: style }))
-        .toBeInTheDocument();
+      expect(screen.getByRole("menuitemradio", { name: style })).toBeInTheDocument();
     }
 
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Rounded Box" }));
-    expect(screen.getByRole("button", { name: "New text style: Rounded Box" }))
-      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "New text style: Rounded Box" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
     const creationSize = Number((screen.getByLabelText("New text size") as HTMLInputElement).value);
 
     const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
@@ -1229,24 +1279,28 @@ describe("ScreenshotEditor", () => {
     expect(radius).toBeGreaterThan(6);
     expect(radius).toBeLessThan(frameHeight * 0.45);
     expect(inlineEditor).toHaveStyle({ textAlign: "center" });
-    expect(screen.getByRole("button", { name: "Text style: Rounded Box" }))
-      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Text style: Rounded Box" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Text style: Rounded Box" }));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "Text style" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Text style: Rounded Box" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Text style: Rounded Box" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Text style: Rounded Box" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Outlined" }));
-    expect(screen.getByRole("button", { name: "Text style: Outlined" }))
-      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Text style: Outlined" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
     expect(inlineEditor.style.color).toBe("transparent");
     expect(inlineEditor.style.backgroundColor).toBe("transparent");
     expect(inlineEditor.style.webkitTextStroke).toContain("#ff3b5c");
-    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color"))
-      .toBe("transparent");
+    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color")).toBe(
+      "transparent",
+    );
 
     // A named preset carries forward; manual label properties do not.
     fireEvent.change(inlineEditor, { target: { value: "Keep this label" } });
@@ -1344,7 +1398,8 @@ describe("ScreenshotEditor", () => {
     fireEvent.change(inlineEditor, { target: { value: "Copied label" } });
     fireEvent.blur(inlineEditor);
 
-    const layerList = screen.getByRole("region", { name: "Layers" })
+    const layerList = screen
+      .getByRole("region", { name: "Layers" })
       .querySelector(".screenshot-layer-list")!;
     expect(layerList.children).toHaveLength(2);
 
@@ -1409,9 +1464,7 @@ describe("ScreenshotEditor", () => {
     const layers = screen.getByRole("region", { name: "Layers" });
     const arrowLayer = within(layers).getByRole("button", { name: /ArrowShape/ });
     // Shape layers paint a live canvas thumbnail (color/geometry), not a static icon.
-    expect(
-      arrowLayer.querySelector("canvas.screenshot-layer-preview-canvas"),
-    ).toBeTruthy();
+    expect(arrowLayer.querySelector("canvas.screenshot-layer-preview-canvas")).toBeTruthy();
     fireEvent.click(arrowLayer);
     const curve = screen.getByRole("slider", { name: "Curve" });
     expect(curve).toHaveValue("0");
@@ -1554,8 +1607,10 @@ describe("ScreenshotEditor", () => {
       clientY: 200,
     });
 
-    expect(screen.getByRole("slider", { name: "Stroke width" }))
-      .toHaveAttribute("aria-valuetext", "8 px");
+    expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveAttribute(
+      "aria-valuetext",
+      "8 px",
+    );
 
     const placed: EditorShapeElement = {
       id: "placed-arrow",
@@ -1963,9 +2018,11 @@ describe("ScreenshotEditor", () => {
     expect(rename).toHaveValue("Original screenshot");
     fireEvent.change(rename, { target: { value: "Reference image" } });
     fireEvent.keyDown(rename, { key: "Enter" });
-    expect(within(layers).getByRole("button", {
-      name: /Reference imageLocked background/,
-    })).toBeInTheDocument();
+    expect(
+      within(layers).getByRole("button", {
+        name: /Reference imageLocked background/,
+      }),
+    ).toBeInTheDocument();
 
     // Lock and visibility stay as the only always-visible layer-row actions.
     const layerLock = within(layers).getByRole("button", {
@@ -1986,25 +2043,29 @@ describe("ScreenshotEditor", () => {
     const layerSettings = screen.getByRole("dialog", {
       name: "Layer settings for Reference image",
     });
-    expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" }))
-      .toHaveValue("100");
-    expect(within(layerSettings).getByRole("combobox", { name: "Blend mode" }))
-      .toHaveTextContent("Normal");
+    expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" })).toHaveValue("100");
+    expect(within(layerSettings).getByRole("combobox", { name: "Blend mode" })).toHaveTextContent(
+      "Normal",
+    );
     fireEvent.click(within(layerSettings).getByRole("combobox", { name: "Blend mode" }));
     const blendMenu = screen.getByRole("listbox", { name: "Blend mode" });
     expect(blendMenu.parentElement).toBe(document.body);
     const multiply = screen.getByRole("option", { name: "Multiply" });
     fireEvent.pointerDown(multiply);
     fireEvent.click(multiply);
-    expect(screen.getByRole("dialog", {
-      name: "Layer settings for Reference image",
-    })).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", {
+        name: "Layer settings for Reference image",
+      }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Blend mode" })).toHaveTextContent("Multiply");
     fireEvent.change(within(layerSettings).getByRole("slider", { name: "Layer opacity" }), {
       target: { value: "65" },
     });
-    expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" }))
-      .toHaveAttribute("aria-valuetext", "65%");
+    expect(within(layerSettings).getByRole("slider", { name: "Layer opacity" })).toHaveAttribute(
+      "aria-valuetext",
+      "65%",
+    );
     expect(within(layerSettings).getByRole("button", { name: "Duplicate" })).toBeEnabled();
     expect(within(layerSettings).getByRole("button", { name: "Delete" })).toBeEnabled();
     // Single-layer document: nothing to merge into, and flatten only bakes when
@@ -2014,9 +2075,10 @@ describe("ScreenshotEditor", () => {
     expect(within(layerSettings).getByRole("button", { name: "Flatten image" })).toBeEnabled();
     expect(within(layerSettings).getByRole("button", { name: "Bring to front" })).toBeDisabled();
     expect(within(layerSettings).getByRole("button", { name: "Send to back" })).toBeDisabled();
-    expect(
-      within(layers).getByRole("button", { name: "Lock Reference image" }),
-    ).toHaveAttribute("aria-pressed", "false");
+    expect(within(layers).getByRole("button", { name: "Lock Reference image" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
     expect(within(layers).getByText("Background")).toBeInTheDocument();
   });
 
@@ -2044,37 +2106,51 @@ describe("ScreenshotEditor", () => {
     const originalLayer = within(layers).getByRole("button", {
       name: /Original screenshotLocked background/,
     });
-    fireEvent.click(within(layers).getByRole("button", {
-      name: "Layer settings for Original screenshot",
-    }));
+    fireEvent.click(
+      within(layers).getByRole("button", {
+        name: "Layer settings for Original screenshot",
+      }),
+    );
     const transforms = screen.getByRole("group", {
       name: "Image transforms for Original screenshot",
     });
-    expect(within(transforms).getByRole("button", {
-      name: "Rotate image counterclockwise",
-    })).toBeEnabled();
-    expect(within(transforms).getByRole("button", {
-      name: "Rotate image clockwise",
-    })).toBeEnabled();
-    expect(within(transforms).getByRole("button", {
-      name: "Flip image horizontally",
-    })).toBeEnabled();
-    expect(within(transforms).getByRole("button", {
-      name: "Flip image vertically",
-    })).toBeEnabled();
+    expect(
+      within(transforms).getByRole("button", {
+        name: "Rotate image counterclockwise",
+      }),
+    ).toBeEnabled();
+    expect(
+      within(transforms).getByRole("button", {
+        name: "Rotate image clockwise",
+      }),
+    ).toBeEnabled();
+    expect(
+      within(transforms).getByRole("button", {
+        name: "Flip image horizontally",
+      }),
+    ).toBeEnabled();
+    expect(
+      within(transforms).getByRole("button", {
+        name: "Flip image vertically",
+      }),
+    ).toBeEnabled();
 
     const preview = originalLayer.querySelector("img")!;
-    fireEvent.click(within(transforms).getByRole("button", {
-      name: "Flip image horizontally",
-    }));
+    fireEvent.click(
+      within(transforms).getByRole("button", {
+        name: "Flip image horizontally",
+      }),
+    );
     expect(preview.style.transform).toBe("matrix(-1, 0, 0, 1, 0, 0)");
 
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(preview.style.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
 
-    fireEvent.click(within(transforms).getByRole("button", {
-      name: "Rotate image clockwise",
-    }));
+    fireEvent.click(
+      within(transforms).getByRole("button", {
+        name: "Rotate image clockwise",
+      }),
+    );
     const canvasToolbar = screen.getByRole("group", { name: "Canvas" });
     expect(within(canvasToolbar).getByLabelText("Canvas width")).toHaveValue(900);
     expect(within(canvasToolbar).getByLabelText("Canvas height")).toHaveValue(1440);
@@ -2093,8 +2169,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Wand" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Color tolerance")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Contiguous only" })).toBeChecked();
-    expect(screen.getByText("Remove a color, paint it out, or paint it back."))
-      .toBeInTheDocument();
+    expect(screen.getByText("Remove a color, paint it out, or paint it back.")).toBeInTheDocument();
     expect(screen.queryByText(/Not automatic subject cutout/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Export as PNG or WebP/i)).not.toBeInTheDocument();
 
@@ -2110,8 +2185,9 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Brush size")).toBeInTheDocument();
     expect(screen.getByText("Paint to put back what you erased.")).toBeInTheDocument();
-    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Shift rotation snap" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("New annotation color")).not.toBeInTheDocument();
   });
 
@@ -2134,8 +2210,9 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
     fireEvent.click(screen.getByRole("button", { name: "Erase" }));
     expect(originalLayer).toHaveAttribute("aria-pressed", "false");
-    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Shift rotation snap" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("New annotation color")).not.toBeInTheDocument();
 
     fireEvent.pointerDown(canvas as HTMLCanvasElement, {
@@ -2151,8 +2228,9 @@ describe("ScreenshotEditor", () => {
       pointerId: 21,
     });
     expect(originalLayer).toHaveAttribute("aria-pressed", "false");
-    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Shift rotation snap" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Crop (C)" }));
     fireEvent.pointerDown(canvas as HTMLCanvasElement, {
@@ -2168,8 +2246,9 @@ describe("ScreenshotEditor", () => {
       pointerId: 22,
     });
     expect(originalLayer).toHaveAttribute("aria-pressed", "false");
-    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Shift rotation snap" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Freehand (P)" }));
     fireEvent.pointerDown(canvas as HTMLCanvasElement, {
@@ -2189,8 +2268,9 @@ describe("ScreenshotEditor", () => {
       clientY: 120,
       pointerId: 23,
     });
-    expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Shift rotation snap" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a size-matched circular brush cursor for erase mode", async () => {
@@ -2318,8 +2398,9 @@ describe("ScreenshotEditor", () => {
       imageSmoothingQuality: "high",
     } as unknown as CanvasRenderingContext2D;
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
-    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
-      .mockReturnValue("data:image/png;base64,edited");
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+      "data:image/png;base64,edited",
+    );
 
     const imageSources: string[] = [];
     const originalImage = window.Image;
@@ -2366,8 +2447,9 @@ describe("ScreenshotEditor", () => {
           name: /Background color/,
         }),
       ).toHaveAccessibleName("Background color: transparent");
-      expect(screen.queryByRole("spinbutton", { name: "Shift rotation snap" }))
-        .not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("spinbutton", { name: "Shift rotation snap" }),
+      ).not.toBeInTheDocument();
       expect(
         within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
           name: /Original screenshotLocked background/,
@@ -2455,8 +2537,9 @@ describe("ScreenshotEditor", () => {
       imageSmoothingQuality: "high",
     } as unknown as CanvasRenderingContext2D;
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
-    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL")
-      .mockReturnValue("data:image/png;base64,edited");
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+      "data:image/png;base64,edited",
+    );
 
     const originalImage = window.Image;
     class LoadedImage {
@@ -2575,8 +2658,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(format);
     fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
     expect(format).toHaveTextContent(".jpg");
-    expect(screen.queryByText(/JPEG will fill in transparent areas/i))
-      .not.toBeInTheDocument();
+    expect(screen.queryByText(/JPEG will fill in transparent areas/i)).not.toBeInTheDocument();
     expect(
       screen.getByText(
         "Save writes a new JPEG at original quality and leaves the original untouched.",
@@ -2605,12 +2687,9 @@ describe("ScreenshotEditor", () => {
     );
     fireEvent.click(screen.getByRole("option", { name: "PNG" }));
     expect(format).toHaveTextContent(".png");
-    expect(screen.queryByText(/JPEG will fill in transparent areas/i))
-      .not.toBeInTheDocument();
+    expect(screen.queryByText(/JPEG will fill in transparent areas/i)).not.toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Save keeps original quality as PNG and overwrites the original.",
-      ),
+      screen.getByText("Save keeps original quality as PNG and overwrites the original."),
     ).toBeInTheDocument();
   });
 
@@ -2636,8 +2715,9 @@ describe("ScreenshotEditor", () => {
       .querySelector(".screenshot-canvas-surface");
     expect(surface).not.toHaveClass("transparent");
     expect(surface).toHaveStyle({ backgroundColor: "#ff3b5c" });
-    expect(within(canvasToolbar).getByRole("button", { name: /Background color/ }))
-      .toHaveAccessibleName("Background color: #ff3b5c");
+    expect(
+      within(canvasToolbar).getByRole("button", { name: /Background color/ }),
+    ).toHaveAccessibleName("Background color: #ff3b5c");
 
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => {
@@ -2736,10 +2816,7 @@ describe("ScreenshotEditor", () => {
     });
 
     // Shape tool stays active, but the new rectangle is selected for post-place edits.
-    expect(screen.getByRole("button", { name: "Shapes" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByRole("button", { name: "Shapes" })).toHaveAttribute("aria-pressed", "true");
     expect(
       within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
         name: /RectangleShape/,
@@ -2801,9 +2878,11 @@ describe("ScreenshotEditor", () => {
       clientY: handle.y,
     });
     expect(screen.getByText("Drag to rotate. Hold Shift to snap by 15°")).toBeInTheDocument();
-    expect(screen.queryByRole("group", {
-      name: "Rotation angle shortcuts",
-    })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", {
+        name: "Rotation angle shortcuts",
+      }),
+    ).not.toBeInTheDocument();
 
     const snapInput = screen.getByRole("spinbutton", { name: "Shift rotation snap" });
     expect(snapInput).toHaveValue(15);
@@ -2878,8 +2957,9 @@ describe("ScreenshotEditor", () => {
       clientX: 140,
       clientY: 95,
     });
-    const textLayer = within(screen.getByRole("region", { name: "Layers" }))
-      .getByRole("button", { name: /PinnedText/ });
+    const textLayer = within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
+      name: /PinnedText/,
+    });
     expect(textLayer).toHaveAttribute("aria-pressed", "true");
 
     // Click the checkerboard / empty padding around the canvas surface.
@@ -3055,14 +3135,19 @@ describe("ScreenshotEditor", () => {
     expect(viewport.querySelector(".screenshot-canvas-expand-particle")).toBeNull();
 
     fireEvent.pointerEnter(expand);
-    expect(viewport.querySelector(".screenshot-canvas-expand-ghost")?.classList.contains("edge-left"))
-      .toBe(true);
-    expect(viewport.querySelectorAll(".screenshot-canvas-expand-particle").length).toBeGreaterThan(0);
+    expect(
+      viewport.querySelector(".screenshot-canvas-expand-ghost")?.classList.contains("edge-left"),
+    ).toBe(true);
+    expect(viewport.querySelectorAll(".screenshot-canvas-expand-particle").length).toBeGreaterThan(
+      0,
+    );
 
     fireEvent.click(expand);
     expect(screen.queryByRole("button", { name: "Expand canvas" })).not.toBeInTheDocument();
     expect(viewport.querySelector(".screenshot-canvas-expand-overflow")).toBeNull();
-    expect(Number(screen.getByLabelText("Canvas width").getAttribute("value"))).toBeGreaterThan(1_440);
+    expect(Number(screen.getByLabelText("Canvas width").getAttribute("value"))).toBeGreaterThan(
+      1_440,
+    );
   });
 
   it("still expands when a new drawing sits fully outside the canvas", async () => {
@@ -3110,7 +3195,9 @@ describe("ScreenshotEditor", () => {
       within(screen.getByRole("region", { name: "Layers" })).getByText("Arrow"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Expand canvas" })).not.toBeInTheDocument();
-    expect(Number(screen.getByLabelText("Canvas width").getAttribute("value"))).toBeGreaterThan(1_440);
+    expect(Number(screen.getByLabelText("Canvas width").getAttribute("value"))).toBeGreaterThan(
+      1_440,
+    );
   });
 
   it("snaps image drop guides to the closest edge without a selected layer", async () => {
@@ -3221,7 +3308,9 @@ describe("ScreenshotEditor", () => {
     // 70 + 820 / 2 = 480: centered in the visible canvas viewport, not the window.
     expect(toast).toHaveStyle({ left: "480px", top: "72px" });
 
-    const guide = document.querySelector(".screenshot-drop-snap-guide.edge-stack") as HTMLElement | null;
+    const guide = document.querySelector(
+      ".screenshot-drop-snap-guide.edge-stack",
+    ) as HTMLElement | null;
     expect(guide).not.toBeNull();
     const light = guide?.querySelector(".screenshot-drop-snap-stack-light") as HTMLElement | null;
     expect(light).not.toBeNull();
@@ -3266,133 +3355,136 @@ describe("ScreenshotEditor", () => {
   it("keeps preserve quality by default and compress shows quality presets without changing format", async () => {
     const restoreCanvas = installExportableCanvas();
     try {
-    render(<ScreenshotEditor />);
-    await screen.findByLabelText("Canvas width");
-    openExportSettings();
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      openExportSettings();
 
-    const format = screen.getByRole("combobox", { name: "Format" });
-    expect(format).toHaveTextContent(".png");
-    const saveQuality = screen.getByRole("combobox", { name: "Save quality" });
-    expect(saveQuality).toHaveTextContent("Preserve quality");
-    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
-      .not.toBeInTheDocument();
-    expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
-      .not.toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Save keeps original quality as PNG and overwrites the original.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("group", { name: "Compression comparison" }))
-      .not.toBeInTheDocument();
-
-    // Compress keeps PNG and shows the same Tiny–Highest quality ladder as JPEG.
-    fireEvent.click(saveQuality);
-    const compressOption = screen.getByRole("option", { name: /Compress/ });
-    expect(compressOption).toHaveTextContent(
-      "Smaller PNG with Tiny through Highest quality presets.",
-    );
-    expect(compressOption).not.toHaveTextContent(/compresspng/i);
-    fireEvent.click(compressOption);
-
-    await waitFor(() => {
+      const format = screen.getByRole("combobox", { name: "Format" });
       expect(format).toHaveTextContent(".png");
-    });
-    const quality = screen.getByRole("combobox", { name: "Compression quality" });
-    expect(quality).toHaveTextContent("Highest");
-    expect(screen.queryByRole("slider", { name: "PNG palette colors" }))
-      .not.toBeInTheDocument();
-    expect(screen.queryByRole("spinbutton", { name: "Maximum file size" }))
-      .not.toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Save overwrites the original with compressed PNG. Turn on Save as new file to keep it.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Compare before / after" }))
-      .not.toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
+      const saveQuality = screen.getByRole("combobox", { name: "Save quality" });
+      expect(saveQuality).toHaveTextContent("Preserve quality");
+      expect(
+        screen.queryByRole("combobox", { name: "Compression quality" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("spinbutton", { name: "Maximum file size" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText("Save keeps original quality as PNG and overwrites the original."),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("group", { name: "Compression comparison" }),
+      ).not.toBeInTheDocument();
 
-    fireEvent.click(quality);
-    expect(screen.getByRole("option", { name: /Tiny/ })).toHaveTextContent(
-      "Smallest PNG with the most visible dithering.",
-    );
-    expect(screen.getByRole("option", { name: /^Highest/ })).toHaveTextContent(
-      "Same pixels, tighter packing. No color reduction.",
-    );
-    fireEvent.click(screen.getByRole("option", { name: /^Highest/ }));
-    expect(quality).toHaveTextContent("Highest");
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith(
-        "preview_screenshot_export",
-        expect.objectContaining({
-          format: "png",
-          qualityMode: "compress",
-          jpegQuality: 98,
-          pngMaxColors: null,
-        }),
+      // Compress keeps PNG and shows the same Tiny–Highest quality ladder as JPEG.
+      fireEvent.click(saveQuality);
+      const compressOption = screen.getByRole("option", { name: /Compress/ });
+      expect(compressOption).toHaveTextContent(
+        "Smaller PNG with Tiny through Highest quality presets.",
       );
-    });
-    fireEvent.click(quality);
-    fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
-    expect(quality).toHaveTextContent("Tiny");
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith(
-        "preview_screenshot_export",
-        expect.objectContaining({
-          format: "png",
-          qualityMode: "compress",
-          jpegQuality: 55,
-          pngMaxColors: 32,
-        }),
+      expect(compressOption).not.toHaveTextContent(/compresspng/i);
+      fireEvent.click(compressOption);
+
+      await waitFor(() => {
+        expect(format).toHaveTextContent(".png");
+      });
+      const quality = screen.getByRole("combobox", { name: "Compression quality" });
+      expect(quality).toHaveTextContent("Highest");
+      expect(screen.queryByRole("slider", { name: "PNG palette colors" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("spinbutton", { name: "Maximum file size" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Save overwrites the original with compressed PNG. Turn on Save as new file to keep it.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Compare before / after" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
+
+      fireEvent.click(quality);
+      expect(screen.getByRole("option", { name: /Tiny/ })).toHaveTextContent(
+        "Smallest PNG with the most visible dithering.",
       );
-    });
+      expect(screen.getByRole("option", { name: /^Highest/ })).toHaveTextContent(
+        "Same pixels, tighter packing. No color reduction.",
+      );
+      fireEvent.click(screen.getByRole("option", { name: /^Highest/ }));
+      expect(quality).toHaveTextContent("Highest");
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith(
+          "preview_screenshot_export",
+          expect.objectContaining({
+            format: "png",
+            qualityMode: "compress",
+            jpegQuality: 98,
+            pngMaxColors: null,
+          }),
+        );
+      });
+      fireEvent.click(quality);
+      fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
+      expect(quality).toHaveTextContent("Tiny");
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith(
+          "preview_screenshot_export",
+          expect.objectContaining({
+            format: "png",
+            qualityMode: "compress",
+            jpegQuality: 55,
+            pngMaxColors: 32,
+          }),
+        );
+      });
 
-    fireEvent.click(format);
-    fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
-    expect(screen.getByRole("combobox", { name: "Save quality" }))
-      .toHaveTextContent("Compress");
-    expect(screen.getByRole("combobox", { name: "Compression quality" }))
-      .toHaveTextContent("Tiny");
-    fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
-    fireEvent.click(screen.getByRole("option", { name: /Balanced/ }));
-    expect(screen.getByRole("combobox", { name: "Compression quality" }))
-      .toHaveTextContent("Balanced");
-    // Source is still a PNG path, so a JPEG save is always a new file.
-    expect(
-      screen.getByText(
-        "Save writes a compressed JPEG and leaves the original untouched.",
-      ),
-    ).toBeInTheDocument();
+      fireEvent.click(format);
+      fireEvent.click(screen.getByRole("option", { name: "JPEG" }));
+      expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent("Compress");
+      expect(screen.getByRole("combobox", { name: "Compression quality" })).toHaveTextContent(
+        "Tiny",
+      );
+      fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Balanced/ }));
+      expect(screen.getByRole("combobox", { name: "Compression quality" })).toHaveTextContent(
+        "Balanced",
+      );
+      // Source is still a PNG path, so a JPEG save is always a new file.
+      expect(
+        screen.getByText("Save writes a compressed JPEG and leaves the original untouched."),
+      ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
-    fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
 
-    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
-      .not.toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
-    expect(screen.getByRole("combobox", { name: "Screenshot file size unit" }))
-      .toHaveTextContent("MB");
-    expect(format).toHaveTextContent(".jpg");
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
+      expect(
+        screen.queryByRole("combobox", { name: "Compression quality" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toHaveValue(10);
+      expect(screen.getByRole("combobox", { name: "Screenshot file size unit" })).toHaveTextContent(
+        "MB",
+      );
+      expect(format).toHaveTextContent(".jpg");
+      expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
 
-    // Switching format keeps the quality mode; maximum works for PNG too.
-    fireEvent.click(format);
-    fireEvent.click(screen.getByRole("option", { name: "PNG" }));
-    expect(screen.getByRole("combobox", { name: "Save quality" }))
-      .toHaveTextContent("Maximum file size");
-    expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
+      // Switching format keeps the quality mode; maximum works for PNG too.
+      fireEvent.click(format);
+      fireEvent.click(screen.getByRole("option", { name: "PNG" }));
+      expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
+        "Maximum file size",
+      );
+      expect(screen.getByRole("spinbutton", { name: "Maximum file size" })).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
-    fireEvent.click(screen.getByRole("option", { name: /Preserve quality/ }));
-    expect(screen.queryByRole("group", { name: "Compression comparison" }))
-      .not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Compression quality" }))
-      .not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Preserve quality/ }));
+      expect(
+        screen.queryByRole("group", { name: "Compression comparison" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("combobox", { name: "Compression quality" }),
+      ).not.toBeInTheDocument();
     } finally {
       restoreCanvas();
     }
@@ -3428,8 +3520,9 @@ describe("ScreenshotEditor", () => {
       expect(frame).toHaveAttribute("data-pending", "true");
       expect(frame).toHaveClass("is-cover", "is-processing");
       expect(screen.getByText("After · Processing…")).toBeInTheDocument();
-      expect(screen.getByRole("status", { name: "Compression processing" }))
-        .toHaveTextContent("Processing");
+      expect(screen.getByRole("status", { name: "Compression processing" })).toHaveTextContent(
+        "Processing",
+      );
       expect(split).toBeDisabled();
       expect(split).toHaveValue("68");
 
@@ -3438,20 +3531,20 @@ describe("ScreenshotEditor", () => {
         expect(screen.getByAltText("Before compression")).toBeInTheDocument();
         expect(screen.getByAltText("After compression")).toBeInTheDocument();
       });
-      expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-        .toHaveValue("68");
+      expect(screen.getByRole("slider", { name: "Before and after comparison" })).toHaveValue("68");
       expect(frame).toHaveClass("is-cover");
 
       fireEvent.click(screen.getByRole("button", { name: "Hide compression comparison" }));
-      expect(screen.queryByRole("group", { name: "Compression comparison" }))
-        .not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("group", { name: "Compression comparison" }),
+      ).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Show before / after" }));
-      expect(screen.getByRole("group", { name: "Compression comparison" }))
-        .toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: /Export settings/ }));
-      expect(screen.queryByRole("group", { name: "Compression comparison" }))
-        .not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("group", { name: "Compression comparison" }),
+      ).not.toBeInTheDocument();
     } finally {
       restoreCanvas();
     }
@@ -3511,8 +3604,7 @@ describe("ScreenshotEditor", () => {
       });
 
       expect(screen.queryByRole("button", { name: /ArrowShape/ })).not.toBeInTheDocument();
-      expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-        .toHaveValue("25");
+      expect(screen.getByRole("slider", { name: "Before and after comparison" })).toHaveValue("25");
 
       const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
       canvas.setPointerCapture = vi.fn();
@@ -3573,9 +3665,12 @@ describe("ScreenshotEditor", () => {
       await screen.findByLabelText("Canvas width");
 
       // Original PNG at full size with preserve quality → known capture size (250 KB).
-      await waitFor(() => {
-        expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
-      }, { timeout: 2_000 });
+      await waitFor(
+        () => {
+          expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
+        },
+        { timeout: 2_000 },
+      );
       expect(screen.queryByText("−0%")).not.toBeInTheDocument();
       expect(document.querySelector(".screenshot-output-estimate-delta")).toBeNull();
       // Browser re-encode path should not run for the unedited original estimate.
@@ -3594,11 +3689,9 @@ describe("ScreenshotEditor", () => {
     expect(listbox.parentElement).toBe(document.body);
     expect(document.querySelector(".screenshot-editor")?.contains(listbox)).toBe(false);
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
-    expect(screen.getByRole("listbox", { name: "Save quality" }).parentElement)
-      .toBe(document.body);
+    expect(screen.getByRole("listbox", { name: "Save quality" }).parentElement).toBe(document.body);
     fireEvent.click(screen.getByRole("combobox", { name: "Format" }));
-    expect(screen.getByRole("listbox", { name: "Format" }).parentElement)
-      .toBe(document.body);
+    expect(screen.getByRole("listbox", { name: "Format" }).parentElement).toBe(document.body);
   });
 
   it("supports explicit custom output width and height", async () => {
@@ -3640,9 +3733,12 @@ describe("ScreenshotEditor", () => {
     try {
       render(<ScreenshotEditor />);
       await screen.findByLabelText("Canvas width");
-      await waitFor(() => {
-        expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
-      }, { timeout: 2_000 });
+      await waitFor(
+        () => {
+          expect(screen.getByText("≈ 250 KB")).toBeInTheDocument();
+        },
+        { timeout: 2_000 },
+      );
       expect(document.querySelector(".screenshot-output-estimate-delta")).toBeNull();
 
       fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
@@ -3652,27 +3748,29 @@ describe("ScreenshotEditor", () => {
       fireEvent.click(screen.getByRole("option", { name: /half the pixel width/ }));
 
       // 1440×900 → 720×450; 0.12 bytes/pixel ≈ 38.9 KB vs the 250 KB original.
-      await waitFor(() => {
-        expect(screen.getByText("≈ 38.9 KB")).toBeInTheDocument();
-        expect(screen.getByText("−84%")).toBeInTheDocument();
-      }, { timeout: 2_000 });
-      expect(screen.getByText("−84%")).toHaveClass("screenshot-output-estimate-delta", "is-smaller");
-      expect(screen.getByRole("combobox", { name: "Save quality" }))
-        .toHaveTextContent("Preserve quality");
+      await waitFor(
+        () => {
+          expect(screen.getByText("≈ 38.9 KB")).toBeInTheDocument();
+          expect(screen.getByText("−84%")).toBeInTheDocument();
+        },
+        { timeout: 2_000 },
+      );
+      expect(screen.getByText("−84%")).toHaveClass(
+        "screenshot-output-estimate-delta",
+        "is-smaller",
+      );
+      expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
+        "Preserve quality",
+      );
     } finally {
       restoreCanvas();
     }
   });
 
   it("shows an estimated export size when format and quality change", async () => {
-    const toBlob = vi.fn((
-      callback: BlobCallback,
-      type?: string,
-      quality?: number,
-    ) => {
-      const size = type === "image/jpeg"
-        ? Math.max(1, Math.round(80_000 * (quality ?? 1)))
-        : 220_000;
+    const toBlob = vi.fn((callback: BlobCallback, type?: string, quality?: number) => {
+      const size =
+        type === "image/jpeg" ? Math.max(1, Math.round(80_000 * (quality ?? 1))) : 220_000;
       const bytes = new Uint8Array(size);
       const blob = new Blob([bytes], { type: type ?? "image/png" });
       if (typeof blob.arrayBuffer !== "function") {
@@ -3698,8 +3796,8 @@ describe("ScreenshotEditor", () => {
       closePath: vi.fn(),
       setLineDash: vi.fn(),
       measureText: (text: string) => ({
-      width: Math.max(1, [...String(text ?? "")].length * 10),
-    }),
+        width: Math.max(1, [...String(text ?? "")].length * 10),
+      }),
       fillText: vi.fn(),
       strokeText: vi.fn(),
       translate: vi.fn(),
@@ -3739,10 +3837,16 @@ describe("ScreenshotEditor", () => {
       render(<ScreenshotEditor />);
       await screen.findByLabelText("Canvas width");
 
-      await waitFor(() => {
-        expect(screen.getByTitle("Estimated export file size for the current format, quality, and output size"))
-          .toHaveTextContent(/≈/);
-      }, { timeout: 2_000 });
+      await waitFor(
+        () => {
+          expect(
+            screen.getByTitle(
+              "Estimated export file size for the current format, quality, and output size",
+            ),
+          ).toHaveTextContent(/≈/);
+        },
+        { timeout: 2_000 },
+      );
 
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
@@ -3752,15 +3856,21 @@ describe("ScreenshotEditor", () => {
         expect(screen.getByRole("combobox", { name: "Compression quality" })).toBeInTheDocument();
       });
 
-      const estimate = () => screen.getByTitle(
-        "Estimated export file size for the current format, quality, and output size",
+      const estimate = () =>
+        screen.getByTitle(
+          "Estimated export file size for the current format, quality, and output size",
+        );
+      await waitFor(
+        () => {
+          expect(
+            vi
+              .mocked(invoke)
+              .mock.calls.some(([command]) => command === "estimate_screenshot_export"),
+          ).toBe(true);
+          expect(estimate()).toHaveTextContent(/≈/);
+        },
+        { timeout: 2_000 },
       );
-      await waitFor(() => {
-        expect(vi.mocked(invoke).mock.calls.some(
-          ([command]) => command === "estimate_screenshot_export",
-        )).toBe(true);
-        expect(estimate()).toHaveTextContent(/≈/);
-      }, { timeout: 2_000 });
 
       // JPEG still uses the browser quality estimate path.
       fireEvent.click(screen.getByRole("combobox", { name: "Format" }));
@@ -3770,20 +3880,26 @@ describe("ScreenshotEditor", () => {
       });
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
       fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
-      await waitFor(() => {
-        expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
-        expect(estimate()).toHaveTextContent(/≈/);
-      }, { timeout: 2_000 });
+      await waitFor(
+        () => {
+          expect(toBlob.mock.calls.some((call) => call[1] === "image/jpeg")).toBe(true);
+          expect(estimate()).toHaveTextContent(/≈/);
+        },
+        { timeout: 2_000 },
+      );
       const highEstimate = estimate().textContent;
 
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
 
-      await waitFor(() => {
-        expect(estimate()).toHaveTextContent(/≈/);
-        // Lower JPEG quality should yield a smaller estimated encode.
-        expect(estimate().textContent).not.toBe(highEstimate);
-      }, { timeout: 2_000 });
+      await waitFor(
+        () => {
+          expect(estimate()).toHaveTextContent(/≈/);
+          // Lower JPEG quality should yield a smaller estimated encode.
+          expect(estimate().textContent).not.toBe(highEstimate);
+        },
+        { timeout: 2_000 },
+      );
     } finally {
       window.Image = originalImage;
     }
@@ -3815,9 +3931,12 @@ describe("ScreenshotEditor", () => {
       if (command === "get_artifact") return compact;
       if (command === "estimate_screenshot_export" || command === "preview_screenshot_export") {
         const pngMaxColors = (args as { pngMaxColors?: number | null } | undefined)?.pngMaxColors;
-        const sizeBytes = typeof pngMaxColors === "number" && pngMaxColors > 0
-          ? (pngMaxColors <= 32 ? tinyBytes : highBytes)
-          : highestBytes;
+        const sizeBytes =
+          typeof pngMaxColors === "number" && pngMaxColors > 0
+            ? pngMaxColors <= 32
+              ? tinyBytes
+              : highBytes
+            : highestBytes;
         if (command === "estimate_screenshot_export") return sizeBytes;
         return {
           bytes: [1, 2, 3],
@@ -3839,32 +3958,45 @@ describe("ScreenshotEditor", () => {
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
 
-      const estimate = () => screen.getByTitle(
-        "Estimated export file size for the current format, quality, and output size",
-      );
+      const estimate = () =>
+        screen.getByTitle(
+          "Estimated export file size for the current format, quality, and output size",
+        );
 
       // Default compress preset is Highest. 715 KB vs the 1.1 MB Before image is −35%,
       // not +60% versus the compact 188 KB file (or a previous Tiny estimate).
-      await waitFor(() => {
-        expect(estimate()).toHaveTextContent("≈ 715 KB");
-        expect(screen.getByText("−35%")).toBeInTheDocument();
-      }, { timeout: 3_000 });
-      expect(screen.getByText("−35%")).toHaveClass("screenshot-output-estimate-delta", "is-smaller");
+      await waitFor(
+        () => {
+          expect(estimate()).toHaveTextContent("≈ 715 KB");
+          expect(screen.getByText("−35%")).toBeInTheDocument();
+        },
+        { timeout: 3_000 },
+      );
+      expect(screen.getByText("−35%")).toHaveClass(
+        "screenshot-output-estimate-delta",
+        "is-smaller",
+      );
       expect(screen.queryByText("+60%")).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
-      await waitFor(() => {
-        expect(estimate()).toHaveTextContent("≈ 188 KB");
-        expect(screen.getByText("−83%")).toBeInTheDocument();
-      }, { timeout: 3_000 });
+      await waitFor(
+        () => {
+          expect(estimate()).toHaveTextContent("≈ 188 KB");
+          expect(screen.getByText("−83%")).toBeInTheDocument();
+        },
+        { timeout: 3_000 },
+      );
 
       fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
       fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
-      await waitFor(() => {
-        expect(estimate()).toHaveTextContent("≈ 301 KB");
-        expect(screen.getByText("−73%")).toBeInTheDocument();
-      }, { timeout: 3_000 });
+      await waitFor(
+        () => {
+          expect(estimate()).toHaveTextContent("≈ 301 KB");
+          expect(screen.getByText("−73%")).toBeInTheDocument();
+        },
+        { timeout: 3_000 },
+      );
       expect(screen.queryByText("+60%")).not.toBeInTheDocument();
     } finally {
       restoreCanvas();
@@ -3881,9 +4013,8 @@ describe("ScreenshotEditor", () => {
     Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
       configurable: true,
       value: function toBlob(this: HTMLCanvasElement, callback: BlobCallback, type?: string) {
-        const size = type === "image/png"
-          ? (this.width >= 1_000 ? fullPngBytes : halfPngBytes)
-          : 64;
+        const size =
+          type === "image/png" ? (this.width >= 1_000 ? fullPngBytes : halfPngBytes) : 64;
         const bytes = new Uint8Array(size);
         const blob = new Blob([bytes], { type: type ?? "image/png" });
         if (typeof blob.arrayBuffer !== "function") {
@@ -3919,13 +4050,17 @@ describe("ScreenshotEditor", () => {
       fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
       fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
 
-      const estimate = () => screen.getByTitle(
-        "Estimated export file size for the current format, quality, and output size",
+      const estimate = () =>
+        screen.getByTitle(
+          "Estimated export file size for the current format, quality, and output size",
+        );
+      await waitFor(
+        () => {
+          expect(estimate()).toHaveTextContent("≈ 50.0 KB");
+          expect(screen.getByText("−50%")).toBeInTheDocument();
+        },
+        { timeout: 3_000 },
       );
-      await waitFor(() => {
-        expect(estimate()).toHaveTextContent("≈ 50.0 KB");
-        expect(screen.getByText("−50%")).toBeInTheDocument();
-      }, { timeout: 3_000 });
 
       failPreview = true;
       fireEvent.click(screen.getByRole("combobox", { name: "Output size" }));
@@ -3933,10 +4068,13 @@ describe("ScreenshotEditor", () => {
 
       // Half-size source is 25 KB; estimate 12.5 KB is −50% versus that canvas,
       // not −88% versus the stale full-size Before bytes.
-      await waitFor(() => {
-        expect(estimate()).toHaveTextContent("≈ 12.5 KB");
-        expect(screen.getByText("−50%")).toBeInTheDocument();
-      }, { timeout: 3_000 });
+      await waitFor(
+        () => {
+          expect(estimate()).toHaveTextContent("≈ 12.5 KB");
+          expect(screen.getByText("−50%")).toBeInTheDocument();
+        },
+        { timeout: 3_000 },
+      );
       expect(screen.queryByText("−88%")).not.toBeInTheDocument();
     } finally {
       restoreCanvas();
@@ -3961,16 +4099,13 @@ describe("ScreenshotEditor", () => {
     });
 
     render(<ScreenshotEditor />);
-    expect(await screen.findByRole("textbox", { name: "Saved filename" }))
-      .toHaveValue("Captures_2026-08-08_12-00-00_000");
-    expect(screen.getByLabelText("Save location"))
-      .toHaveTextContent("/Users/example/Captures");
+    expect(await screen.findByRole("textbox", { name: "Saved filename" })).toHaveValue(
+      "Captures_2026-08-08_12-00-00_000",
+    );
+    expect(screen.getByLabelText("Save location")).toHaveTextContent("/Users/example/Captures");
     // No permanent original yet — Save as new file is hidden until the first save.
-    expect(screen.queryByRole("checkbox", { name: "Save as new file" }))
-      .not.toBeInTheDocument();
-    expect(
-      screen.getByText("Save writes a PNG at original quality."),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Save as new file" })).not.toBeInTheDocument();
+    expect(screen.getByText("Save writes a PNG at original quality.")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
       artifactId: pathless.id,
       format: "png",
@@ -4012,8 +4147,9 @@ describe("ScreenshotEditor", () => {
     });
 
     render(<ScreenshotEditor />);
-    expect(await screen.findByRole("textbox", { name: "Saved filename" }))
-      .toHaveValue("Captures_2026-08-08_12-00-00_000");
+    expect(await screen.findByRole("textbox", { name: "Saved filename" })).toHaveValue(
+      "Captures_2026-08-08_12-00-00_000",
+    );
     expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".webp");
     expect(invoke).toHaveBeenCalledWith("default_screenshot_edit_path", {
       artifactId: pathless.id,
@@ -4056,16 +4192,13 @@ describe("ScreenshotEditor", () => {
 
     try {
       render(<ScreenshotEditor />);
-      expect(await screen.findByRole("textbox", { name: "Saved filename" }))
-        .toHaveValue("capture");
-      expect(screen.getByLabelText("Save location"))
-        .toHaveTextContent("/Users/example/Captures");
+      expect(await screen.findByRole("textbox", { name: "Saved filename" })).toHaveValue("capture");
+      expect(screen.getByLabelText("Save location")).toHaveTextContent("/Users/example/Captures");
       expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
 
       fireEvent.click(screen.getByRole("button", { name: "Change save location" }));
       await waitFor(() => {
-        expect(screen.getByLabelText("Save location"))
-          .toHaveTextContent("/Users/example/Pictures");
+        expect(screen.getByLabelText("Save location")).toHaveTextContent("/Users/example/Pictures");
       });
       expect(open).toHaveBeenCalledWith({
         directory: true,
@@ -4086,20 +4219,17 @@ describe("ScreenshotEditor", () => {
 
       await waitFor(() => {
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-        expect(invoke).toHaveBeenCalledWith(
-          "save_screenshot_edit",
-          {
-            request: expect.objectContaining({
-              artifact_id: artifact.id,
-              destination_path: "/Users/example/Pictures/edited-photo.png",
-              format: "png",
-              quality_mode: "maximum",
-              jpeg_quality: 100,
-              max_size_bytes: 10_000_000,
-              overwrite_source: false,
-            }),
-          },
-        );
+        expect(invoke).toHaveBeenCalledWith("save_screenshot_edit", {
+          request: expect.objectContaining({
+            artifact_id: artifact.id,
+            destination_path: "/Users/example/Pictures/edited-photo.png",
+            format: "png",
+            quality_mode: "maximum",
+            jpeg_quality: 100,
+            max_size_bytes: 10_000_000,
+            overwrite_source: false,
+          }),
+        });
       });
       expect(invoke).toHaveBeenCalledWith("reveal_artifact", {
         artifactId: savedArtifact.id,
@@ -4107,15 +4237,14 @@ describe("ScreenshotEditor", () => {
       // After the first copy save, the editor treats that file as the original
       // so later Save overwrites and Save as new file creates another file.
       await waitFor(() => {
-        expect(screen.getByRole("textbox", { name: "Saved filename" }))
-          .toHaveValue("edited-photo");
-        expect(screen.getByLabelText("Save location"))
-          .toHaveTextContent("/Users/example/Pictures");
+        expect(screen.getByRole("textbox", { name: "Saved filename" })).toHaveValue("edited-photo");
+        expect(screen.getByLabelText("Save location")).toHaveTextContent("/Users/example/Pictures");
         expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
       });
       fireEvent.click(screen.getByRole("checkbox", { name: "Save as new file" }));
-      expect(screen.getByRole("textbox", { name: "Saved filename" }))
-        .toHaveValue("edited-photo-edited");
+      expect(screen.getByRole("textbox", { name: "Saved filename" })).toHaveValue(
+        "edited-photo-edited",
+      );
     } finally {
       restoreCanvas();
     }
@@ -4128,13 +4257,12 @@ describe("ScreenshotEditor", () => {
     const copy = screen.getByRole("button", { name: "Copy image" });
     const save = screen.getByRole("button", { name: "Save" });
     const overwriteHint = "Save keeps original quality as PNG and overwrites the original.";
-    const newFileHint = "Save writes a new PNG at original quality and leaves the original untouched.";
+    const newFileHint =
+      "Save writes a new PNG at original quality and leaves the original untouched.";
     const hint = screen.getByText(overwriteHint);
 
-    expect(copy.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING)
-      .not.toBe(0);
-    expect(hint.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING)
-      .not.toBe(0);
+    expect(copy.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(hint.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(copy.closest(".screenshot-export-secondary")).not.toBeNull();
     expect(save.closest(".screenshot-export-actions")).not.toBeNull();
     expect(hint.closest(".screenshot-export-status")).not.toBeNull();
@@ -4143,10 +4271,7 @@ describe("ScreenshotEditor", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Save as new file" }));
     expect(screen.getByText(newFileHint)).toBeInTheDocument();
     expect(screen.queryByText(overwriteHint)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute(
-      "title",
-      newFileHint,
-    );
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("title", newFileHint);
   });
 
   it("keeps copy and save available when the original capture is deleted", async () => {
@@ -4170,9 +4295,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
     expect(
-      screen.getByText(
-        "Save keeps original quality as PNG and overwrites the original.",
-      ),
+      screen.getByText("Save keeps original quality as PNG and overwrites the original."),
     ).toBeInTheDocument();
 
     expect(artifactRemoved).not.toBeNull();
@@ -4181,19 +4304,14 @@ describe("ScreenshotEditor", () => {
     });
 
     expect(
-      screen.getByText(
-        "The original was deleted. You can still copy or save this edit.",
-      ),
+      screen.getByText("The original was deleted. You can still copy or save this edit."),
     ).toHaveClass("screenshot-export-hint");
     expect(
-      screen.queryByText(
-        "Save keeps original quality as PNG and overwrites the original.",
-      ),
+      screen.queryByText("Save keeps original quality as PNG and overwrites the original."),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy image" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    expect(screen.queryByRole("checkbox", { name: "Save as new file" }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Save as new file" })).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -4324,10 +4442,7 @@ describe("ScreenshotEditor", () => {
       });
       expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      expect(invoke).not.toHaveBeenCalledWith(
-        "save_screenshot_edit",
-        expect.anything(),
-      );
+      expect(invoke).not.toHaveBeenCalledWith("save_screenshot_edit", expect.anything());
 
       finishCopy();
       await waitFor(() => {

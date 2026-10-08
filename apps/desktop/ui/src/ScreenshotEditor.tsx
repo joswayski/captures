@@ -208,70 +208,70 @@ type CachedImage = {
 
 type EditorGesture =
   | {
-    kind: "move";
-    pointerId: number;
-    origin: EditorPoint;
-    element: ScreenshotElement;
-    wasSelected: boolean;
-    didMove: boolean;
-    initialDocument: ScreenshotDocument;
-  }
+      kind: "move";
+      pointerId: number;
+      origin: EditorPoint;
+      element: ScreenshotElement;
+      wasSelected: boolean;
+      didMove: boolean;
+      initialDocument: ScreenshotDocument;
+    }
   | {
-    kind: "resize";
-    pointerId: number;
-    handle: ResizeHandle;
-    element: ScreenshotElement;
-    initialBounds: EditorRect;
-    currentBounds: EditorRect;
-    initialDocument: ScreenshotDocument;
-  }
+      kind: "resize";
+      pointerId: number;
+      handle: ResizeHandle;
+      element: ScreenshotElement;
+      initialBounds: EditorRect;
+      currentBounds: EditorRect;
+      initialDocument: ScreenshotDocument;
+    }
   | {
-    kind: "draw";
-    pointerId: number;
-    elementId: string;
-    initialDocument: ScreenshotDocument;
-  }
+      kind: "draw";
+      pointerId: number;
+      elementId: string;
+      initialDocument: ScreenshotDocument;
+    }
   | {
-    kind: "crop";
-    pointerId: number;
-    origin: EditorPoint;
-    /** Live Shift-lock snapshot; null when Shift is not held (or a preset is set). */
-    shiftAspect: number | null;
-    /** Last canvas-clamped crop, used to freeze ratio when Shift goes down. */
-    lastRect: EditorRect | null;
-  }
+      kind: "crop";
+      pointerId: number;
+      origin: EditorPoint;
+      /** Live Shift-lock snapshot; null when Shift is not held (or a preset is set). */
+      shiftAspect: number | null;
+      /** Last canvas-clamped crop, used to freeze ratio when Shift goes down. */
+      lastRect: EditorRect | null;
+    }
   | {
-    kind: "arrow-handle";
-    pointerId: number;
-    handle: ArrowHandle;
-    element: Extract<ScreenshotElement, { kind: "shape" }>;
-    initialDocument: ScreenshotDocument;
-  }
+      kind: "arrow-handle";
+      pointerId: number;
+      handle: ArrowHandle;
+      element: Extract<ScreenshotElement, { kind: "shape" }>;
+      initialDocument: ScreenshotDocument;
+    }
   | {
-    kind: "rotate";
-    pointerId: number;
-    element: ScreenshotElement;
-    origin: EditorPoint;
-    startAngle: number;
-    initialRotation: number;
-    initialDocument: ScreenshotDocument;
-  }
+      kind: "rotate";
+      pointerId: number;
+      element: ScreenshotElement;
+      origin: EditorPoint;
+      startAngle: number;
+      initialRotation: number;
+      initialDocument: ScreenshotDocument;
+    }
   | {
-    kind: "remove-bg";
-    pointerId: number;
-    mode: "erase" | "restore";
-    elementId: string;
-    sourceBeforeEdit: string;
-    initialDocument: ScreenshotDocument;
-    workingData: ImageData;
-    workingCanvas: HTMLCanvasElement;
-    originalData: ImageData | null;
-    radius: number;
-    hardness: number;
-    lastPixel: { x: number; y: number } | null;
-    pendingPixel: { x: number; y: number } | null;
-    changed: boolean;
-  };
+      kind: "remove-bg";
+      pointerId: number;
+      mode: "erase" | "restore";
+      elementId: string;
+      sourceBeforeEdit: string;
+      initialDocument: ScreenshotDocument;
+      workingData: ImageData;
+      workingCanvas: HTMLCanvasElement;
+      originalData: ImageData | null;
+      radius: number;
+      hardness: number;
+      lastPixel: { x: number; y: number } | null;
+      pendingPixel: { x: number; y: number } | null;
+      changed: boolean;
+    };
 
 type RemoveBackgroundGesture = Extract<EditorGesture, { kind: "remove-bg" }>;
 
@@ -285,19 +285,18 @@ type PanGesture = {
 
 /** True when a keyboard event is Command (Mac) or Ctrl (Windows/Linux). */
 function isPanModifierKey(event: KeyboardEvent): boolean {
-  return event.key === "Meta"
-    || event.key === "Control"
-    || event.code === "MetaLeft"
-    || event.code === "MetaRight"
-    || event.code === "ControlLeft"
-    || event.code === "ControlRight";
+  return (
+    event.key === "Meta" ||
+    event.key === "Control" ||
+    event.code === "MetaLeft" ||
+    event.code === "MetaRight" ||
+    event.code === "ControlLeft" ||
+    event.code === "ControlRight"
+  );
 }
 
 /** Canvas is "lost" when almost none of it intersects the viewport. */
-function isCanvasMostlyOffscreen(
-  viewport: DOMRectReadOnly,
-  surface: DOMRectReadOnly,
-): boolean {
+function isCanvasMostlyOffscreen(viewport: DOMRectReadOnly, surface: DOMRectReadOnly): boolean {
   const overlapWidth = Math.max(
     0,
     Math.min(surface.right, viewport.right) - Math.max(surface.left, viewport.left),
@@ -396,12 +395,14 @@ const TEXT_STYLE_ITEMS: Array<{ preset: TextStylePreset; label: string }> = [
 ];
 
 function isGroupedShapeTool(tool: ScreenshotTool): tool is GroupedShapeTool {
-  return tool === "rectangle"
-    || tool === "ellipse"
-    || tool === "line"
-    || tool === "triangle"
-    || tool === "diamond"
-    || tool === "star";
+  return (
+    tool === "rectangle" ||
+    tool === "ellipse" ||
+    tool === "line" ||
+    tool === "triangle" ||
+    tool === "diamond" ||
+    tool === "star"
+  );
 }
 
 function isClosedShapeTool(tool: ScreenshotTool): boolean {
@@ -428,10 +429,7 @@ function toolShowsTransformChrome(tool: ScreenshotTool): boolean {
 
 /** Tools whose strokes would not appear on the frozen compressed side. */
 function isAnnotationDrawTool(tool: ScreenshotTool): boolean {
-  return tool === "text"
-    || tool === "pen"
-    || tool === "remove-bg"
-    || isShapeDrawTool(tool);
+  return tool === "text" || tool === "pen" || tool === "remove-bg" || isShapeDrawTool(tool);
 }
 
 /**
@@ -445,22 +443,15 @@ function hitTestSelectedAnnotation(
   interactionRadius: number,
   displayScale: number,
   canvas?: Pick<ScreenshotDocument, "width" | "height">,
-): (
+):
   | { kind: "resize"; handle: ResizeHandle; bounds: EditorRect }
   | { kind: "arrow-handle"; handle: ArrowHandle }
   | { kind: "rotate" }
-  | null
-) {
+  | null {
   if (selected.locked || !selected.visible) return null;
   if (
-    (!canvas || elementRotationHandleFitsCanvas(selected, displayScale, canvas))
-    && hitTestElementRotationHandle(
-      selected,
-      point,
-      interactionRadius,
-      displayScale,
-      canvas,
-    )
+    (!canvas || elementRotationHandleFitsCanvas(selected, displayScale, canvas)) &&
+    hitTestElementRotationHandle(selected, point, interactionRadius, displayScale, canvas)
   ) {
     return { kind: "rotate" };
   }
@@ -491,11 +482,7 @@ function hitTestSelectedShapeBody(
   point: EditorPoint,
   interactionRadius: number,
 ): boolean {
-  if (
-    selected.kind !== "shape"
-    || selected.locked
-    || !selected.visible
-  ) {
+  if (selected.kind !== "shape" || selected.locked || !selected.visible) {
     return false;
   }
   if (isCurveableStrokeShape(selected)) {
@@ -569,7 +556,7 @@ const SCREENSHOT_QUALITY_OPTIONS = [
     webpDescription: "Light lossy WebP. Near-original quality, a modest size cut.",
     pngDescription: "Same pixels, tighter packing. No color reduction.",
   },
-  ] as const;
+] as const;
 
 /** Keep in sync with `png_palette_colors_for_quality` in the Rust encoder. */
 function pngMaxColorsForQuality(quality: ScreenshotQuality): number | null {
@@ -619,8 +606,7 @@ const LAYER_BLEND_MODE_OPTIONS: Array<{ value: LayerBlendMode; label: string }> 
 ];
 
 function isFileTransfer(dataTransfer: DataTransfer): boolean {
-  return Array.from(dataTransfer.types).includes("Files")
-    || dataTransfer.files.length > 0;
+  return Array.from(dataTransfer.types).includes("Files") || dataTransfer.files.length > 0;
 }
 
 function clampScreenshotZoomPercent(value: number): number {
@@ -640,9 +626,7 @@ function screenshotZoomLabel(value: number): string {
  * Linear 5–800% puts ~100% (typical “fills the window”) near the left edge;
  * log space keeps useful mid-range zooms near the middle of the track.
  */
-const ZOOM_SLIDER_LOG_SPAN = Math.log(
-  MAX_SCREENSHOT_ZOOM_PERCENT / MIN_SCREENSHOT_ZOOM_PERCENT,
-);
+const ZOOM_SLIDER_LOG_SPAN = Math.log(MAX_SCREENSHOT_ZOOM_PERCENT / MIN_SCREENSHOT_ZOOM_PERCENT);
 
 function zoomPercentToSliderPosition(percent: number): number {
   const clamped = clampScreenshotZoomPercent(percent);
@@ -656,16 +640,8 @@ function sliderPositionToZoomPercent(position: number): number {
   );
 }
 
-function wheelZoomFactor(
-  deltaY: number,
-  deltaMode: number,
-  viewportHeight: number,
-): number {
-  const deltaUnit = deltaMode === 1
-    ? 16
-    : deltaMode === 2
-      ? Math.max(1, viewportHeight)
-      : 1;
+function wheelZoomFactor(deltaY: number, deltaMode: number, viewportHeight: number): number {
+  const deltaUnit = deltaMode === 1 ? 16 : deltaMode === 2 ? Math.max(1, viewportHeight) : 1;
   const pixelDelta = Math.min(240, Math.max(-240, deltaY * deltaUnit));
   return Math.exp(-pixelDelta * WHEEL_ZOOM_SENSITIVITY);
 }
@@ -686,9 +662,9 @@ function replaceElement(
 ): ScreenshotDocument {
   return {
     ...document,
-    elements: document.elements.map((element) => (
-      element.id === elementId ? replacement : element
-    )),
+    elements: document.elements.map((element) =>
+      element.id === elementId ? replacement : element,
+    ),
   };
 }
 
@@ -711,26 +687,18 @@ function measureTextElementLine(element: EditorTextElement, line: string): numbe
   if (!textMetricsContext) return estimateTextWidth(line, element.fontSize);
   textMetricsContext.font = editorTextCanvasFont(element);
   const width = textMetricsContext.measureText(line || " ").width;
-  return Number.isFinite(width) && width > 0
-    ? width
-    : estimateTextWidth(line, element.fontSize);
+  return Number.isFinite(width) && width > 0 ? width : estimateTextWidth(line, element.fontSize);
 }
 
 function fitLiveText(element: EditorTextElement): EditorTextElement {
-  return fitEditingAutoWidthTextElement(
-    element,
-    (line) => measureTextElementLine(element, line),
-  );
+  return fitEditingAutoWidthTextElement(element, (line) => measureTextElementLine(element, line));
 }
 
 function textOutlineWidth(fontSize: number): number {
   return Math.max(1.5, fontSize * 0.08);
 }
 
-function drawSmoothPath(
-  context: CanvasRenderingContext2D,
-  points: EditorPoint[],
-): void {
+function drawSmoothPath(context: CanvasRenderingContext2D, points: EditorPoint[]): void {
   if (points.length === 0) return;
   context.beginPath();
   context.moveTo(points[0].x, points[0].y);
@@ -752,34 +720,21 @@ function drawSmoothPath(
 }
 
 /** Stroke an arrow shaft: straight, single quadratic, or smooth multi-control. */
-function strokeArrowPath(
-  context: CanvasRenderingContext2D,
-  vertices: EditorPoint[],
-): void {
+function strokeArrowPath(context: CanvasRenderingContext2D, vertices: EditorPoint[]): void {
   if (vertices.length < 2) return;
   context.beginPath();
   context.moveTo(vertices[0].x, vertices[0].y);
   if (vertices.length === 2) {
     context.lineTo(vertices[1].x, vertices[1].y);
   } else if (vertices.length === 3) {
-    context.quadraticCurveTo(
-      vertices[1].x,
-      vertices[1].y,
-      vertices[2].x,
-      vertices[2].y,
-    );
+    context.quadraticCurveTo(vertices[1].x, vertices[1].y, vertices[2].x, vertices[2].y);
   } else {
     for (let index = 1; index < vertices.length - 2; index += 1) {
       const midpoint = {
         x: (vertices[index].x + vertices[index + 1].x) / 2,
         y: (vertices[index].y + vertices[index + 1].y) / 2,
       };
-      context.quadraticCurveTo(
-        vertices[index].x,
-        vertices[index].y,
-        midpoint.x,
-        midpoint.y,
-      );
+      context.quadraticCurveTo(vertices[index].x, vertices[index].y, midpoint.x, midpoint.y);
     }
     const last = vertices.length - 1;
     context.quadraticCurveTo(
@@ -891,10 +846,7 @@ function drawArrowControlHandle(
   context.restore();
 }
 
-function fillPolygon(
-  context: CanvasRenderingContext2D,
-  points: EditorPoint[],
-): void {
+function fillPolygon(context: CanvasRenderingContext2D, points: EditorPoint[]): void {
   if (points.length < 3) return;
   context.beginPath();
   context.moveTo(points[0].x, points[0].y);
@@ -908,10 +860,7 @@ function fillPolygon(
   context.stroke();
 }
 
-function applyAnnotationDropShadow(
-  context: CanvasRenderingContext2D,
-  style: ElementStyle,
-): void {
+function applyAnnotationDropShadow(context: CanvasRenderingContext2D, style: ElementStyle): void {
   const metrics = annotationDropShadowMetrics(style);
   context.shadowColor = metrics.color;
   context.shadowBlur = metrics.blur;
@@ -944,10 +893,7 @@ function paintAnnotationInk(
   paint();
 }
 
-function configureAnnotationStroke(
-  context: CanvasRenderingContext2D,
-  style: ElementStyle,
-): void {
+function configureAnnotationStroke(context: CanvasRenderingContext2D, style: ElementStyle): void {
   context.strokeStyle = style.color;
   context.fillStyle = style.fill ?? "transparent";
   context.lineWidth = style.strokeWidth;
@@ -970,15 +916,7 @@ function paintShapeGeometry(
     if (shape === "rectangle") {
       context.roundRect(left, top, width, height, Math.min(12, width / 6, height / 6));
     } else if (shape === "ellipse") {
-      context.ellipse(
-        left + width / 2,
-        top + height / 2,
-        width / 2,
-        height / 2,
-        0,
-        0,
-        Math.PI * 2,
-      );
+      context.ellipse(left + width / 2, top + height / 2, width / 2, height / 2, 0, 0, Math.PI * 2);
     } else if (isPolygonShapeKind(shape)) {
       const points = closedShapePolygon(shape, { x: left, y: top, width, height });
       if (points.length < 3) return;
@@ -1043,9 +981,12 @@ function drawText(
     (line) => context.measureText(line || " ").width,
   );
   const contentHeight = Math.max(1, lines.length) * lineHeight;
-  const anchorX = element.align === "center"
-    ? element.x + boxWidth / 2
-    : element.align === "right" ? element.x + boxWidth : element.x;
+  const anchorX =
+    element.align === "center"
+      ? element.x + boxWidth / 2
+      : element.align === "right"
+        ? element.x + boxWidth
+        : element.x;
   const shadowStyle = textDropShadowStyle(element);
   const paintPlate = () => {
     const pad = textBackgroundPad(element.fontSize);
@@ -1053,11 +994,7 @@ function drawText(
     const backgroundY = element.y - pad.y;
     const backgroundWidth = boxWidth + pad.x * 2;
     const backgroundHeight = contentHeight + pad.y * 2;
-    const backgroundRadius = textBackgroundRadius(
-      element,
-      backgroundWidth,
-      backgroundHeight,
-    );
+    const backgroundRadius = textBackgroundRadius(element, backgroundWidth, backgroundHeight);
     if (backgroundRadius > 0) {
       context.beginPath();
       context.roundRect(
@@ -1079,12 +1016,7 @@ function drawText(
     context.lineJoin = "round";
     lines.forEach((line, index) => {
       const sample = line || " ";
-      const draw = textGlyphDrawY(
-        element.y,
-        element.fontSize,
-        index,
-        context.measureText(sample),
-      );
+      const draw = textGlyphDrawY(element.y, element.fontSize, index, context.measureText(sample));
       context.textBaseline = draw.baseline;
       if (element.outlined) {
         context.strokeText(sample, anchorX, draw.y);
@@ -1113,10 +1045,7 @@ function paintImageElementSource(
   const matrix = imageOrientationMatrix(element.orientation);
   const sourceSize = imageSourceDisplaySize(element);
   context.save();
-  context.translate(
-    element.x + element.width / 2,
-    element.y + element.height / 2,
-  );
+  context.translate(element.x + element.width / 2, element.y + element.height / 2);
   context.transform(matrix.a, matrix.b, matrix.c, matrix.d, 0, 0);
   context.drawImage(
     source,
@@ -1207,10 +1136,9 @@ function WandColorLoupe({
       {(colorCss || colorHex) && (
         <div className="screenshot-wand-loupe-meta">
           <span
-            className={[
-              "screenshot-wand-loupe-swatch",
-              transparent ? "is-transparent" : "",
-            ].filter(Boolean).join(" ")}
+            className={["screenshot-wand-loupe-swatch", transparent ? "is-transparent" : ""]
+              .filter(Boolean)
+              .join(" ")}
             style={transparent || !colorCss ? undefined : { background: colorCss }}
             aria-hidden="true"
           />
@@ -1447,8 +1375,7 @@ function drawEditorOverlays(
   const unit = 1 / Math.max(0.01, displayScale);
   if ((selected?.visible ?? false) || selectionBoundsOverride) {
     const shape = selected?.kind === "shape" ? selected : null;
-    const bounds = selectionBoundsOverride
-      ?? (selected ? elementLocalBounds(selected) : null);
+    const bounds = selectionBoundsOverride ?? (selected ? elementLocalBounds(selected) : null);
     if (bounds) {
       const curveable = Boolean(shape && isCurveableStrokeShape(shape));
       // Text labels scale as a sticker: corner grips only, no independent stretch.
@@ -1481,34 +1408,24 @@ function drawEditorOverlays(
       const midY = bounds.y + bounds.height / 2;
       const gripPoints = cornerGripsOnly
         ? [
-          [bounds.x, bounds.y],
-          [bounds.x + bounds.width, bounds.y],
-          [bounds.x + bounds.width, bounds.y + bounds.height],
-          [bounds.x, bounds.y + bounds.height],
-        ]
+            [bounds.x, bounds.y],
+            [bounds.x + bounds.width, bounds.y],
+            [bounds.x + bounds.width, bounds.y + bounds.height],
+            [bounds.x, bounds.y + bounds.height],
+          ]
         : [
-          [bounds.x, bounds.y],
-          [midX, bounds.y],
-          [bounds.x + bounds.width, bounds.y],
-          [bounds.x + bounds.width, midY],
-          [bounds.x + bounds.width, bounds.y + bounds.height],
-          [midX, bounds.y + bounds.height],
-          [bounds.x, bounds.y + bounds.height],
-          [bounds.x, midY],
-        ];
+            [bounds.x, bounds.y],
+            [midX, bounds.y],
+            [bounds.x + bounds.width, bounds.y],
+            [bounds.x + bounds.width, midY],
+            [bounds.x + bounds.width, bounds.y + bounds.height],
+            [midX, bounds.y + bounds.height],
+            [bounds.x, bounds.y + bounds.height],
+            [bounds.x, midY],
+          ];
       for (const point of gripPoints) {
-        context.fillRect(
-          point[0] - grip / 2,
-          point[1] - grip / 2,
-          grip,
-          grip,
-        );
-        context.strokeRect(
-          point[0] - grip / 2,
-          point[1] - grip / 2,
-          grip,
-          grip,
-        );
+        context.fillRect(point[0] - grip / 2, point[1] - grip / 2, grip, grip);
+        context.strokeRect(point[0] - grip / 2, point[1] - grip / 2, grip, grip);
       }
       if (selected?.kind === "shape" && isCurveableStrokeShape(selected)) {
         context.globalAlpha = 1;
@@ -1569,11 +1486,7 @@ function drawEditorOverlays(
     context.fillStyle = "#ffffff";
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillText(
-      label,
-      crop.x + crop.width / 2,
-      crop.y + 20 * unit,
-    );
+    context.fillText(label, crop.x + crop.width / 2, crop.y + 20 * unit);
     context.restore();
   }
 }
@@ -1604,7 +1517,7 @@ function screenshotOutputDimensions(
   return outputDimensions(
     document.width,
     document.height,
-    Math.round(document.width * Number(size) / 100),
+    Math.round((document.width * Number(size)) / 100),
   );
 }
 
@@ -1638,27 +1551,24 @@ function screenshotFilenameError(fileStem: string): string {
   const trimmed = fileStem.trim();
   const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
   const forbidden = '<>:"/\\|?*';
-  const hasForbiddenCharacter = Array.from(trimmed).some((character) => (
-    character.charCodeAt(0) < 32 || forbidden.includes(character)
-  ));
+  const hasForbiddenCharacter = Array.from(trimmed).some(
+    (character) => character.charCodeAt(0) < 32 || forbidden.includes(character),
+  );
   if (
-    !trimmed
-    || trimmed !== fileStem
-    || trimmed === "."
-    || trimmed === ".."
-    || hasForbiddenCharacter
-    || /[. ]$/.test(trimmed)
-    || reserved.test(trimmed)
+    !trimmed ||
+    trimmed !== fileStem ||
+    trimmed === "." ||
+    trimmed === ".." ||
+    hasForbiddenCharacter ||
+    /[. ]$/.test(trimmed) ||
+    reserved.test(trimmed)
   ) {
     return "Enter a filename without folders or reserved characters.";
   }
   return "";
 }
 
-function screenshotFormatExtension(
-  format: ExportFormat,
-  sourcePath: string | null,
-): string {
+function screenshotFormatExtension(format: ExportFormat, sourcePath: string | null): string {
   if (format !== "jpeg") return format;
   return sourcePath?.toLowerCase().endsWith(".jpeg") ? "jpeg" : "jpg";
 }
@@ -1675,10 +1585,7 @@ function screenshotDestinationPath(
   return base ? `${base}${separator}${filename}` : `${separator}${filename}`;
 }
 
-function formatScreenshotMaximumFileSizeInput(
-  bytes: number,
-  unit: ScreenshotFileSizeUnit,
-): string {
+function formatScreenshotMaximumFileSizeInput(bytes: number, unit: ScreenshotFileSizeUnit): string {
   const value = bytes / SCREENSHOT_FILE_SIZE_UNIT_BYTES[unit];
   return Number(value.toPrecision(8)).toString();
 }
@@ -1699,11 +1606,7 @@ function screenshotSaveHint({
   hasOriginalFile: boolean;
   savingCopy: boolean;
 }): string {
-  const formatLabel = exportFormat === "jpeg"
-    ? "JPEG"
-    : exportFormat === "webp"
-      ? "WebP"
-      : "PNG";
+  const formatLabel = exportFormat === "jpeg" ? "JPEG" : exportFormat === "webp" ? "WebP" : "PNG";
   if (sourceMissing) {
     return "The original was deleted. You can still copy or save this edit.";
   }
@@ -1755,10 +1658,7 @@ function shouldUseOriginalFileSizeEstimate(
   if (exportSize !== "original") return false;
   if (exportFormat === "jpeg") return false;
   if (!baselineDocument) return false;
-  if (
-    editorDocument.width !== artifact.width
-    || editorDocument.height !== artifact.height
-  ) {
+  if (editorDocument.width !== artifact.width || editorDocument.height !== artifact.height) {
     return false;
   }
   if (JSON.stringify(editorDocument) !== JSON.stringify(baselineDocument)) {
@@ -1807,9 +1707,7 @@ export function ScreenshotEditor() {
   const [defaultOpacity, setDefaultOpacity] = useState(100);
   const [defaultFontSize, setDefaultFontSize] = useState(48);
   const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("rounded-box");
-  const [rotationSnapDegrees, setRotationSnapDegrees] = useState(
-    SHAPE_ROTATION_SNAP_DEGREES,
-  );
+  const [rotationSnapDegrees, setRotationSnapDegrees] = useState(SHAPE_ROTATION_SNAP_DEGREES);
   const [fitScale, setFitScale] = useState(1);
   const [zoomMode, setZoomMode] = useState<"fit" | "manual">("fit");
   const [zoom, setZoom] = useState(100);
@@ -1880,11 +1778,9 @@ export function ScreenshotEditor() {
   const [customExportHeight, setCustomExportHeight] = useState(1_080);
   const [exportAspectLocked, setExportAspectLocked] = useState(true);
   const [jpegQuality, setJpegQuality] = useState<ScreenshotQuality>("98");
-  const [qualityMode, setQualityMode] =
-    useState<ScreenshotQualityMode>("preserve");
+  const [qualityMode, setQualityMode] = useState<ScreenshotQualityMode>("preserve");
   const [maximumFileSize, setMaximumFileSize] = useState("10");
-  const [maximumFileSizeUnit, setMaximumFileSizeUnit] =
-    useState<ScreenshotFileSizeUnit>("mb");
+  const [maximumFileSizeUnit, setMaximumFileSizeUnit] = useState<ScreenshotFileSizeUnit>("mb");
   const [exportSettingsOpen, setExportSettingsOpen] = useState(false);
   const [filenameStem, setFilenameStem] = useState("");
   const [destinationDirectory, setDestinationDirectory] = useState("");
@@ -1927,21 +1823,21 @@ export function ScreenshotEditor() {
 
   const closeShapesMenu = useCallback(() => setShapesMenuOpen(false), []);
 
-  const activateTool = useCallback((
-    next: ScreenshotTool,
-    options?: { openShapesMenu?: boolean },
-  ) => {
-    setEditingTextId(null);
-    setTool(next);
-    if (isGroupedShapeTool(next)) {
-      setLastGroupedShape(next);
-      setShapesMenuOpen(Boolean(options?.openShapesMenu));
-    } else {
-      setShapesMenuOpen(false);
-    }
-    if (next !== "select") setSelectedId(null);
-    if (next !== "crop") setCropSelection(null);
-  }, []);
+  const activateTool = useCallback(
+    (next: ScreenshotTool, options?: { openShapesMenu?: boolean }) => {
+      setEditingTextId(null);
+      setTool(next);
+      if (isGroupedShapeTool(next)) {
+        setLastGroupedShape(next);
+        setShapesMenuOpen(Boolean(options?.openShapesMenu));
+      } else {
+        setShapesMenuOpen(false);
+      }
+      if (next !== "select") setSelectedId(null);
+      if (next !== "crop") setCropSelection(null);
+    },
+    [],
+  );
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -1975,10 +1871,13 @@ export function ScreenshotEditor() {
     draftAssetCacheRef.current.persisted.clear();
   }, []);
 
-  const discardEditorDraft = useCallback((artifactKey: string): Promise<void> => {
-    forgetPersistedDraftAssets();
-    return invoke<void>("discard_screenshot_editor_draft", { artifactId: artifactKey });
-  }, [forgetPersistedDraftAssets]);
+  const discardEditorDraft = useCallback(
+    (artifactKey: string): Promise<void> => {
+      forgetPersistedDraftAssets();
+      return invoke<void>("discard_screenshot_editor_draft", { artifactId: artifactKey });
+    },
+    [forgetPersistedDraftAssets],
+  );
   /** Latest flush function for the close handler (stable listener, no re-subscribe). */
   const flushEditorDraftRef = useRef<() => Promise<void>>(async () => undefined);
   const objectUrlsRef = useRef(new Set<string>());
@@ -2027,13 +1926,11 @@ export function ScreenshotEditor() {
       left: bounds.left + bounds.width / 2,
       top: bounds.top + 18,
     };
-    setDropToastAnchor((current) => (
-      current
-      && Math.abs(current.left - next.left) < 0.5
-      && Math.abs(current.top - next.top) < 0.5
+    setDropToastAnchor((current) =>
+      current && Math.abs(current.left - next.left) < 0.5 && Math.abs(current.top - next.top) < 0.5
         ? current
-        : next
-    ));
+        : next,
+    );
   }, []);
 
   useLayoutEffect(() => {
@@ -2070,11 +1967,14 @@ export function ScreenshotEditor() {
     setCompressPreviewError("");
   }, []);
 
-  const replaceDocument = useCallback((next: ScreenshotDocument) => {
-    documentRef.current = next;
-    setEditorDocument(next);
-    invalidateCompressPreview();
-  }, [invalidateCompressPreview]);
+  const replaceDocument = useCallback(
+    (next: ScreenshotDocument) => {
+      documentRef.current = next;
+      setEditorDocument(next);
+      invalidateCompressPreview();
+    },
+    [invalidateCompressPreview],
+  );
 
   const clearSuccessTimer = useCallback(() => {
     if (successTimerRef.current !== null) {
@@ -2102,17 +2002,20 @@ export function ScreenshotEditor() {
     }, 4_000);
   }, []);
 
-  useEffect(() => () => {
-    if (successTimerRef.current !== null) {
-      window.clearTimeout(successTimerRef.current);
-    }
-    if (zoomAnchorFrameRef.current !== null) {
-      window.cancelAnimationFrame(zoomAnchorFrameRef.current);
-    }
-    if (removeBgPreviewFrameRef.current !== null) {
-      window.cancelAnimationFrame(removeBgPreviewFrameRef.current);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (successTimerRef.current !== null) {
+        window.clearTimeout(successTimerRef.current);
+      }
+      if (zoomAnchorFrameRef.current !== null) {
+        window.cancelAnimationFrame(zoomAnchorFrameRef.current);
+      }
+      if (removeBgPreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(removeBgPreviewFrameRef.current);
+      }
+    },
+    [],
+  );
 
   // Position the per-layer settings popover beside the ⋯ trigger (over the
   // canvas, not stacked on the layer list). Fixed coords avoid clipping from
@@ -2129,10 +2032,7 @@ export function ScreenshotEditor() {
       // Prefer left of the trigger so the panel sits beside the sidebar.
       let left = bounds.left - menuWidth - gap;
       if (left < 8) {
-        left = Math.min(
-          bounds.right + gap,
-          Math.max(8, window.innerWidth - menuWidth - 8),
-        );
+        left = Math.min(bounds.right + gap, Math.max(8, window.innerWidth - menuWidth - 8));
       }
       // Align with the trigger row; shift up only when the card would overflow.
       let top = bounds.top;
@@ -2161,12 +2061,14 @@ export function ScreenshotEditor() {
     if (!layerMenuId) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
-      if (target && (
-        layerMenuRootRef.current?.contains(target)
-        || layerMenuPanelRef.current?.contains(target)
-        || eventTargetBelongsToSelectIn(layerMenuPanelRef.current, target)
-        || eventTargetBelongsToSelectIn(layerMenuRootRef.current, target)
-      )) return;
+      if (
+        target &&
+        (layerMenuRootRef.current?.contains(target) ||
+          layerMenuPanelRef.current?.contains(target) ||
+          eventTargetBelongsToSelectIn(layerMenuPanelRef.current, target) ||
+          eventTargetBelongsToSelectIn(layerMenuRootRef.current, target))
+      )
+        return;
       setLayerMenuId(null);
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2183,148 +2085,159 @@ export function ScreenshotEditor() {
     };
   }, [layerMenuId]);
 
-  const commitDocument = useCallback((next: ScreenshotDocument) => {
-    const current = documentRef.current;
-    if (!current || JSON.stringify(current) === JSON.stringify(next)) return;
-    setUndoStack((stack) => [...stack.slice(-99), current]);
-    setRedoStack([]);
-    replaceDocument(next);
-    setSaved(null);
-    clearSuccess();
-  }, [clearSuccess, replaceDocument]);
+  const commitDocument = useCallback(
+    (next: ScreenshotDocument) => {
+      const current = documentRef.current;
+      if (!current || JSON.stringify(current) === JSON.stringify(next)) return;
+      setUndoStack((stack) => [...stack.slice(-99), current]);
+      setRedoStack([]);
+      replaceDocument(next);
+      setSaved(null);
+      clearSuccess();
+    },
+    [clearSuccess, replaceDocument],
+  );
 
-  const commitCanvasSize = useCallback((axis: "width" | "height", text: string) => {
-    setCanvasSizeDraft(null);
-    const current = documentRef.current;
-    const parsed = Number(text);
-    if (!current || !Number.isFinite(parsed)) return;
-    const next = Math.min(
-      MAX_SCREENSHOT_OUTPUT_DIMENSION,
-      Math.max(1, Math.round(parsed)),
-    );
-    commitDocument(resizeDocumentCanvas(
-      current,
-      axis === "width" ? next : current.width,
-      axis === "height" ? next : current.height,
-    ));
-  }, [commitDocument]);
+  const commitCanvasSize = useCallback(
+    (axis: "width" | "height", text: string) => {
+      setCanvasSizeDraft(null);
+      const current = documentRef.current;
+      const parsed = Number(text);
+      if (!current || !Number.isFinite(parsed)) return;
+      const next = Math.min(MAX_SCREENSHOT_OUTPUT_DIMENSION, Math.max(1, Math.round(parsed)));
+      commitDocument(
+        resizeDocumentCanvas(
+          current,
+          axis === "width" ? next : current.width,
+          axis === "height" ? next : current.height,
+        ),
+      );
+    },
+    [commitDocument],
+  );
 
-  const ensureImage = useCallback((src: string): CachedImage => {
-    const existing = imageCacheRef.current.get(src);
-    if (existing) return existing;
-    const image = new Image();
-    const cached: CachedImage = { image, status: "loading" };
-    imageCacheRef.current.set(src, cached);
-    // Custom capture protocol needs CORS for canvas export. blob:/data: object
-    // URLs from dropped files are same-origin and fail if marked anonymous.
-    if (!src.startsWith("blob:") && !src.startsWith("data:")) {
-      image.crossOrigin = "anonymous";
-    }
-    image.onload = () => {
-      cached.status = "loaded";
-      setImageRevision((revision) => revision + 1);
-      invalidateCompressPreview();
-    };
-    image.onerror = () => {
-      cached.status = "error";
-      setError("One of the images in this edit could not be loaded.");
-      setImageRevision((revision) => revision + 1);
-      invalidateCompressPreview();
-    };
-    image.src = src;
-    return cached;
-  }, [invalidateCompressPreview]);
+  const ensureImage = useCallback(
+    (src: string): CachedImage => {
+      const existing = imageCacheRef.current.get(src);
+      if (existing) return existing;
+      const image = new Image();
+      const cached: CachedImage = { image, status: "loading" };
+      imageCacheRef.current.set(src, cached);
+      // Custom capture protocol needs CORS for canvas export. blob:/data: object
+      // URLs from dropped files are same-origin and fail if marked anonymous.
+      if (!src.startsWith("blob:") && !src.startsWith("data:")) {
+        image.crossOrigin = "anonymous";
+      }
+      image.onload = () => {
+        cached.status = "loaded";
+        setImageRevision((revision) => revision + 1);
+        invalidateCompressPreview();
+      };
+      image.onerror = () => {
+        cached.status = "error";
+        setError("One of the images in this edit could not be loaded.");
+        setImageRevision((revision) => revision + 1);
+        invalidateCompressPreview();
+      };
+      image.src = src;
+      return cached;
+    },
+    [invalidateCompressPreview],
+  );
 
   /** Encode any document image URL to PNG bytes for draft persistence. */
-  const pngBytesForSource = useCallback(async (src: string): Promise<number[]> => {
-    if (src.startsWith("data:image/png;base64,")) {
-      const binary = atob(src.slice("data:image/png;base64,".length));
-      const bytes = new Array<number>(binary.length);
-      for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
+  const pngBytesForSource = useCallback(
+    async (src: string): Promise<number[]> => {
+      if (src.startsWith("data:image/png;base64,")) {
+        const binary = atob(src.slice("data:image/png;base64,".length));
+        const bytes = new Array<number>(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        return bytes;
       }
-      return bytes;
-    }
-    const cached = ensureImage(src);
-    for (let attempt = 0; attempt < 120 && cached.status === "loading"; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 25));
-    }
-    if (cached.status !== "loaded") {
-      throw new Error("An image layer could not be saved into the edit draft.");
-    }
-    // Cache may hold an Image or a working canvas (e.g. after remove-bg).
-    const source = cached.image;
-    const width = Math.max(
-      1,
-      source instanceof HTMLImageElement
-        ? source.naturalWidth || source.width || 1
-        : source.width || 1,
-    );
-    const height = Math.max(
-      1,
-      source instanceof HTMLImageElement
-        ? source.naturalHeight || source.height || 1
-        : source.height || 1,
-    );
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("The edit draft could not be encoded.");
-    context.drawImage(source, 0, 0, width, height);
-    return canvasPngBytes(canvas);
-  }, [ensureImage]);
-
-  const persistEditorDraft = useCallback(async (
-    document: ScreenshotDocument,
-    artifactKey: string,
-  ): Promise<void> => {
-    if (!isScreenshotDocumentDirty(document, baselineDocumentRef.current)) {
-      await discardEditorDraft(artifactKey);
-      return;
-    }
-    const cache = draftAssetCacheRef.current;
-    if (cache.artifactKey !== artifactKey) {
-      cache.artifactKey = artifactKey;
-      cache.assetIdBySource.clear();
-      cache.persisted.clear();
-    }
-    const assetIdForSource = (src: string): string => {
-      let id = cache.assetIdBySource.get(src);
-      if (!id) {
-        id = crypto.randomUUID();
-        cache.assetIdBySource.set(src, id);
+      const cached = ensureImage(src);
+      for (let attempt = 0; attempt < 120 && cached.status === "loading"; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 25));
       }
-      return id;
-    };
-    const save = async (incremental: boolean): Promise<void> => {
-      const payload = await buildScreenshotEditorDraftPayload(
-        artifactKey,
-        document,
-        pngBytesForSource,
-        Date.now(),
-        assetIdForSource,
-        incremental ? (assetId) => cache.persisted.has(assetId) : () => false,
+      if (cached.status !== "loaded") {
+        throw new Error("An image layer could not be saved into the edit draft.");
+      }
+      // Cache may hold an Image or a working canvas (e.g. after remove-bg).
+      const source = cached.image;
+      const width = Math.max(
+        1,
+        source instanceof HTMLImageElement
+          ? source.naturalWidth || source.width || 1
+          : source.width || 1,
       );
-      await invoke("save_screenshot_editor_draft", {
-        request: {
-          artifact_id: payload.artifact_id,
-          document: payload.document,
-          assets: payload.assets,
-          updated_at_ms: payload.updated_at_ms,
-        },
-      });
-      cache.persisted = new Set(payload.assets.map((asset) => asset.id));
-    };
-    try {
-      await save(true);
-    } catch (reason) {
-      if (!isDraftAssetMissingError(reason)) throw reason;
-      // Draft files were removed out from under us; resend every asset.
-      cache.persisted.clear();
-      await save(false);
-    }
-  }, [discardEditorDraft, pngBytesForSource]);
+      const height = Math.max(
+        1,
+        source instanceof HTMLImageElement
+          ? source.naturalHeight || source.height || 1
+          : source.height || 1,
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("The edit draft could not be encoded.");
+      context.drawImage(source, 0, 0, width, height);
+      return canvasPngBytes(canvas);
+    },
+    [ensureImage],
+  );
+
+  const persistEditorDraft = useCallback(
+    async (document: ScreenshotDocument, artifactKey: string): Promise<void> => {
+      if (!isScreenshotDocumentDirty(document, baselineDocumentRef.current)) {
+        await discardEditorDraft(artifactKey);
+        return;
+      }
+      const cache = draftAssetCacheRef.current;
+      if (cache.artifactKey !== artifactKey) {
+        cache.artifactKey = artifactKey;
+        cache.assetIdBySource.clear();
+        cache.persisted.clear();
+      }
+      const assetIdForSource = (src: string): string => {
+        let id = cache.assetIdBySource.get(src);
+        if (!id) {
+          id = crypto.randomUUID();
+          cache.assetIdBySource.set(src, id);
+        }
+        return id;
+      };
+      const save = async (incremental: boolean): Promise<void> => {
+        const payload = await buildScreenshotEditorDraftPayload(
+          artifactKey,
+          document,
+          pngBytesForSource,
+          Date.now(),
+          assetIdForSource,
+          incremental ? (assetId) => cache.persisted.has(assetId) : () => false,
+        );
+        await invoke("save_screenshot_editor_draft", {
+          request: {
+            artifact_id: payload.artifact_id,
+            document: payload.document,
+            assets: payload.assets,
+            updated_at_ms: payload.updated_at_ms,
+          },
+        });
+        cache.persisted = new Set(payload.assets.map((asset) => asset.id));
+      };
+      try {
+        await save(true);
+      } catch (reason) {
+        if (!isDraftAssetMissingError(reason)) throw reason;
+        // Draft files were removed out from under us; resend every asset.
+        cache.persisted.clear();
+        await save(false);
+      }
+    },
+    [discardEditorDraft, pngBytesForSource],
+  );
 
   const flushEditorDraft = useCallback(async (): Promise<void> => {
     draftSaveGenerationRef.current += 1;
@@ -2367,20 +2280,25 @@ export function ScreenshotEditor() {
   const editorPresenceId = artifactId ? `screenshot-editor-${artifactId}` : null;
   const lastEmittedPresenceRef = useRef<string[] | null>(null);
 
-  const emitEditorPresence = useCallback((artifactIds: string[]) => {
-    if (!editorPresenceId) return;
-    if (
-      lastEmittedPresenceRef.current
-      && sameSortedIds(lastEmittedPresenceRef.current, artifactIds)
-    ) {
-      return;
-    }
-    lastEmittedPresenceRef.current = artifactIds;
-    void Promise.resolve(emit<EditorLayerPresence>("editor-layers-changed", {
-      editor_id: editorPresenceId,
-      artifact_ids: artifactIds,
-    })).catch(() => undefined);
-  }, [editorPresenceId]);
+  const emitEditorPresence = useCallback(
+    (artifactIds: string[]) => {
+      if (!editorPresenceId) return;
+      if (
+        lastEmittedPresenceRef.current &&
+        sameSortedIds(lastEmittedPresenceRef.current, artifactIds)
+      ) {
+        return;
+      }
+      lastEmittedPresenceRef.current = artifactIds;
+      void Promise.resolve(
+        emit<EditorLayerPresence>("editor-layers-changed", {
+          editor_id: editorPresenceId,
+          artifact_ids: artifactIds,
+        }),
+      ).catch(() => undefined);
+    },
+    [editorPresenceId],
+  );
 
   useEffect(() => {
     let active = true;
@@ -2405,10 +2323,12 @@ export function ScreenshotEditor() {
       if (!active) return;
       if (!loaded) throw new Error("The screenshot is no longer available.");
       const preferredFormat: ExportFormat = loadedSettings?.screenshot_format ?? "png";
-      const initialPath = loaded.path ?? await invoke<string>("default_screenshot_edit_path", {
-        artifactId: loaded.id,
-        format: preferredFormat,
-      });
+      const initialPath =
+        loaded.path ??
+        (await invoke<string>("default_screenshot_edit_path", {
+          artifactId: loaded.id,
+          format: preferredFormat,
+        }));
       if (!active) return;
       const baseline = createScreenshotDocument(
         loaded.full_url,
@@ -2425,11 +2345,11 @@ export function ScreenshotEditor() {
           { artifactId: loaded.id },
         );
         if (
-          draft
-          && draft.document
-          && Array.isArray(draft.document.elements)
-          && typeof draft.document.width === "number"
-          && typeof draft.document.height === "number"
+          draft &&
+          draft.document &&
+          Array.isArray(draft.document.elements) &&
+          typeof draft.document.width === "number" &&
+          typeof draft.document.height === "number"
         ) {
           working = draft.document;
           restoredDraft = true;
@@ -2451,7 +2371,9 @@ export function ScreenshotEditor() {
       setMakeCopy(!loaded.path);
       setFilenameStem(screenshotFileStem(initialPath));
       setDestinationDirectory(screenshotParentDirectory(initialPath));
-      setDefaultFontSize(Math.max(24, Math.min(72, Math.round(Math.min(loaded.width, loaded.height) * 0.055))));
+      setDefaultFontSize(
+        Math.max(24, Math.min(72, Math.round(Math.min(loaded.width, loaded.height) * 0.055))),
+      );
     })().catch((reason) => {
       if (active) setError(String(reason));
     });
@@ -2497,22 +2419,24 @@ export function ScreenshotEditor() {
     if (!isTauri() || !artifactId) return;
     let active = true;
     let unlisten: (() => void) | undefined;
-    void getCurrentWindow().onCloseRequested(async () => {
-      if (!active) return;
-      await Promise.race([
-        flushEditorDraftRef.current(),
-        new Promise<void>((resolve) => {
-          window.setTimeout(resolve, SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS);
-        }),
-      ]);
-      // Do not preventDefault — allow Tauri to destroy after the race settles.
-    }).then((dispose) => {
-      if (!active) {
-        dispose();
-        return;
-      }
-      unlisten = dispose;
-    });
+    void getCurrentWindow()
+      .onCloseRequested(async () => {
+        if (!active) return;
+        await Promise.race([
+          flushEditorDraftRef.current(),
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS);
+          }),
+        ]);
+        // Do not preventDefault — allow Tauri to destroy after the race settles.
+      })
+      .then((dispose) => {
+        if (!active) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      });
     return () => {
       active = false;
       unlisten?.();
@@ -2533,16 +2457,19 @@ export function ScreenshotEditor() {
     if (!editorPresenceId) return;
     return () => {
       lastEmittedPresenceRef.current = null;
-      void Promise.resolve(emit<EditorLayerPresence>("editor-layers-changed", {
-        editor_id: editorPresenceId,
-        artifact_ids: [],
-      })).catch(() => undefined);
+      void Promise.resolve(
+        emit<EditorLayerPresence>("editor-layers-changed", {
+          editor_id: editorPresenceId,
+          artifact_ids: [],
+        }),
+      ).catch(() => undefined);
     };
   }, [editorPresenceId]);
 
-  const selected = useMemo(() => (
-    editorDocument?.elements.find((element) => element.id === selectedId) ?? null
-  ), [editorDocument, selectedId]);
+  const selected = useMemo(
+    () => editorDocument?.elements.find((element) => element.id === selectedId) ?? null,
+    [editorDocument, selectedId],
+  );
 
   /** True when visible layers leave empty margin (or overhang) on the canvas. */
   const canTrimEdges = useMemo(() => {
@@ -2558,9 +2485,7 @@ export function ScreenshotEditor() {
     return canvasTrimMarginPreview(editorDocument);
   }, [trimEdgesHover, canTrimEdges, editorDocument]);
 
-  const editingText = editingTextId === selectedId && selected?.kind === "text"
-    ? selected
-    : null;
+  const editingText = editingTextId === selectedId && selected?.kind === "text" ? selected : null;
 
   const beginTextEditing = useCallback((elementId: string, selectAll = false) => {
     selectInlineTextRef.current = selectAll;
@@ -2571,19 +2496,22 @@ export function ScreenshotEditor() {
     setCropSelection(null);
   }, []);
 
-  const beginTextEditingFromPointerDown = useCallback((elementId: string, selectAll = false) => {
-    suppressInlineTextBlurRef.current = true;
-    const release = () => {
-      window.removeEventListener("pointerup", release, true);
-      window.removeEventListener("pointercancel", release, true);
-      window.requestAnimationFrame(() => {
-        suppressInlineTextBlurRef.current = false;
-      });
-    };
-    window.addEventListener("pointerup", release, true);
-    window.addEventListener("pointercancel", release, true);
-    beginTextEditing(elementId, selectAll);
-  }, [beginTextEditing]);
+  const beginTextEditingFromPointerDown = useCallback(
+    (elementId: string, selectAll = false) => {
+      suppressInlineTextBlurRef.current = true;
+      const release = () => {
+        window.removeEventListener("pointerup", release, true);
+        window.removeEventListener("pointercancel", release, true);
+        window.requestAnimationFrame(() => {
+          suppressInlineTextBlurRef.current = false;
+        });
+      };
+      window.addEventListener("pointerup", release, true);
+      window.addEventListener("pointercancel", release, true);
+      beginTextEditing(elementId, selectAll);
+    },
+    [beginTextEditing],
+  );
 
   useLayoutEffect(() => {
     if (!editingTextId) return;
@@ -2612,16 +2540,16 @@ export function ScreenshotEditor() {
   }, [canvasExpandPreview, editorDocument, overflowHoverId]);
   const shownExpandPreview = canvasExpandPreview ?? idleOverflowPreview;
   const expandPreviewIsLive = canvasExpandPreview !== null;
-  const expandPreviewArmed = !expandPreviewIsLive
-    && expandButtonHover
-    && shownExpandPreview !== null;
-  const expandActionAnchor = !expandPreviewIsLive && shownExpandPreview
-    ? canvasExpandButtonAnchor(
-      elementBounds(shownExpandPreview.element),
-      shownExpandPreview.canvas,
-      22 / Math.max(0.01, displayScale),
-    )
-    : null;
+  const expandPreviewArmed =
+    !expandPreviewIsLive && expandButtonHover && shownExpandPreview !== null;
+  const expandActionAnchor =
+    !expandPreviewIsLive && shownExpandPreview
+      ? canvasExpandButtonAnchor(
+          elementBounds(shownExpandPreview.element),
+          shownExpandPreview.canvas,
+          22 / Math.max(0.01, displayScale),
+        )
+      : null;
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
@@ -2638,14 +2566,8 @@ export function ScreenshotEditor() {
       frame: {
         left: localBounds.x * displayScale,
         top: localBounds.y * displayScale,
-        width: Math.max(
-          48,
-          localBounds.width * displayScale + border,
-        ),
-        height: Math.max(
-          28,
-          localBounds.height * displayScale + border,
-        ),
+        width: Math.max(48, localBounds.width * displayScale + border),
+        height: Math.max(28, localBounds.height * displayScale + border),
       },
       padding: `${padY + optical}px ${pad.x * displayScale}px ${Math.max(0, padY - optical)}px`,
     };
@@ -2655,80 +2577,78 @@ export function ScreenshotEditor() {
     displayedZoomPercentRef.current = displayScale * 100;
   }, [displayScale]);
 
-  const setManualZoom = useCallback((
-    requestedZoomPercent: number,
-    clientPoint?: { clientX: number; clientY: number },
-  ) => {
-    if (!Number.isFinite(requestedZoomPercent)) return;
-    const nextZoomPercent = clampScreenshotZoomPercent(requestedZoomPercent);
-    const viewport = viewportRef.current;
-    const canvas = canvasRef.current;
-    let anchor: {
-      clientX: number;
-      clientY: number;
-      xRatio: number;
-      yRatio: number;
-    } | null = null;
+  const setManualZoom = useCallback(
+    (requestedZoomPercent: number, clientPoint?: { clientX: number; clientY: number }) => {
+      if (!Number.isFinite(requestedZoomPercent)) return;
+      const nextZoomPercent = clampScreenshotZoomPercent(requestedZoomPercent);
+      const viewport = viewportRef.current;
+      const canvas = canvasRef.current;
+      let anchor: {
+        clientX: number;
+        clientY: number;
+        xRatio: number;
+        yRatio: number;
+      } | null = null;
 
-    if (viewport && canvas) {
-      const viewportBounds = viewport.getBoundingClientRect();
-      const canvasBounds = canvas.getBoundingClientRect();
-      const clientX = clientPoint?.clientX
-        ?? viewportBounds.left + viewportBounds.width / 2;
-      const clientY = clientPoint?.clientY
-        ?? viewportBounds.top + viewportBounds.height / 2;
-      if (canvasBounds.width > 0 && canvasBounds.height > 0) {
-        anchor = {
-          clientX,
-          clientY,
-          xRatio: (clientX - canvasBounds.left) / canvasBounds.width,
-          yRatio: (clientY - canvasBounds.top) / canvasBounds.height,
-        };
+      if (viewport && canvas) {
+        const viewportBounds = viewport.getBoundingClientRect();
+        const canvasBounds = canvas.getBoundingClientRect();
+        const clientX = clientPoint?.clientX ?? viewportBounds.left + viewportBounds.width / 2;
+        const clientY = clientPoint?.clientY ?? viewportBounds.top + viewportBounds.height / 2;
+        if (canvasBounds.width > 0 && canvasBounds.height > 0) {
+          anchor = {
+            clientX,
+            clientY,
+            xRatio: (clientX - canvasBounds.left) / canvasBounds.width,
+            yRatio: (clientY - canvasBounds.top) / canvasBounds.height,
+          };
+        }
       }
-    }
 
-    displayedZoomPercentRef.current = nextZoomPercent;
-    setZoom(nextZoomPercent);
-    setZoomMode("manual");
+      displayedZoomPercentRef.current = nextZoomPercent;
+      setZoom(nextZoomPercent);
+      setZoomMode("manual");
 
-    if (!viewport || !canvas || !anchor) return;
-    if (zoomAnchorFrameRef.current !== null) {
-      window.cancelAnimationFrame(zoomAnchorFrameRef.current);
-    }
-    zoomAnchorFrameRef.current = window.requestAnimationFrame(() => {
-      zoomAnchorFrameRef.current = null;
-      const nextBounds = canvas.getBoundingClientRect();
-      const nextClientX = nextBounds.left + nextBounds.width * anchor.xRatio;
-      const nextClientY = nextBounds.top + nextBounds.height * anchor.yRatio;
-      // Prefer scroll when the viewport overflows; otherwise nudge free pan so
-      // zoom still stays under the pointer after a Command/Ctrl drag-pan.
-      const dx = nextClientX - anchor.clientX;
-      const dy = nextClientY - anchor.clientY;
-      const prevLeft = viewport.scrollLeft;
-      const prevTop = viewport.scrollTop;
-      viewport.scrollLeft = prevLeft + dx;
-      viewport.scrollTop = prevTop + dy;
-      const scrolledX = viewport.scrollLeft - prevLeft;
-      const scrolledY = viewport.scrollTop - prevTop;
-      const residualX = dx - scrolledX;
-      const residualY = dy - scrolledY;
-      if (Math.abs(residualX) > 0.5 || Math.abs(residualY) > 0.5) {
-        const nextPan = {
-          x: viewPanRef.current.x - residualX,
-          y: viewPanRef.current.y - residualY,
-        };
-        viewPanRef.current = nextPan;
-        setViewPan(nextPan);
+      if (!viewport || !canvas || !anchor) return;
+      if (zoomAnchorFrameRef.current !== null) {
+        window.cancelAnimationFrame(zoomAnchorFrameRef.current);
       }
-    });
-  }, []);
+      zoomAnchorFrameRef.current = window.requestAnimationFrame(() => {
+        zoomAnchorFrameRef.current = null;
+        const nextBounds = canvas.getBoundingClientRect();
+        const nextClientX = nextBounds.left + nextBounds.width * anchor.xRatio;
+        const nextClientY = nextBounds.top + nextBounds.height * anchor.yRatio;
+        // Prefer scroll when the viewport overflows; otherwise nudge free pan so
+        // zoom still stays under the pointer after a Command/Ctrl drag-pan.
+        const dx = nextClientX - anchor.clientX;
+        const dy = nextClientY - anchor.clientY;
+        const prevLeft = viewport.scrollLeft;
+        const prevTop = viewport.scrollTop;
+        viewport.scrollLeft = prevLeft + dx;
+        viewport.scrollTop = prevTop + dy;
+        const scrolledX = viewport.scrollLeft - prevLeft;
+        const scrolledY = viewport.scrollTop - prevTop;
+        const residualX = dx - scrolledX;
+        const residualY = dy - scrolledY;
+        if (Math.abs(residualX) > 0.5 || Math.abs(residualY) > 0.5) {
+          const nextPan = {
+            x: viewPanRef.current.x - residualX,
+            y: viewPanRef.current.y - residualY,
+          };
+          viewPanRef.current = nextPan;
+          setViewPan(nextPan);
+        }
+      });
+    },
+    [],
+  );
 
-  const zoomBy = useCallback((
-    factor: number,
-    clientPoint?: { clientX: number; clientY: number },
-  ) => {
-    setManualZoom(displayedZoomPercentRef.current * factor, clientPoint);
-  }, [setManualZoom]);
+  const zoomBy = useCallback(
+    (factor: number, clientPoint?: { clientX: number; clientY: number }) => {
+      setManualZoom(displayedZoomPercentRef.current * factor, clientPoint);
+    },
+    [setManualZoom],
+  );
 
   const activateFitZoom = useCallback(() => {
     if (zoomAnchorFrameRef.current !== null) {
@@ -2788,9 +2708,7 @@ export function ScreenshotEditor() {
     );
     const live = removeBgLiveRef.current;
     const hiddenElementId = live?.elementId ?? canvasEditingTextId;
-    const paintDocument = live
-      ? { ...editorDocument, background: null }
-      : editorDocument;
+    const paintDocument = live ? { ...editorDocument, background: null } : editorDocument;
     renderScreenshot(context, paintDocument, imageCacheRef.current, hiddenElementId);
     // Live erase/restore: draw the working natural-res canvas in place of the layer.
     if (live) {
@@ -2803,12 +2721,10 @@ export function ScreenshotEditor() {
         context.restore();
       }
     }
-    const accentColor = getComputedStyle(canvas)
-      .getPropertyValue("--theme-accent")
-      .trim() || "#ffffff";
-    const overlaySelected = canvasEditingTextId === null && toolShowsTransformChrome(tool)
-      ? selected
-      : null;
+    const accentColor =
+      getComputedStyle(canvas).getPropertyValue("--theme-accent").trim() || "#ffffff";
+    const overlaySelected =
+      canvasEditingTextId === null && toolShowsTransformChrome(tool) ? selected : null;
     // While the inline text editor is open it provides its own focus chrome;
     // drawing the selection box too produces a second dashed highlight.
     drawEditorOverlays(
@@ -2894,81 +2810,87 @@ export function ScreenshotEditor() {
     });
   }, [replaceDocument]);
 
-  const deleteLayer = useCallback((elementId: string | null) => {
-    const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === elementId);
-    if (!current || !element || element.locked) return;
-    commitDocument({
-      ...current,
-      elements: current.elements.filter(({ id }) => id !== elementId),
-    });
-    setSelectedId((currentId) => (currentId === elementId ? null : currentId));
-    setLayerMenuId(null);
-  }, [commitDocument]);
+  const deleteLayer = useCallback(
+    (elementId: string | null) => {
+      const current = documentRef.current;
+      const element = current?.elements.find(({ id }) => id === elementId);
+      if (!current || !element || element.locked) return;
+      commitDocument({
+        ...current,
+        elements: current.elements.filter(({ id }) => id !== elementId),
+      });
+      setSelectedId((currentId) => (currentId === elementId ? null : currentId));
+      setLayerMenuId(null);
+    },
+    [commitDocument],
+  );
 
   const deleteSelected = useCallback(() => {
     deleteLayer(selectedId);
   }, [deleteLayer, selectedId]);
 
-  const nudgeSelected = useCallback((deltaX: number, deltaY: number) => {
-    const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === selectedId);
-    if (!current || !element || element.locked) return;
-    commitDocument(replaceElement(
-      current,
-      element.id,
-      translateElement(element, deltaX, deltaY),
-    ));
-  }, [commitDocument, selectedId]);
+  const nudgeSelected = useCallback(
+    (deltaX: number, deltaY: number) => {
+      const current = documentRef.current;
+      const element = current?.elements.find(({ id }) => id === selectedId);
+      if (!current || !element || element.locked) return;
+      commitDocument(
+        replaceElement(current, element.id, translateElement(element, deltaX, deltaY)),
+      );
+    },
+    [commitDocument, selectedId],
+  );
 
-  const duplicateLayer = useCallback((elementId: string | null) => {
-    const current = documentRef.current;
-    const index = current?.elements.findIndex(({ id }) => id === elementId) ?? -1;
-    if (!current || index < 0) return false;
-    const duplicate = duplicateScreenshotElement(current.elements[index], editorId());
-    const elements = [...current.elements];
-    elements.splice(index + 1, 0, duplicate);
-    commitDocument({ ...current, elements });
-    setSelectedId(duplicate.id);
-    setEditingTextId(null);
-    setTool("select");
-    setLayerMenuId(null);
-    return true;
-  }, [commitDocument]);
+  const duplicateLayer = useCallback(
+    (elementId: string | null) => {
+      const current = documentRef.current;
+      const index = current?.elements.findIndex(({ id }) => id === elementId) ?? -1;
+      if (!current || index < 0) return false;
+      const duplicate = duplicateScreenshotElement(current.elements[index], editorId());
+      const elements = [...current.elements];
+      elements.splice(index + 1, 0, duplicate);
+      commitDocument({ ...current, elements });
+      setSelectedId(duplicate.id);
+      setEditingTextId(null);
+      setTool("select");
+      setLayerMenuId(null);
+      return true;
+    },
+    [commitDocument],
+  );
 
   const duplicateSelected = useCallback(() => {
     return duplicateLayer(selectedId);
   }, [duplicateLayer, selectedId]);
 
-  const mergeLayerDown = useCallback((elementId: string | null) => {
-    const current = documentRef.current;
-    if (!current || !elementId || !canMergeLayerDown(current.elements, elementId)) return false;
-    const index = current.elements.findIndex(({ id }) => id === elementId);
-    if (index <= 0) return false;
-    const below = current.elements[index - 1];
-    const selected = current.elements[index];
-    try {
-      const layers = [below, selected];
-      const raster = rasterizeLayersToImage(current, layers, imageCacheRef.current);
-      const merged = createMergedImageLayer(
-        editorId(),
-        raster,
-        mergedLayerName(layers),
-      );
-      ensureImage(merged.src);
-      commitDocument(applyMergeLayerDown(current, selected.id, merged));
-      setSelectedId(merged.id);
-      setEditingTextId(null);
-      setTool("select");
-      setImageRevision((revision) => revision + 1);
-      setLayerMenuId(null);
-      setError("");
-      return true;
-    } catch (reason) {
-      setError(String(reason));
-      return false;
-    }
-  }, [commitDocument, ensureImage]);
+  const mergeLayerDown = useCallback(
+    (elementId: string | null) => {
+      const current = documentRef.current;
+      if (!current || !elementId || !canMergeLayerDown(current.elements, elementId)) return false;
+      const index = current.elements.findIndex(({ id }) => id === elementId);
+      if (index <= 0) return false;
+      const below = current.elements[index - 1];
+      const selected = current.elements[index];
+      try {
+        const layers = [below, selected];
+        const raster = rasterizeLayersToImage(current, layers, imageCacheRef.current);
+        const merged = createMergedImageLayer(editorId(), raster, mergedLayerName(layers));
+        ensureImage(merged.src);
+        commitDocument(applyMergeLayerDown(current, selected.id, merged));
+        setSelectedId(merged.id);
+        setEditingTextId(null);
+        setTool("select");
+        setImageRevision((revision) => revision + 1);
+        setLayerMenuId(null);
+        setError("");
+        return true;
+      } catch (reason) {
+        setError(String(reason));
+        return false;
+      }
+    },
+    [commitDocument, ensureImage],
+  );
 
   const mergeVisibleLayers = useCallback(() => {
     const current = documentRef.current;
@@ -3056,10 +2978,12 @@ export function ScreenshotEditor() {
     const onKeyDown = (event: KeyboardEvent) => {
       const command = event.metaKey || event.ctrlKey;
       const target = event.target as HTMLElement | null;
-      const editingField = target instanceof Element
-        && target.matches("input, textarea, select, [contenteditable=true]");
-      const interactiveTarget = target instanceof Element
-        && target.matches("input, textarea, select, button, a, [contenteditable=true]");
+      const editingField =
+        target instanceof Element &&
+        target.matches("input, textarea, select, [contenteditable=true]");
+      const interactiveTarget =
+        target instanceof Element &&
+        target.matches("input, textarea, select, button, a, [contenteditable=true]");
       // Command (macOS) / Ctrl (Windows & Linux) hold enables click-drag pan.
       if (isPanModifierKey(event) && !interactiveTarget) {
         modifierPanRef.current = true;
@@ -3067,26 +2991,22 @@ export function ScreenshotEditor() {
         return;
       }
       if (
-        command
-        && (
-          event.key === "+"
-          || event.key === "="
-          || event.code === "Equal"
-          || event.code === "NumpadAdd"
-        )
+        command &&
+        (event.key === "+" ||
+          event.key === "=" ||
+          event.code === "Equal" ||
+          event.code === "NumpadAdd")
       ) {
         event.preventDefault();
         zoomBy(KEYBOARD_ZOOM_FACTOR);
         return;
       }
       if (
-        command
-        && (
-          event.key === "-"
-          || event.key === "_"
-          || event.code === "Minus"
-          || event.code === "NumpadSubtract"
-        )
+        command &&
+        (event.key === "-" ||
+          event.key === "_" ||
+          event.code === "Minus" ||
+          event.code === "NumpadSubtract")
       ) {
         event.preventDefault();
         zoomBy(1 / KEYBOARD_ZOOM_FACTOR);
@@ -3128,14 +3048,12 @@ export function ScreenshotEditor() {
         return;
       }
       if (
-        shapesMenuOpen
-        && (
-          event.key === "Backspace"
-          || event.key === "Delete"
-          || event.key === "Home"
-          || event.key === "End"
-          || event.key.startsWith("Arrow")
-        )
+        shapesMenuOpen &&
+        (event.key === "Backspace" ||
+          event.key === "Delete" ||
+          event.key === "Home" ||
+          event.key === "End" ||
+          event.key.startsWith("Arrow"))
       ) {
         return;
       }
@@ -3150,10 +3068,9 @@ export function ScreenshotEditor() {
       else if (event.key === "ArrowUp") nudgeSelected(0, -multiplier);
       else if (event.key === "ArrowDown") nudgeSelected(0, multiplier);
       else if (!command && !event.altKey) {
-        const match = TOOL_ITEMS.find(({ shortcut }) => (
-          shortcut
-          && shortcut.toLowerCase() === event.key.toLowerCase()
-        ));
+        const match = TOOL_ITEMS.find(
+          ({ shortcut }) => shortcut && shortcut.toLowerCase() === event.key.toLowerCase(),
+        );
         if (match) {
           activateTool(match.tool);
         }
@@ -3199,12 +3116,14 @@ export function ScreenshotEditor() {
       const clientX = event.clientX;
       const clientY = event.clientY;
       return {
-        clientX: typeof clientX === "number" && Number.isFinite(clientX)
-          ? clientX
-          : bounds.left + bounds.width / 2,
-        clientY: typeof clientY === "number" && Number.isFinite(clientY)
-          ? clientY
-          : bounds.top + bounds.height / 2,
+        clientX:
+          typeof clientX === "number" && Number.isFinite(clientX)
+            ? clientX
+            : bounds.left + bounds.width / 2,
+        clientY:
+          typeof clientY === "number" && Number.isFinite(clientY)
+            ? clientY
+            : bounds.top + bounds.height / 2,
       };
     };
 
@@ -3212,10 +3131,10 @@ export function ScreenshotEditor() {
       if ((!event.ctrlKey && !event.metaKey) || event.deltaY === 0) return;
       event.preventDefault();
       if (magnifyGestureRef.current) return;
-      zoomBy(
-        wheelZoomFactor(event.deltaY, event.deltaMode, viewport.clientHeight),
-        { clientX: event.clientX, clientY: event.clientY },
-      );
+      zoomBy(wheelZoomFactor(event.deltaY, event.deltaMode, viewport.clientHeight), {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
     };
 
     const onGestureStart = (event: Event) => {
@@ -3304,8 +3223,8 @@ export function ScreenshotEditor() {
     event.preventDefault();
     event.stopPropagation();
     if (
-      typeof event.currentTarget.hasPointerCapture === "function"
-      && event.currentTarget.hasPointerCapture(event.pointerId)
+      typeof event.currentTarget.hasPointerCapture === "function" &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
     ) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -3334,10 +3253,9 @@ export function ScreenshotEditor() {
     }
 
     const update = () => {
-      setCanvasOffscreen(isCanvasMostlyOffscreen(
-        viewport.getBoundingClientRect(),
-        surface.getBoundingClientRect(),
-      ));
+      setCanvasOffscreen(
+        isCanvasMostlyOffscreen(viewport.getBoundingClientRect(), surface.getBoundingClientRect()),
+      );
     };
 
     update();
@@ -3363,21 +3281,16 @@ export function ScreenshotEditor() {
     if (!canvas || !current) return { x: 0, y: 0 };
     const bounds = canvas.getBoundingClientRect();
     return {
-      x: (clientX - bounds.left) * current.width / Math.max(1, bounds.width),
-      y: (clientY - bounds.top) * current.height / Math.max(1, bounds.height),
+      x: ((clientX - bounds.left) * current.width) / Math.max(1, bounds.width),
+      y: ((clientY - bounds.top) * current.height) / Math.max(1, bounds.height),
     };
   };
 
-  const canvasPoint = (
-    event: Pick<React.PointerEvent, "clientX" | "clientY">,
-  ): EditorPoint => clientToDocumentPoint(event.clientX, event.clientY);
+  const canvasPoint = (event: Pick<React.PointerEvent, "clientX" | "clientY">): EditorPoint =>
+    clientToDocumentPoint(event.clientX, event.clientY);
 
   /** Move an already-visible brush ring without rerendering the full editor. */
-  const showBrushCursor = (
-    clientX: number,
-    clientY: number,
-    mode: "erase" | "restore",
-  ) => {
+  const showBrushCursor = (clientX: number, clientY: number, mode: "erase" | "restore") => {
     brushCursorPositionRef.current = { clientX, clientY };
     const cursor = brushCursorElementRef.current;
     if (cursor) {
@@ -3403,9 +3316,9 @@ export function ScreenshotEditor() {
       setWandLoupe(null);
       return;
     }
-    const mode = options?.mode ?? (
-      removeBgMode === "restore" ? "restore" : removeBgMode === "erase" ? "erase" : null
-    );
+    const mode =
+      options?.mode ??
+      (removeBgMode === "restore" ? "restore" : removeBgMode === "erase" ? "erase" : null);
     if (removeBgMode === "wand" || mode == null) {
       setBrushCursor(null);
       const current = documentRef.current;
@@ -3428,12 +3341,7 @@ export function ScreenshotEditor() {
         if (!wandSampleCanvasRef.current) {
           wandSampleCanvasRef.current = document.createElement("canvas");
         }
-        color = sampleImagePixel(
-          cached.image,
-          pixel.x,
-          pixel.y,
-          wandSampleCanvasRef.current,
-        );
+        color = sampleImagePixel(cached.image, pixel.x, pixel.y, wandSampleCanvasRef.current);
       }
       setWandLoupe({
         clientX: event.clientX,
@@ -3447,8 +3355,8 @@ export function ScreenshotEditor() {
     }
     setWandLoupe(null);
     const current = documentRef.current;
-    const overImage = options?.forceOverImage
-      || Boolean(current && hitTestImageElement(current.elements, point));
+    const overImage =
+      options?.forceOverImage || Boolean(current && hitTestImageElement(current.elements, point));
     if (overImage) {
       setCanvasCursor("none");
       showBrushCursor(event.clientX, event.clientY, mode);
@@ -3497,9 +3405,9 @@ export function ScreenshotEditor() {
     pointerId: number,
   ) => {
     if (
-      typeof target.hasPointerCapture === "function"
-      && typeof target.releasePointerCapture === "function"
-      && target.hasPointerCapture(pointerId)
+      typeof target.hasPointerCapture === "function" &&
+      typeof target.releasePointerCapture === "function" &&
+      target.hasPointerCapture(pointerId)
     ) {
       target.releasePointerCapture(pointerId);
     }
@@ -3567,9 +3475,9 @@ export function ScreenshotEditor() {
     canvas: Pick<ScreenshotDocument, "width" | "height">,
   ) => {
     if (
-      element
-      && element.visible
-      && canvasOverflowEdges(elementBounds(element), canvas).length > 0
+      element &&
+      element.visible &&
+      canvasOverflowEdges(elementBounds(element), canvas).length > 0
     ) {
       setOverflowHoverId(element.id);
       return;
@@ -3611,10 +3519,7 @@ export function ScreenshotEditor() {
    * Begin an edit gesture at a document-space point. The capture target may be
    * the canvas or the viewport chrome (so drawing can start outside the image).
    */
-  const startPointerAt = (
-    event: React.PointerEvent<Element>,
-    point: EditorPoint,
-  ) => {
+  const startPointerAt = (event: React.PointerEvent<Element>, point: EditorPoint) => {
     const current = documentRef.current;
     if (!current || event.button !== 0) return;
     const interactionRadius = 10 / Math.max(0.01, displayScale);
@@ -3642,7 +3547,7 @@ export function ScreenshotEditor() {
 
     if (tool === "select") {
       const selectedElement = selectedId
-        ? current.elements.find((element) => element.id === selectedId) ?? null
+        ? (current.elements.find((element) => element.id === selectedId) ?? null)
         : null;
       if (selectedElement) {
         const annotationHit = hitTestSelectedAnnotation(
@@ -3682,10 +3587,7 @@ export function ScreenshotEditor() {
           capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
-        if (
-          annotationHit?.kind === "arrow-handle"
-          && selectedElement.kind === "shape"
-        ) {
+        if (annotationHit?.kind === "arrow-handle" && selectedElement.kind === "shape") {
           startCanvasGesture({
             kind: "arrow-handle",
             pointerId: event.pointerId,
@@ -3780,7 +3682,7 @@ export function ScreenshotEditor() {
     // without switching to Select; empty space still starts a new shape.
     if (isShapeDrawTool(tool)) {
       const selectedElement = selectedId
-        ? current.elements.find((element) => element.id === selectedId) ?? null
+        ? (current.elements.find((element) => element.id === selectedId) ?? null)
         : null;
       if (selectedElement) {
         const annotationHit = hitTestSelectedAnnotation(
@@ -3820,10 +3722,7 @@ export function ScreenshotEditor() {
           capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
-        if (
-          annotationHit?.kind === "arrow-handle"
-          && selectedElement.kind === "shape"
-        ) {
+        if (annotationHit?.kind === "arrow-handle" && selectedElement.kind === "shape") {
           startCanvasGesture({
             kind: "arrow-handle",
             pointerId: event.pointerId,
@@ -3841,9 +3740,9 @@ export function ScreenshotEditor() {
         // Keeping body clicks on that shape out of the draw path prevents a
         // double-click intended for curve insertion from creating tiny shapes.
         if (
-          selectedElement.kind === "shape"
-          && selectedElement.shape === tool
-          && hitTestSelectedShapeBody(selectedElement, point, interactionRadius)
+          selectedElement.kind === "shape" &&
+          selectedElement.shape === tool &&
+          hitTestSelectedShapeBody(selectedElement, point, interactionRadius)
         ) {
           startCanvasGesture({
             kind: "move",
@@ -3864,37 +3763,38 @@ export function ScreenshotEditor() {
 
     const elementId = editorId();
     setSelectedId(null);
-    const element: ScreenshotElement = tool === "pen"
-      ? {
-        id: elementId,
-        kind: "path",
-        x: point.x,
-        y: point.y,
-        points: [point],
-        style: { ...defaultStyle, fill: null },
-        locked: false,
-        visible: true,
-        opacity: defaultOpacity,
-        blendMode: "source-over",
-      }
-      : {
-        id: elementId,
-        kind: "shape",
-        shape: tool as ShapeKind,
-        x: point.x,
-        y: point.y,
-        endX: point.x,
-        endY: point.y,
-        controls: [],
-        style: {
-          ...defaultStyle,
-          fill: isClosedShapeKind(tool) ? defaultStyle.fill : null,
-        },
-        locked: false,
-        visible: true,
-        opacity: defaultOpacity,
-        blendMode: "source-over",
-      };
+    const element: ScreenshotElement =
+      tool === "pen"
+        ? {
+            id: elementId,
+            kind: "path",
+            x: point.x,
+            y: point.y,
+            points: [point],
+            style: { ...defaultStyle, fill: null },
+            locked: false,
+            visible: true,
+            opacity: defaultOpacity,
+            blendMode: "source-over",
+          }
+        : {
+            id: elementId,
+            kind: "shape",
+            shape: tool as ShapeKind,
+            x: point.x,
+            y: point.y,
+            endX: point.x,
+            endY: point.y,
+            controls: [],
+            style: {
+              ...defaultStyle,
+              fill: isClosedShapeKind(tool) ? defaultStyle.fill : null,
+            },
+            locked: false,
+            visible: true,
+            opacity: defaultOpacity,
+            blendMode: "source-over",
+          };
     startCanvasGesture({
       kind: "draw",
       pointerId: event.pointerId,
@@ -3937,9 +3837,10 @@ export function ScreenshotEditor() {
       if (tool === "select" || isShapeDrawTool(tool)) {
         const current = documentRef.current;
         const interactionRadius = 10 / Math.max(0.01, displayScale);
-        const selectedElement = selectedId && current
-          ? current.elements.find((element) => element.id === selectedId) ?? null
-          : null;
+        const selectedElement =
+          selectedId && current
+            ? (current.elements.find((element) => element.id === selectedId) ?? null)
+            : null;
         if (selectedElement) {
           const annotationHit = hitTestSelectedAnnotation(
             selectedElement,
@@ -3957,24 +3858,14 @@ export function ScreenshotEditor() {
             setCanvasCursor("grab");
             return;
           }
-          if (
-            selectedElement.kind === "shape"
-            && isCurveableStrokeShape(selectedElement)
-          ) {
-            const hint = curveStrokeHoverHint(
-              selectedElement,
-              point,
-              interactionRadius,
-            );
+          if (selectedElement.kind === "shape" && isCurveableStrokeShape(selectedElement)) {
+            const hint = curveStrokeHoverHint(selectedElement, point, interactionRadius);
             setCurveHoverTip(
-              hint
-                ? { text: hint, clientX: event.clientX, clientY: event.clientY }
-                : null,
+              hint ? { text: hint, clientX: event.clientX, clientY: event.clientY } : null,
             );
             if (annotationHit?.kind === "arrow-handle") {
               setCanvasCursor(
-                annotationHit.handle.kind === "start"
-                  || annotationHit.handle.kind === "end"
+                annotationHit.handle.kind === "start" || annotationHit.handle.kind === "end"
                   ? "move"
                   : "grab",
               );
@@ -3992,10 +3883,10 @@ export function ScreenshotEditor() {
             return;
           }
           if (
-            tool !== "select"
-            && selectedElement.kind === "shape"
-            && selectedElement.shape === tool
-            && hitTestSelectedShapeBody(selectedElement, point, interactionRadius)
+            tool !== "select" &&
+            selectedElement.kind === "shape" &&
+            selectedElement.shape === tool &&
+            hitTestSelectedShapeBody(selectedElement, point, interactionRadius)
           ) {
             setCanvasCursor("move");
             return;
@@ -4009,11 +3900,11 @@ export function ScreenshotEditor() {
             : null;
           // Unselected curveable strokes: light discovery tip when hovering the path.
           if (
-            hovered
-            && hovered.kind === "shape"
-            && isCurveableStrokeShape(hovered)
-            && hovered.id !== selectedId
-            && !hovered.locked
+            hovered &&
+            hovered.kind === "shape" &&
+            isCurveableStrokeShape(hovered) &&
+            hovered.id !== selectedId &&
+            !hovered.locked
           ) {
             const closest = closestPointOnArrow(hovered, point);
             const pathHitRadius = Math.max(
@@ -4051,12 +3942,7 @@ export function ScreenshotEditor() {
         shiftAspect: gesture.shiftAspect,
         liveRect: gesture.lastRect,
       });
-      const rect = boundedCropRect(
-        gesture.origin,
-        point,
-        bounds,
-        next.aspectRatio,
-      );
+      const rect = boundedCropRect(gesture.origin, point, bounds, next.aspectRatio);
       gestureRef.current = {
         ...gesture,
         shiftAspect: next.shiftAspect,
@@ -4083,9 +3969,9 @@ export function ScreenshotEditor() {
         );
       } else {
         const controlIndex = handle.index;
-        const controls = gesture.element.controls.map((control, index) => (
-          index === controlIndex ? { x: local.x, y: local.y } : control
-        ));
+        const controls = gesture.element.controls.map((control, index) =>
+          index === controlIndex ? { x: local.x, y: local.y } : control,
+        );
         next = preserveShapeWorldPoint(
           gesture.element,
           { ...gesture.element, controls },
@@ -4103,16 +3989,10 @@ export function ScreenshotEditor() {
         );
       }
       setCanvasCursor("grabbing");
-      setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        elementBounds(next),
-        gesture.initialDocument,
-        next,
-      ));
-      replaceDocument(replaceElement(
-        gesture.initialDocument,
-        gesture.element.id,
-        next,
-      ));
+      setCanvasExpandPreview(
+        canvasExpandPreviewForBounds(elementBounds(next), gesture.initialDocument, next),
+      );
+      replaceDocument(replaceElement(gesture.initialDocument, gesture.element.id, next));
       return;
     }
     if (gesture.kind === "rotate") {
@@ -4126,25 +4006,19 @@ export function ScreenshotEditor() {
           rotationSnapDegrees,
         ),
       );
-      setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        elementBounds(next),
-        gesture.initialDocument,
-        next,
-      ));
-      replaceDocument(replaceElement(
-        gesture.initialDocument,
-        gesture.element.id,
-        next,
-      ));
+      setCanvasExpandPreview(
+        canvasExpandPreviewForBounds(elementBounds(next), gesture.initialDocument, next),
+      );
+      replaceDocument(replaceElement(gesture.initialDocument, gesture.element.id, next));
       return;
     }
     if (gesture.kind === "move") {
       setCanvasCursor("move");
       const directTextEditCandidate = gesture.element.kind === "text" && gesture.wasSelected;
-      const didMove = gesture.didMove || Math.hypot(
-        point.x - gesture.origin.x,
-        point.y - gesture.origin.y,
-      ) > (directTextEditCandidate ? 2 / Math.max(0.01, displayScale) : 0);
+      const didMove =
+        gesture.didMove ||
+        Math.hypot(point.x - gesture.origin.x, point.y - gesture.origin.y) >
+          (directTextEditCandidate ? 2 / Math.max(0.01, displayScale) : 0);
       if (didMove !== gesture.didMove) {
         gestureRef.current = { ...gesture, didMove };
       }
@@ -4156,27 +4030,16 @@ export function ScreenshotEditor() {
         point.y - gesture.origin.y,
       );
       const freeBounds = elementBounds(free);
-      const lines = collectAlignmentSnapLines(
-        gesture.initialDocument,
-        gesture.element.id,
-      );
+      const lines = collectAlignmentSnapLines(gesture.initialDocument, gesture.element.id);
       const snapped = snapTranslatedBounds(freeBounds, lines, snapThreshold);
       const deltaX = snapped.bounds.x - freeBounds.x;
       const deltaY = snapped.bounds.y - freeBounds.y;
-      const moved = (deltaX !== 0 || deltaY !== 0)
-        ? translateElement(free, deltaX, deltaY)
-        : free;
-      const nextDocument = replaceElement(
-        gesture.initialDocument,
-        gesture.element.id,
-        moved,
-      );
+      const moved = deltaX !== 0 || deltaY !== 0 ? translateElement(free, deltaX, deltaY) : free;
+      const nextDocument = replaceElement(gesture.initialDocument, gesture.element.id, moved);
       setAlignmentGuides(snapped.guides);
-      setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        elementBounds(moved),
-        gesture.initialDocument,
-        moved,
-      ));
+      setCanvasExpandPreview(
+        canvasExpandPreviewForBounds(elementBounds(moved), gesture.initialDocument, moved),
+      );
       replaceDocument(nextDocument);
       return;
     }
@@ -4210,35 +4073,28 @@ export function ScreenshotEditor() {
         minSize,
         lockAspectRatio,
       );
-      const lines = collectAlignmentSnapLines(
-        gesture.initialDocument,
-        gesture.element.id,
-      );
+      const lines = collectAlignmentSnapLines(gesture.initialDocument, gesture.element.id);
       const snapped = rotatedElement
         ? { bounds: freeBounds, guides: [] as AlignmentSnapGuide[] }
         : snapResizedBounds(
-          gesture.initialBounds,
-          gesture.handle,
-          freeBounds,
-          lines,
-          snapThreshold,
-          minSize,
-        );
+            gesture.initialBounds,
+            gesture.handle,
+            freeBounds,
+            lines,
+            snapThreshold,
+            minSize,
+          );
       // Snap can nudge axes independently; re-apply the lock so Shift stays fixed-ratio.
       const nextBounds = lockAspectRatio
         ? resizeBoundsFromHandle(
-          gesture.initialBounds,
-          gesture.handle,
-          resizeHandlePoint(snapped.bounds, gesture.handle),
-          minSize,
-          true,
-        )
+            gesture.initialBounds,
+            gesture.handle,
+            resizeHandlePoint(snapped.bounds, gesture.handle),
+            minSize,
+            true,
+          )
         : snapped.bounds;
-      let resized = resizeElement(
-        gesture.element,
-        gesture.initialBounds,
-        nextBounds,
-      );
+      let resized = resizeElement(gesture.element, gesture.initialBounds, nextBounds);
       if (elementRotation(resized) !== 0) {
         const anchor = resizeHandlePoint(
           gesture.initialBounds,
@@ -4249,16 +4105,10 @@ export function ScreenshotEditor() {
       gestureRef.current = { ...gesture, currentBounds: nextBounds };
       setResizePreviewBounds(elementLocalBounds(resized));
       setAlignmentGuides(snapped.guides);
-      setCanvasExpandPreview(canvasExpandPreviewForBounds(
-        elementBounds(resized),
-        gesture.initialDocument,
-        resized,
-      ));
-      replaceDocument(replaceElement(
-        gesture.initialDocument,
-        gesture.element.id,
-        resized,
-      ));
+      setCanvasExpandPreview(
+        canvasExpandPreviewForBounds(elementBounds(resized), gesture.initialDocument, resized),
+      );
+      replaceDocument(replaceElement(gesture.initialDocument, gesture.element.id, resized));
       return;
     }
     // Freehand / shape draw: track the pointer (including past the canvas edge).
@@ -4288,11 +4138,9 @@ export function ScreenshotEditor() {
     if (updated !== element) {
       replaceDocument(replaceElement(current, element.id, updated));
     }
-    setCanvasExpandPreview(canvasExpandPreviewForBounds(
-      elementBounds(updated),
-      gesture.initialDocument,
-      updated,
-    ));
+    setCanvasExpandPreview(
+      canvasExpandPreviewForBounds(elementBounds(updated), gesture.initialDocument, updated),
+    );
   };
 
   const finishPointer = (event: React.PointerEvent<Element>) => {
@@ -4308,9 +4156,10 @@ export function ScreenshotEditor() {
       const element = gesture.initialDocument.elements.find(
         (item) => item.id === gesture.elementId,
       );
-      const releasePixel = event.type === "pointerup" && element?.kind === "image"
-        ? documentPointToImagePixel(element, canvasPoint(event))
-        : null;
+      const releasePixel =
+        event.type === "pointerup" && element?.kind === "image"
+          ? documentPointToImagePixel(element, canvasPoint(event))
+          : null;
       if (releasePixel) {
         gestureRef.current = { ...gesture, pendingPixel: releasePixel };
       }
@@ -4376,13 +4225,13 @@ export function ScreenshotEditor() {
     const releasePoint = gesture.kind === "move" ? canvasPoint(event) : null;
 
     if (
-      gesture.kind === "move"
-      && gesture.element.kind === "text"
-      && gesture.wasSelected
-      && !gesture.didMove
-      && releasePoint
-      && Math.hypot(releasePoint.x - gesture.origin.x, releasePoint.y - gesture.origin.y)
-        <= 2 / Math.max(0.01, displayScale)
+      gesture.kind === "move" &&
+      gesture.element.kind === "text" &&
+      gesture.wasSelected &&
+      !gesture.didMove &&
+      releasePoint &&
+      Math.hypot(releasePoint.x - gesture.origin.x, releasePoint.y - gesture.origin.y) <=
+        2 / Math.max(0.01, displayScale)
     ) {
       beginTextEditing(gesture.element.id);
       return;
@@ -4391,11 +4240,11 @@ export function ScreenshotEditor() {
     // Partial overflow stays clipped. Fully off-canvas work still grows the
     // document so a chrome-only draw or label is not lost.
     if (
-      gesture.kind === "resize"
-      || gesture.kind === "move"
-      || gesture.kind === "arrow-handle"
-      || gesture.kind === "rotate"
-      || gesture.kind === "draw"
+      gesture.kind === "resize" ||
+      gesture.kind === "move" ||
+      gesture.kind === "arrow-handle" ||
+      gesture.kind === "rotate" ||
+      gesture.kind === "draw"
     ) {
       const elementId = gesture.kind === "draw" ? gesture.elementId : gesture.element.id;
       const element = current.elements.find(({ id }) => id === elementId);
@@ -4428,13 +4277,10 @@ export function ScreenshotEditor() {
     if (gesture.kind === "draw") {
       const drawn = current.elements.find(({ id }) => id === gesture.elementId);
       if (
-        drawn
-        && drawn.kind === "shape"
-        && drawn.shape === "arrow"
-        && arrowPathLength(drawn) < Math.max(
-          ARROW_MIN_DRAW_LENGTH,
-          3 / Math.max(0.01, displayScale),
-        )
+        drawn &&
+        drawn.kind === "shape" &&
+        drawn.shape === "arrow" &&
+        arrowPathLength(drawn) < Math.max(ARROW_MIN_DRAW_LENGTH, 3 / Math.max(0.01, displayScale))
       ) {
         replaceDocument(gesture.initialDocument);
         current = gesture.initialDocument;
@@ -4451,11 +4297,7 @@ export function ScreenshotEditor() {
   const handleCanvasDoubleClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const current = documentRef.current;
     // Curve point add/remove works with Select or any shape tool while a stroke is selected.
-    if (
-      !current
-      || (tool !== "select" && !isShapeDrawTool(tool))
-      || event.button !== 0
-    ) {
+    if (!current || (tool !== "select" && !isShapeDrawTool(tool)) || event.button !== 0) {
       return;
     }
     const point = clientToDocumentPoint(event.clientX, event.clientY);
@@ -4463,28 +4305,30 @@ export function ScreenshotEditor() {
 
     // Prefer the selected line/arrow so double-click on its path adds a control.
     const selectedElement = selectedId
-      ? current.elements.find((element) => element.id === selectedId) ?? null
+      ? (current.elements.find((element) => element.id === selectedId) ?? null)
       : null;
     if (
-      selectedElement
-      && selectedElement.kind === "shape"
-      && isCurveableStrokeShape(selectedElement)
-      && !selectedElement.locked
+      selectedElement &&
+      selectedElement.kind === "shape" &&
+      isCurveableStrokeShape(selectedElement) &&
+      !selectedElement.locked
     ) {
       const handle = hitTestArrowHandle(selectedElement, point, interactionRadius);
       if (handle?.kind === "control") {
         event.preventDefault();
-        commitDocument(replaceElement(
-          current,
-          selectedElement.id,
-          removeArrowControl(selectedElement, handle.index),
-        ));
+        commitDocument(
+          replaceElement(
+            current,
+            selectedElement.id,
+            removeArrowControl(selectedElement, handle.index),
+          ),
+        );
         return;
       }
       if (
-        handle?.kind === "start"
-        || handle?.kind === "end"
-        || handle?.kind === "starter-control"
+        handle?.kind === "start" ||
+        handle?.kind === "end" ||
+        handle?.kind === "starter-control"
       ) {
         // Starter dots are drag affordances; endpoints are move affordances.
         return;
@@ -4507,11 +4351,11 @@ export function ScreenshotEditor() {
     // Double-click an unselected line/arrow path: select it and add a curve point.
     const hit = hitTestElement(current.elements, point, interactionRadius);
     if (
-      hit
-      && hit.kind === "shape"
-      && isCurveableStrokeShape(hit)
-      && !hit.locked
-      && hit.id !== selectedId
+      hit &&
+      hit.kind === "shape" &&
+      isCurveableStrokeShape(hit) &&
+      !hit.locked &&
+      hit.id !== selectedId
     ) {
       const closest = closestPointOnArrow(hit, point);
       const pathHitRadius = Math.max(
@@ -4555,50 +4399,54 @@ export function ScreenshotEditor() {
     setTrimEdgesHover(false);
   };
 
-  const transformImageLayer = useCallback((elementId: string, action: ImageTransformAction) => {
-    const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === elementId);
-    if (!current || element?.kind !== "image") return;
+  const transformImageLayer = useCallback(
+    (elementId: string, action: ImageTransformAction) => {
+      const current = documentRef.current;
+      const element = current?.elements.find(({ id }) => id === elementId);
+      if (!current || element?.kind !== "image") return;
 
-    const rotates = action === "rotate-clockwise" || action === "rotate-counterclockwise";
-    const visibleElements = current.elements.filter((candidate) => candidate.visible);
-    const fillsCanvas = element.visible
-      && visibleElements.length === 1
-      && visibleElements[0].id === element.id
-      && Math.abs(element.x) < 0.01
-      && Math.abs(element.y) < 0.01
-      && Math.abs(element.width - current.width) < 0.01
-      && Math.abs(element.height - current.height) < 0.01;
-    const transformed = transformImageElement(element, action);
-    let next = replaceElement(current, element.id, transformed);
+      const rotates = action === "rotate-clockwise" || action === "rotate-counterclockwise";
+      const visibleElements = current.elements.filter((candidate) => candidate.visible);
+      const fillsCanvas =
+        element.visible &&
+        visibleElements.length === 1 &&
+        visibleElements[0].id === element.id &&
+        Math.abs(element.x) < 0.01 &&
+        Math.abs(element.y) < 0.01 &&
+        Math.abs(element.width - current.width) < 0.01 &&
+        Math.abs(element.height - current.height) < 0.01;
+      const transformed = transformImageElement(element, action);
+      let next = replaceElement(current, element.id, transformed);
 
-    // The common fresh-photo case should become portrait/landscape in one click.
-    // Layered compositions keep the canvas; hanging overflow stays clipped until
-    // the user expands. Fully off-canvas results still grow so the layer is not lost.
-    if (rotates && fillsCanvas) {
-      next = trimDocumentToContent(next);
-    } else if (isFullyOutsideCanvas(elementBounds(transformed), next)) {
-      next = expandDocumentToFitBounds(next, elementBounds(transformed), 0);
-    }
+      // The common fresh-photo case should become portrait/landscape in one click.
+      // Layered compositions keep the canvas; hanging overflow stays clipped until
+      // the user expands. Fully off-canvas results still grow so the layer is not lost.
+      if (rotates && fillsCanvas) {
+        next = trimDocumentToContent(next);
+      } else if (isFullyOutsideCanvas(elementBounds(transformed), next)) {
+        next = expandDocumentToFitBounds(next, elementBounds(transformed), 0);
+      }
 
-    commitDocument(next);
-    setSelectedId(element.id);
-    setEditingTextId(null);
-    setCropSelection(null);
-    setTrimEdgesHover(false);
-    setTool("select");
-    setError("");
-    const nextElement = next.elements.find(({ id }) => id === element.id);
-    if (
-      nextElement
-      && nextElement.visible
-      && canvasOverflowEdges(elementBounds(nextElement), next).length > 0
-    ) {
-      setOverflowHoverId(nextElement.id);
-    } else {
-      setOverflowHoverId(null);
-    }
-  }, [commitDocument]);
+      commitDocument(next);
+      setSelectedId(element.id);
+      setEditingTextId(null);
+      setCropSelection(null);
+      setTrimEdgesHover(false);
+      setTool("select");
+      setError("");
+      const nextElement = next.elements.find(({ id }) => id === element.id);
+      if (
+        nextElement &&
+        nextElement.visible &&
+        canvasOverflowEdges(elementBounds(nextElement), next).length > 0
+      ) {
+        setOverflowHoverId(nextElement.id);
+      } else {
+        setOverflowHoverId(null);
+      }
+    },
+    [commitDocument],
+  );
 
   /** Decode a cached layer image into natural-resolution pixels. */
   const readLayerImageData = (src: string): ImageData => {
@@ -4641,12 +4489,7 @@ export function ScreenshotEditor() {
         image: workingCanvas,
         status: "loaded",
       });
-      const next = applyImageBackgroundEdit(
-        initialDocument,
-        element.id,
-        nextSrc,
-        element.src,
-      );
+      const next = applyImageBackgroundEdit(initialDocument, element.id, nextSrc, element.src);
       commitDocument(next);
     } catch (reason) {
       setError(String(reason));
@@ -4761,9 +4604,9 @@ export function ScreenshotEditor() {
     if (!rename) return;
     const name = rename.value.trim();
     if (!name) return;
-    updateLayer(rename.id, (element) => (
-      element.kind === "image" ? { ...element, name } : element
-    ));
+    updateLayer(rename.id, (element) =>
+      element.kind === "image" ? { ...element, name } : element,
+    );
   };
 
   const moveLayer = (elementId: string, direction: "front" | "back") => {
@@ -4771,9 +4614,7 @@ export function ScreenshotEditor() {
     if (!current) return;
     const index = current.elements.findIndex(({ id }) => id === elementId);
     if (index < 0 || current.elements[index].locked) return;
-    const target = direction === "front"
-      ? current.elements.at(-1)
-      : current.elements[0];
+    const target = direction === "front" ? current.elements.at(-1) : current.elements[0];
     if (!target || target.id === elementId) return;
     const elements = reorderScreenshotLayers(
       current.elements,
@@ -4787,19 +4628,10 @@ export function ScreenshotEditor() {
     setLayerMenuId(null);
   };
 
-  const dropLayer = (
-    movedId: string,
-    targetId: string,
-    placement: LayerDropPlacement,
-  ) => {
+  const dropLayer = (movedId: string, targetId: string, placement: LayerDropPlacement) => {
     const current = documentRef.current;
     if (!current) return;
-    const elements = reorderScreenshotLayers(
-      current.elements,
-      movedId,
-      targetId,
-      placement,
-    );
+    const elements = reorderScreenshotLayers(current.elements, movedId, targetId, placement);
     if (elements === current.elements) return;
     commitDocument({ ...current, elements });
     setSelectedId(movedId);
@@ -4849,9 +4681,10 @@ export function ScreenshotEditor() {
         // Same-app drops from a preview card can also hand the webview an empty
         // File; loadImageFile then reads the PNG staged for the native drag.
         const image = await loadImageFile(file, {
-          preparedBytes: () => invoke<number[]>("read_prepared_drag_image", {
-            fileName: file.name,
-          }),
+          preparedBytes: () =>
+            invoke<number[]>("read_prepared_drag_image", {
+              fileName: file.name,
+            }),
         });
         const sourceArtifactId = await invoke<string | null>("prepared_drag_artifact_id", {
           fileName: file.name,
@@ -4889,11 +4722,7 @@ export function ScreenshotEditor() {
           blendMode: "source-over",
         };
         if (isFullyOutsideCanvas(elementBounds(element), next)) {
-          next = expandDocumentForElement(
-            next,
-            element,
-            imageDropExpandPadding(placement.edge),
-          );
+          next = expandDocumentForElement(next, element, imageDropExpandPadding(placement.edge));
         } else {
           next = { ...next, elements: [...next.elements, element] };
         }
@@ -4945,16 +4774,26 @@ export function ScreenshotEditor() {
     }
     if (dimension === "width") {
       setCustomExportWidth(next);
-      setCustomExportHeight(Math.max(1, Math.min(
-        MAX_SCREENSHOT_OUTPUT_DIMENSION,
-        Math.round(next * current.height / current.width),
-      )));
+      setCustomExportHeight(
+        Math.max(
+          1,
+          Math.min(
+            MAX_SCREENSHOT_OUTPUT_DIMENSION,
+            Math.round((next * current.height) / current.width),
+          ),
+        ),
+      );
     } else {
       setCustomExportHeight(next);
-      setCustomExportWidth(Math.max(1, Math.min(
-        MAX_SCREENSHOT_OUTPUT_DIMENSION,
-        Math.round(next * current.width / current.height),
-      )));
+      setCustomExportWidth(
+        Math.max(
+          1,
+          Math.min(
+            MAX_SCREENSHOT_OUTPUT_DIMENSION,
+            Math.round((next * current.width) / current.height),
+          ),
+        ),
+      );
     }
   };
 
@@ -4962,7 +4801,9 @@ export function ScreenshotEditor() {
     const current = documentRef.current;
     if (!current) throw new Error("The editor is still loading.");
     const missing = current.elements
-      .filter((element): element is EditorImageElement => element.kind === "image" && element.visible)
+      .filter(
+        (element): element is EditorImageElement => element.kind === "image" && element.visible,
+      )
       .find((element) => imageCacheRef.current.get(element.src)?.status !== "loaded");
     if (missing) throw new Error(`${missing.name} has not finished loading.`);
     const source = createDocumentPaintCanvas(current.width, current.height);
@@ -5000,14 +4841,16 @@ export function ScreenshotEditor() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
-      if (shouldUseOriginalFileSizeEstimate(
-        artifact,
-        editorDocument,
-        baselineDocumentRef.current,
-        exportFormat,
-        exportSize,
-        qualityMode,
-      )) {
+      if (
+        shouldUseOriginalFileSizeEstimate(
+          artifact,
+          editorDocument,
+          baselineDocumentRef.current,
+          exportFormat,
+          exportSize,
+          qualityMode,
+        )
+      ) {
         setEstimatedBytes(artifact.size_bytes);
         setEstimateSourceBytes(artifact.size_bytes);
         setEstimatePending(false);
@@ -5022,26 +4865,26 @@ export function ScreenshotEditor() {
           // JPEG stays in-browser (toBlob quality matches our encoder closely enough).
           let bytes: number;
           let sourceBytes: number | null = null;
-          if (
-            (exportFormat === "png" || exportFormat === "webp")
-            && qualityMode !== "preserve"
-          ) {
+          if ((exportFormat === "png" || exportFormat === "webp") && qualityMode !== "preserve") {
             const imagePng = await canvasPngBytes(canvas);
             sourceBytes = imagePng.length;
-            const maxSizeBytes = qualityMode === "maximum"
-              ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
-              : null;
+            const maxSizeBytes =
+              qualityMode === "maximum"
+                ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
+                : null;
             bytes = await invoke<number>("estimate_screenshot_export", {
               imagePng,
               format: exportFormat,
               qualityMode,
               jpegQuality: Number(jpegQuality),
-              maxSizeBytes: maxSizeBytes !== null && Number.isFinite(maxSizeBytes)
-                ? Math.round(maxSizeBytes)
-                : null,
-              pngMaxColors: exportFormat === "png" && qualityMode === "compress"
-                ? pngMaxColorsForQuality(jpegQuality)
-                : null,
+              maxSizeBytes:
+                maxSizeBytes !== null && Number.isFinite(maxSizeBytes)
+                  ? Math.round(maxSizeBytes)
+                  : null,
+              pngMaxColors:
+                exportFormat === "png" && qualityMode === "compress"
+                  ? pngMaxColorsForQuality(jpegQuality)
+                  : null,
             });
           } else {
             // Compress JPEG still needs the flattened PNG length as Est. size's
@@ -5049,14 +4892,9 @@ export function ScreenshotEditor() {
             if (qualityMode !== "preserve") {
               sourceBytes = (await canvasPngBytes(canvas)).length;
             }
-            const estimateQuality = exportFormat === "jpeg" && qualityMode !== "preserve"
-              ? Number(jpegQuality)
-              : 100;
-            bytes = await estimateCanvasExportBytes(
-              canvas,
-              exportFormat,
-              estimateQuality,
-            );
+            const estimateQuality =
+              exportFormat === "jpeg" && qualityMode !== "preserve" ? Number(jpegQuality) : 100;
+            bytes = await estimateCanvasExportBytes(canvas, exportFormat, estimateQuality);
           }
           if (!cancelled) {
             if (sourceBytes !== null) setEstimateSourceBytes(sourceBytes);
@@ -5138,20 +4976,16 @@ export function ScreenshotEditor() {
       setError("Choose a destination folder for the edited screenshot.");
       return;
     }
-    const maximumSizeText = qualityMode === "maximum"
-      ? maximumFileSize.trim()
-      : "";
+    const maximumSizeText = qualityMode === "maximum" ? maximumFileSize.trim() : "";
     const maximumSizeBytes = maximumSizeText
-      ? Math.floor(
-        Number(maximumSizeText) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit],
-      )
+      ? Math.floor(Number(maximumSizeText) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit])
       : null;
     if (
-      qualityMode === "maximum"
-      && (!maximumSizeText
-        || !Number.isFinite(maximumSizeBytes)
-        || maximumSizeBytes === null
-        || maximumSizeBytes < 10_000)
+      qualityMode === "maximum" &&
+      (!maximumSizeText ||
+        !Number.isFinite(maximumSizeBytes) ||
+        maximumSizeBytes === null ||
+        maximumSizeBytes < 10_000)
     ) {
       setError("Enter a maximum file size of at least 10 KB.");
       return;
@@ -5170,10 +5004,11 @@ export function ScreenshotEditor() {
         exportFormat,
         artifact.path,
       );
-      const overwriteSource = !makeCopy
-        && !sourceMissing
-        && screenshotPathMatchesFormat(artifact.path, exportFormat)
-        && artifact.path === destinationPath;
+      const overwriteSource =
+        !makeCopy &&
+        !sourceMissing &&
+        screenshotPathMatchesFormat(artifact.path, exportFormat) &&
+        artifact.path === destinationPath;
       await loadEditorTextFonts();
       const imagePng = await canvasPngBytes(renderFlattened());
       const result = await invoke<SavedScreenshotEdit>("save_screenshot_edit", {
@@ -5183,9 +5018,10 @@ export function ScreenshotEditor() {
           format: exportFormat,
           quality_mode: qualityMode,
           jpeg_quality: saveQuality,
-          png_max_colors: exportFormat === "png" && qualityMode === "compress"
-            ? pngMaxColorsForQuality(jpegQuality)
-            : null,
+          png_max_colors:
+            exportFormat === "png" && qualityMode === "compress"
+              ? pngMaxColorsForQuality(jpegQuality)
+              : null,
           max_size_bytes: maximumSizeBytes,
           overwrite_source: overwriteSource,
           image_png: imagePng,
@@ -5264,9 +5100,8 @@ export function ScreenshotEditor() {
 
   // Hooks must stay above the loading early-return.
   const canPreviewCompression = qualityMode === "compress" || qualityMode === "maximum";
-  const showCompressCompare = canPreviewCompression
-    && exportSettingsOpen
-    && !compressCompareDismissed;
+  const showCompressCompare =
+    canPreviewCompression && exportSettingsOpen && !compressCompareDismissed;
 
   const loadCompressPreview = useCallback(async () => {
     if (!canPreviewCompression || !editorDocument || !artifact) return;
@@ -5284,9 +5119,10 @@ export function ScreenshotEditor() {
       const beforeBlob = new Blob([new Uint8Array(beforePng)], { type: "image/png" });
       beforeUrl = URL.createObjectURL(beforeBlob);
 
-      const maxSizeBytes = qualityMode === "maximum"
-        ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
-        : null;
+      const maxSizeBytes =
+        qualityMode === "maximum"
+          ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
+          : null;
       const preview = await invoke<{
         bytes: number[];
         sizeBytes: number;
@@ -5296,18 +5132,19 @@ export function ScreenshotEditor() {
         format: exportFormat,
         qualityMode,
         jpegQuality: qualityMode === "compress" ? Number(jpegQuality) : 100,
-        maxSizeBytes: maxSizeBytes !== null && Number.isFinite(maxSizeBytes)
-          ? Math.round(maxSizeBytes)
-          : null,
-        pngMaxColors: exportFormat === "png" && qualityMode === "compress"
-          ? pngMaxColorsForQuality(jpegQuality)
-          : null,
+        maxSizeBytes:
+          maxSizeBytes !== null && Number.isFinite(maxSizeBytes) ? Math.round(maxSizeBytes) : null,
+        pngMaxColors:
+          exportFormat === "png" && qualityMode === "compress"
+            ? pngMaxColorsForQuality(jpegQuality)
+            : null,
       });
-      const mime = exportFormat === "jpeg"
-        ? "image/jpeg"
-        : exportFormat === "webp"
-          ? "image/webp"
-          : "image/png";
+      const mime =
+        exportFormat === "jpeg"
+          ? "image/jpeg"
+          : exportFormat === "webp"
+            ? "image/webp"
+            : "image/png";
       const afterBlob = new Blob([new Uint8Array(preview.bytes)], { type: mime });
       afterUrl = URL.createObjectURL(afterBlob);
 
@@ -5361,9 +5198,12 @@ export function ScreenshotEditor() {
     qualityMode,
   ]);
 
-  useEffect(() => () => {
-    revokeCompressPreviewUrls();
-  }, [revokeCompressPreviewUrls]);
+  useEffect(
+    () => () => {
+      revokeCompressPreviewUrls();
+    },
+    [revokeCompressPreviewUrls],
+  );
 
   if (!artifact || !editorDocument) {
     return (
@@ -5381,14 +5221,13 @@ export function ScreenshotEditor() {
     customExportWidth,
     customExportHeight,
   );
-  const formatRequiresCopy = sourceMissing
-    || !screenshotPathMatchesFormat(artifact.path, exportFormat);
+  const formatRequiresCopy =
+    sourceMissing || !screenshotPathMatchesFormat(artifact.path, exportFormat);
   const savingCopy = makeCopy || formatRequiresCopy;
   const hasOriginalFile = Boolean(artifact.path) && !sourceMissing;
   const saveHint = screenshotSaveHint({
     sourceMissing,
-    jpegDropsTransparency: exportFormat === "jpeg"
-      && editorDocument.background == null,
+    jpegDropsTransparency: exportFormat === "jpeg" && editorDocument.background == null,
     qualityMode,
     exportFormat,
     hasOriginalFile,
@@ -5396,38 +5235,38 @@ export function ScreenshotEditor() {
   });
   const sourceDirectory = artifact.path ? screenshotParentDirectory(artifact.path) : "";
   const sourceStem = artifact.path ? screenshotFileStem(artifact.path) : "";
-  const maximumSizeBytes = qualityMode === "maximum"
-    ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
-    : null;
-  const estimatedSizeIsCap = maximumSizeBytes !== null
-    && Number.isFinite(maximumSizeBytes)
-    && maximumSizeBytes >= 10_000
-    && estimatedBytes !== null
-    && estimatedBytes > maximumSizeBytes
-    && (exportFormat === "jpeg" || exportFormat === "webp");
-  const estimatedSizeLabel = estimatePending && estimatedBytes === null
-    ? "Estimating…"
-    : estimatedBytes === null
-      ? "—"
-      : estimatedSizeIsCap
-        ? `≤ ${formatFileSize(maximumSizeBytes ?? 0)}`
-        : `≈ ${formatFileSize(estimatedBytes)}`;
+  const maximumSizeBytes =
+    qualityMode === "maximum"
+      ? Number(maximumFileSize) * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit]
+      : null;
+  const estimatedSizeIsCap =
+    maximumSizeBytes !== null &&
+    Number.isFinite(maximumSizeBytes) &&
+    maximumSizeBytes >= 10_000 &&
+    estimatedBytes !== null &&
+    estimatedBytes > maximumSizeBytes &&
+    (exportFormat === "jpeg" || exportFormat === "webp");
+  const estimatedSizeLabel =
+    estimatePending && estimatedBytes === null
+      ? "Estimating…"
+      : estimatedBytes === null
+        ? "—"
+        : estimatedSizeIsCap
+          ? `≤ ${formatFileSize(maximumSizeBytes ?? 0)}`
+          : `≈ ${formatFileSize(estimatedBytes)}`;
   // Versus the current flattened image from this estimate, then the Before
   // badge. Do not keep a stale preview size after the canvas or output changes.
-  const estimatedDelta = estimatedSizeIsCap || estimatePending
-    ? null
-    : formatFileSizeDelta(
-      estimatedBytes,
-      fileSizeDeltaBaseline(
-        artifact.size_bytes,
-        estimateSourceBytes ?? compressPreviewBeforeBytes,
-      ),
-    );
-  const formatLabel = exportFormat === "jpeg"
-    ? "JPEG"
-    : exportFormat === "webp"
-      ? "WebP"
-      : "PNG";
+  const estimatedDelta =
+    estimatedSizeIsCap || estimatePending
+      ? null
+      : formatFileSizeDelta(
+          estimatedBytes,
+          fileSizeDeltaBaseline(
+            artifact.size_bytes,
+            estimateSourceBytes ?? compressPreviewBeforeBytes,
+          ),
+        );
+  const formatLabel = exportFormat === "jpeg" ? "JPEG" : exportFormat === "webp" ? "WebP" : "PNG";
   const jpegDropsTransparency = exportFormat === "jpeg" && editorDocument.background == null;
   const exportNotice = error || (success?.kind === "save" ? success.message : "");
   const showCompressQuality = qualityMode === "compress";
@@ -5463,10 +5302,11 @@ export function ScreenshotEditor() {
     setMakeCopy(enabled);
     if (enabled && filenameStem === sourceStem && destinationDirectory === sourceDirectory) {
       setFilenameStem(screenshotEditedFileStem(sourceStem));
-    } else if (!enabled && (
-      filenameStem === screenshotEditedFileStem(sourceStem)
-      || filenameStem === `${sourceStem}-copy`
-    )) {
+    } else if (
+      !enabled &&
+      (filenameStem === screenshotEditedFileStem(sourceStem) ||
+        filenameStem === `${sourceStem}-copy`)
+    ) {
       setFilenameStem(sourceStem);
       setDestinationDirectory(sourceDirectory);
     }
@@ -5480,8 +5320,8 @@ export function ScreenshotEditor() {
     if (!canvas || !current) return;
     const bounds = canvas.getBoundingClientRect();
     const point = {
-      x: (clientX - bounds.left) * current.width / Math.max(1, bounds.width),
-      y: (clientY - bounds.top) * current.height / Math.max(1, bounds.height),
+      x: ((clientX - bounds.left) * current.width) / Math.max(1, bounds.width),
+      y: ((clientY - bounds.top) * current.height) / Math.max(1, bounds.height),
     };
     setImageDropGuideState(imageDropGuideAtPoint(current, selectedId, point));
   };
@@ -5521,9 +5361,8 @@ export function ScreenshotEditor() {
         setDragActive(false);
         setDropToastAnchor(null);
         // Prefer the latest pointer sample from dragover; React state can lag.
-        const guide = imageDropGuideRef.current
-          ?? imageDropGuide
-          ?? defaultImageDropGuide(editorDocument);
+        const guide =
+          imageDropGuideRef.current ?? imageDropGuide ?? defaultImageDropGuide(editorDocument);
         setImageDropGuideState(null);
         void loadDroppedFiles(Array.from(event.dataTransfer.files), guide);
       }}
@@ -5549,159 +5388,180 @@ export function ScreenshotEditor() {
         )}
         {/* Window title already says "Captures screenshot editor"; keep chrome here only. */}
         <div className="screenshot-editor-header-main">
-        <div className="screenshot-editor-title">
-          <div className="screenshot-canvas-toolbar" role="group" aria-label="Canvas">
-            <span className="screenshot-canvas-toolbar-label" aria-hidden="true">
-              Canvas
-            </span>
-            <label className="screenshot-canvas-dim">
-              <span>W</span>
-              <NumberInput
-                compact
-                min={1}
-                max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
-                ariaLabel="Canvas width"
-                title="Canvas width"
-                value={canvasSizeDraft?.axis === "width"
-                  ? canvasSizeDraft.text
-                  : editorDocument.width}
-                onTextChange={(text) => setCanvasSizeDraft({ axis: "width", text })}
-                onCommit={(text) => commitCanvasSize("width", text)}
+          <div className="screenshot-editor-title">
+            <div className="screenshot-canvas-toolbar" role="group" aria-label="Canvas">
+              <span className="screenshot-canvas-toolbar-label" aria-hidden="true">
+                Canvas
+              </span>
+              <label className="screenshot-canvas-dim">
+                <span>W</span>
+                <NumberInput
+                  compact
+                  min={1}
+                  max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
+                  ariaLabel="Canvas width"
+                  title="Canvas width"
+                  value={
+                    canvasSizeDraft?.axis === "width" ? canvasSizeDraft.text : editorDocument.width
+                  }
+                  onTextChange={(text) => setCanvasSizeDraft({ axis: "width", text })}
+                  onCommit={(text) => commitCanvasSize("width", text)}
+                />
+              </label>
+              <span className="screenshot-canvas-dim-sep" aria-hidden="true">
+                ×
+              </span>
+              <label className="screenshot-canvas-dim">
+                <span>H</span>
+                <NumberInput
+                  compact
+                  min={1}
+                  max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
+                  ariaLabel="Canvas height"
+                  title="Canvas height"
+                  value={
+                    canvasSizeDraft?.axis === "height"
+                      ? canvasSizeDraft.text
+                      : editorDocument.height
+                  }
+                  onTextChange={(text) => setCanvasSizeDraft({ axis: "height", text })}
+                  onCommit={(text) => commitCanvasSize("height", text)}
+                />
+              </label>
+              <span className="screenshot-canvas-toolbar-split" aria-hidden="true" />
+              <button
+                type="button"
+                className="screenshot-canvas-tool screenshot-canvas-trim"
+                disabled={!canTrimEdges}
+                title="Shrink the canvas to the edges of visible layers"
+                onClick={applyTrimEdges}
+                onPointerEnter={() => setTrimEdgesHover(true)}
+                onPointerLeave={() => setTrimEdgesHover(false)}
+                onFocus={() => setTrimEdgesHover(true)}
+                onBlur={() => setTrimEdgesHover(false)}
+              >
+                <EditorIcon name="trim" />
+                Trim edges
+              </button>
+              <CanvasBackgroundPicker
+                value={canvasBackground}
+                onChange={(background) => commitDocument({ ...editorDocument, background })}
               />
-            </label>
-            <span className="screenshot-canvas-dim-sep" aria-hidden="true">×</span>
-            <label className="screenshot-canvas-dim">
-              <span>H</span>
-              <NumberInput
-                compact
-                min={1}
-                max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
-                ariaLabel="Canvas height"
-                title="Canvas height"
-                value={canvasSizeDraft?.axis === "height"
-                  ? canvasSizeDraft.text
-                  : editorDocument.height}
-                onTextChange={(text) => setCanvasSizeDraft({ axis: "height", text })}
-                onCommit={(text) => commitCanvasSize("height", text)}
-              />
-            </label>
-            <span className="screenshot-canvas-toolbar-split" aria-hidden="true" />
+            </div>
+          </div>
+          <div className="screenshot-editor-history-actions">
             <button
               type="button"
-              className="screenshot-canvas-tool screenshot-canvas-trim"
-              disabled={!canTrimEdges}
-              title="Shrink the canvas to the edges of visible layers"
-              onClick={applyTrimEdges}
-              onPointerEnter={() => setTrimEdgesHover(true)}
-              onPointerLeave={() => setTrimEdgesHover(false)}
-              onFocus={() => setTrimEdgesHover(true)}
-              onBlur={() => setTrimEdgesHover(false)}
+              disabled={undoStack.length === 0}
+              onClick={undo}
+              aria-label="Undo"
             >
-              <EditorIcon name="trim" />
-              Trim edges
+              <EditorIcon name="undo" />
             </button>
-            <CanvasBackgroundPicker
-              value={canvasBackground}
-              onChange={(background) => commitDocument({ ...editorDocument, background })}
+            <button
+              type="button"
+              disabled={redoStack.length === 0}
+              onClick={redo}
+              aria-label="Redo"
+            >
+              <EditorIcon name="redo" />
+            </button>
+            <span className="screenshot-editor-zoom" role="group" aria-label="Canvas zoom controls">
+              <button
+                type="button"
+                className={zoomMode === "fit" ? "active" : ""}
+                aria-label="Fit canvas"
+                title="Fit canvas to window"
+                onClick={activateFitZoom}
+              >
+                <EditorIcon name="fit" />
+              </button>
+              <button
+                type="button"
+                aria-label="Zoom out"
+                title="Zoom out"
+                disabled={displayScale * 100 <= MIN_SCREENSHOT_ZOOM_PERCENT + 0.05}
+                onClick={() => zoomBy(1 / KEYBOARD_ZOOM_FACTOR)}
+              >
+                <EditorIcon name="minus" />
+              </button>
+              <label className="screenshot-editor-zoom-slider">
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step="any"
+                  aria-label="Canvas zoom"
+                  aria-valuemin={MIN_SCREENSHOT_ZOOM_PERCENT}
+                  aria-valuemax={MAX_SCREENSHOT_ZOOM_PERCENT}
+                  aria-valuenow={clampScreenshotZoomPercent(
+                    zoomMode === "fit" ? displayScale * 100 : zoom,
+                  )}
+                  aria-valuetext={
+                    zoomMode === "fit"
+                      ? `Fit (${screenshotZoomLabel(displayScale * 100)})`
+                      : screenshotZoomLabel(zoom)
+                  }
+                  title="Drag to zoom · Pinch or Command/Ctrl + scroll also work"
+                  value={zoomPercentToSliderPosition(
+                    zoomMode === "fit" ? displayScale * 100 : zoom,
+                  )}
+                  onChange={(event) =>
+                    setManualZoom(sliderPositionToZoomPercent(Number(event.target.value)))
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                aria-label="Zoom in"
+                title="Zoom in"
+                disabled={displayScale * 100 >= MAX_SCREENSHOT_ZOOM_PERCENT - 0.05}
+                onClick={() => zoomBy(KEYBOARD_ZOOM_FACTOR)}
+              >
+                <EditorIcon name="plus" />
+              </button>
+              <select
+                className="screenshot-editor-zoom-presets"
+                aria-label="Canvas zoom preset"
+                title="Zoom presets"
+                value={zoomMode === "fit" ? "fit" : String(zoom)}
+                onChange={(event) => {
+                  if (event.target.value === "fit") activateFitZoom();
+                  else setManualZoom(Number(event.target.value));
+                }}
+              >
+                <option value="fit">Fit</option>
+                {zoomMode === "manual" &&
+                  !SCREENSHOT_ZOOM_OPTIONS.some((option) => option === zoom) && (
+                    <option value={String(zoom)}>{screenshotZoomLabel(zoom)}</option>
+                  )}
+                {SCREENSHOT_ZOOM_OPTIONS.map((option) => (
+                  <option key={option} value={String(option)}>
+                    {option}%
+                  </option>
+                ))}
+              </select>
+            </span>
+            <button
+              type="button"
+              className="screenshot-add-image"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <EditorIcon name="image" /> Add images
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              aria-label="Choose image layers"
+              onChange={(event) => {
+                void loadDroppedFiles(Array.from(event.target.files ?? []));
+                event.target.value = "";
+              }}
             />
           </div>
-        </div>
-        <div className="screenshot-editor-history-actions">
-          <button type="button" disabled={undoStack.length === 0} onClick={undo} aria-label="Undo">
-            <EditorIcon name="undo" />
-          </button>
-          <button type="button" disabled={redoStack.length === 0} onClick={redo} aria-label="Redo">
-            <EditorIcon name="redo" />
-          </button>
-          <span className="screenshot-editor-zoom" role="group" aria-label="Canvas zoom controls">
-            <button
-              type="button"
-              className={zoomMode === "fit" ? "active" : ""}
-              aria-label="Fit canvas"
-              title="Fit canvas to window"
-              onClick={activateFitZoom}
-            >
-              <EditorIcon name="fit" />
-            </button>
-            <button
-              type="button"
-              aria-label="Zoom out"
-              title="Zoom out"
-              disabled={displayScale * 100 <= MIN_SCREENSHOT_ZOOM_PERCENT + 0.05}
-              onClick={() => zoomBy(1 / KEYBOARD_ZOOM_FACTOR)}
-            >
-              <EditorIcon name="minus" />
-            </button>
-            <label className="screenshot-editor-zoom-slider">
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step="any"
-                aria-label="Canvas zoom"
-                aria-valuemin={MIN_SCREENSHOT_ZOOM_PERCENT}
-                aria-valuemax={MAX_SCREENSHOT_ZOOM_PERCENT}
-                aria-valuenow={clampScreenshotZoomPercent(
-                  zoomMode === "fit" ? displayScale * 100 : zoom,
-                )}
-                aria-valuetext={
-                  zoomMode === "fit"
-                    ? `Fit (${screenshotZoomLabel(displayScale * 100)})`
-                    : screenshotZoomLabel(zoom)
-                }
-                title="Drag to zoom · Pinch or Command/Ctrl + scroll also work"
-                value={zoomPercentToSliderPosition(
-                  zoomMode === "fit" ? displayScale * 100 : zoom,
-                )}
-                onChange={(event) => setManualZoom(
-                  sliderPositionToZoomPercent(Number(event.target.value)),
-                )}
-              />
-            </label>
-            <button
-              type="button"
-              aria-label="Zoom in"
-              title="Zoom in"
-              disabled={displayScale * 100 >= MAX_SCREENSHOT_ZOOM_PERCENT - 0.05}
-              onClick={() => zoomBy(KEYBOARD_ZOOM_FACTOR)}
-            >
-              <EditorIcon name="plus" />
-            </button>
-            <select
-              className="screenshot-editor-zoom-presets"
-              aria-label="Canvas zoom preset"
-              title="Zoom presets"
-              value={zoomMode === "fit" ? "fit" : String(zoom)}
-              onChange={(event) => {
-                if (event.target.value === "fit") activateFitZoom();
-                else setManualZoom(Number(event.target.value));
-              }}
-            >
-              <option value="fit">Fit</option>
-              {zoomMode === "manual"
-                && !SCREENSHOT_ZOOM_OPTIONS.some((option) => option === zoom)
-                && <option value={String(zoom)}>{screenshotZoomLabel(zoom)}</option>}
-              {SCREENSHOT_ZOOM_OPTIONS.map((option) => (
-                <option key={option} value={String(option)}>{option}%</option>
-              ))}
-            </select>
-          </span>
-          <button type="button" className="screenshot-add-image" onClick={() => fileInputRef.current?.click()}>
-            <EditorIcon name="image" /> Add images
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            hidden
-            aria-label="Choose image layers"
-            onChange={(event) => {
-              void loadDroppedFiles(Array.from(event.target.files ?? []));
-              event.target.value = "";
-            }}
-          />
-        </div>
         </div>
       </header>
 
@@ -5745,7 +5605,9 @@ export function ScreenshotEditor() {
           "screenshot-canvas-viewport",
           panReady ? "is-pan-ready" : "",
           panActive ? "is-panning" : "",
-        ].filter(Boolean).join(" ")}
+        ]
+          .filter(Boolean)
+          .join(" ")}
         aria-label="Screenshot editing canvas"
         onPointerDownCapture={startPanPointer}
         onPointerMoveCapture={movePanPointer}
@@ -5757,10 +5619,7 @@ export function ScreenshotEditor() {
         onPointerCancel={finishPointer}
         onPointerLeave={(event) => {
           const nextTarget = event.relatedTarget;
-          if (
-            nextTarget instanceof Node
-            && event.currentTarget.contains(nextTarget)
-          ) {
+          if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
             return;
           }
           if (gestureRef.current || expandButtonHover) return;
@@ -5769,10 +5628,9 @@ export function ScreenshotEditor() {
       >
         <button
           type="button"
-          className={[
-            "screenshot-canvas-recenter",
-            canvasOffscreen ? "is-visible" : "",
-          ].filter(Boolean).join(" ")}
+          className={["screenshot-canvas-recenter", canvasOffscreen ? "is-visible" : ""]
+            .filter(Boolean)
+            .join(" ")}
           aria-hidden={!canvasOffscreen}
           tabIndex={canvasOffscreen ? 0 : -1}
           onClick={recenterCanvas}
@@ -5781,10 +5639,9 @@ export function ScreenshotEditor() {
         </button>
         <div
           ref={surfaceRef}
-          className={[
-            "screenshot-canvas-surface",
-            canvasBackground ? "" : "transparent",
-          ].filter(Boolean).join(" ")}
+          className={["screenshot-canvas-surface", canvasBackground ? "" : "transparent"]
+            .filter(Boolean)
+            .join(" ")}
           style={{
             width: editorDocument.width * displayScale,
             height: editorDocument.height * displayScale,
@@ -5826,9 +5683,11 @@ export function ScreenshotEditor() {
               pending={compressPreviewPending}
               error={compressPreviewError}
               suppressed={compressComparePaused || Boolean(editingTextId)}
-              afterHint={isAnnotationDrawTool(tool)
-                ? "Edits apply to the original. This side updates after you finish."
-                : undefined}
+              afterHint={
+                isAnnotationDrawTool(tool)
+                  ? "Edits apply to the original. This side updates after you finish."
+                  : undefined
+              }
               initialSplit={compressSplit}
               onSplitChange={setCompressSplit}
               splitDragEnabled={!isAnnotationDrawTool(tool)}
@@ -5840,9 +5699,10 @@ export function ScreenshotEditor() {
               className="screenshot-inline-text-frame"
               style={{
                 ...inlineTextLayout.frame,
-                transform: elementRotation(editingText) === 0
-                  ? undefined
-                  : `rotate(${elementRotation(editingText)}rad)`,
+                transform:
+                  elementRotation(editingText) === 0
+                    ? undefined
+                    : `rotate(${elementRotation(editingText)}rad)`,
                 transformOrigin: "center",
               }}
               onPointerDown={(event) => event.stopPropagation()}
@@ -5852,10 +5712,10 @@ export function ScreenshotEditor() {
                 className={[
                   "screenshot-inline-text-editor",
                   isAutoWidthText(editingText) ? "is-auto-width" : "",
-                  subduedInlineSelectionId === editingText.id
-                    ? "is-placeholder-selected"
-                    : "",
-                ].filter(Boolean).join(" ")}
+                  subduedInlineSelectionId === editingText.id ? "is-placeholder-selected" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 aria-label="Edit text on canvas"
                 autoFocus
                 value={editingText.text}
@@ -5869,11 +5729,11 @@ export function ScreenshotEditor() {
                   color: editingText.outlined ? "transparent" : editingText.color,
                   backgroundColor: editingText.background ?? "transparent",
                   borderRadius: editingText.roundedBackground
-                      ? textBackgroundRadius(
-                      editingText,
-                      textLayoutBounds(editingText).width,
-                      textLayoutBounds(editingText).height,
-                    ) * displayScale
+                    ? textBackgroundRadius(
+                        editingText,
+                        textLayoutBounds(editingText).width,
+                        textLayoutBounds(editingText).height,
+                      ) * displayScale
                     : undefined,
                   caretColor: editingText.color,
                   fontFamily: fontFamily(editingText),
@@ -5886,18 +5746,15 @@ export function ScreenshotEditor() {
                     ? `${textOutlineWidth(editingText.fontSize) * displayScale}px ${editingText.color}`
                     : undefined,
                   opacity: editingText.opacity / 100,
-                  mixBlendMode: editingText.blendMode === "source-over"
-                    ? "normal"
-                    : editingText.blendMode,
+                  mixBlendMode:
+                    editingText.blendMode === "source-over" ? "normal" : editingText.blendMode,
                 }}
                 onChange={(event) => {
                   const nextText = event.target.value;
                   setSubduedInlineSelectionId(null);
-                  updateLayer(editingText.id, (element) => (
-                    element.kind === "text"
-                      ? fitLiveText({ ...element, text: nextText })
-                      : element
-                  ));
+                  updateLayer(editingText.id, (element) =>
+                    element.kind === "text" ? fitLiveText({ ...element, text: nextText }) : element,
+                  );
                 }}
                 onPointerDown={(event) => event.stopPropagation()}
                 onSelect={(event) => {
@@ -5923,17 +5780,13 @@ export function ScreenshotEditor() {
                   setSubduedInlineSelectionId(null);
                   const textId = editingText.id;
                   const shouldDiscard = isBlankTextElement(editingText);
-                  setEditingTextId((current) => (
-                    current === textId ? null : current
-                  ));
+                  setEditingTextId((current) => (current === textId ? null : current));
                   if (!shouldDiscard) return;
                   const currentDocument = documentRef.current;
                   if (!currentDocument) return;
                   commitDocument({
                     ...currentDocument,
-                    elements: currentDocument.elements.filter((element) => (
-                      element.id !== textId
-                    )),
+                    elements: currentDocument.elements.filter((element) => element.id !== textId),
                   });
                   setSelectedId((current) => (current === textId ? null : current));
                 }}
@@ -5986,17 +5839,19 @@ export function ScreenshotEditor() {
             <div
               key={`${guide.orientation}-${guide.position}`}
               className={`screenshot-align-snap-guide ${guide.orientation}`}
-              style={guide.orientation === "vertical"
-                ? {
-                  left: guide.position * displayScale,
-                  top: 0,
-                  height: editorDocument.height * displayScale,
-                }
-                : {
-                  top: guide.position * displayScale,
-                  left: 0,
-                  width: editorDocument.width * displayScale,
-                }}
+              style={
+                guide.orientation === "vertical"
+                  ? {
+                      left: guide.position * displayScale,
+                      top: 0,
+                      height: editorDocument.height * displayScale,
+                    }
+                  : {
+                      top: guide.position * displayScale,
+                      left: 0,
+                      width: editorDocument.width * displayScale,
+                    }
+              }
               aria-hidden="true"
             />
           ))}
@@ -6064,10 +5919,7 @@ export function ScreenshotEditor() {
                   aria-hidden="true"
                 >
                   {shownExpandPreview.edges.map((edge) => (
-                    <div
-                      key={edge}
-                      className={`screenshot-canvas-expand-edge edge-${edge}`}
-                    >
+                    <div key={edge} className={`screenshot-canvas-expand-edge edge-${edge}`}>
                       <div className="screenshot-canvas-expand-bloom" />
                       <div className="screenshot-canvas-expand-particles">
                         {DROP_SNAP_PARTICLES.map((particle) => (
@@ -6121,11 +5973,11 @@ export function ScreenshotEditor() {
                     left: 0,
                     top: trimEdgesPreview.margins.top * displayScale,
                     width: trimEdgesPreview.margins.left * displayScale,
-                    height: (
-                      editorDocument.height
-                      - trimEdgesPreview.margins.top
-                      - trimEdgesPreview.margins.bottom
-                    ) * displayScale,
+                    height:
+                      (editorDocument.height -
+                        trimEdgesPreview.margins.top -
+                        trimEdgesPreview.margins.bottom) *
+                      displayScale,
                   }}
                 />
               )}
@@ -6136,11 +5988,11 @@ export function ScreenshotEditor() {
                     left: (editorDocument.width - trimEdgesPreview.margins.right) * displayScale,
                     top: trimEdgesPreview.margins.top * displayScale,
                     width: trimEdgesPreview.margins.right * displayScale,
-                    height: (
-                      editorDocument.height
-                      - trimEdgesPreview.margins.top
-                      - trimEdgesPreview.margins.bottom
-                    ) * displayScale,
+                    height:
+                      (editorDocument.height -
+                        trimEdgesPreview.margins.top -
+                        trimEdgesPreview.margins.bottom) *
+                      displayScale,
                   }}
                 />
               )}
@@ -6163,10 +6015,7 @@ export function ScreenshotEditor() {
                 }}
               >
                 {trimEdgesPreview.edges.map((edge) => (
-                  <div
-                    key={edge}
-                    className={`screenshot-canvas-trim-edge edge-${edge}`}
-                  >
+                  <div key={edge} className={`screenshot-canvas-trim-edge edge-${edge}`}>
                     <div className="screenshot-canvas-trim-bloom" />
                     <div className="screenshot-canvas-trim-particles">
                       {DROP_SNAP_PARTICLES.map((particle) => (
@@ -6215,37 +6064,37 @@ export function ScreenshotEditor() {
         )}
         {/* Circular brush preview for erase/restore — diameter tracks brush size × zoom.
             Visibility is derived from tool/mode so we never need a setState-in-effect to clear it. */}
-        {brushCursor
-          && tool === "remove-bg"
-          && removeBgMode !== "wand"
-          && !panActive
-          && !panReady && (
-          <div
-            ref={attachBrushCursor}
-            className={[
-              "screenshot-brush-cursor",
-              brushCursor.mode === "restore" ? "is-restore" : "is-erase",
-            ].join(" ")}
-            aria-hidden="true"
-            style={{
-              width: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
-              height: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
-            }}
-          />
-        )}
+        {brushCursor &&
+          tool === "remove-bg" &&
+          removeBgMode !== "wand" &&
+          !panActive &&
+          !panReady && (
+            <div
+              ref={attachBrushCursor}
+              className={[
+                "screenshot-brush-cursor",
+                brushCursor.mode === "restore" ? "is-restore" : "is-erase",
+              ].join(" ")}
+              aria-hidden="true"
+              style={{
+                width: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
+                height: removeBgBrushScreenDiameter(removeBgBrushSize, displayScale),
+              }}
+            />
+          )}
         {/* Wand color loupe: zoomed natural pixels + hex so the sample color is obvious. */}
-        {wandLoupe
-          && tool === "remove-bg"
-          && removeBgMode === "wand"
-          && !panActive
-          && !panReady && (
-          <WandColorLoupe
-            clientX={wandLoupe.clientX}
-            clientY={wandLoupe.clientY}
-            color={wandLoupe.color}
-            canvasRef={wandLoupeCanvasRef}
-          />
-        )}
+        {wandLoupe &&
+          tool === "remove-bg" &&
+          removeBgMode === "wand" &&
+          !panActive &&
+          !panReady && (
+            <WandColorLoupe
+              clientX={wandLoupe.clientX}
+              clientY={wandLoupe.clientY}
+              color={wandLoupe.color}
+              canvasRef={wandLoupeCanvasRef}
+            />
+          )}
       </section>
 
       <aside className="screenshot-sidebar">
@@ -6267,13 +6116,11 @@ export function ScreenshotEditor() {
           <ol className="screenshot-layer-list">
             {[...editorDocument.elements].reverse().map((element) => {
               const locked = element.locked;
-              const previewOrientation = element.kind === "image"
-                ? imageOrientationMatrix(element.orientation)
-                : null;
+              const previewOrientation =
+                element.kind === "image" ? imageOrientationMatrix(element.orientation) : null;
               const previewRotation = elementRotation(element);
-              const dropPlacement = layerDropTarget?.id === element.id
-                ? layerDropTarget.placement
-                : null;
+              const dropPlacement =
+                layerDropTarget?.id === element.id ? layerDropTarget.placement : null;
               return (
                 <li
                   key={element.id}
@@ -6283,7 +6130,9 @@ export function ScreenshotEditor() {
                     element.visible ? "" : "hidden",
                     draggedLayerId === element.id ? "dragging" : "",
                     dropPlacement ? `drop-${dropPlacement}` : "",
-                  ].filter(Boolean).join(" ")}
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   draggable={!locked && layerRename?.id !== element.id}
                   onDragStart={(event) => {
                     if (locked) {
@@ -6296,30 +6145,27 @@ export function ScreenshotEditor() {
                     event.dataTransfer.setData("application/x-captures-layer", element.id);
                   }}
                   onDragOver={(event) => {
-                    const movedId = draggedLayerId
-                      ?? event.dataTransfer.getData("application/x-captures-layer");
+                    const movedId =
+                      draggedLayerId ?? event.dataTransfer.getData("application/x-captures-layer");
                     if (!movedId || movedId === element.id) return;
                     event.preventDefault();
                     event.stopPropagation();
                     event.dataTransfer.dropEffect = "move";
                     const bounds = event.currentTarget.getBoundingClientRect();
-                    const placement = event.clientY < bounds.top + bounds.height / 2
-                      ? "before"
-                      : "after";
+                    const placement =
+                      event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
                     setLayerDropTarget({ id: element.id, placement });
                   }}
                   onDrop={(event) => {
-                    const movedId = draggedLayerId
-                      ?? event.dataTransfer.getData("application/x-captures-layer");
+                    const movedId =
+                      draggedLayerId ?? event.dataTransfer.getData("application/x-captures-layer");
                     if (!movedId) return;
                     event.preventDefault();
                     event.stopPropagation();
                     dropLayer(
                       movedId,
                       element.id,
-                      layerDropTarget?.id === element.id
-                        ? layerDropTarget.placement
-                        : "before",
+                      layerDropTarget?.id === element.id ? layerDropTarget.placement : "before",
                     );
                     setDraggedLayerId(null);
                     setLayerDropTarget(null);
@@ -6333,9 +6179,9 @@ export function ScreenshotEditor() {
                     className="screenshot-layer-select"
                     role={layerRename?.id === element.id ? "group" : "button"}
                     tabIndex={layerRename?.id === element.id ? -1 : 0}
-                    aria-pressed={layerRename?.id === element.id
-                      ? undefined
-                      : selectedId === element.id}
+                    aria-pressed={
+                      layerRename?.id === element.id ? undefined : selectedId === element.id
+                    }
                     onClick={() => {
                       setEditingTextId(null);
                       setTool("select");
@@ -6365,25 +6211,26 @@ export function ScreenshotEditor() {
                       <EditorIcon name="grip" />
                     </span>
                     <span className="screenshot-layer-preview" aria-hidden="true">
-                      {element.kind === "image"
-                        ? (
-                          <img
-                            src={element.src}
-                            alt=""
-                            draggable={false}
-                            style={{
-                              transform: [
-                                previewRotation === 0
-                                  ? ""
-                                  : `rotate(${previewRotation}rad)`,
+                      {element.kind === "image" ? (
+                        <img
+                          src={element.src}
+                          alt=""
+                          draggable={false}
+                          style={{
+                            transform:
+                              [
+                                previewRotation === 0 ? "" : `rotate(${previewRotation}rad)`,
                                 previewOrientation
                                   ? `matrix(${previewOrientation.a}, ${previewOrientation.b}, ${previewOrientation.c}, ${previewOrientation.d}, 0, 0)`
                                   : "",
-                              ].filter(Boolean).join(" ") || undefined,
-                            }}
-                          />
-                        )
-                        : <AnnotationLayerPreview element={element} />}
+                              ]
+                                .filter(Boolean)
+                                .join(" ") || undefined,
+                          }}
+                        />
+                      ) : (
+                        <AnnotationLayerPreview element={element} />
+                      )}
                     </span>
                     <span className="screenshot-layer-copy">
                       {layerRename?.id === element.id && element.kind === "image" ? (
@@ -6395,10 +6242,12 @@ export function ScreenshotEditor() {
                           onPointerDown={(event) => event.stopPropagation()}
                           onClick={(event) => event.stopPropagation()}
                           onDoubleClick={(event) => event.stopPropagation()}
-                          onChange={(event) => setLayerRename({
-                            id: element.id,
-                            value: event.target.value,
-                          })}
+                          onChange={(event) =>
+                            setLayerRename({
+                              id: element.id,
+                              value: event.target.value,
+                            })
+                          }
                           onBlur={finishLayerRename}
                           onKeyDown={(event) => {
                             event.stopPropagation();
@@ -6412,7 +6261,9 @@ export function ScreenshotEditor() {
                           }}
                         />
                       ) : (
-                        <strong title={element.kind === "image" ? "Double-click to rename" : undefined}>
+                        <strong
+                          title={element.kind === "image" ? "Double-click to rename" : undefined}
+                        >
                           {elementLayerName(element)}
                         </strong>
                       )}
@@ -6456,9 +6307,13 @@ export function ScreenshotEditor() {
                     </button>
                     <span
                       className="screenshot-layer-menu"
-                      ref={layerMenuId === element.id
-                        ? (node) => { layerMenuRootRef.current = node; }
-                        : undefined}
+                      ref={
+                        layerMenuId === element.id
+                          ? (node) => {
+                              layerMenuRootRef.current = node;
+                            }
+                          : undefined
+                      }
                     >
                       <button
                         type="button"
@@ -6477,211 +6332,287 @@ export function ScreenshotEditor() {
                           setTool("select");
                           setCropSelection(null);
                           setSelectedId(element.id);
-                          setLayerMenuId((openId) => (
-                            openId === element.id ? null : element.id
-                          ));
+                          setLayerMenuId((openId) => (openId === element.id ? null : element.id));
                         }}
                       >
                         <EditorIcon name="more" />
                       </button>
-                      {layerMenuId === element.id && layerMenuPlacement && createPortal(
-                        <div
-                          ref={layerMenuPanelRef}
-                          className="screenshot-layer-menu-panel"
-                          role="dialog"
-                          aria-label={`Layer settings for ${elementLayerName(element)}`}
-                          style={{
-                            top: layerMenuPlacement.top,
-                            bottom: layerMenuPlacement.bottom,
-                            left: layerMenuPlacement.left,
-                            maxHeight: layerMenuPlacement.maxHeight,
-                          }}
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <section className="screenshot-layer-menu-section screenshot-layer-menu-section-static">
-                            <h2 className="screenshot-layer-menu-section-title">Appearance</h2>
-                            <label className="screenshot-layer-menu-field">
-                              <span className="screenshot-layer-menu-field-label">Blend mode</span>
-                              <CustomSelect
-                                ariaLabel="Blend mode"
-                                value={element.blendMode}
-                                options={LAYER_BLEND_MODE_OPTIONS}
-                                onChange={(blendMode) => updateLayer(element.id, (current) => ({
-                                  ...current,
-                                  blendMode: blendMode as LayerBlendMode,
-                                }))}
-                              />
-                            </label>
-                            <label className="screenshot-layer-menu-field">
-                              <span className="screenshot-layer-menu-field-label">Opacity</span>
-                              <RangeSlider
-                                ariaLabel="Layer opacity"
-                                min={0}
-                                max={100}
-                                value={element.opacity}
-                                valueText={`${element.opacity}%`}
-                                onChange={(opacity) => updateLayer(element.id, (current) => ({
-                                  ...current,
-                                  opacity,
-                                }))}
-                              />
-                            </label>
-                          </section>
+                      {layerMenuId === element.id &&
+                        layerMenuPlacement &&
+                        createPortal(
+                          <div
+                            ref={layerMenuPanelRef}
+                            className="screenshot-layer-menu-panel"
+                            role="dialog"
+                            aria-label={`Layer settings for ${elementLayerName(element)}`}
+                            style={{
+                              top: layerMenuPlacement.top,
+                              bottom: layerMenuPlacement.bottom,
+                              left: layerMenuPlacement.left,
+                              maxHeight: layerMenuPlacement.maxHeight,
+                            }}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <section className="screenshot-layer-menu-section screenshot-layer-menu-section-static">
+                              <h2 className="screenshot-layer-menu-section-title">Appearance</h2>
+                              <label className="screenshot-layer-menu-field">
+                                <span className="screenshot-layer-menu-field-label">
+                                  Blend mode
+                                </span>
+                                <CustomSelect
+                                  ariaLabel="Blend mode"
+                                  value={element.blendMode}
+                                  options={LAYER_BLEND_MODE_OPTIONS}
+                                  onChange={(blendMode) =>
+                                    updateLayer(element.id, (current) => ({
+                                      ...current,
+                                      blendMode: blendMode as LayerBlendMode,
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label className="screenshot-layer-menu-field">
+                                <span className="screenshot-layer-menu-field-label">Opacity</span>
+                                <RangeSlider
+                                  ariaLabel="Layer opacity"
+                                  min={0}
+                                  max={100}
+                                  value={element.opacity}
+                                  valueText={`${element.opacity}%`}
+                                  onChange={(opacity) =>
+                                    updateLayer(element.id, (current) => ({
+                                      ...current,
+                                      opacity,
+                                    }))
+                                  }
+                                />
+                              </label>
+                            </section>
 
-                          <div className="screenshot-layer-menu-scroll">
-                            {element.kind === "image" && (
+                            <div className="screenshot-layer-menu-scroll">
+                              {element.kind === "image" && (
+                                <section className="screenshot-layer-menu-section">
+                                  <h2 className="screenshot-layer-menu-section-title">Transform</h2>
+                                  <div
+                                    className="screenshot-layer-menu-transform-grid"
+                                    role="group"
+                                    aria-label={`Image transforms for ${elementLayerName(element)}`}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="screenshot-layer-menu-tile"
+                                      aria-label="Rotate image counterclockwise"
+                                      title="Rotate this image layer 90° counterclockwise"
+                                      onClick={() =>
+                                        transformImageLayer(element.id, "rotate-counterclockwise")
+                                      }
+                                    >
+                                      <EditorIcon name="rotate-counterclockwise" />
+                                      <span>Rotate left</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="screenshot-layer-menu-tile"
+                                      aria-label="Rotate image clockwise"
+                                      title="Rotate this image layer 90° clockwise"
+                                      onClick={() =>
+                                        transformImageLayer(element.id, "rotate-clockwise")
+                                      }
+                                    >
+                                      <EditorIcon name="rotate-clockwise" />
+                                      <span>Rotate right</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="screenshot-layer-menu-tile"
+                                      aria-label="Flip image horizontally"
+                                      title="Mirror this image layer from left to right"
+                                      onClick={() =>
+                                        transformImageLayer(element.id, "flip-horizontal")
+                                      }
+                                    >
+                                      <EditorIcon name="flip-horizontal" />
+                                      <span>Flip horizontal</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="screenshot-layer-menu-tile"
+                                      aria-label="Flip image vertically"
+                                      title="Mirror this image layer from top to bottom"
+                                      onClick={() =>
+                                        transformImageLayer(element.id, "flip-vertical")
+                                      }
+                                    >
+                                      <EditorIcon name="flip-vertical" />
+                                      <span>Flip vertical</span>
+                                    </button>
+                                  </div>
+                                </section>
+                              )}
+
                               <section className="screenshot-layer-menu-section">
-                                <h2 className="screenshot-layer-menu-section-title">Transform</h2>
+                                <h2 className="screenshot-layer-menu-section-title">Arrange</h2>
                                 <div
-                                  className="screenshot-layer-menu-transform-grid"
+                                  className="screenshot-layer-menu-actions"
                                   role="group"
-                                  aria-label={`Image transforms for ${elementLayerName(element)}`}
+                                  aria-label="Layer arrange"
                                 >
                                   <button
                                     type="button"
-                                    className="screenshot-layer-menu-tile"
-                                    aria-label="Rotate image counterclockwise"
-                                    title="Rotate this image layer 90° counterclockwise"
-                                    onClick={() => transformImageLayer(element.id, "rotate-counterclockwise")}
+                                    className="screenshot-layer-menu-action"
+                                    disabled={
+                                      locked || element.id === editorDocument.elements.at(-1)?.id
+                                    }
+                                    title="Move this layer above every other layer"
+                                    onClick={() => moveLayer(element.id, "front")}
                                   >
-                                    <EditorIcon name="rotate-counterclockwise" />
-                                    <span>Rotate left</span>
+                                    <span
+                                      className="screenshot-layer-menu-action-icon"
+                                      aria-hidden="true"
+                                    >
+                                      <EditorIcon name="bring-front" />
+                                    </span>
+                                    <span className="screenshot-layer-menu-action-label">
+                                      Bring to front
+                                    </span>
                                   </button>
                                   <button
                                     type="button"
-                                    className="screenshot-layer-menu-tile"
-                                    aria-label="Rotate image clockwise"
-                                    title="Rotate this image layer 90° clockwise"
-                                    onClick={() => transformImageLayer(element.id, "rotate-clockwise")}
+                                    className="screenshot-layer-menu-action"
+                                    disabled={
+                                      locked || element.id === editorDocument.elements[0]?.id
+                                    }
+                                    title="Move this layer below every other layer"
+                                    onClick={() => moveLayer(element.id, "back")}
                                   >
-                                    <EditorIcon name="rotate-clockwise" />
-                                    <span>Rotate right</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="screenshot-layer-menu-tile"
-                                    aria-label="Flip image horizontally"
-                                    title="Mirror this image layer from left to right"
-                                    onClick={() => transformImageLayer(element.id, "flip-horizontal")}
-                                  >
-                                    <EditorIcon name="flip-horizontal" />
-                                    <span>Flip horizontal</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="screenshot-layer-menu-tile"
-                                    aria-label="Flip image vertically"
-                                    title="Mirror this image layer from top to bottom"
-                                    onClick={() => transformImageLayer(element.id, "flip-vertical")}
-                                  >
-                                    <EditorIcon name="flip-vertical" />
-                                    <span>Flip vertical</span>
+                                    <span
+                                      className="screenshot-layer-menu-action-icon"
+                                      aria-hidden="true"
+                                    >
+                                      <EditorIcon name="send-back" />
+                                    </span>
+                                    <span className="screenshot-layer-menu-action-label">
+                                      Send to back
+                                    </span>
                                   </button>
                                 </div>
                               </section>
-                            )}
 
-                            <section className="screenshot-layer-menu-section">
-                              <h2 className="screenshot-layer-menu-section-title">Arrange</h2>
-                              <div className="screenshot-layer-menu-actions" role="group" aria-label="Layer arrange">
-                                <button
-                                  type="button"
-                                  className="screenshot-layer-menu-action"
-                                  disabled={locked || element.id === editorDocument.elements.at(-1)?.id}
-                                  title="Move this layer above every other layer"
-                                  onClick={() => moveLayer(element.id, "front")}
+                              <section className="screenshot-layer-menu-section">
+                                <h2 className="screenshot-layer-menu-section-title">Combine</h2>
+                                <div
+                                  className="screenshot-layer-menu-actions"
+                                  role="group"
+                                  aria-label="Layer combine"
                                 >
-                                  <span className="screenshot-layer-menu-action-icon" aria-hidden="true">
-                                    <EditorIcon name="bring-front" />
-                                  </span>
-                                  <span className="screenshot-layer-menu-action-label">Bring to front</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="screenshot-layer-menu-action"
-                                  disabled={locked || element.id === editorDocument.elements[0]?.id}
-                                  title="Move this layer below every other layer"
-                                  onClick={() => moveLayer(element.id, "back")}
+                                  <button
+                                    type="button"
+                                    className="screenshot-layer-menu-action"
+                                    disabled={
+                                      !canMergeLayerDown(editorDocument.elements, element.id)
+                                    }
+                                    title="Rasterize this layer together with the unlocked layer directly under it"
+                                    onClick={() => {
+                                      mergeLayerDown(element.id);
+                                    }}
+                                  >
+                                    <span
+                                      className="screenshot-layer-menu-action-icon"
+                                      aria-hidden="true"
+                                    >
+                                      <EditorIcon name="merge-down" />
+                                    </span>
+                                    <span className="screenshot-layer-menu-action-label">
+                                      Merge down
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="screenshot-layer-menu-action"
+                                    disabled={!canMergeVisibleLayers(editorDocument.elements)}
+                                    title="Rasterize every visible layer into one image; hidden layers stay"
+                                    onClick={() => {
+                                      mergeVisibleLayers();
+                                    }}
+                                  >
+                                    <span
+                                      className="screenshot-layer-menu-action-icon"
+                                      aria-hidden="true"
+                                    >
+                                      <EditorIcon name="merge-visible" />
+                                    </span>
+                                    <span className="screenshot-layer-menu-action-label">
+                                      Merge visible
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="screenshot-layer-menu-action"
+                                    disabled={
+                                      !canFlattenLayers(
+                                        editorDocument.elements,
+                                        editorDocument.background,
+                                      )
+                                    }
+                                    title="Bake the canvas background and visible layers into one locked background layer; discard hidden layers"
+                                    onClick={() => {
+                                      flattenImage();
+                                    }}
+                                  >
+                                    <span
+                                      className="screenshot-layer-menu-action-icon"
+                                      aria-hidden="true"
+                                    >
+                                      <EditorIcon name="flatten" />
+                                    </span>
+                                    <span className="screenshot-layer-menu-action-label">
+                                      Flatten image
+                                    </span>
+                                  </button>
+                                </div>
+                              </section>
+                            </div>
+
+                            <section className="screenshot-layer-menu-footer">
+                              <button
+                                type="button"
+                                className="screenshot-layer-menu-action"
+                                title="Duplicate this layer (Command/Ctrl+D)"
+                                onClick={() => {
+                                  duplicateLayer(element.id);
+                                }}
+                              >
+                                <span
+                                  className="screenshot-layer-menu-action-icon"
+                                  aria-hidden="true"
                                 >
-                                  <span className="screenshot-layer-menu-action-icon" aria-hidden="true">
-                                    <EditorIcon name="send-back" />
-                                  </span>
-                                  <span className="screenshot-layer-menu-action-label">Send to back</span>
-                                </button>
-                              </div>
+                                  <EditorIcon name="duplicate" />
+                                </span>
+                                <span className="screenshot-layer-menu-action-label">
+                                  Duplicate
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className="screenshot-layer-menu-action danger"
+                                disabled={locked}
+                                title="Delete this layer"
+                                onClick={() => {
+                                  deleteLayer(element.id);
+                                }}
+                              >
+                                <span
+                                  className="screenshot-layer-menu-action-icon"
+                                  aria-hidden="true"
+                                >
+                                  <EditorIcon name="trash" />
+                                </span>
+                                <span className="screenshot-layer-menu-action-label">Delete</span>
+                              </button>
                             </section>
-
-                            <section className="screenshot-layer-menu-section">
-                              <h2 className="screenshot-layer-menu-section-title">Combine</h2>
-                              <div className="screenshot-layer-menu-actions" role="group" aria-label="Layer combine">
-                                <button
-                                  type="button"
-                                  className="screenshot-layer-menu-action"
-                                  disabled={!canMergeLayerDown(editorDocument.elements, element.id)}
-                                  title="Rasterize this layer together with the unlocked layer directly under it"
-                                  onClick={() => { mergeLayerDown(element.id); }}
-                                >
-                                  <span className="screenshot-layer-menu-action-icon" aria-hidden="true">
-                                    <EditorIcon name="merge-down" />
-                                  </span>
-                                  <span className="screenshot-layer-menu-action-label">Merge down</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="screenshot-layer-menu-action"
-                                  disabled={!canMergeVisibleLayers(editorDocument.elements)}
-                                  title="Rasterize every visible layer into one image; hidden layers stay"
-                                  onClick={() => { mergeVisibleLayers(); }}
-                                >
-                                  <span className="screenshot-layer-menu-action-icon" aria-hidden="true">
-                                    <EditorIcon name="merge-visible" />
-                                  </span>
-                                  <span className="screenshot-layer-menu-action-label">Merge visible</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="screenshot-layer-menu-action"
-                                  disabled={!canFlattenLayers(editorDocument.elements, editorDocument.background)}
-                                  title="Bake the canvas background and visible layers into one locked background layer; discard hidden layers"
-                                  onClick={() => { flattenImage(); }}
-                                >
-                                  <span className="screenshot-layer-menu-action-icon" aria-hidden="true">
-                                    <EditorIcon name="flatten" />
-                                  </span>
-                                  <span className="screenshot-layer-menu-action-label">Flatten image</span>
-                                </button>
-                              </div>
-                            </section>
-                          </div>
-
-                          <section className="screenshot-layer-menu-footer">
-                            <button
-                              type="button"
-                              className="screenshot-layer-menu-action"
-                              title="Duplicate this layer (Command/Ctrl+D)"
-                              onClick={() => { duplicateLayer(element.id); }}
-                            >
-                              <span className="screenshot-layer-menu-action-icon" aria-hidden="true">
-                                <EditorIcon name="duplicate" />
-                              </span>
-                              <span className="screenshot-layer-menu-action-label">Duplicate</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="screenshot-layer-menu-action danger"
-                              disabled={locked}
-                              title="Delete this layer"
-                              onClick={() => { deleteLayer(element.id); }}
-                            >
-                              <span className="screenshot-layer-menu-action-icon" aria-hidden="true">
-                                <EditorIcon name="trash" />
-                              </span>
-                              <span className="screenshot-layer-menu-action-label">Delete</span>
-                            </button>
-                          </section>
-                        </div>,
-                        document.body,
-                      )}
+                          </div>,
+                          document.body,
+                        )}
                     </span>
                   </span>
                 </li>
@@ -6691,886 +6622,975 @@ export function ScreenshotEditor() {
         </section>
 
         <section className="screenshot-properties" aria-label="Tool properties">
-        {/* Select tool is already indicated on the left rail; only show a heading
+          {/* Select tool is already indicated on the left rail; only show a heading
             when an element is selected or another tool has properties to configure. */}
-        {(transformSelected || tool !== "select") && (
-          <div className="screenshot-properties-heading">
-            <strong>{transformSelected ? elementLabel(transformSelected) : toolLabel(tool)}</strong>
-          </div>
-        )}
-
-        {transformSelected && (
-          <section className="screenshot-property-section">
-            <label>
-              Shift rotation snap
-              <NumberInput
-                min={1}
-                max={180}
-                ariaLabel="Shift rotation snap"
-                value={rotationSnapDegrees}
-                onChange={(degrees) => setRotationSnapDegrees(
-                  Math.min(180, Math.max(1, Math.round(degrees))),
-                )}
-              />
-            </label>
-            <p>
-              Hold Shift while dragging the rotate handle to snap in {rotationSnapDegrees}° increments.
-            </p>
-          </section>
-        )}
-
-        {tool === "crop" && (
-          <section className="screenshot-property-section">
-            <label>
-              Aspect ratio
-              <select value={cropAspect} onChange={(event) => setCropAspect(event.target.value)}>
-                <option value="free">Free</option>
-                <option value="1:1">1 : 1</option>
-                <option value="4:3">4 : 3</option>
-                <option value="3:2">3 : 2</option>
-                <option value="16:9">16 : 9</option>
-              </select>
-            </label>
-            {cropSelection ? (
-              <>
-                <div className="screenshot-number-pair">
-                  <label>Width<input value={cropSelection.width} readOnly aria-label="Crop width" /></label>
-                  <label>Height<input value={cropSelection.height} readOnly aria-label="Crop height" /></label>
-                </div>
-                <div className="screenshot-property-actions">
-                  <button type="button" onClick={() => setCropSelection(null)}>Clear</button>
-                  <button
-                    type="button"
-                    className="primary cta-pulse"
-                    onClick={applyCrop}
-                  >
-                    Apply crop
-                  </button>
-                </div>
-                <p>Hold Shift while dragging to keep this aspect ratio.</p>
-              </>
-            ) : (
-              <p>
-                Drag over the area you want to keep. Start from outside the
-                canvas to crop to an edge. Hold Shift to lock the current
-                aspect ratio.
-              </p>
-            )}
-          </section>
-        )}
-
-        {tool === "remove-bg" && (
-          <section className="screenshot-property-section">
-            <p>
-              Remove a color, paint it out, or paint it back.
-            </p>
-            <div className="screenshot-format-buttons screenshot-format-buttons-3" role="group" aria-label="Eraser mode">
-              {REMOVE_BG_MODE_ITEMS.map((item) => (
-                <button
-                  key={item.mode}
-                  type="button"
-                  className={removeBgMode === item.mode ? "active" : ""}
-                  aria-pressed={removeBgMode === item.mode}
-                  onClick={() => setRemoveBgMode(item.mode)}
-                >
-                  {item.label}
-                </button>
-              ))}
+          {(transformSelected || tool !== "select") && (
+            <div className="screenshot-properties-heading">
+              <strong>
+                {transformSelected ? elementLabel(transformSelected) : toolLabel(tool)}
+              </strong>
             </div>
-            {removeBgMode === "wand" ? (
-              <>
-                <label>
-                  Tolerance
-                  <RangeSlider
-                    ariaLabel="Color tolerance"
-                    min={0}
-                    max={120}
-                    value={wandTolerance}
-                    valueText={`${wandTolerance}`}
-                    marks={[
-                      { value: 0, label: "0" },
-                      { value: 36, label: "36" },
-                      { value: 80, label: "80" },
-                      { value: 120, label: "120" },
-                    ]}
-                    onChange={setWandTolerance}
-                  />
-                </label>
-                <label className="screenshot-check-row">
-                  <input
-                    type="checkbox"
-                    checked={wandContiguous}
-                    onChange={(event) => setWandContiguous(event.target.checked)}
-                  />
-                  Contiguous only
-                </label>
-                <p>
-                  {wandContiguous
-                    ? "Click a color to remove that area."
-                    : "Click a color to remove it everywhere in the layer."}
-                </p>
-              </>
-            ) : (
-              <>
-                <DrawToolPreview
-                  tool="remove-bg"
-                  color="#ffffff"
-                  fill={null}
-                  strokeWidth={removeBgBrushSize}
-                  brushSize={removeBgBrushSize}
-                  brushSoftness={removeBgBrushSoftness}
-                  opacity={100}
-                />
-                <label>
-                  Size
-                  <RangeSlider
-                    ariaLabel="Brush size"
-                    min={4}
-                    max={120}
-                    value={removeBgBrushSize}
-                    valueText={`${removeBgBrushSize} px`}
-                    marks={[
-                      { value: 4, label: "4" },
-                      { value: 28, label: "28" },
-                      { value: 64, label: "64" },
-                      { value: 120, label: "120" },
-                    ]}
-                    onChange={setRemoveBgBrushSize}
-                  />
-                </label>
-                <label>
-                  Softness
-                  <RangeSlider
-                    ariaLabel="Brush softness"
-                    min={0}
-                    max={100}
-                    value={removeBgBrushSoftness}
-                    valueText={`${removeBgBrushSoftness}%`}
-                    marks={[
-                      { value: 0, label: "Hard" },
-                      { value: 50, label: "50%" },
-                      { value: 100, label: "Soft" },
-                    ]}
-                    onChange={setRemoveBgBrushSoftness}
-                  />
-                </label>
-                <p>
-                  {removeBgMode === "erase"
-                    ? "Paint to erase."
-                    : "Paint to put back what you erased."}
-                </p>
-              </>
-            )}
-            {removeBgBusy && <p>Working…</p>}
-          </section>
-        )}
+          )}
 
-        {selected?.kind === "text" && (
-          <section className="screenshot-property-section">
-            <TextStylePicker
-              value={textStylePreset(selected)}
-              onChange={(preset) => {
-                setDefaultTextStyle(preset);
-                updateSelected((element) => (
-                  element.kind === "text"
-                    ? fitLiveText(applyTextStylePreset(element, preset))
-                    : element
-                ));
-              }}
-            />
-            <label>
-              Text
-              <textarea
-                rows={4}
-                value={selected.text}
-                onChange={(event) => updateSelected((element) => (
-                  element.kind === "text"
-                    ? fitLiveText({ ...element, text: event.target.value })
-                    : element
-                ))}
-              />
-            </label>
-            <div className="screenshot-number-pair">
+          {transformSelected && (
+            <section className="screenshot-property-section">
               <label>
-                Font
-                <select
-                  value={selected.fontFamily}
-                  onChange={(event) => updateSelected((element) => (
-                    element.kind === "text"
-                      ? fitLiveText({
-                        ...element,
-                        fontFamily: event.target.value as typeof element.fontFamily,
-                        roundedBackground: event.target.value === "rounded"
-                          ? element.roundedBackground
-                          : false,
-                      })
-                      : element
-                  ))}
-                >
-                  <option value="sans">Sans serif</option>
-                  <option value="serif">Serif</option>
-                  <option value="mono">Monospace</option>
-                  <option value="rounded">Rounded</option>
+                Shift rotation snap
+                <NumberInput
+                  min={1}
+                  max={180}
+                  ariaLabel="Shift rotation snap"
+                  value={rotationSnapDegrees}
+                  onChange={(degrees) =>
+                    setRotationSnapDegrees(Math.min(180, Math.max(1, Math.round(degrees))))
+                  }
+                />
+              </label>
+              <p>
+                Hold Shift while dragging the rotate handle to snap in {rotationSnapDegrees}°
+                increments.
+              </p>
+            </section>
+          )}
+
+          {tool === "crop" && (
+            <section className="screenshot-property-section">
+              <label>
+                Aspect ratio
+                <select value={cropAspect} onChange={(event) => setCropAspect(event.target.value)}>
+                  <option value="free">Free</option>
+                  <option value="1:1">1 : 1</option>
+                  <option value="4:3">4 : 3</option>
+                  <option value="3:2">3 : 2</option>
+                  <option value="16:9">16 : 9</option>
                 </select>
               </label>
-              <label>
-                Size
-                <NumberInput
-                  min={8}
-                  max={512}
-                  value={selected.fontSize}
-                  onChange={(fontSize) => updateSelected((element) => (
-                    element.kind === "text"
-                      ? fitLiveText({ ...element, fontSize: Math.max(8, fontSize) })
-                      : element
-                  ))}
-                />
-              </label>
-            </div>
-            <div className="screenshot-format-buttons">
-              <button
-                type="button"
-                className={selected.bold ? "active" : ""}
-                aria-label="Bold"
-                onClick={() => updateSelected((element) => (
-                  element.kind === "text"
-                    ? fitLiveText({ ...element, bold: !element.bold })
-                    : element
-                ))}
-              >B</button>
-              <button
-                type="button"
-                className={selected.italic ? "active" : ""}
-                aria-label="Italic"
-                onClick={() => updateSelected((element) => (
-                  element.kind === "text"
-                    ? fitLiveText({ ...element, italic: !element.italic })
-                    : element
-                ))}
-              ><em>I</em></button>
-              {(["left", "center", "right"] as const).map((align) => (
-                <button
-                  key={align}
-                  type="button"
-                  className={selected.align === align ? "active" : ""}
-                  aria-label={`Align ${align}`}
-                  onClick={() => updateSelected((element) => (
-                    element.kind === "text" ? { ...element, align } : element
-                  ))}
-                >
-                  <EditorIcon name={`align-${align}`} />
-                </button>
-              ))}
-            </div>
-            <ColorField
-              label="Text color"
-              value={selected.color}
-              onChange={(color) => updateSelected((element) => (
-                element.kind === "text" ? { ...element, color } : element
-              ))}
-            />
-            <label className="screenshot-check-row">
-              <input
-                type="checkbox"
-                checked={selected.background !== null}
-                onChange={(event) => updateSelected((element) => (
-                  element.kind === "text"
-                    ? {
-                      ...element,
-                      background: event.target.checked ? "#111318" : null,
-                      outlined: event.target.checked ? false : element.outlined,
-                      roundedBackground: event.target.checked
-                        ? false
-                        : element.roundedBackground,
-                    }
-                    : element
-                ))}
-              />
-              Text background
-            </label>
-            {selected.background && (
-              <ColorField
-                label="Background color"
-                value={selected.background}
-                onChange={(background) => updateSelected((element) => (
-                  element.kind === "text" ? { ...element, background } : element
-                ))}
-              />
-            )}
-            <DropShadowFields
-              style={textDropShadowStyle(selected)}
-              onChange={(next) => updateSelected((element) => (
-                element.kind === "text"
-                  ? {
-                    ...element,
-                    dropShadow: next.dropShadow,
-                    dropShadowStyle: next.dropShadowStyle,
-                  }
-                  : element
-              ))}
-            />
-          </section>
-        )}
-
-        {selected?.kind === "image" && (
-          <section className="screenshot-property-section">
-            <div className="screenshot-number-pair">
-              <label>
-                Width
-                <NumberInput
-                  min={1}
-                  max={16_384}
-                  ariaLabel="Layer width"
-                  title={selected.locked
-                    ? "Unlock this layer to change size and position"
-                    : "Keeps the image aspect ratio"}
-                  value={Math.round(selected.width)}
-                  disabled={selected.locked}
-                  onChange={(width) => updateSelected((element) => {
-                    if (element.kind !== "image") return element;
-                    const size = imageSizeAtWidth(element, width);
-                    return { ...element, ...size };
-                  })}
-                />
-              </label>
-              <label>
-                Height
-                <NumberInput
-                  min={1}
-                  max={16_384}
-                  ariaLabel="Layer height"
-                  title={selected.locked
-                    ? "Unlock this layer to change size and position"
-                    : "Keeps the image aspect ratio"}
-                  value={Math.round(selected.height)}
-                  disabled={selected.locked}
-                  onChange={(height) => updateSelected((element) => {
-                    if (element.kind !== "image") return element;
-                    const size = imageSizeAtHeight(element, height);
-                    return { ...element, ...size };
-                  })}
-                />
-              </label>
-              <label>
-                X
-                <NumberInput
-                  ariaLabel="Layer X"
-                  title={selected.locked
-                    ? "Unlock this layer to change size and position"
-                    : undefined}
-                  value={Math.round(selected.x)}
-                  disabled={selected.locked}
-                  onChange={(x) => updateSelected((element) => (
-                    element.kind === "image" ? { ...element, x } : element
-                  ))}
-                />
-              </label>
-              <label>
-                Y
-                <NumberInput
-                  ariaLabel="Layer Y"
-                  title={selected.locked
-                    ? "Unlock this layer to change size and position"
-                    : undefined}
-                  value={Math.round(selected.y)}
-                  disabled={selected.locked}
-                  onChange={(y) => updateSelected((element) => (
-                    element.kind === "image" ? { ...element, y } : element
-                  ))}
-                />
-              </label>
-            </div>
-            <p>
-              {selected.locked
-                ? "Unlock this layer to change size and position."
-                : "Width and height stay proportional to the image."}
-            </p>
-          </section>
-        )}
-
-        {(selected?.kind === "shape" || selected?.kind === "path") && (
-          <section className="screenshot-property-section">
-            {selected.kind === "shape" && isClosedShapeKind(selected.shape) && (
-              <label className="screenshot-check-row">
-                <input
-                  type="checkbox"
-                  checked={selected.style.strokeEnabled !== false}
-                  onChange={(event) => updateSelected((element) => (
-                    element.kind === "shape"
-                      ? { ...element, style: { ...element.style, strokeEnabled: event.target.checked } }
-                      : element
-                  ))}
-                />
-                Stroke
-              </label>
-            )}
-            {(selected.kind === "path" || !isClosedShapeKind(selected.shape)
-              || selected.style.strokeEnabled !== false) && (
-              <>
-                <ColorField
-                  label="Stroke color"
-                  value={selected.style.color}
-                  onChange={(color) => updateSelected((element) => (
-                    element.kind === "shape" || element.kind === "path"
-                      ? { ...element, style: { ...element.style, color } }
-                      : element
-                  ))}
-                />
-                <label>
-                  Stroke width
-                  <RangeSlider
-                    ariaLabel="Stroke width"
-                    min={2}
-                    max={40}
-                    value={Math.round(selected.style.strokeWidth)}
-                    valueText={`${Math.round(selected.style.strokeWidth)} px`}
-                    onChange={(strokeWidth) => updateSelected((element) => (
-                      element.kind === "shape" || element.kind === "path"
-                        ? {
-                          ...element,
-                          style: { ...element.style, strokeWidth },
-                        }
-                        : element
-                    ))}
-                  />
-                </label>
-              </>
-            )}
-            <label>
-              Opacity
-              <RangeSlider
-                ariaLabel="Opacity"
-                min={0}
-                max={100}
-                value={selected.opacity}
-                valueText={`${selected.opacity}%`}
-                onChange={(opacity) => updateSelected((element) => (
-                  element.kind === "shape" || element.kind === "path"
-                    ? { ...element, opacity }
-                    : element
-                ))}
-              />
-            </label>
-            <DropShadowFields
-              style={selected.style}
-              onChange={(nextStyle) => updateSelected((element) => (
-                element.kind === "shape" || element.kind === "path"
-                  ? { ...element, style: nextStyle }
-                  : element
-              ))}
-            />
-            {selected.kind === "shape" && isClosedShapeKind(selected.shape) && (
-              <>
-                <label className="screenshot-check-row">
-                  <input
-                    type="checkbox"
-                    checked={selected.style.fill !== null}
-                    onChange={(event) => updateSelected((element) => (
-                      element.kind === "shape"
-                        ? {
-                          ...element,
-                          style: {
-                            ...element.style,
-                            fill: event.target.checked ? element.style.color : null,
-                          },
-                        }
-                        : element
-                    ))}
-                  />
-                  Filled shape
-                </label>
-                {selected.style.fill && (
-                  <ColorField
-                    label="Fill color"
-                    value={selected.style.fill.slice(0, 7)}
-                    onChange={(fill) => updateSelected((element) => (
-                      element.kind === "shape"
-                        ? { ...element, style: { ...element.style, fill } }
-                        : element
-                    ))}
-                  />
-                )}
-              </>
-            )}
-            {selected.kind === "shape" && isCurveableStrokeShape(selected) && (
-              <>
-                {selected.controls.length <= 1 ? (
-                  <label>
-                    Curve
-                    <RangeSlider
-                      ariaLabel="Curve"
-                      min={-100}
-                      max={100}
-                      value={Math.round(arrowBendAmount(selected) * 100)}
-                      valueText={`${Math.round(arrowBendAmount(selected) * 100)}%`}
-                      marks={[
-                        { value: -100, label: "Left" },
-                        { value: 0, label: "Straight" },
-                        { value: 100, label: "Right" },
-                      ]}
-                      onChange={(bend) => updateSelected((element) => (
-                        element.kind === "shape"
-                          ? arrowWithBend(element, bend / 100)
-                          : element
-                      ))}
-                    />
-                  </label>
-                ) : (
+              {cropSelection ? (
+                <>
+                  <div className="screenshot-number-pair">
+                    <label>
+                      Width
+                      <input value={cropSelection.width} readOnly aria-label="Crop width" />
+                    </label>
+                    <label>
+                      Height
+                      <input value={cropSelection.height} readOnly aria-label="Crop height" />
+                    </label>
+                  </div>
                   <div className="screenshot-property-actions">
-                    <button
-                      type="button"
-                      onClick={() => updateSelected((element) => (
-                        element.kind === "shape"
-                          ? { ...element, controls: [] }
-                          : element
-                      ))}
-                    >
-                      {selected.shape === "arrow" ? "Straighten arrow" : "Straighten line"}
+                    <button type="button" onClick={() => setCropSelection(null)}>
+                      Clear
+                    </button>
+                    <button type="button" className="primary cta-pulse" onClick={applyCrop}>
+                      Apply crop
                     </button>
                   </div>
-                )}
+                  <p>Hold Shift while dragging to keep this aspect ratio.</p>
+                </>
+              ) : (
                 <p>
-                  Drag the curve dots to reshape. Double-click the path to add more
-                  points; double-click a point to remove it.
+                  Drag over the area you want to keep. Start from outside the canvas to crop to an
+                  edge. Hold Shift to lock the current aspect ratio.
                 </p>
-              </>
-            )}
-          </section>
-        )}
+              )}
+            </section>
+          )}
 
-        {!selected && tool !== "crop" && tool !== "select" && tool !== "remove-bg" && (
-          <section className="screenshot-property-section">
-            {tool === "text" ? (
-              <>
-                <TextStylePicker
-                  label="New text style"
-                  value={defaultTextStyle}
-                  onChange={setDefaultTextStyle}
-                />
-                <label>
-                  New text size
-                  <NumberInput
-                    min={8}
-                    max={512}
-                    value={defaultFontSize}
-                    onChange={setDefaultFontSize}
-                  />
-                </label>
-                <DropShadowFields
-                  style={textDropShadowStyle({
-                    color: defaultStyle.color,
-                    fontSize: defaultFontSize,
-                    dropShadow: defaultStyle.dropShadow,
-                    dropShadowStyle: defaultStyle.dropShadowStyle,
-                  })}
-                  onChange={(next) => setDefaultStyle((style) => ({
-                    ...style,
-                    dropShadow: next.dropShadow,
-                    dropShadowStyle: next.dropShadowStyle,
-                  }))}
-                />
-              </>
-            ) : (
-              <>
-                {isGroupedShapeTool(tool) && (
-                  <div className="screenshot-shape-picker" role="group" aria-label="Shape">
-                    {SHAPE_GROUP_ITEMS.map((item) => (
-                      <button
-                        key={item.tool}
-                        type="button"
-                        className={tool === item.tool ? "active" : ""}
-                        aria-pressed={tool === item.tool}
-                        aria-label={item.label}
-                        title={shapeItemName(item)}
-                        onClick={() => activateTool(item.tool)}
-                      >
-                        <EditorIcon name={item.tool} />
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <DrawToolPreview
-                  tool={tool}
-                  color={defaultStyle.color}
-                  fill={isClosedShapeTool(tool) ? defaultStyle.fill : null}
-                  strokeWidth={defaultStyle.strokeWidth}
-                  strokeEnabled={!isClosedShapeTool(tool) || defaultStyle.strokeEnabled !== false}
-                  brushSize={defaultStyle.strokeWidth}
-                  brushSoftness={0}
-                  opacity={defaultOpacity}
-                />
-                {isClosedShapeTool(tool) && (
+          {tool === "remove-bg" && (
+            <section className="screenshot-property-section">
+              <p>Remove a color, paint it out, or paint it back.</p>
+              <div
+                className="screenshot-format-buttons screenshot-format-buttons-3"
+                role="group"
+                aria-label="Eraser mode"
+              >
+                {REMOVE_BG_MODE_ITEMS.map((item) => (
+                  <button
+                    key={item.mode}
+                    type="button"
+                    className={removeBgMode === item.mode ? "active" : ""}
+                    aria-pressed={removeBgMode === item.mode}
+                    onClick={() => setRemoveBgMode(item.mode)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              {removeBgMode === "wand" ? (
+                <>
+                  <label>
+                    Tolerance
+                    <RangeSlider
+                      ariaLabel="Color tolerance"
+                      min={0}
+                      max={120}
+                      value={wandTolerance}
+                      valueText={`${wandTolerance}`}
+                      marks={[
+                        { value: 0, label: "0" },
+                        { value: 36, label: "36" },
+                        { value: 80, label: "80" },
+                        { value: 120, label: "120" },
+                      ]}
+                      onChange={setWandTolerance}
+                    />
+                  </label>
                   <label className="screenshot-check-row">
                     <input
                       type="checkbox"
-                      checked={defaultStyle.strokeEnabled !== false}
-                      onChange={(event) => setDefaultStyle((style) => ({
-                        ...style,
-                        strokeEnabled: event.target.checked,
-                      }))}
+                      checked={wandContiguous}
+                      onChange={(event) => setWandContiguous(event.target.checked)}
                     />
-                    Stroke
+                    Contiguous only
                   </label>
-                )}
-                {(!isClosedShapeTool(tool) || defaultStyle.strokeEnabled !== false) && (
-                  <>
-                    <ColorField
-                      label={isClosedShapeTool(tool) ? "Stroke color" : "Color"}
-                      value={defaultStyle.color}
-                      onChange={(color) => setDefaultStyle((style) => ({ ...style, color }))}
+                  <p>
+                    {wandContiguous
+                      ? "Click a color to remove that area."
+                      : "Click a color to remove it everywhere in the layer."}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <DrawToolPreview
+                    tool="remove-bg"
+                    color="#ffffff"
+                    fill={null}
+                    strokeWidth={removeBgBrushSize}
+                    brushSize={removeBgBrushSize}
+                    brushSoftness={removeBgBrushSoftness}
+                    opacity={100}
+                  />
+                  <label>
+                    Size
+                    <RangeSlider
+                      ariaLabel="Brush size"
+                      min={4}
+                      max={120}
+                      value={removeBgBrushSize}
+                      valueText={`${removeBgBrushSize} px`}
+                      marks={[
+                        { value: 4, label: "4" },
+                        { value: 28, label: "28" },
+                        { value: 64, label: "64" },
+                        { value: 120, label: "120" },
+                      ]}
+                      onChange={setRemoveBgBrushSize}
                     />
-                    <label>
-                      Size
-                      <RangeSlider
-                        ariaLabel="Stroke width"
-                        min={2}
-                        max={40}
-                        value={Math.round(defaultStyle.strokeWidth)}
-                        valueText={`${Math.round(defaultStyle.strokeWidth)} px`}
-                        onChange={(strokeWidth) => setDefaultStyle((style) => ({
-                          ...style,
-                          strokeWidth,
-                        }))}
-                      />
-                    </label>
-                  </>
-                )}
+                  </label>
+                  <label>
+                    Softness
+                    <RangeSlider
+                      ariaLabel="Brush softness"
+                      min={0}
+                      max={100}
+                      value={removeBgBrushSoftness}
+                      valueText={`${removeBgBrushSoftness}%`}
+                      marks={[
+                        { value: 0, label: "Hard" },
+                        { value: 50, label: "50%" },
+                        { value: 100, label: "Soft" },
+                      ]}
+                      onChange={setRemoveBgBrushSoftness}
+                    />
+                  </label>
+                  <p>
+                    {removeBgMode === "erase"
+                      ? "Paint to erase."
+                      : "Paint to put back what you erased."}
+                  </p>
+                </>
+              )}
+              {removeBgBusy && <p>Working…</p>}
+            </section>
+          )}
+
+          {selected?.kind === "text" && (
+            <section className="screenshot-property-section">
+              <TextStylePicker
+                value={textStylePreset(selected)}
+                onChange={(preset) => {
+                  setDefaultTextStyle(preset);
+                  updateSelected((element) =>
+                    element.kind === "text"
+                      ? fitLiveText(applyTextStylePreset(element, preset))
+                      : element,
+                  );
+                }}
+              />
+              <label>
+                Text
+                <textarea
+                  rows={4}
+                  value={selected.text}
+                  onChange={(event) =>
+                    updateSelected((element) =>
+                      element.kind === "text"
+                        ? fitLiveText({ ...element, text: event.target.value })
+                        : element,
+                    )
+                  }
+                />
+              </label>
+              <div className="screenshot-number-pair">
                 <label>
-                  Opacity
-                  <RangeSlider
-                    ariaLabel="Opacity"
-                    min={0}
-                    max={100}
-                    value={defaultOpacity}
-                    valueText={`${defaultOpacity}%`}
-                    onChange={setDefaultOpacity}
+                  Font
+                  <select
+                    value={selected.fontFamily}
+                    onChange={(event) =>
+                      updateSelected((element) =>
+                        element.kind === "text"
+                          ? fitLiveText({
+                              ...element,
+                              fontFamily: event.target.value as typeof element.fontFamily,
+                              roundedBackground:
+                                event.target.value === "rounded"
+                                  ? element.roundedBackground
+                                  : false,
+                            })
+                          : element,
+                      )
+                    }
+                  >
+                    <option value="sans">Sans serif</option>
+                    <option value="serif">Serif</option>
+                    <option value="mono">Monospace</option>
+                    <option value="rounded">Rounded</option>
+                  </select>
+                </label>
+                <label>
+                  Size
+                  <NumberInput
+                    min={8}
+                    max={512}
+                    value={selected.fontSize}
+                    onChange={(fontSize) =>
+                      updateSelected((element) =>
+                        element.kind === "text"
+                          ? fitLiveText({ ...element, fontSize: Math.max(8, fontSize) })
+                          : element,
+                      )
+                    }
                   />
                 </label>
-                {isClosedShapeTool(tool) && (
-                  <>
+              </div>
+              <div className="screenshot-format-buttons">
+                <button
+                  type="button"
+                  className={selected.bold ? "active" : ""}
+                  aria-label="Bold"
+                  onClick={() =>
+                    updateSelected((element) =>
+                      element.kind === "text"
+                        ? fitLiveText({ ...element, bold: !element.bold })
+                        : element,
+                    )
+                  }
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  className={selected.italic ? "active" : ""}
+                  aria-label="Italic"
+                  onClick={() =>
+                    updateSelected((element) =>
+                      element.kind === "text"
+                        ? fitLiveText({ ...element, italic: !element.italic })
+                        : element,
+                    )
+                  }
+                >
+                  <em>I</em>
+                </button>
+                {(["left", "center", "right"] as const).map((align) => (
+                  <button
+                    key={align}
+                    type="button"
+                    className={selected.align === align ? "active" : ""}
+                    aria-label={`Align ${align}`}
+                    onClick={() =>
+                      updateSelected((element) =>
+                        element.kind === "text" ? { ...element, align } : element,
+                      )
+                    }
+                  >
+                    <EditorIcon name={`align-${align}`} />
+                  </button>
+                ))}
+              </div>
+              <ColorField
+                label="Text color"
+                value={selected.color}
+                onChange={(color) =>
+                  updateSelected((element) =>
+                    element.kind === "text" ? { ...element, color } : element,
+                  )
+                }
+              />
+              <label className="screenshot-check-row">
+                <input
+                  type="checkbox"
+                  checked={selected.background !== null}
+                  onChange={(event) =>
+                    updateSelected((element) =>
+                      element.kind === "text"
+                        ? {
+                            ...element,
+                            background: event.target.checked ? "#111318" : null,
+                            outlined: event.target.checked ? false : element.outlined,
+                            roundedBackground: event.target.checked
+                              ? false
+                              : element.roundedBackground,
+                          }
+                        : element,
+                    )
+                  }
+                />
+                Text background
+              </label>
+              {selected.background && (
+                <ColorField
+                  label="Background color"
+                  value={selected.background}
+                  onChange={(background) =>
+                    updateSelected((element) =>
+                      element.kind === "text" ? { ...element, background } : element,
+                    )
+                  }
+                />
+              )}
+              <DropShadowFields
+                style={textDropShadowStyle(selected)}
+                onChange={(next) =>
+                  updateSelected((element) =>
+                    element.kind === "text"
+                      ? {
+                          ...element,
+                          dropShadow: next.dropShadow,
+                          dropShadowStyle: next.dropShadowStyle,
+                        }
+                      : element,
+                  )
+                }
+              />
+            </section>
+          )}
+
+          {selected?.kind === "image" && (
+            <section className="screenshot-property-section">
+              <div className="screenshot-number-pair">
+                <label>
+                  Width
+                  <NumberInput
+                    min={1}
+                    max={16_384}
+                    ariaLabel="Layer width"
+                    title={
+                      selected.locked
+                        ? "Unlock this layer to change size and position"
+                        : "Keeps the image aspect ratio"
+                    }
+                    value={Math.round(selected.width)}
+                    disabled={selected.locked}
+                    onChange={(width) =>
+                      updateSelected((element) => {
+                        if (element.kind !== "image") return element;
+                        const size = imageSizeAtWidth(element, width);
+                        return { ...element, ...size };
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Height
+                  <NumberInput
+                    min={1}
+                    max={16_384}
+                    ariaLabel="Layer height"
+                    title={
+                      selected.locked
+                        ? "Unlock this layer to change size and position"
+                        : "Keeps the image aspect ratio"
+                    }
+                    value={Math.round(selected.height)}
+                    disabled={selected.locked}
+                    onChange={(height) =>
+                      updateSelected((element) => {
+                        if (element.kind !== "image") return element;
+                        const size = imageSizeAtHeight(element, height);
+                        return { ...element, ...size };
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  X
+                  <NumberInput
+                    ariaLabel="Layer X"
+                    title={
+                      selected.locked ? "Unlock this layer to change size and position" : undefined
+                    }
+                    value={Math.round(selected.x)}
+                    disabled={selected.locked}
+                    onChange={(x) =>
+                      updateSelected((element) =>
+                        element.kind === "image" ? { ...element, x } : element,
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  Y
+                  <NumberInput
+                    ariaLabel="Layer Y"
+                    title={
+                      selected.locked ? "Unlock this layer to change size and position" : undefined
+                    }
+                    value={Math.round(selected.y)}
+                    disabled={selected.locked}
+                    onChange={(y) =>
+                      updateSelected((element) =>
+                        element.kind === "image" ? { ...element, y } : element,
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <p>
+                {selected.locked
+                  ? "Unlock this layer to change size and position."
+                  : "Width and height stay proportional to the image."}
+              </p>
+            </section>
+          )}
+
+          {(selected?.kind === "shape" || selected?.kind === "path") && (
+            <section className="screenshot-property-section">
+              {selected.kind === "shape" && isClosedShapeKind(selected.shape) && (
+                <label className="screenshot-check-row">
+                  <input
+                    type="checkbox"
+                    checked={selected.style.strokeEnabled !== false}
+                    onChange={(event) =>
+                      updateSelected((element) =>
+                        element.kind === "shape"
+                          ? {
+                              ...element,
+                              style: { ...element.style, strokeEnabled: event.target.checked },
+                            }
+                          : element,
+                      )
+                    }
+                  />
+                  Stroke
+                </label>
+              )}
+              {(selected.kind === "path" ||
+                !isClosedShapeKind(selected.shape) ||
+                selected.style.strokeEnabled !== false) && (
+                <>
+                  <ColorField
+                    label="Stroke color"
+                    value={selected.style.color}
+                    onChange={(color) =>
+                      updateSelected((element) =>
+                        element.kind === "shape" || element.kind === "path"
+                          ? { ...element, style: { ...element.style, color } }
+                          : element,
+                      )
+                    }
+                  />
+                  <label>
+                    Stroke width
+                    <RangeSlider
+                      ariaLabel="Stroke width"
+                      min={2}
+                      max={40}
+                      value={Math.round(selected.style.strokeWidth)}
+                      valueText={`${Math.round(selected.style.strokeWidth)} px`}
+                      onChange={(strokeWidth) =>
+                        updateSelected((element) =>
+                          element.kind === "shape" || element.kind === "path"
+                            ? {
+                                ...element,
+                                style: { ...element.style, strokeWidth },
+                              }
+                            : element,
+                        )
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              <label>
+                Opacity
+                <RangeSlider
+                  ariaLabel="Opacity"
+                  min={0}
+                  max={100}
+                  value={selected.opacity}
+                  valueText={`${selected.opacity}%`}
+                  onChange={(opacity) =>
+                    updateSelected((element) =>
+                      element.kind === "shape" || element.kind === "path"
+                        ? { ...element, opacity }
+                        : element,
+                    )
+                  }
+                />
+              </label>
+              <DropShadowFields
+                style={selected.style}
+                onChange={(nextStyle) =>
+                  updateSelected((element) =>
+                    element.kind === "shape" || element.kind === "path"
+                      ? { ...element, style: nextStyle }
+                      : element,
+                  )
+                }
+              />
+              {selected.kind === "shape" && isClosedShapeKind(selected.shape) && (
+                <>
+                  <label className="screenshot-check-row">
+                    <input
+                      type="checkbox"
+                      checked={selected.style.fill !== null}
+                      onChange={(event) =>
+                        updateSelected((element) =>
+                          element.kind === "shape"
+                            ? {
+                                ...element,
+                                style: {
+                                  ...element.style,
+                                  fill: event.target.checked ? element.style.color : null,
+                                },
+                              }
+                            : element,
+                        )
+                      }
+                    />
+                    Filled shape
+                  </label>
+                  {selected.style.fill && (
+                    <ColorField
+                      label="Fill color"
+                      value={selected.style.fill.slice(0, 7)}
+                      onChange={(fill) =>
+                        updateSelected((element) =>
+                          element.kind === "shape"
+                            ? { ...element, style: { ...element.style, fill } }
+                            : element,
+                        )
+                      }
+                    />
+                  )}
+                </>
+              )}
+              {selected.kind === "shape" && isCurveableStrokeShape(selected) && (
+                <>
+                  {selected.controls.length <= 1 ? (
+                    <label>
+                      Curve
+                      <RangeSlider
+                        ariaLabel="Curve"
+                        min={-100}
+                        max={100}
+                        value={Math.round(arrowBendAmount(selected) * 100)}
+                        valueText={`${Math.round(arrowBendAmount(selected) * 100)}%`}
+                        marks={[
+                          { value: -100, label: "Left" },
+                          { value: 0, label: "Straight" },
+                          { value: 100, label: "Right" },
+                        ]}
+                        onChange={(bend) =>
+                          updateSelected((element) =>
+                            element.kind === "shape" ? arrowWithBend(element, bend / 100) : element,
+                          )
+                        }
+                      />
+                    </label>
+                  ) : (
+                    <div className="screenshot-property-actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateSelected((element) =>
+                            element.kind === "shape" ? { ...element, controls: [] } : element,
+                          )
+                        }
+                      >
+                        {selected.shape === "arrow" ? "Straighten arrow" : "Straighten line"}
+                      </button>
+                    </div>
+                  )}
+                  <p>
+                    Drag the curve dots to reshape. Double-click the path to add more points;
+                    double-click a point to remove it.
+                  </p>
+                </>
+              )}
+            </section>
+          )}
+
+          {!selected && tool !== "crop" && tool !== "select" && tool !== "remove-bg" && (
+            <section className="screenshot-property-section">
+              {tool === "text" ? (
+                <>
+                  <TextStylePicker
+                    label="New text style"
+                    value={defaultTextStyle}
+                    onChange={setDefaultTextStyle}
+                  />
+                  <label>
+                    New text size
+                    <NumberInput
+                      min={8}
+                      max={512}
+                      value={defaultFontSize}
+                      onChange={setDefaultFontSize}
+                    />
+                  </label>
+                  <DropShadowFields
+                    style={textDropShadowStyle({
+                      color: defaultStyle.color,
+                      fontSize: defaultFontSize,
+                      dropShadow: defaultStyle.dropShadow,
+                      dropShadowStyle: defaultStyle.dropShadowStyle,
+                    })}
+                    onChange={(next) =>
+                      setDefaultStyle((style) => ({
+                        ...style,
+                        dropShadow: next.dropShadow,
+                        dropShadowStyle: next.dropShadowStyle,
+                      }))
+                    }
+                  />
+                </>
+              ) : (
+                <>
+                  {isGroupedShapeTool(tool) && (
+                    <div className="screenshot-shape-picker" role="group" aria-label="Shape">
+                      {SHAPE_GROUP_ITEMS.map((item) => (
+                        <button
+                          key={item.tool}
+                          type="button"
+                          className={tool === item.tool ? "active" : ""}
+                          aria-pressed={tool === item.tool}
+                          aria-label={item.label}
+                          title={shapeItemName(item)}
+                          onClick={() => activateTool(item.tool)}
+                        >
+                          <EditorIcon name={item.tool} />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <DrawToolPreview
+                    tool={tool}
+                    color={defaultStyle.color}
+                    fill={isClosedShapeTool(tool) ? defaultStyle.fill : null}
+                    strokeWidth={defaultStyle.strokeWidth}
+                    strokeEnabled={!isClosedShapeTool(tool) || defaultStyle.strokeEnabled !== false}
+                    brushSize={defaultStyle.strokeWidth}
+                    brushSoftness={0}
+                    opacity={defaultOpacity}
+                  />
+                  {isClosedShapeTool(tool) && (
                     <label className="screenshot-check-row">
                       <input
                         type="checkbox"
-                        checked={defaultStyle.fill !== null}
-                        onChange={(event) => setDefaultStyle((style) => ({
-                          ...style,
-                          fill: event.target.checked ? style.color : null,
-                        }))}
+                        checked={defaultStyle.strokeEnabled !== false}
+                        onChange={(event) =>
+                          setDefaultStyle((style) => ({
+                            ...style,
+                            strokeEnabled: event.target.checked,
+                          }))
+                        }
                       />
-                      Filled shape
+                      Stroke
                     </label>
-                    {defaultStyle.fill && (
+                  )}
+                  {(!isClosedShapeTool(tool) || defaultStyle.strokeEnabled !== false) && (
+                    <>
                       <ColorField
-                        label="Fill color"
-                        value={defaultStyle.fill.slice(0, 7)}
-                        onChange={(fill) => setDefaultStyle((style) => ({
-                          ...style,
-                          fill,
-                        }))}
+                        label={isClosedShapeTool(tool) ? "Stroke color" : "Color"}
+                        value={defaultStyle.color}
+                        onChange={(color) => setDefaultStyle((style) => ({ ...style, color }))}
                       />
-                    )}
-                  </>
-                )}
-                <DropShadowFields
-                  style={defaultStyle}
-                  onChange={setDefaultStyle}
-                />
-              </>
-            )}
-          </section>
-        )}
-
+                      <label>
+                        Size
+                        <RangeSlider
+                          ariaLabel="Stroke width"
+                          min={2}
+                          max={40}
+                          value={Math.round(defaultStyle.strokeWidth)}
+                          valueText={`${Math.round(defaultStyle.strokeWidth)} px`}
+                          onChange={(strokeWidth) =>
+                            setDefaultStyle((style) => ({
+                              ...style,
+                              strokeWidth,
+                            }))
+                          }
+                        />
+                      </label>
+                    </>
+                  )}
+                  <label>
+                    Opacity
+                    <RangeSlider
+                      ariaLabel="Opacity"
+                      min={0}
+                      max={100}
+                      value={defaultOpacity}
+                      valueText={`${defaultOpacity}%`}
+                      onChange={setDefaultOpacity}
+                    />
+                  </label>
+                  {isClosedShapeTool(tool) && (
+                    <>
+                      <label className="screenshot-check-row">
+                        <input
+                          type="checkbox"
+                          checked={defaultStyle.fill !== null}
+                          onChange={(event) =>
+                            setDefaultStyle((style) => ({
+                              ...style,
+                              fill: event.target.checked ? style.color : null,
+                            }))
+                          }
+                        />
+                        Filled shape
+                      </label>
+                      {defaultStyle.fill && (
+                        <ColorField
+                          label="Fill color"
+                          value={defaultStyle.fill.slice(0, 7)}
+                          onChange={(fill) =>
+                            setDefaultStyle((style) => ({
+                              ...style,
+                              fill,
+                            }))
+                          }
+                        />
+                      )}
+                    </>
+                  )}
+                  <DropShadowFields style={defaultStyle} onChange={setDefaultStyle} />
+                </>
+              )}
+            </section>
+          )}
         </section>
       </aside>
 
       <footer className="screenshot-export-bar">
         <div className={`screenshot-export-options${exportSettingsOpen ? " is-open" : ""}`}>
           <div id="screenshot-export-settings" className="screenshot-export-settings">
-          <div className="screenshot-export-control screenshot-export-size">
-            <span>Output size</span>
-            <span className="screenshot-export-size-control">
-              <CustomSelect
-                value={exportSize}
-                ariaLabel="Output size"
-                options={[
-                  {
-                    value: "original",
-                    label: "Original",
-                    description: "Keep the capture’s pixel dimensions.",
-                  },
-                  {
-                    value: "75",
-                    label: "75%",
-                    description: "Save at 75% of the pixel width and height.",
-                  },
-                  {
-                    value: "50",
-                    label: "50%",
-                    description: "Save at half the pixel width and height.",
-                  },
-                  {
-                    value: "custom",
-                    label: "Custom",
-                    description: "Choose exact pixel dimensions.",
-                  },
-                ]}
-                onChange={(value) => {
-                  const next = value as ExportSize;
-                  if (next === "custom" && exportSize !== "custom") {
-                    setCustomExportWidth(editorDocument.width);
-                    setCustomExportHeight(editorDocument.height);
-                  }
-                  setExportSize(next);
-                }}
-              />
-              <span className="screenshot-output-dimensions" aria-live="polite">
-                {output.width} × {output.height}
-              </span>
-            </span>
-          </div>
-          {exportSize === "custom" && (
-            <div className="screenshot-export-control screenshot-custom-dimensions">
-              <span>Width × height</span>
-              <div>
-                <NumberInput
-                  min={1}
-                  max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
-                  value={customExportWidth}
-                  ariaLabel="Custom output width"
-                  onChange={(width) => updateCustomExportDimension("width", width)}
-                />
-                <span aria-hidden="true">×</span>
-                <NumberInput
-                  min={1}
-                  max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
-                  value={customExportHeight}
-                  ariaLabel="Custom output height"
-                  onChange={(height) => updateCustomExportDimension("height", height)}
-                />
-                <button
-                  type="button"
-                  className={exportAspectLocked ? "active" : ""}
-                  aria-label="Lock output aspect ratio"
-                  aria-pressed={exportAspectLocked}
-                  title="Lock output aspect ratio"
-                  onClick={() => setExportAspectLocked((locked) => !locked)}
-                >
-                  <EditorIcon name={exportAspectLocked ? "lock" : "unlock"} />
-                </button>
-              </div>
-            </div>
-          )}
-          <div className="screenshot-export-control screenshot-quality-mode">
-            <span>Save quality</span>
-            <CustomSelect
-              value={qualityMode}
-              ariaLabel="Save quality"
-              options={[
-                {
-                  value: "preserve",
-                  label: "Preserve quality",
-                  description: "Original quality with no extra compression unless an edit requires it.",
-                },
-                {
-                  value: "compress",
-                  label: "Compress",
-                  description: exportFormat === "png"
-                    ? "Smaller PNG with Tiny through Highest quality presets."
-                    : exportFormat === "webp"
-                      ? "Smaller lossy WebP with Tiny through Highest quality presets."
-                      : "Smaller JPEG with Tiny through Highest quality presets.",
-                },
-                {
-                  value: "maximum",
-                  label: "Maximum file size",
-                  description: "Set a hard size limit for the saved file.",
-                },
-              ]}
-              onChange={(value) => applyQualityMode(value as ScreenshotQualityMode)}
-            />
-          </div>
-          {showCompressQuality && (
-            <div className="screenshot-export-control screenshot-quality">
-              <span>Quality</span>
-              <CustomSelect
-                value={jpegQuality}
-                ariaLabel="Compression quality"
-                options={SCREENSHOT_QUALITY_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.label,
-                  description: screenshotQualityDescription(exportFormat, option),
-                }))}
-                onChange={(value) => setJpegQuality(value as ScreenshotQuality)}
-              />
-            </div>
-          )}
-          {qualityMode === "maximum" && (
-            <div
-              className="screenshot-export-control screenshot-maximum-size"
-              title={exportFormat === "jpeg" || exportFormat === "webp"
-                ? `${formatLabel} quality is lowered only when needed to meet this limit. If the original already fits, it stays uncompressed.`
-                : `Uses stronger ${formatLabel} compression only when the original exceeds this limit.`}
-            >
-              <span>Maximum file size</span>
-              <span className="screenshot-maximum-size-control">
-                <NumberInput
-                  min={maximumFileSizeUnit === "kb" ? 10 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
-                  step={maximumFileSizeUnit === "kb" ? 1 : maximumFileSizeUnit === "mb" ? 0.01 : 0.00001}
-                  value={maximumFileSize}
-                  ariaLabel="Maximum file size"
-                  onTextChange={setMaximumFileSize}
-                />
+            <div className="screenshot-export-control screenshot-export-size">
+              <span>Output size</span>
+              <span className="screenshot-export-size-control">
                 <CustomSelect
-                  value={maximumFileSizeUnit}
-                  ariaLabel="Screenshot file size unit"
+                  value={exportSize}
+                  ariaLabel="Output size"
                   options={[
-                    { value: "kb", label: "KB" },
-                    { value: "mb", label: "MB" },
-                    { value: "gb", label: "GB" },
+                    {
+                      value: "original",
+                      label: "Original",
+                      description: "Keep the capture’s pixel dimensions.",
+                    },
+                    {
+                      value: "75",
+                      label: "75%",
+                      description: "Save at 75% of the pixel width and height.",
+                    },
+                    {
+                      value: "50",
+                      label: "50%",
+                      description: "Save at half the pixel width and height.",
+                    },
+                    {
+                      value: "custom",
+                      label: "Custom",
+                      description: "Choose exact pixel dimensions.",
+                    },
                   ]}
                   onChange={(value) => {
-                    const nextUnit = value as ScreenshotFileSizeUnit;
-                    const bytes = Number(maximumFileSize)
-                      * SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit];
-                    setMaximumFileSizeUnit(nextUnit);
-                    if (Number.isFinite(bytes)) {
-                      setMaximumFileSize(formatScreenshotMaximumFileSizeInput(bytes, nextUnit));
+                    const next = value as ExportSize;
+                    if (next === "custom" && exportSize !== "custom") {
+                      setCustomExportWidth(editorDocument.width);
+                      setCustomExportHeight(editorDocument.height);
                     }
+                    setExportSize(next);
                   }}
                 />
+                <span className="screenshot-output-dimensions" aria-live="polite">
+                  {output.width} × {output.height}
+                </span>
               </span>
             </div>
-          )}
-          <div className="screenshot-export-control screenshot-output-estimate-control" aria-live="polite">
-            <span>Est. size</span>
-            <strong
-              className="screenshot-output-estimate"
-              data-pending={estimatePending ? "true" : undefined}
-              title="Estimated export file size for the current format, quality, and output size"
-            >
-              {estimatedSizeLabel}
-              {estimatedDelta && (
-                <span
-                  className={`screenshot-output-estimate-delta${estimatedDelta.percent < 0 ? " is-smaller" : " is-larger"}`}
-                  title="Change versus the original image, before this export"
-                >
-                  {estimatedDelta.label}
-                </span>
-              )}
-            </strong>
-          </div>
-          {canPreviewCompression && compressCompareDismissed && (
-            <div className="screenshot-export-control">
-              <span>Comparison</span>
-              <button
-                type="button"
-                className="screenshot-show-comparison"
-                onClick={() => setCompressCompareDismissed(false)}
-              >
-                Show before / after
-              </button>
+            {exportSize === "custom" && (
+              <div className="screenshot-export-control screenshot-custom-dimensions">
+                <span>Width × height</span>
+                <div>
+                  <NumberInput
+                    min={1}
+                    max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
+                    value={customExportWidth}
+                    ariaLabel="Custom output width"
+                    onChange={(width) => updateCustomExportDimension("width", width)}
+                  />
+                  <span aria-hidden="true">×</span>
+                  <NumberInput
+                    min={1}
+                    max={MAX_SCREENSHOT_OUTPUT_DIMENSION}
+                    value={customExportHeight}
+                    ariaLabel="Custom output height"
+                    onChange={(height) => updateCustomExportDimension("height", height)}
+                  />
+                  <button
+                    type="button"
+                    className={exportAspectLocked ? "active" : ""}
+                    aria-label="Lock output aspect ratio"
+                    aria-pressed={exportAspectLocked}
+                    title="Lock output aspect ratio"
+                    onClick={() => setExportAspectLocked((locked) => !locked)}
+                  >
+                    <EditorIcon name={exportAspectLocked ? "lock" : "unlock"} />
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="screenshot-export-control screenshot-quality-mode">
+              <span>Save quality</span>
+              <CustomSelect
+                value={qualityMode}
+                ariaLabel="Save quality"
+                options={[
+                  {
+                    value: "preserve",
+                    label: "Preserve quality",
+                    description:
+                      "Original quality with no extra compression unless an edit requires it.",
+                  },
+                  {
+                    value: "compress",
+                    label: "Compress",
+                    description:
+                      exportFormat === "png"
+                        ? "Smaller PNG with Tiny through Highest quality presets."
+                        : exportFormat === "webp"
+                          ? "Smaller lossy WebP with Tiny through Highest quality presets."
+                          : "Smaller JPEG with Tiny through Highest quality presets.",
+                  },
+                  {
+                    value: "maximum",
+                    label: "Maximum file size",
+                    description: "Set a hard size limit for the saved file.",
+                  },
+                ]}
+                onChange={(value) => applyQualityMode(value as ScreenshotQualityMode)}
+              />
             </div>
-          )}
+            {showCompressQuality && (
+              <div className="screenshot-export-control screenshot-quality">
+                <span>Quality</span>
+                <CustomSelect
+                  value={jpegQuality}
+                  ariaLabel="Compression quality"
+                  options={SCREENSHOT_QUALITY_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                    description: screenshotQualityDescription(exportFormat, option),
+                  }))}
+                  onChange={(value) => setJpegQuality(value as ScreenshotQuality)}
+                />
+              </div>
+            )}
+            {qualityMode === "maximum" && (
+              <div
+                className="screenshot-export-control screenshot-maximum-size"
+                title={
+                  exportFormat === "jpeg" || exportFormat === "webp"
+                    ? `${formatLabel} quality is lowered only when needed to meet this limit. If the original already fits, it stays uncompressed.`
+                    : `Uses stronger ${formatLabel} compression only when the original exceeds this limit.`
+                }
+              >
+                <span>Maximum file size</span>
+                <span className="screenshot-maximum-size-control">
+                  <NumberInput
+                    min={
+                      maximumFileSizeUnit === "kb"
+                        ? 10
+                        : maximumFileSizeUnit === "mb"
+                          ? 0.01
+                          : 0.00001
+                    }
+                    step={
+                      maximumFileSizeUnit === "kb"
+                        ? 1
+                        : maximumFileSizeUnit === "mb"
+                          ? 0.01
+                          : 0.00001
+                    }
+                    value={maximumFileSize}
+                    ariaLabel="Maximum file size"
+                    onTextChange={setMaximumFileSize}
+                  />
+                  <CustomSelect
+                    value={maximumFileSizeUnit}
+                    ariaLabel="Screenshot file size unit"
+                    options={[
+                      { value: "kb", label: "KB" },
+                      { value: "mb", label: "MB" },
+                      { value: "gb", label: "GB" },
+                    ]}
+                    onChange={(value) => {
+                      const nextUnit = value as ScreenshotFileSizeUnit;
+                      const bytes =
+                        Number(maximumFileSize) *
+                        SCREENSHOT_FILE_SIZE_UNIT_BYTES[maximumFileSizeUnit];
+                      setMaximumFileSizeUnit(nextUnit);
+                      if (Number.isFinite(bytes)) {
+                        setMaximumFileSize(formatScreenshotMaximumFileSizeInput(bytes, nextUnit));
+                      }
+                    }}
+                  />
+                </span>
+              </div>
+            )}
+            <div
+              className="screenshot-export-control screenshot-output-estimate-control"
+              aria-live="polite"
+            >
+              <span>Est. size</span>
+              <strong
+                className="screenshot-output-estimate"
+                data-pending={estimatePending ? "true" : undefined}
+                title="Estimated export file size for the current format, quality, and output size"
+              >
+                {estimatedSizeLabel}
+                {estimatedDelta && (
+                  <span
+                    className={`screenshot-output-estimate-delta${estimatedDelta.percent < 0 ? " is-smaller" : " is-larger"}`}
+                    title="Change versus the original image, before this export"
+                  >
+                    {estimatedDelta.label}
+                  </span>
+                )}
+              </strong>
+            </div>
+            {canPreviewCompression && compressCompareDismissed && (
+              <div className="screenshot-export-control">
+                <span>Comparison</span>
+                <button
+                  type="button"
+                  className="screenshot-show-comparison"
+                  onClick={() => setCompressCompareDismissed(false)}
+                >
+                  Show before / after
+                </button>
+              </div>
+            )}
           </div>
         </div>
         <div className="screenshot-save-row">
@@ -7600,7 +7620,9 @@ export function ScreenshotEditor() {
                   aria-label="Change save location"
                   disabled={busy === "saving"}
                   onClick={() => void chooseDestinationDirectory()}
-                >Change…</button>
+                >
+                  Change…
+                </button>
               </div>
             </div>
             <span className="recording-filename-input">
@@ -7614,7 +7636,10 @@ export function ScreenshotEditor() {
                 onChange={(event) => {
                   const next = event.target.value;
                   setFilenameStem(next);
-                  if (artifact.path && (next !== sourceStem || destinationDirectory !== sourceDirectory)) {
+                  if (
+                    artifact.path &&
+                    (next !== sourceStem || destinationDirectory !== sourceDirectory)
+                  ) {
                     setMakeCopy(true);
                   }
                   setSaved(null);
@@ -7633,9 +7658,7 @@ export function ScreenshotEditor() {
                   {
                     value: "jpeg",
                     label: "JPEG",
-                    description: jpegDropsTransparency
-                      ? "Fills in transparent areas."
-                      : undefined,
+                    description: jpegDropsTransparency ? "Fills in transparent areas." : undefined,
                   },
                   { value: "webp", label: "WebP" },
                 ]}
@@ -7644,13 +7667,16 @@ export function ScreenshotEditor() {
             </span>
           </div>
           <div className="screenshot-export-secondary">
-            {saved && <button type="button" onClick={() => void showSavedFile()}>Show in Folder</button>}
+            {saved && (
+              <button type="button" onClick={() => void showSavedFile()}>
+                Show in Folder
+              </button>
+            )}
             <button
               type="button"
-              className={[
-                "screenshot-export-copy",
-                success?.kind === "copy" ? "success" : "",
-              ].filter(Boolean).join(" ")}
+              className={["screenshot-export-copy", success?.kind === "copy" ? "success" : ""]
+                .filter(Boolean)
+                .join(" ")}
               title="Copy the edited image to the clipboard. Does not save a file."
               aria-label={success?.kind === "copy" ? "Copied" : "Copy image"}
               aria-busy={busy === "copying" ? true : undefined}
@@ -7669,7 +7695,9 @@ export function ScreenshotEditor() {
               "screenshot-export-status",
               error ? "has-error" : "",
               !error && success?.kind === "save" ? "has-success" : "",
-            ].filter(Boolean).join(" ")}
+            ]
+              .filter(Boolean)
+              .join(" ")}
           >
             <div
               className={[
@@ -7681,20 +7709,14 @@ export function ScreenshotEditor() {
             >
               {exportNotice || "\u00a0"}
             </div>
-            <div
-              className="visually-hidden"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
+            <div className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
               {copyAnnouncement}
             </div>
             {!error && (
               <div
-                className={[
-                  "screenshot-export-hint",
-                  jpegDropsTransparency ? "is-warning" : "",
-                ].filter(Boolean).join(" ")}
+                className={["screenshot-export-hint", jpegDropsTransparency ? "is-warning" : ""]
+                  .filter(Boolean)
+                  .join(" ")}
                 role={jpegDropsTransparency ? "status" : undefined}
               >
                 {saveHint}
@@ -7725,7 +7747,8 @@ export function ScreenshotEditor() {
               disabled={busy === "saving"}
               onClick={() => void saveEditedImage()}
             >
-              <EditorIcon name="save" />{busy === "saving" ? "Saving…" : "Save"}
+              <EditorIcon name="save" />
+              {busy === "saving" ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
@@ -7748,8 +7771,8 @@ function TextStylePicker({
   const pickerRef = useRef<HTMLFieldSetElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const selectedStyle = TEXT_STYLE_ITEMS.find((item) => item.preset === value)
-    ?? TEXT_STYLE_ITEMS[0];
+  const selectedStyle =
+    TEXT_STYLE_ITEMS.find((item) => item.preset === value) ?? TEXT_STYLE_ITEMS[0];
 
   const positionMenu = useCallback(() => {
     const trigger = triggerRef.current;
@@ -7792,10 +7815,7 @@ function TextStylePicker({
     if (!open) return undefined;
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (
-        !pickerRef.current?.contains(target)
-        && !menuRef.current?.contains(target)
-      ) {
+      if (!pickerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setOpen(false);
       }
     };
@@ -7842,38 +7862,39 @@ function TextStylePicker({
           <EditorIcon name="chevron-down" />
         </button>
       </fieldset>
-      {open && createPortal(
-        <div
-          ref={menuRef}
-          className="screenshot-text-style-menu"
-          role="menu"
-          aria-label={label}
-          style={menuPosition}
-        >
-          {TEXT_STYLE_ITEMS.map((item) => (
-            <button
-              key={item.preset}
-              type="button"
-              className={value === item.preset ? "active" : ""}
-              role="menuitemradio"
-              aria-checked={value === item.preset}
-              onClick={() => {
-                onChange(item.preset);
-                setOpen(false);
-              }}
-            >
-              <span
-                className={`screenshot-text-style-preview style-${item.preset}`}
-                aria-hidden="true"
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="screenshot-text-style-menu"
+            role="menu"
+            aria-label={label}
+            style={menuPosition}
+          >
+            {TEXT_STYLE_ITEMS.map((item) => (
+              <button
+                key={item.preset}
+                type="button"
+                className={value === item.preset ? "active" : ""}
+                role="menuitemradio"
+                aria-checked={value === item.preset}
+                onClick={() => {
+                  onChange(item.preset);
+                  setOpen(false);
+                }}
               >
-                Text
-              </span>
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )}
+                <span
+                  className={`screenshot-text-style-preview style-${item.preset}`}
+                  aria-hidden="true"
+                >
+                  Text
+                </span>
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -7939,10 +7960,7 @@ function CanvasBackgroundPicker({
     if (!open) return undefined;
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (
-        !pickerRef.current?.contains(target)
-        && !menuRef.current?.contains(target)
-      ) {
+      if (!pickerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setOpen(false);
       }
     };
@@ -7970,7 +7988,9 @@ function CanvasBackgroundPicker({
             "screenshot-canvas-tool",
             "screenshot-canvas-bg-trigger",
             open ? "is-open" : "",
-          ].filter(Boolean).join(" ")}
+          ]
+            .filter(Boolean)
+            .join(" ")}
           aria-label={solid ? `Background color: ${value}` : "Background color: transparent"}
           aria-haspopup="dialog"
           aria-expanded={open}
@@ -7984,10 +8004,9 @@ function CanvasBackgroundPicker({
           }}
         >
           <span
-            className={[
-              "screenshot-canvas-bg-chip",
-              solid ? "" : "is-transparent",
-            ].filter(Boolean).join(" ")}
+            className={["screenshot-canvas-bg-chip", solid ? "" : "is-transparent"]
+              .filter(Boolean)
+              .join(" ")}
             style={solid ? { background: value } : undefined}
             aria-hidden="true"
           />
@@ -7995,34 +8014,35 @@ function CanvasBackgroundPicker({
           <EditorIcon name="chevron-down" />
         </button>
       </div>
-      {open && createPortal(
-        <div
-          ref={menuRef}
-          className="screenshot-canvas-bg-menu"
-          role="dialog"
-          aria-label="Canvas background"
-          style={menuPosition}
-        >
-          <label className="screenshot-check-row screenshot-canvas-bg-toggle">
-            <input
-              type="checkbox"
-              checked={solid}
-              onChange={(event) => onChange(event.target.checked ? lastSolid : null)}
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="screenshot-canvas-bg-menu"
+            role="dialog"
+            aria-label="Canvas background"
+            style={menuPosition}
+          >
+            <label className="screenshot-check-row screenshot-canvas-bg-toggle">
+              <input
+                type="checkbox"
+                checked={solid}
+                onChange={(event) => onChange(event.target.checked ? lastSolid : null)}
+              />
+              Solid background
+            </label>
+            <ColorField
+              label="Canvas background"
+              value={swatchValue}
+              onChange={(background) => {
+                setLastSolid(background);
+                onChange(background);
+              }}
+              compact
             />
-            Solid background
-          </label>
-          <ColorField
-            label="Canvas background"
-            value={swatchValue}
-            onChange={(background) => {
-              setLastSolid(background);
-              onChange(background);
-            }}
-            compact
-          />
-        </div>,
-        document.body,
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -8064,10 +8084,12 @@ function DropShadowFields({
         <input
           type="checkbox"
           checked={enabled}
-          onChange={(event) => onChange({
-            ...style,
-            dropShadow: event.target.checked,
-          })}
+          onChange={(event) =>
+            onChange({
+              ...style,
+              dropShadow: event.target.checked,
+            })
+          }
         />
         Drop shadow
       </label>
@@ -8107,9 +8129,7 @@ function DropShadowFields({
                 ariaLabel="Shadow X offset"
                 min={-DROP_SHADOW_OFFSET_MAX}
                 max={DROP_SHADOW_OFFSET_MAX}
-                value={offsetDraft?.axis === "x"
-                  ? offsetDraft.text
-                  : Math.round(shadow.offsetX)}
+                value={offsetDraft?.axis === "x" ? offsetDraft.text : Math.round(shadow.offsetX)}
                 onTextChange={(text) => setOffsetDraft({ axis: "x", text })}
                 onCommit={(text) => commitOffset("x", text)}
               />
@@ -8120,9 +8140,7 @@ function DropShadowFields({
                 ariaLabel="Shadow Y offset"
                 min={-DROP_SHADOW_OFFSET_MAX}
                 max={DROP_SHADOW_OFFSET_MAX}
-                value={offsetDraft?.axis === "y"
-                  ? offsetDraft.text
-                  : Math.round(shadow.offsetY)}
+                value={offsetDraft?.axis === "y" ? offsetDraft.text : Math.round(shadow.offsetY)}
                 onTextChange={(text) => setOffsetDraft({ axis: "y", text })}
                 onCommit={(text) => commitOffset("y", text)}
               />
@@ -8147,7 +8165,9 @@ function ColorField({
   compact?: boolean;
 }) {
   return (
-    <fieldset className={["screenshot-color-field", compact ? "compact" : ""].filter(Boolean).join(" ")}>
+    <fieldset
+      className={["screenshot-color-field", compact ? "compact" : ""].filter(Boolean).join(" ")}
+    >
       <legend className={compact ? "visually-hidden" : undefined}>{label}</legend>
       <div className="screenshot-color-swatches">
         {COLOR_SWATCHES.map((color) => (
@@ -8161,7 +8181,11 @@ function ColorField({
           />
         ))}
         <label className="screenshot-custom-color" title="Custom color">
-          <input type="color" value={value.slice(0, 7)} onChange={(event) => onChange(event.target.value)} />
+          <input
+            type="color"
+            value={value.slice(0, 7)}
+            onChange={(event) => onChange(event.target.value)}
+          />
         </label>
       </div>
     </fieldset>
@@ -8289,7 +8313,9 @@ function elementLayerName(element: ScreenshotElement): string {
 function elementKindLabel(element: ScreenshotElement): string {
   if (element.kind === "image") {
     return element.source === "background"
-      ? element.locked ? "Locked background" : "Background"
+      ? element.locked
+        ? "Locked background"
+        : "Background"
       : "Image";
   }
   if (element.kind === "text") return "Text";
@@ -8325,8 +8351,8 @@ function ShapesRailButton({
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   const active = isGroupedShapeTool(activeTool);
   const current = active ? activeTool : lastShape;
-  const currentItem = SHAPE_GROUP_ITEMS.find((item) => item.tool === current)
-    ?? SHAPE_GROUP_ITEMS[0];
+  const currentItem =
+    SHAPE_GROUP_ITEMS.find((item) => item.tool === current) ?? SHAPE_GROUP_ITEMS[0];
 
   const positionMenu = useCallback(() => {
     const trigger = buttonRef.current;
@@ -8360,56 +8386,60 @@ function ShapesRailButton({
     items[(index + items.length) % items.length]?.focus();
   }, []);
 
-  const handleMenuKeyDown = useCallback((event: { key: string; preventDefault: () => void; stopPropagation: () => void }) => {
-    const items = shapeFlyoutItems(menuRef.current);
-    if (items.length === 0) return;
-    const currentIndex = items.findIndex((item) => item === document.activeElement);
-    const index = currentIndex >= 0 ? currentIndex : items.findIndex(
-      (item) => item.getAttribute("aria-checked") === "true",
-    );
+  const handleMenuKeyDown = useCallback(
+    (event: { key: string; preventDefault: () => void; stopPropagation: () => void }) => {
+      const items = shapeFlyoutItems(menuRef.current);
+      if (items.length === 0) return;
+      const currentIndex = items.findIndex((item) => item === document.activeElement);
+      const index =
+        currentIndex >= 0
+          ? currentIndex
+          : items.findIndex((item) => item.getAttribute("aria-checked") === "true");
 
-    if (event.key === "Escape" || event.key === "Tab") {
-      event.preventDefault();
-      event.stopPropagation();
-      closeAndRestoreFocus();
-      return;
-    }
-    if (event.key === "ArrowRight") {
-      event.preventDefault();
-      event.stopPropagation();
-      focusFlyoutItem(index + 1);
-      return;
-    }
-    if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      event.stopPropagation();
-      focusFlyoutItem(index - 1);
-      return;
-    }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      event.stopPropagation();
-      focusFlyoutItem(index + SHAPE_FLYOUT_COLUMNS);
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      event.stopPropagation();
-      focusFlyoutItem(index - SHAPE_FLYOUT_COLUMNS);
-      return;
-    }
-    if (event.key === "Home") {
-      event.preventDefault();
-      event.stopPropagation();
-      focusFlyoutItem(0);
-      return;
-    }
-    if (event.key === "End") {
-      event.preventDefault();
-      event.stopPropagation();
-      focusFlyoutItem(items.length - 1);
-    }
-  }, [closeAndRestoreFocus, focusFlyoutItem]);
+      if (event.key === "Escape" || event.key === "Tab") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeAndRestoreFocus();
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        event.stopPropagation();
+        focusFlyoutItem(index + 1);
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        event.stopPropagation();
+        focusFlyoutItem(index - 1);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        focusFlyoutItem(index + SHAPE_FLYOUT_COLUMNS);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        focusFlyoutItem(index - SHAPE_FLYOUT_COLUMNS);
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        event.stopPropagation();
+        focusFlyoutItem(0);
+        return;
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        event.stopPropagation();
+        focusFlyoutItem(items.length - 1);
+      }
+    },
+    [closeAndRestoreFocus, focusFlyoutItem],
+  );
 
   useLayoutEffect(() => {
     if (!open) return undefined;
@@ -8433,10 +8463,7 @@ function ShapesRailButton({
     if (!open) return undefined;
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (
-        !buttonRef.current?.contains(target)
-        && !menuRef.current?.contains(target)
-      ) {
+      if (!buttonRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         onClose();
       }
     };
@@ -8460,10 +8487,10 @@ function ShapesRailButton({
         onClick={onToggle}
         onKeyDown={(event) => {
           if (
-            event.key !== "ArrowDown"
-            && event.key !== "ArrowUp"
-            && event.key !== "ArrowLeft"
-            && event.key !== "ArrowRight"
+            event.key !== "ArrowDown" &&
+            event.key !== "ArrowUp" &&
+            event.key !== "ArrowLeft" &&
+            event.key !== "ArrowRight"
           ) {
             return;
           }
@@ -8476,36 +8503,37 @@ function ShapesRailButton({
         <EditorIcon name="shapes" />
         <span>Shapes</span>
       </button>
-      {open && createPortal(
-        <div
-          ref={menuRef}
-          className="screenshot-tool-flyout"
-          role="menu"
-          aria-label="Shapes"
-          style={menuPosition}
-          onKeyDown={handleMenuKeyDown}
-        >
-          {SHAPE_GROUP_ITEMS.map((item) => (
-            <button
-              key={item.tool}
-              type="button"
-              className={current === item.tool ? "active" : ""}
-              role="menuitemradio"
-              aria-checked={current === item.tool}
-              aria-label={shapeItemName(item)}
-              title={shapeItemName(item)}
-              tabIndex={-1}
-              onClick={() => {
-                onChoose(item.tool);
-                buttonRef.current?.focus();
-              }}
-            >
-              <EditorIcon name={item.tool} />
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )}
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="screenshot-tool-flyout"
+            role="menu"
+            aria-label="Shapes"
+            style={menuPosition}
+            onKeyDown={handleMenuKeyDown}
+          >
+            {SHAPE_GROUP_ITEMS.map((item) => (
+              <button
+                key={item.tool}
+                type="button"
+                className={current === item.tool ? "active" : ""}
+                role="menuitemradio"
+                aria-checked={current === item.tool}
+                aria-label={shapeItemName(item)}
+                title={shapeItemName(item)}
+                tabIndex={-1}
+                onClick={() => {
+                  onChoose(item.tool);
+                  buttonRef.current?.focus();
+                }}
+              >
+                <EditorIcon name={item.tool} />
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -8538,7 +8566,9 @@ function DrawToolPreview({
       className={[
         "screenshot-draw-preview",
         tool === "remove-bg" ? "screenshot-draw-preview-brush" : "",
-      ].filter(Boolean).join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       role="img"
       aria-label={tool === "remove-bg" ? "Brush preview" : "Stroke preview"}
     >
@@ -8552,12 +8582,7 @@ function DrawToolPreview({
                 <stop offset="100%" stopOpacity="0" />
               </radialGradient>
             </defs>
-            <circle
-              cx="80"
-              cy="36"
-              r={brushRadius}
-              fill="url(#screenshot-brush-preview-grad)"
-            />
+            <circle cx="80" cy="36" r={brushRadius} fill="url(#screenshot-brush-preview-grad)" />
           </>
         ) : tool === "rectangle" ? (
           <rect
@@ -8590,12 +8615,14 @@ function DrawToolPreview({
           />
         ) : isPolygonShapeKind(tool) ? (
           <path
-            d={editorPointsToSvgPath(closedShapePolygon(tool, {
-              x: 38,
-              y: 12,
-              width: 84,
-              height: 48,
-            }))}
+            d={editorPointsToSvgPath(
+              closedShapePolygon(tool, {
+                x: 38,
+                y: 12,
+                width: 84,
+                height: 48,
+              }),
+            )}
             fill={fill ?? "none"}
             stroke={color}
             strokeWidth={previewStroke}
@@ -8626,8 +8653,18 @@ function DrawToolPreview({
 }
 
 function EditorIcon({ name }: { name: string }) {
-  if (name === "select") return <svg viewBox="0 0 24 24"><path d="m5 3 13 9-7 2-3 7Z" /></svg>;
-  if (name === "crop") return <svg viewBox="0 0 24 24"><path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12" /></svg>;
+  if (name === "select")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="m5 3 13 9-7 2-3 7Z" />
+      </svg>
+    );
+  if (name === "crop")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12" />
+      </svg>
+    );
   if (name === "trim") {
     return (
       <svg viewBox="0 0 24 24">
@@ -8636,7 +8673,12 @@ function EditorIcon({ name }: { name: string }) {
       </svg>
     );
   }
-  if (name === "text") return <svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14M8 19h8" /></svg>;
+  if (name === "text")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M5 5h14M12 5v14M8 19h8" />
+      </svg>
+    );
   if (name === "shapes") {
     return (
       <svg viewBox="0 0 24 24">
@@ -8645,25 +8687,64 @@ function EditorIcon({ name }: { name: string }) {
       </svg>
     );
   }
-  if (name === "rectangle") return <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /></svg>;
-  if (name === "ellipse") return <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="6.5" /></svg>;
-  if (name === "line") return <svg viewBox="0 0 24 24"><path d="M5 19 19 5" /></svg>;
-  if (name === "triangle") return <svg viewBox="0 0 24 24"><path d="M12 4 20.5 19.5H3.5Z" /></svg>;
-  if (name === "diamond") return <svg viewBox="0 0 24 24"><path d="M12 3.5 20.5 12 12 20.5 3.5 12Z" /></svg>;
+  if (name === "rectangle")
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="4" y="5" width="16" height="14" rx="2" />
+      </svg>
+    );
+  if (name === "ellipse")
+    return (
+      <svg viewBox="0 0 24 24">
+        <ellipse cx="12" cy="12" rx="8" ry="6.5" />
+      </svg>
+    );
+  if (name === "line")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M5 19 19 5" />
+      </svg>
+    );
+  if (name === "triangle")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M12 4 20.5 19.5H3.5Z" />
+      </svg>
+    );
+  if (name === "diamond")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M12 3.5 20.5 12 12 20.5 3.5 12Z" />
+      </svg>
+    );
   if (name === "star") {
     return (
       <svg viewBox="0 0 24 24">
-        <path d={editorPointsToSvgPath(closedShapePolygon("star", {
-          x: 3,
-          y: 3,
-          width: 18,
-          height: 18,
-        }))} />
+        <path
+          d={editorPointsToSvgPath(
+            closedShapePolygon("star", {
+              x: 3,
+              y: 3,
+              width: 18,
+              height: 18,
+            }),
+          )}
+        />
       </svg>
     );
   }
-  if (name === "arrow") return <svg viewBox="0 0 24 24"><path d="M4 20 20 4M12 4h8v8" /></svg>;
-  if (name === "pen") return <svg viewBox="0 0 24 24"><path d="M4 16c4-7 6-8 8-3s4 4 8-4M4 20h16" /></svg>;
+  if (name === "arrow")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M4 20 20 4M12 4h8v8" />
+      </svg>
+    );
+  if (name === "pen")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M4 16c4-7 6-8 8-3s4 4 8-4M4 20h16" />
+      </svg>
+    );
   if (name === "remove-bg") {
     return (
       <svg viewBox="0 0 24 24">
@@ -8703,22 +8784,109 @@ function EditorIcon({ name }: { name: string }) {
       </svg>
     );
   }
-  if (name === "undo") return <svg viewBox="0 0 24 24"><path d="m9 7-5 5 5 5M5 12h8a6 6 0 0 1 6 6" /></svg>;
-  if (name === "redo") return <svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5M19 12h-8a6 6 0 0 0-6 6" /></svg>;
-  if (name === "fit") return <svg viewBox="0 0 24 24"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" /></svg>;
-  if (name === "image") return <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8" cy="9" r="1.5" /><path d="m5 18 5-5 3 3 2-2 4 4" /></svg>;
-  if (name === "trash") return <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></svg>;
-  if (name === "copy") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></svg>;
-  if (name === "check") return <svg viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>;
-  if (name === "save") return <svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z M8 3v6h8V3M8 17h8" /></svg>;
-  if (name === "plus") return <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>;
-  if (name === "minus") return <svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg>;
-  if (name === "chevron-down") return <svg viewBox="0 0 24 24"><path d="m7 9 5 5 5-5" /></svg>;
-  if (name === "lock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>;
-  if (name === "unlock") return <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M9 10V7a4 4 0 0 1 7.5-2" /></svg>;
-  if (name === "eye") return <svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
-  if (name === "eye-off") return <svg viewBox="0 0 24 24"><path d="m4 4 16 16M9.5 6.4A9 9 0 0 1 12 6c5.5 0 9 6 9 6a15 15 0 0 1-2.2 2.9M14.4 17.6A9 9 0 0 1 12 18c-5.5 0-9-6-9-6a15 15 0 0 1 2.1-2.8" /></svg>;
-  if (name === "duplicate") return <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3M13.5 11v5M11 13.5h5" /></svg>;
+  if (name === "undo")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="m9 7-5 5 5 5M5 12h8a6 6 0 0 1 6 6" />
+      </svg>
+    );
+  if (name === "redo")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="m15 7 5 5-5 5M19 12h-8a6 6 0 0 0-6 6" />
+      </svg>
+    );
+  if (name === "fit")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
+      </svg>
+    );
+  if (name === "image")
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <circle cx="8" cy="9" r="1.5" />
+        <path d="m5 18 5-5 3 3 2-2 4 4" />
+      </svg>
+    );
+  if (name === "trash")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+      </svg>
+    );
+  if (name === "copy")
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="8" y="8" width="11" height="11" rx="2" />
+        <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+      </svg>
+    );
+  if (name === "check")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="m5 12 4.5 4.5L19 7" />
+      </svg>
+    );
+  if (name === "save")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M5 3h12l2 2v16H5Z M8 3v6h8V3M8 17h8" />
+      </svg>
+    );
+  if (name === "plus")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </svg>
+    );
+  if (name === "minus")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M5 12h14" />
+      </svg>
+    );
+  if (name === "chevron-down")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="m7 9 5 5 5-5" />
+      </svg>
+    );
+  if (name === "lock")
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="5" y="10" width="14" height="11" rx="2" />
+        <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+      </svg>
+    );
+  if (name === "unlock")
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="5" y="10" width="14" height="11" rx="2" />
+        <path d="M9 10V7a4 4 0 0 1 7.5-2" />
+      </svg>
+    );
+  if (name === "eye")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z" />
+        <circle cx="12" cy="12" r="2.5" />
+      </svg>
+    );
+  if (name === "eye-off")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="m4 4 16 16M9.5 6.4A9 9 0 0 1 12 6c5.5 0 9 6 9 6a15 15 0 0 1-2.2 2.9M14.4 17.6A9 9 0 0 1 12 18c-5.5 0-9-6-9-6a15 15 0 0 1 2.1-2.8" />
+      </svg>
+    );
+  if (name === "duplicate")
+    return (
+      <svg viewBox="0 0 24 24">
+        <rect x="8" y="8" width="11" height="11" rx="2" />
+        <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3M13.5 11v5M11 13.5h5" />
+      </svg>
+    );
   if (name === "more") {
     return (
       <svg viewBox="0 0 24 24">
@@ -8776,8 +8944,32 @@ function EditorIcon({ name }: { name: string }) {
       </svg>
     );
   }
-  if (name === "grip") return <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r=".8" /><circle cx="15" cy="7" r=".8" /><circle cx="9" cy="12" r=".8" /><circle cx="15" cy="12" r=".8" /><circle cx="9" cy="17" r=".8" /><circle cx="15" cy="17" r=".8" /></svg>;
-  if (name === "align-center") return <svg viewBox="0 0 24 24"><path d="M5 6h14M8 10h8M5 14h14M8 18h8" /></svg>;
-  if (name === "align-right") return <svg viewBox="0 0 24 24"><path d="M5 6h14M9 10h10M5 14h14M9 18h10" /></svg>;
-  return <svg viewBox="0 0 24 24"><path d="M5 6h14M5 10h10M5 14h14M5 18h10" /></svg>;
+  if (name === "grip")
+    return (
+      <svg viewBox="0 0 24 24">
+        <circle cx="9" cy="7" r=".8" />
+        <circle cx="15" cy="7" r=".8" />
+        <circle cx="9" cy="12" r=".8" />
+        <circle cx="15" cy="12" r=".8" />
+        <circle cx="9" cy="17" r=".8" />
+        <circle cx="15" cy="17" r=".8" />
+      </svg>
+    );
+  if (name === "align-center")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M5 6h14M8 10h8M5 14h14M8 18h8" />
+      </svg>
+    );
+  if (name === "align-right")
+    return (
+      <svg viewBox="0 0 24 24">
+        <path d="M5 6h14M9 10h10M5 14h14M9 18h10" />
+      </svg>
+    );
+  return (
+    <svg viewBox="0 0 24 24">
+      <path d="M5 6h14M5 10h10M5 14h14M5 18h10" />
+    </svg>
+  );
 }

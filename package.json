@@ -15,11 +15,21 @@
     "install:preview": "node scripts/install-latest-release.mjs",
     "build:web": "npm run build --workspace @captures/web",
     "start:web": "npm run start --workspace @captures/web",
-    "check": "npm run test:release-version && npm run check --workspace @captures/desktop && npm test --workspace @captures/web && npm run build:web",
-    "test:release-version": "node --test scripts/*.test.mjs",
-    "test": "npm run test --workspace @captures/desktop"
+    "check": "npm run lint && npm run check:python && npm run fmt:check && npm run test:release-version && npm run check --workspace @captures/desktop && npm test --workspace @captures/web && npm run build:web",
+    "check:python": "uvx --from ruff==0.16.10 ruff check apps/native crates/captures-image/tests && npm run test:python",
+    "test:python": "uv run --no-project python -m unittest discover -s apps/native -p test_*.py",
+    "lint": "oxlint --deny-warnings",
+    "fmt": "oxfmt --write \"**/*.{js,mjs,cjs,ts,mts,tsx,css}\" \"**/package.json\" \"**/tsconfig*.json\" \".ox*.json\"",
+    "fmt:check": "oxfmt --check \"**/*.{js,mjs,cjs,ts,mts,tsx,css}\" \"**/package.json\" \"**/tsconfig*.json\" \".ox*.json\"",
+    "test:release-version": "vitest run --project scripts",
+    "test": "vitest run"
   },
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "vitest": "5.0.3"
   }
 }

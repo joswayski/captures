@@ -114,30 +114,33 @@ export function useImageZoom({
     [commit],
   );
 
-  const pinchTo = useCallback((first: Point, second: Point) => {
-    const viewportEl = viewportRef.current;
-    if (viewportEl === null) return;
-    if (!pinchRef.current) {
-      pinchRef.current = {
-        distance: Math.max(1, pointerDistance(first, second)),
-        transform: zoomRef.current,
-      };
-      return;
-    }
-    const distance = Math.max(1, pointerDistance(first, second));
-    const mid = pointerMidpoint(first, second);
-    const rect = viewportEl.getBoundingClientRect();
-    commit(
-      scaleAroundPoint(
-        pinchRef.current.transform,
-        pinchRef.current.transform.scale * (distance / pinchRef.current.distance),
-        { x: mid.x - rect.left, y: mid.y - rect.top },
-        viewportSizeRef.current,
-        fittedRef.current,
-      ),
-      false,
-    );
-  }, [commit, viewportRef]);
+  const pinchTo = useCallback(
+    (first: Point, second: Point) => {
+      const viewportEl = viewportRef.current;
+      if (viewportEl === null) return;
+      if (!pinchRef.current) {
+        pinchRef.current = {
+          distance: Math.max(1, pointerDistance(first, second)),
+          transform: zoomRef.current,
+        };
+        return;
+      }
+      const distance = Math.max(1, pointerDistance(first, second));
+      const mid = pointerMidpoint(first, second);
+      const rect = viewportEl.getBoundingClientRect();
+      commit(
+        scaleAroundPoint(
+          pinchRef.current.transform,
+          pinchRef.current.transform.scale * (distance / pinchRef.current.distance),
+          { x: mid.x - rect.left, y: mid.y - rect.top },
+          viewportSizeRef.current,
+          fittedRef.current,
+        ),
+        false,
+      );
+    },
+    [commit, viewportRef],
+  );
 
   useEffect(() => {
     if (!active) return;

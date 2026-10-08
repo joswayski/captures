@@ -242,9 +242,9 @@ describe("RecordingCountdown", () => {
       expect(invoke).toHaveBeenCalledWith("discard_recording", {
         sessionId: countdownSnapshot.id,
       });
-      expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-        command === "discard_recording"
-      ))).toHaveLength(1);
+      expect(
+        vi.mocked(invoke).mock.calls.filter(([command]) => command === "discard_recording"),
+      ).toHaveLength(1);
     });
   });
 
@@ -318,10 +318,16 @@ describe("RecordingRegionIndicator", () => {
     vi.useFakeTimers();
     const frame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     try {
-      window.history.replaceState({}, "", "/?view=recording-region-indicator&x=1&y=2&width=300&height=200");
+      window.history.replaceState(
+        {},
+        "",
+        "/?view=recording-region-indicator&x=1&y=2&width=300&height=200",
+      );
       const { unmount } = render(<RecordingRegionIndicator />);
       expect(invoke).not.toHaveBeenCalled();
-      await act(async () => { vi.advanceTimersByTime(1000); });
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
       expect(invoke).toHaveBeenCalledExactlyOnceWith("reveal_recording_region_indicator");
       unmount();
     } finally {
@@ -334,10 +340,16 @@ describe("RecordingRegionIndicator", () => {
     vi.useFakeTimers();
     const frame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     try {
-      window.history.replaceState({}, "", "/?view=recording-region-indicator&x=1&y=2&width=300&height=200");
+      window.history.replaceState(
+        {},
+        "",
+        "/?view=recording-region-indicator&x=1&y=2&width=300&height=200",
+      );
       const { unmount } = render(<RecordingRegionIndicator />);
       unmount();
-      await act(async () => { vi.advanceTimersByTime(1000); });
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
       expect(invoke).not.toHaveBeenCalled();
     } finally {
       frame.mockRestore();

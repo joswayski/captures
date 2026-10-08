@@ -34,7 +34,9 @@ function log(message) {
 
 function commandError(command, result) {
   const detail = result.error?.message || result.stderr?.trim();
-  return new Error(detail ? `${command} failed: ${detail}` : `${command} failed with status ${result.status}`);
+  return new Error(
+    detail ? `${command} failed: ${detail}` : `${command} failed with status ${result.status}`,
+  );
 }
 
 function run(command, args, options = {}) {
@@ -190,7 +192,12 @@ export function notarizationEnvContents({ issuer, keyId, keyPath }) {
 
 export function mergeNotarizationEnv(env, fileValues) {
   const merged = { ...env };
-  for (const key of ["APPLE_API_ISSUER", "APPLE_API_KEY", "APPLE_API_KEY_PATH", "APPLE_NOTARY_PROFILE"]) {
+  for (const key of [
+    "APPLE_API_ISSUER",
+    "APPLE_API_KEY",
+    "APPLE_API_KEY_PATH",
+    "APPLE_NOTARY_PROFILE",
+  ]) {
     if (!merged[key] && fileValues[key]) merged[key] = fileValues[key];
   }
   return merged;
@@ -251,7 +258,13 @@ export function selectNewestDmg(entries) {
 }
 
 function notaryProfileExists(profile) {
-  const result = run("/usr/bin/security", ["find-generic-password", "-s", "com.apple.gke.notary.tool", "-a", profile]);
+  const result = run("/usr/bin/security", [
+    "find-generic-password",
+    "-s",
+    "com.apple.gke.notary.tool",
+    "-a",
+    profile,
+  ]);
   return result.status === 0;
 }
 
@@ -331,7 +344,9 @@ function setupNotarization(options, env, home) {
     ],
     { stdio: "inherit" },
   );
-  log(`Stored notarization credentials in ${envPath} and the ${DEFAULT_NOTARY_PROFILE} notarytool profile.`);
+  log(
+    `Stored notarization credentials in ${envPath} and the ${DEFAULT_NOTARY_PROFILE} notarytool profile.`,
+  );
   log("You can now run: npm run build:signed");
 }
 
@@ -459,7 +474,9 @@ function validateNotarizedBundle(app, dmg) {
     stdio: "inherit",
   });
   runChecked("/usr/bin/xcrun", ["stapler", "validate", app], { stdio: "inherit" });
-  runChecked("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", dmg], { stdio: "inherit" });
+  runChecked("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", dmg], {
+    stdio: "inherit",
+  });
   runChecked(
     "/usr/sbin/spctl",
     ["--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg],
@@ -495,9 +512,13 @@ function installFromDmg(dmg, { quarantine }) {
     }
     runChecked("/usr/bin/xcrun", ["stapler", "staple", APPLICATIONS_APP], { stdio: "inherit" });
     validateSignedApp(APPLICATIONS_APP);
-    runChecked("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", APPLICATIONS_APP], {
-      stdio: "inherit",
-    });
+    runChecked(
+      "/usr/sbin/spctl",
+      ["--assess", "--type", "execute", "--verbose=2", APPLICATIONS_APP],
+      {
+        stdio: "inherit",
+      },
+    );
 
     if (quarantine) {
       const attribute = downloadQuarantineAttribute(Math.floor(Date.now() / 1000));

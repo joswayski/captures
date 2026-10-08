@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -66,8 +60,11 @@ export function CustomSelect({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listboxRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
-  const enabledIndexes = options.flatMap((option, index) => option.disabled ? [] : [index]);
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const enabledIndexes = options.flatMap((option, index) => (option.disabled ? [] : [index]));
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
   const selected = options[selectedIndex] ?? options[0];
   const activeOptionId = `${listboxId}-option-${activeIndex}`;
 
@@ -89,9 +86,12 @@ export function CustomSelect({
   const moveActive = (direction: 1 | -1) => {
     if (enabledIndexes.length === 0) return;
     const current = enabledIndexes.indexOf(activeIndex);
-    const next = current < 0
-      ? (direction === 1 ? 0 : enabledIndexes.length - 1)
-      : (current + direction + enabledIndexes.length) % enabledIndexes.length;
+    const next =
+      current < 0
+        ? direction === 1
+          ? 0
+          : enabledIndexes.length - 1
+        : (current + direction + enabledIndexes.length) % enabledIndexes.length;
     setActiveIndex(enabledIndexes[next]);
   };
 
@@ -122,15 +122,15 @@ export function CustomSelect({
         { width: window.innerWidth, height: window.innerHeight },
         options.length,
       );
-      setMenuLayout((current) => (
-        current.placement === nextLayout.placement
-          && current.maxHeight === nextLayout.maxHeight
-          && current.top === nextLayout.top
-          && current.left === nextLayout.left
-          && current.minWidth === nextLayout.minWidth
+      setMenuLayout((current) =>
+        current.placement === nextLayout.placement &&
+        current.maxHeight === nextLayout.maxHeight &&
+        current.top === nextLayout.top &&
+        current.left === nextLayout.left &&
+        current.minWidth === nextLayout.minWidth
           ? current
-          : nextLayout
-      ));
+          : nextLayout,
+      );
     };
     place();
     window.addEventListener("resize", place);
@@ -149,7 +149,9 @@ export function CustomSelect({
         "custom-select-listbox",
         className?.includes("filename-format-select") ? "filename-format-select-listbox" : "",
         glass ? "custom-select-listbox-glass" : "",
-      ].filter(Boolean).join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       role="listbox"
       aria-label={ariaLabel}
       style={{
@@ -192,7 +194,9 @@ export function CustomSelect({
         open ? "open" : "",
         open && menuLayout.placement === "above" ? "open-above" : "",
         className,
-      ].filter(Boolean).join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       ref={rootRef}
     >
       <button
@@ -206,13 +210,16 @@ export function CustomSelect({
         aria-controls={open ? listboxId : undefined}
         aria-activedescendant={open ? activeOptionId : undefined}
         disabled={disabled}
-        onClick={() => open ? closeMenu() : openMenu()}
+        onClick={() => (open ? closeMenu() : openMenu())}
         onBlur={(event) => {
-          if (!menuContainsTarget(
-            rootRef.current,
-            listboxRef.current,
-            event.relatedTarget as Node | null,
-          )) closeMenu();
+          if (
+            !menuContainsTarget(
+              rootRef.current,
+              listboxRef.current,
+              event.relatedTarget as Node | null,
+            )
+          )
+            closeMenu();
         }}
         onKeyDown={(event) => {
           if (event.key === "Escape" && open) {
@@ -236,7 +243,9 @@ export function CustomSelect({
         }}
       >
         <span>{triggerLabel ?? selected?.label ?? value}</span>
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m4 6 4 4 4-4" />
+        </svg>
       </button>
       {listbox && createPortal(listbox, document.body)}
     </div>

@@ -16,6 +16,7 @@ COPY apps/desktop/package.json apps/desktop/
 RUN npm ci
 
 COPY apps/web apps/web
+COPY vitest.config.mts ./
 COPY shared shared
 COPY docs/images docs/images
 

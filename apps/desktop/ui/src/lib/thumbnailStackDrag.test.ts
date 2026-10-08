@@ -42,8 +42,9 @@ describe("preventThumbnailHtml5Drag", () => {
 
 describe("cssUrl", () => {
   it("quotes data URLs so they are valid CSS url() values", () => {
-    expect(cssUrl('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg">'))
-      .toBe('url("data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\">")');
+    expect(cssUrl('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg">')).toBe(
+      'url("data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\">")',
+    );
   });
 });
 
@@ -125,20 +126,36 @@ describe("harness stack offset", () => {
     expect(next).toEqual({ x: 120, y: -80 });
     expect(readHarnessStackOffset()).toEqual({ x: 120, y: -80 });
 
-    expect(writeHarnessStackOffset(4_000, 80, document.documentElement, {
-      width: 1_280,
-      height: 720,
-    })).toEqual({ x: 940, y: 0 });
+    expect(
+      writeHarnessStackOffset(4_000, 80, document.documentElement, {
+        width: 1_280,
+        height: 720,
+      }),
+    ).toEqual({ x: 940, y: 0 });
 
-    const top = writeHarnessStackOffset(40, 80, document.documentElement, {
-      width: 1_280,
-      height: 720,
-    }, { anchor: "top", contentHeight: 240 });
+    const top = writeHarnessStackOffset(
+      40,
+      80,
+      document.documentElement,
+      {
+        width: 1_280,
+        height: 720,
+      },
+      { anchor: "top", contentHeight: 240 },
+    );
     expect(top).toEqual({ x: 40, y: 80 });
-    expect(writeHarnessStackOffset(40, 800, document.documentElement, {
-      width: 1_280,
-      height: 720,
-    }, { anchor: "top", contentHeight: 240 })).toEqual({ x: 40, y: 480 });
+    expect(
+      writeHarnessStackOffset(
+        40,
+        800,
+        document.documentElement,
+        {
+          width: 1_280,
+          height: 720,
+        },
+        { anchor: "top", contentHeight: 240 },
+      ),
+    ).toEqual({ x: 40, y: 480 });
   });
 });
 
@@ -157,7 +174,9 @@ describe("CollapsedThumbnailStackDrag", () => {
     return {
       request,
       cancel,
-      get pending() { return callbacks.size; },
+      get pending() {
+        return callbacks.size;
+      },
       frame(now: number) {
         const queued = [...callbacks.values()];
         callbacks.clear();
@@ -168,7 +187,9 @@ describe("CollapsedThumbnailStackDrag", () => {
 
   it("keeps the session locked through anchor conversion and ignores duplicate releases", async () => {
     let finishSettlement!: () => void;
-    const settled = new Promise<void>((resolve) => { finishSettlement = resolve; });
+    const settled = new Promise<void>((resolve) => {
+      finishSettlement = resolve;
+    });
     let frame = { x: 0, y: 400 };
     const onDrop = vi.fn(async () => {
       await settled;
@@ -184,8 +205,7 @@ describe("CollapsedThumbnailStackDrag", () => {
     await drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 100 });
     const drop = drag.pointerUp({ pointerId: 1 });
     await vi.waitFor(() => expect(onDrop).toHaveBeenCalledOnce());
-    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: 100 }))
-      .toBe(false);
+    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: 100 })).toBe(false);
     expect(await drag.pointerMove({ pointerId: 1, screenX: 80, screenY: 200 })).toBeNull();
     expect(await drag.pointerUp({ pointerId: 1 })).toBe("ignored");
     finishSettlement();
@@ -193,40 +213,50 @@ describe("CollapsedThumbnailStackDrag", () => {
     expect(onDrop).toHaveBeenCalledOnce();
 
     drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: 100 });
-    expect(await drag.pointerMove({ pointerId: 1, screenX: 60, screenY: 120 }))
-      .toMatchObject({ x: 60, y: 40 });
+    expect(await drag.pointerMove({ pointerId: 1, screenX: 60, screenY: 120 })).toMatchObject({
+      x: 60,
+      y: 40,
+    });
     await drag.pointerUp({ pointerId: 1 });
   });
 
-  it.each(["frame", "move", "settle"])("releases the session after a failed %s request", async (failure) => {
-    const error = new Error("preview window unavailable");
-    const drag = new CollapsedThumbnailStackDrag({
-      getFrame: () => {
-        if (failure === "frame") throw error;
-        return { x: 0, y: 0 };
-      },
-      moveFrame: (x, y) => {
-        if (failure === "move") throw error;
-        return { x, y };
-      },
-      onDrop: () => { throw error; },
-      onSway: vi.fn(),
-      reducedMotion: () => false,
-    });
-    drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
-    await drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 }).catch(() => undefined);
-    await expect(drag.pointerUp({ pointerId: 1 })).rejects.toThrow(error);
-    expect(drag.isActive).toBe(false);
-    expect(drag.isDragging).toBe(false);
-    expect(drag.pointerDown({ button: 0, pointerId: 2, screenX: 40, screenY: 0 })).toBe(true);
-    await drag.pointerUp({ pointerId: 2 }).catch(() => undefined);
-  });
+  it.each(["frame", "move", "settle"])(
+    "releases the session after a failed %s request",
+    async (failure) => {
+      const error = new Error("preview window unavailable");
+      const drag = new CollapsedThumbnailStackDrag({
+        getFrame: () => {
+          if (failure === "frame") throw error;
+          return { x: 0, y: 0 };
+        },
+        moveFrame: (x, y) => {
+          if (failure === "move") throw error;
+          return { x, y };
+        },
+        onDrop: () => {
+          throw error;
+        },
+        onSway: vi.fn(),
+        reducedMotion: () => false,
+      });
+      drag.pointerDown({ button: 0, pointerId: 1, screenX: 0, screenY: 0 });
+      await drag.pointerMove({ pointerId: 1, screenX: 40, screenY: 0 }).catch(() => undefined);
+      await expect(drag.pointerUp({ pointerId: 1 })).rejects.toThrow(error);
+      expect(drag.isActive).toBe(false);
+      expect(drag.isDragging).toBe(false);
+      expect(drag.pointerDown({ button: 0, pointerId: 2, screenX: 40, screenY: 0 })).toBe(true);
+      await drag.pointerUp({ pointerId: 2 }).catch(() => undefined);
+    },
+  );
 
   it("does not read a new drag origin while the previous drop is still moving", async () => {
     let finishMove!: (frame: { x: number; y: number }) => void;
-    const release = new Promise<{ x: number; y: number }>((resolve) => { finishMove = resolve; });
+    const release = new Promise<{ x: number; y: number }>((resolve) => {
+      finishMove = resolve;
+    });
     const getFrame = vi.fn(() => ({ x: 0, y: 0 }));
-    const moveFrame = vi.fn()
+    const moveFrame = vi
+      .fn()
       .mockImplementationOnce((x: number, y: number) => ({ x, y }))
       .mockReturnValueOnce(release);
     const drag = new CollapsedThumbnailStackDrag({
@@ -239,13 +269,11 @@ describe("CollapsedThumbnailStackDrag", () => {
     const drop = drag.pointerUp({ pointerId: 1 });
     await vi.waitFor(() => expect(moveFrame).toHaveBeenCalledTimes(2));
 
-    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: -80 }))
-      .toBe(false);
+    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: -80 })).toBe(false);
     expect(getFrame).toHaveBeenCalledTimes(1);
     finishMove({ x: 40, y: -80 });
     expect(await drop).toBe("drop");
-    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: -80 }))
-      .toBe(true);
+    expect(drag.pointerDown({ button: 0, pointerId: 1, screenX: 40, screenY: -80 })).toBe(true);
     await drag.pointerUp({ pointerId: 1 });
   });
 
@@ -319,14 +347,15 @@ describe("CollapsedThumbnailStackDrag", () => {
     const frames: { x: number; y: number }[] = [];
     const drag = new CollapsedThumbnailStackDrag({
       getFrame: () => ({ x: 0, y: 0 }),
-      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
-        const finish = () => {
-          frames.push({ x, y });
-          resolve({ x, y });
-        };
-        if (continueFirst === undefined) continueFirst = finish;
-        else finish();
-      }),
+      moveFrame: (x, y) =>
+        new Promise<{ x: number; y: number }>((resolve) => {
+          const finish = () => {
+            frames.push({ x, y });
+            resolve({ x, y });
+          };
+          if (continueFirst === undefined) continueFirst = finish;
+          else finish();
+        }),
       reducedMotion: () => false,
     });
 
@@ -348,14 +377,15 @@ describe("CollapsedThumbnailStackDrag", () => {
     const frames: { x: number; y: number }[] = [];
     const drag = new CollapsedThumbnailStackDrag({
       getFrame: () => ({ x: 0, y: 0 }),
-      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
-        const finish = () => {
-          frames.push({ x, y });
-          resolve({ x, y });
-        };
-        if (continueMove === undefined) continueMove = finish;
-        else finish();
-      }),
+      moveFrame: (x, y) =>
+        new Promise<{ x: number; y: number }>((resolve) => {
+          const finish = () => {
+            frames.push({ x, y });
+            resolve({ x, y });
+          };
+          if (continueMove === undefined) continueMove = finish;
+          else finish();
+        }),
       reducedMotion: () => false,
     });
 
@@ -379,14 +409,15 @@ describe("CollapsedThumbnailStackDrag", () => {
     const frames: { x: number; y: number }[] = [];
     const drag = new CollapsedThumbnailStackDrag({
       getFrame: () => ({ x: 0, y: 0 }),
-      moveFrame: (x, y) => new Promise<{ x: number; y: number }>((resolve) => {
-        const finish = () => {
-          frames.push({ x, y });
-          resolve({ x, y });
-        };
-        if (continueFirst === undefined) continueFirst = finish;
-        else finish();
-      }),
+      moveFrame: (x, y) =>
+        new Promise<{ x: number; y: number }>((resolve) => {
+          const finish = () => {
+            frames.push({ x, y });
+            resolve({ x, y });
+          };
+          if (continueFirst === undefined) continueFirst = finish;
+          else finish();
+        }),
       reducedMotion: () => false,
     });
 

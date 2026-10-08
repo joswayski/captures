@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   applyOnboardingReset,
@@ -50,7 +50,12 @@ test("parses local signed-build flags", () => {
   assert.equal(setup.issuer, "issuer-id");
   assert.equal(setup.dryRun, true);
 
-  const skip = parseOptions(["--skip-notarize", "--no-launch", "--keep-onboarding", "--keep-permissions"]);
+  const skip = parseOptions([
+    "--skip-notarize",
+    "--no-launch",
+    "--keep-onboarding",
+    "--keep-permissions",
+  ]);
   assert.equal(skip.notarize, false);
   assert.equal(skip.quarantine, false);
   assert.equal(skip.launch, false);
@@ -97,10 +102,7 @@ ignored
     APPLE_API_KEY_PATH: "/tmp/key.p8",
   });
 
-  const merged = mergeNotarizationEnv(
-    { APPLE_API_ISSUER: "from-env" },
-    parsed,
-  );
+  const merged = mergeNotarizationEnv({ APPLE_API_ISSUER: "from-env" }, parsed);
   assert.equal(merged.APPLE_API_ISSUER, "from-env");
   assert.equal(merged.APPLE_API_KEY, "KEYID");
   assert.equal(merged.APPLE_API_KEY_PATH, "/tmp/key.p8");
@@ -124,15 +126,12 @@ test("resolves API-key credentials or a stored notarytool profile", () => {
       profile: null,
     },
   );
-  assert.deepEqual(
-    resolveNotarizationCredentials({ env: {}, profileExists: true }),
-    {
-      issuer: null,
-      keyId: null,
-      keyPath: null,
-      profile: DEFAULT_NOTARY_PROFILE,
-    },
-  );
+  assert.deepEqual(resolveNotarizationCredentials({ env: {}, profileExists: true }), {
+    issuer: null,
+    keyId: null,
+    keyPath: null,
+    profile: DEFAULT_NOTARY_PROFILE,
+  });
 });
 
 test("writes a private env file and explains the one-time setup", () => {
@@ -205,8 +204,5 @@ test("dry-run reports missing notarization credentials without building", () => 
 });
 
 test("refuses to run the signed installer path off macOS", () => {
-  assert.throws(
-    () => main([], { platform: "linux" }),
-    /macOS-only/u,
-  );
+  assert.throws(() => main([], { platform: "linux" }), /macOS-only/u);
 });

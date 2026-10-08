@@ -45,11 +45,7 @@ export interface WindowDescriptor {
 
 export type ScreenshotFormat = "png" | "jpeg" | "webp";
 export type VideoFormat = "mp4" | "gif" | "webm";
-export type MiniPreviewPlacement =
-  | "bottom_left"
-  | "bottom_right"
-  | "top_left"
-  | "top_right";
+export type MiniPreviewPlacement = "bottom_left" | "bottom_right" | "top_left" | "top_right";
 
 export interface ActiveSession {
   id: string;
@@ -136,7 +132,11 @@ export interface RecordingSettings {
 export type RecordingTarget =
   | { type: "portal_display" }
   | { type: "display"; display_id: string }
-  | { type: "region"; display_id: string; rect: { x: number; y: number; width: number; height: number } }
+  | {
+      type: "region";
+      display_id: string;
+      rect: { x: number; y: number; width: number; height: number };
+    }
   | { type: "window"; window_id: string };
 
 export interface RecordingOptions {

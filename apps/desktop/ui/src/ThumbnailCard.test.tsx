@@ -46,11 +46,17 @@ describe("ThumbnailCard", () => {
   });
 
   it("renders the quick preview from the full-resolution image and highlights it once ready", async () => {
-    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
 
     const image = screen.getByRole("img", { name: "Screenshot preview" });
-    expect(image)
-      .toHaveAttribute("src", "captures-capture://artifact-full/capture-1");
+    expect(image).toHaveAttribute("src", "captures-capture://artifact-full/capture-1");
     // Clip shell keeps hover blur inside the rounded preview edge.
     expect(image.parentElement).toHaveClass("thumbnail-media");
     expect(screen.getByRole("article")).toHaveClass("thumbnail-pending");
@@ -105,7 +111,14 @@ describe("ThumbnailCard", () => {
   });
 
   it("before a folder save: Delete only (no Close), Save file for a disk PNG", () => {
-    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
 
     expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
@@ -162,7 +175,14 @@ describe("ThumbnailCard", () => {
   });
 
   it("shows In editor immediately after opening, then rearms the hover action on leave", () => {
-    render(<ThumbnailCard artifact={artifact(null)} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />);
+    render(
+      <ThumbnailCard
+        artifact={artifact(null)}
+        clipboardCurrent
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
@@ -320,10 +340,7 @@ describe("ThumbnailCard", () => {
     const onRemoved = vi.fn();
     render(
       <main>
-        <article
-          className="thumbnail-card thumbnail-stack-shifting"
-          data-testid="survivor"
-        />
+        <article className="thumbnail-card thumbnail-stack-shifting" data-testid="survivor" />
         <ThumbnailCard
           artifact={artifact("/Users/josevalerio/Captures/capture.png", "capture-3")}
           clipboardCurrent={false}
@@ -347,9 +364,9 @@ describe("ThumbnailCard", () => {
     fireEvent(exitingCard, dismissFinished);
     await act(async () => Promise.resolve());
 
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => (
-      command === "dismiss_artifact"
-    ))).toBe(false);
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "dismiss_artifact")).toBe(
+      false,
+    );
     expect(onRemoved).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -552,9 +569,12 @@ describe("ThumbnailCard", () => {
     Object.defineProperty(arrived, "animationName", { value: "thumbnail-arrive" });
     fireEvent(card, arrived);
 
-    await waitFor(() => {
-      expect(card).toHaveClass("thumbnail-drop-rejected");
-    }, { timeout: 2_000 });
+    await waitFor(
+      () => {
+        expect(card).toHaveClass("thumbnail-drop-rejected");
+      },
+      { timeout: 2_000 },
+    );
   });
 
   it("keeps the preview when the native file drag is cancelled", async () => {
@@ -629,7 +649,14 @@ describe("ThumbnailCard", () => {
 
   it("does not claim the clipboard changed when automatic copying is disabled", () => {
     const notCopied = { ...artifact(null), clipboard_copy_status: "skipped" as const };
-    render(<ThumbnailCard artifact={notCopied} clipboardCurrent={false} viewerActive={false} onRemoved={() => undefined} />);
+    render(
+      <ThumbnailCard
+        artifact={notCopied}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
 
     expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
     expect(screen.queryByText("Clipboard unavailable")).not.toBeInTheDocument();
@@ -638,7 +665,14 @@ describe("ThumbnailCard", () => {
 
   it("reports an automatic clipboard failure without showing a success confirmation", () => {
     const failedCopy = { ...artifact(null), clipboard_copy_status: "failed" as const };
-    render(<ThumbnailCard artifact={failedCopy} clipboardCurrent={false} viewerActive={false} onRemoved={() => undefined} />);
+    render(
+      <ThumbnailCard
+        artifact={failedCopy}
+        clipboardCurrent={false}
+        viewerActive={false}
+        onRemoved={() => undefined}
+      />,
+    );
 
     expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
     expect(screen.getByText("Clipboard unavailable")).toBeInTheDocument();
@@ -647,8 +681,18 @@ describe("ThumbnailCard", () => {
   it("hides Copy only on the preview that currently owns the clipboard", () => {
     render(
       <>
-        <ThumbnailCard artifact={artifact(null, "older")} clipboardCurrent={false} viewerActive={false} onRemoved={() => undefined} />
-        <ThumbnailCard artifact={artifact(null, "current")} clipboardCurrent viewerActive={false} onRemoved={() => undefined} />
+        <ThumbnailCard
+          artifact={artifact(null, "older")}
+          clipboardCurrent={false}
+          viewerActive={false}
+          onRemoved={() => undefined}
+        />
+        <ThumbnailCard
+          artifact={artifact(null, "current")}
+          clipboardCurrent
+          viewerActive={false}
+          onRemoved={() => undefined}
+        />
       </>,
     );
 
@@ -728,8 +772,9 @@ describe("ThumbnailCard", () => {
       vi.advanceTimersByTime(550);
     });
     expect(screen.getByRole("button", { name: "Edit" })).not.toHaveClass("leaving");
-    expect(within(screen.getByRole("button", { name: "Edit" })).queryByText("In editor"))
-      .not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("button", { name: "Edit" })).queryByText("In editor"),
+    ).not.toBeInTheDocument();
     expect(card).not.toHaveClass("thumbnail-editor-leaving");
     // Plain Edit icon stays up so a mis-close can be reopened without hover.
     expect(card).toHaveClass("thumbnail-editor-lingering");
@@ -832,8 +877,9 @@ describe("ThumbnailCard", () => {
       vi.advanceTimersByTime(550);
     });
     // Leave timer must not drop labels after cancel.
-    expect(within(screen.getByRole("button", { name: "Show in editor" })).getByText("In editor"))
-      .toBeInTheDocument();
+    expect(
+      within(screen.getByRole("button", { name: "Show in editor" })).getByText("In editor"),
+    ).toBeInTheDocument();
     vi.useRealTimers();
   });
 
@@ -1022,7 +1068,9 @@ describe("ThumbnailCard", () => {
       />,
     );
     act(() => screen.getByRole("button", { name: "Delete" }).click());
-    const surface = screen.getByRole("article").querySelector<HTMLElement>(".thumbnail-dust-surface")!;
+    const surface = screen
+      .getByRole("article")
+      .querySelector<HTMLElement>(".thumbnail-dust-surface")!;
     expect(surface.style.backgroundImage).toBe('url("captures-capture://artifact/capture(1)")');
   });
 

@@ -34,11 +34,14 @@ writeFileSync(
 if (process.platform === "darwin") {
   const runnerTemp = process.env.RUNNER_TEMP;
   const githubEnv = process.env.GITHUB_ENV;
-  if (!runnerTemp || !githubEnv) throw new Error("RUNNER_TEMP and GITHUB_ENV are required on macOS CI");
+  if (!runnerTemp || !githubEnv)
+    throw new Error("RUNNER_TEMP and GITHUB_ENV are required on macOS CI");
 
   const certificatePath = join(runnerTemp, "captures-developer-id.p12");
   const apiKeyPath = join(runnerTemp, `AuthKey_${process.env.APPLE_API_KEY}.p8`);
-  writeFileSync(certificatePath, Buffer.from(process.env.APPLE_CERTIFICATE, "base64"), { mode: 0o600 });
+  writeFileSync(certificatePath, Buffer.from(process.env.APPLE_CERTIFICATE, "base64"), {
+    mode: 0o600,
+  });
   writeFileSync(apiKeyPath, process.env.APPLE_API_PRIVATE_KEY, { mode: 0o600 });
   appendFileSync(
     githubEnv,

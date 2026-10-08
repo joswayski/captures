@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { dirname, join } from "node:path";
 
 import {
@@ -64,7 +64,10 @@ function fakeIo(existingPaths) {
 test("derives Spotlight and hidden-bundle paths from the checkout layout", () => {
   const targetDirectory = join("/repo", "target");
   const builtApp = join(targetDirectory, "release", "bundle", "macos", "Captures.app");
-  assert.equal(spotlightExclusionMarkerPath(targetDirectory), join(targetDirectory, ".metadata_never_index"));
+  assert.equal(
+    spotlightExclusionMarkerPath(targetDirectory),
+    join(targetDirectory, ".metadata_never_index"),
+  );
   assert.equal(
     hiddenCheckoutAppPath(builtApp),
     join(targetDirectory, "release", "bundle", HIDDEN_BUNDLE_DIRECTORY_NAME, "Captures.app"),
@@ -145,5 +148,7 @@ test("still writes the Spotlight marker when no checkout app exists", () => {
 
   assert.deepEqual(io.writes, [{ path: "/repo/target/.metadata_never_index", contents: "" }]);
   assert.deepEqual(io.renames, []);
-  assert.deepEqual(io.runs, [{ command: LSREGISTER_PATH, args: ["-f", "/Applications/Captures.app"] }]);
+  assert.deepEqual(io.runs, [
+    { command: LSREGISTER_PATH, args: ["-f", "/Applications/Captures.app"] },
+  ]);
 });

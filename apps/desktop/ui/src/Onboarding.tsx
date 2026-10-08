@@ -52,7 +52,12 @@ function setupTitle(platform: string | undefined) {
   return "You’re ready to capture";
 }
 
-function screenAccessDescription(platform: string, required: boolean, restartRequired: boolean, stillOff: boolean) {
+function screenAccessDescription(
+  platform: string,
+  required: boolean,
+  restartRequired: boolean,
+  stillOff: boolean,
+) {
   if (platform === "macos" && stillOff) {
     return "The switch for this copy of Captures is still off. A local build is a different row from a downloaded app. Turn it on, then restart.";
   }
@@ -149,13 +154,11 @@ export function Onboarding() {
 
   useEffect(() => {
     const waitingForScreen = Boolean(
-      setup?.screen_recording_required
-        && !setup.screen_recording_granted
-        && (!setup.screen_recording_can_request || setup.screen_recording_requested_this_launch),
+      setup?.screen_recording_required &&
+      !setup.screen_recording_granted &&
+      (!setup.screen_recording_can_request || setup.screen_recording_requested_this_launch),
     );
-    const waitingForMicrophone = Boolean(
-      microphoneAsked && setup && !setup.microphone_granted,
-    );
+    const waitingForMicrophone = Boolean(microphoneAsked && setup && !setup.microphone_granted);
     if (!waitingForScreen && !waitingForMicrophone) return undefined;
     const timer = window.setInterval(() => void refresh(), PERMISSION_POLL_MS);
     return () => window.clearInterval(timer);
@@ -262,21 +265,27 @@ export function Onboarding() {
     permissionPending && setup?.screen_recording_requested_this_launch,
   );
   const switchStillOff = Boolean(
-    permissionPending
-      && setup
-      && !setup.screen_recording_can_request
-      && !setup.screen_recording_requested_this_launch,
+    permissionPending &&
+    setup &&
+    !setup.screen_recording_can_request &&
+    !setup.screen_recording_requested_this_launch,
   );
   const showMicrophone = setup?.platform === "macos";
   const primaryLabel = shouldOfferRestart
-    ? (busy === "restart" ? "Restarting…" : "Restart Captures")
-    : (busy === "complete" ? "Finishing…" : "Start capturing");
+    ? busy === "restart"
+      ? "Restarting…"
+      : "Restart Captures"
+    : busy === "complete"
+      ? "Finishing…"
+      : "Start capturing";
 
   return (
     <main className="onboarding-shell">
       <div className="onboarding-stage">
         <header className="onboarding-copy" aria-labelledby="onboarding-setup-title">
-          <span className="onboarding-mark" aria-hidden="true"><AppMarkIcon /></span>
+          <span className="onboarding-mark" aria-hidden="true">
+            <AppMarkIcon />
+          </span>
           <p className="eyebrow">Welcome to Captures</p>
           <h1 id="onboarding-setup-title">{setupTitle(setup?.platform)}</h1>
           <p className="onboarding-lede">
@@ -288,7 +297,9 @@ export function Onboarding() {
         <div className="onboarding-panel">
           <div className="onboarding-permissions" aria-live="polite">
             <article className="onboarding-permission">
-              <span className="onboarding-permission-icon"><ScreenAccessIcon /></span>
+              <span className="onboarding-permission-icon">
+                <ScreenAccessIcon />
+              </span>
               <div className="onboarding-permission-copy">
                 <h3>Screen capture</h3>
                 <p>
@@ -317,7 +328,9 @@ export function Onboarding() {
 
             {showMicrophone && setup && (
               <article className="onboarding-permission">
-                <span className="onboarding-permission-icon"><MicrophoneAccessIcon /></span>
+                <span className="onboarding-permission-icon">
+                  <MicrophoneAccessIcon />
+                </span>
                 <div className="onboarding-permission-copy">
                   <div className="onboarding-permission-heading">
                     <h3>Microphone</h3>
@@ -343,7 +356,11 @@ export function Onboarding() {
             )}
           </div>
 
-          {error && <p className="onboarding-error" role="alert">{error}</p>}
+          {error && (
+            <p className="onboarding-error" role="alert">
+              {error}
+            </p>
+          )}
 
           <div className="onboarding-actions">
             {shouldOfferRestart ? (
@@ -403,12 +420,8 @@ function ScreenPermissionAction({
 
   return (
     <div className="onboarding-permission-actions">
-      {shouldOfferRestart && (
-        <span className="onboarding-permission-status">Restart required</span>
-      )}
-      {switchStillOff && (
-        <span className="onboarding-permission-status">Still off</span>
-      )}
+      {shouldOfferRestart && <span className="onboarding-permission-status">Restart required</span>}
+      {switchStillOff && <span className="onboarding-permission-status">Still off</span>}
       <button
         type="button"
         className="onboarding-permission-button"

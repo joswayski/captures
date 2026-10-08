@@ -1,7 +1,11 @@
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["fonttools==4.60.2"]
+# ///
 """Original geometric glyphs with known GSUB/GPOS metrics; no external font.
 
 Regenerate with:
-uv run --with fonttools python crates/captures-image/tests/make_shaping_font.py
+uv run --script --locked crates/captures-image/tests/make_shaping_font.py
 """
 
 from pathlib import Path

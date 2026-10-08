@@ -6,9 +6,10 @@ export function reconcileClipboardState(
 ): ClipboardState {
   if (next.revision > current.revision) return next;
   if (
-    next.revision === current.revision
-    && next.artifact_id
-    && next.artifact_id !== current.artifact_id
-  ) return next;
+    next.revision === current.revision &&
+    next.artifact_id &&
+    next.artifact_id !== current.artifact_id
+  )
+    return next;
   return current;
 }

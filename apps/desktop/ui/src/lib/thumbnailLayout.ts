@@ -13,8 +13,8 @@ export const THUMBNAIL_STACK_PADDING_PX = 28;
 export const THUMBNAIL_STACK_CONTROL_GUTTER_PX = 52;
 
 /** Drag limits/gravity follow the front card, not count-dependent rear peeks. */
-export const THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT_PX = THUMBNAIL_CARD_HEIGHT_PX
-  + 2 * THUMBNAIL_STACK_CONTROL_GUTTER_PX;
+export const THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT_PX =
+  THUMBNAIL_CARD_HEIGHT_PX + 2 * THUMBNAIL_STACK_CONTROL_GUTTER_PX;
 
 /** One stack slot: card height + inter-card gap. */
 export const THUMBNAIL_CARD_SLOT_PX = THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_GAP_PX;
@@ -74,8 +74,8 @@ export function thumbnailStackFanCollapseMs(
 ): number {
   const extra = Math.max(cardCount - 1, 0);
   return (
-    THUMBNAIL_STACK_FAN_DURATION_MS
-    + thumbnailStackPoseDepth(extra) * THUMBNAIL_STACK_FAN_STAGGER_MS
+    THUMBNAIL_STACK_FAN_DURATION_MS +
+    thumbnailStackPoseDepth(extra) * THUMBNAIL_STACK_FAN_STAGGER_MS
   );
 }
 
@@ -89,9 +89,8 @@ export function thumbnailStackPoseDepth(depth: number): number {
   const n = Math.max(0, depth);
   if (n === 0) return 0;
   return (
-    n
-    * (THUMBNAIL_STACK_POSE_EASE_K + THUMBNAIL_STACK_RECEDING_STEP * n)
-    / (n + THUMBNAIL_STACK_POSE_EASE_K)
+    (n * (THUMBNAIL_STACK_POSE_EASE_K + THUMBNAIL_STACK_RECEDING_STEP * n)) /
+    (n + THUMBNAIL_STACK_POSE_EASE_K)
   );
 }
 
@@ -110,16 +109,16 @@ export function thumbnailStackPeekJitterPx(depth: number): number {
   const n = Math.max(0, Math.trunc(depth));
   if (n <= 0) return 0;
   return (
-    thumbnailStackPeekJitterUnit(n)
-    * THUMBNAIL_STACK_PEEK_JITTER_PX
-    * THUMBNAIL_STACK_PEEK_JITTER_DECAY ** (n - 1)
+    thumbnailStackPeekJitterUnit(n) *
+    THUMBNAIL_STACK_PEEK_JITTER_PX *
+    THUMBNAIL_STACK_PEEK_JITTER_DECAY ** (n - 1)
   );
 }
 
 /** Deterministic signed unit in (-1, 1) from depth so every pile matches. */
 function thumbnailStackPeekJitterUnit(depth: number): number {
-  const hashed = Math.imul(depth * 0x9e3779b1 ^ 0x7f4a7c15, 0x85ebca6b) >>> 0;
-  return hashed / 2 ** 32 * 2 - 1;
+  const hashed = Math.imul((depth * 0x9e3779b1) ^ 0x7f4a7c15, 0x85ebca6b) >>> 0;
+  return (hashed / 2 ** 32) * 2 - 1;
 }
 
 /**
@@ -135,9 +134,10 @@ export function thumbnailStackLayerRotationDeg(id: string, depth: number): numbe
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   const sign = hash & 1 ? 1 : -1;
-  const magnitude = THUMBNAIL_STACK_LAYER_ROTATION_MIN_DEG
-    + (hash >>> 1) / 2 ** 31
-      * (THUMBNAIL_STACK_LAYER_ROTATION_MAX_DEG - THUMBNAIL_STACK_LAYER_ROTATION_MIN_DEG);
+  const magnitude =
+    THUMBNAIL_STACK_LAYER_ROTATION_MIN_DEG +
+    ((hash >>> 1) / 2 ** 31) *
+      (THUMBNAIL_STACK_LAYER_ROTATION_MAX_DEG - THUMBNAIL_STACK_LAYER_ROTATION_MIN_DEG);
   return Number((sign * magnitude).toFixed(3));
 }
 
@@ -173,9 +173,10 @@ export function captureThumbnailCardPoses(
     if (!transform || transform === "none") return;
     const media = card.querySelector(".thumbnail-media");
     captured.set(id, {
-      transform: frameOffset.x === 0 && frameOffset.y === 0
-        ? transform
-        : `translate3d(${frameOffset.x}px, ${frameOffset.y}px, 0) ${transform}`,
+      transform:
+        frameOffset.x === 0 && frameOffset.y === 0
+          ? transform
+          : `translate3d(${frameOffset.x}px, ${frameOffset.y}px, 0) ${transform}`,
       blur: media ? getComputedStyle(media).filter : "none",
       dim: getComputedStyle(card, "::before").opacity,
     });
@@ -187,10 +188,7 @@ export function captureThumbnailCardPoses(
  * Extra height above the front card for the collapsed expand target.
  * One preview stays 160px so empty space above it still click-through.
  */
-export function thumbnailCollapsedPeekPx(
-  cardCount: number,
-  hovered = false,
-): number {
+export function thumbnailCollapsedPeekPx(cardCount: number, hovered = false): number {
   const extra = Math.max(cardCount - 1, 0);
   const pose = thumbnailStackPoseDepth(extra);
   return pose * (hovered ? THUMBNAIL_STACK_HOVER_PEEK_PX : THUMBNAIL_STACK_IDLE_PEEK_PX);
@@ -235,9 +233,7 @@ export function thumbnailStackSideFromPlacement(
   return placement.endsWith("right") ? "right" : "left";
 }
 
-export function thumbnailStackGravityFromPlacement(
-  placement: MiniPreviewPlacement,
-): number {
+export function thumbnailStackGravityFromPlacement(placement: MiniPreviewPlacement): number {
   return thumbnailStackAnchorFromPlacement(placement) === "top" ? -1 : 1;
 }
 
@@ -248,9 +244,10 @@ export function harnessOffsetForPlacement(
   frameWidth = 340,
 ): { x: number; y: number; anchor: ThumbnailStackAnchor } {
   return {
-    x: thumbnailStackSideFromPlacement(placement) === "right"
-      ? Math.max(0, viewport.width - frameWidth)
-      : 0,
+    x:
+      thumbnailStackSideFromPlacement(placement) === "right"
+        ? Math.max(0, viewport.width - frameWidth)
+        : 0,
     y: 0,
     anchor: thumbnailStackAnchorFromPlacement(placement),
   };
@@ -308,21 +305,13 @@ export function thumbnailStackHarnessPileTop({
 }: ThumbnailStackHarnessGravity): number {
   const content = Math.max(0, contentHeight);
   return (
-    viewportHeight
-    + offsetY
-    - Math.max(0, padding)
-    + THUMBNAIL_STACK_CONTROL_GUTTER_PX
-    - content
+    viewportHeight + offsetY - Math.max(0, padding) + THUMBNAIL_STACK_CONTROL_GUTTER_PX - content
   );
 }
 
-export function thumbnailStackGravityFromHarness(
-  options: ThumbnailStackHarnessGravity,
-): number {
+export function thumbnailStackGravityFromHarness(options: ThumbnailStackHarnessGravity): number {
   const travel = Math.max(1, options.viewportHeight - Math.max(0, options.contentHeight));
-  return thumbnailStackGravityFromNormalizedY(
-    thumbnailStackHarnessPileTop(options) / travel,
-  );
+  return thumbnailStackGravityFromNormalizedY(thumbnailStackHarnessPileTop(options) / travel);
 }
 
 export function thumbnailStackAnchorFromGravity(
@@ -397,17 +386,14 @@ export function thumbnailStackVisualPileBottom({
   return y + frame - Math.max(0, padding) + THUMBNAIL_STACK_CONTROL_GUTTER_PX;
 }
 
-export function applyThumbnailStackGravity(
-  stack: HTMLElement | null,
-  gravity: number,
-) {
+export function applyThumbnailStackGravity(stack: HTMLElement | null, gravity: number) {
   if (!stack) return;
   const clamped = clampGravity(gravity);
   const gravityText = String(Number(clamped.toFixed(4)));
   const proximityText = String(Number((1 - Math.abs(clamped)).toFixed(4)));
   if (
-    stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR) === gravityText
-    && stack.style.getPropertyValue(THUMBNAIL_STACK_CENTER_PROXIMITY_VAR) === proximityText
+    stack.style.getPropertyValue(THUMBNAIL_STACK_GRAVITY_VAR) === gravityText &&
+    stack.style.getPropertyValue(THUMBNAIL_STACK_CENTER_PROXIMITY_VAR) === proximityText
   ) {
     return;
   }
@@ -487,8 +473,7 @@ export const THUMBNAIL_STACK_MOTION_DURATION_MS = 580;
  * cover a delete/close overlap while still guaranteeing cleanup if a hidden
  * WebView pauses its animations.
  */
-export const THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS =
-  THUMBNAIL_STACK_MOTION_DURATION_MS * 2 + 100;
+export const THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS = THUMBNAIL_STACK_MOTION_DURATION_MS * 2 + 100;
 
 /**
  * How long a dismiss card keeps its layout slot (visual exit + stacked settle).
@@ -567,9 +552,7 @@ export function resolveThumbnailStackShiftPx(
 }
 
 /** Treat a dissolving-in-place card as passable after its motion delay. */
-function isClearExitHole(
-  card: ThumbnailStackCardMotionState | undefined,
-): boolean {
+function isClearExitHole(card: ThumbnailStackCardMotionState | undefined): boolean {
   return Boolean(card?.holdsLayoutSlot && card.motionReady);
 }
 
@@ -595,13 +578,9 @@ export function computeThumbnailStackShifts(
   if (options.fromTop) {
     const magnitudeCards = cards.map((card) => ({
       ...card,
-      currentShiftPx: card.currentShiftPx === undefined
-        ? undefined
-        : -card.currentShiftPx,
+      currentShiftPx: card.currentShiftPx === undefined ? undefined : -card.currentShiftPx,
     }));
-    const towardStart = computeThumbnailStackShiftsTowardLater(
-      [...magnitudeCards].reverse(),
-    );
+    const towardStart = computeThumbnailStackShiftsTowardLater([...magnitudeCards].reverse());
     return towardStart.reverse().map((px) => (px === 0 ? 0 : -px));
   }
   return computeThumbnailStackShiftsTowardLater(cards);
@@ -653,10 +632,7 @@ export function shouldAnimateThumbnailStackShift(
   return options.fromTop ? nextPx < previousPx : nextPx > previousPx;
 }
 
-export function shouldScrollThumbnailStackToEnd(
-  previousCount: number,
-  nextCount: number,
-): boolean {
+export function shouldScrollThumbnailStackToEnd(previousCount: number, nextCount: number): boolean {
   return nextCount > previousCount;
 }
 
@@ -669,9 +645,7 @@ export function shouldScrollThumbnailStackToNewestOnExpand(
   previousMotion: string | undefined,
   nextMotion: string,
 ): boolean {
-  return nextMotion === "expanded"
-    && previousMotion !== undefined
-    && previousMotion !== "expanded";
+  return nextMotion === "expanded" && previousMotion !== undefined && previousMotion !== "expanded";
 }
 
 /**
@@ -691,10 +665,7 @@ export function thumbnailStackViewportHeight(stack: HTMLElement): number {
 }
 
 /** True when the expanded list is taller than the visible window. */
-export function thumbnailStackNeedsScrollport(
-  cardCount: number,
-  viewportHeight: number,
-): boolean {
+export function thumbnailStackNeedsScrollport(cardCount: number, viewportHeight: number): boolean {
   return thumbnailStackContentHeight(cardCount) - Math.max(0, viewportHeight) > 1;
 }
 
@@ -733,14 +704,13 @@ export function scrollThumbnailStackToNewest(
     stack.classList.remove(THUMBNAIL_STACK_SCROLLPORT_CLASS);
   }
   const measured = stack.clientHeight;
-  const scrollPortHeight = measured > 0 && measured < contentHeight - 1
-    ? measured
-    : (thumbnailStackNeedsScrollport(cardCount, viewportHeight) ? viewportHeight : measured);
-  stack.scrollTop = thumbnailStackNewestScrollTop(
-    cardCount,
-    scrollPortHeight,
-    options.fromTop,
-  );
+  const scrollPortHeight =
+    measured > 0 && measured < contentHeight - 1
+      ? measured
+      : thumbnailStackNeedsScrollport(cardCount, viewportHeight)
+        ? viewportHeight
+        : measured;
+  stack.scrollTop = thumbnailStackNewestScrollTop(cardCount, scrollPortHeight, options.fromTop);
 }
 
 export type ScheduleScrollThumbnailStackToNewestOptions = {
@@ -771,10 +741,9 @@ export function scheduleScrollThumbnailStackToNewest(
   options: ScheduleScrollThumbnailStackToNewestOptions = {},
 ): () => void {
   const onScrolled = options.onScrolled;
-  const frame = options.frame
-    ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
-  const cancelFrame = options.cancelFrame
-    ?? ((id: number) => cancelAnimationFrame(id));
+  const frame =
+    options.frame ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
+  const cancelFrame = options.cancelFrame ?? ((id: number) => cancelAnimationFrame(id));
   const retryMs = options.retryMs ?? 0;
   const viewportHeight = options.viewportHeight;
 
@@ -793,13 +762,10 @@ export function scheduleScrollThumbnailStackToNewest(
     innerFrame = frame(run);
   });
 
-  const observer = retryMs > 0 && typeof ResizeObserver === "function"
-    ? new ResizeObserver(run)
-    : null;
+  const observer =
+    retryMs > 0 && typeof ResizeObserver === "function" ? new ResizeObserver(run) : null;
   observer?.observe(stack);
-  const timeout = retryMs > 0
-    ? window.setTimeout(() => observer?.disconnect(), retryMs)
-    : 0;
+  const timeout = retryMs > 0 ? window.setTimeout(() => observer?.disconnect(), retryMs) : 0;
 
   return () => {
     cancelFrame(outerFrame);
@@ -827,10 +793,10 @@ export type ThumbnailStackOverflow = {
 export function thumbnailStackContentHeight(cardCount: number): number {
   if (cardCount <= 0) return 0;
   return (
-    THUMBNAIL_STACK_PADDING_PX
-    + THUMBNAIL_STACK_CONTROL_GUTTER_PX
-    + cardCount * THUMBNAIL_CARD_HEIGHT_PX
-    + (cardCount - 1) * THUMBNAIL_STACK_GAP_PX
+    THUMBNAIL_STACK_PADDING_PX +
+    THUMBNAIL_STACK_CONTROL_GUTTER_PX +
+    cardCount * THUMBNAIL_CARD_HEIGHT_PX +
+    (cardCount - 1) * THUMBNAIL_STACK_GAP_PX
   );
 }
 
@@ -887,10 +853,9 @@ export function animateThumbnailStackScroll(
   const durationMs = options.durationMs ?? THUMBNAIL_STACK_SCROLL_DURATION_MS;
   const reducedMotion = options.reducedMotion ?? false;
   const now = options.now ?? (() => performance.now());
-  const frame = options.frame
-    ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
-  const cancelFrame = options.cancelFrame
-    ?? ((id: number) => cancelAnimationFrame(id));
+  const frame =
+    options.frame ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
+  const cancelFrame = options.cancelFrame ?? ((id: number) => cancelAnimationFrame(id));
 
   const startTop = stack.scrollTop;
   const delta = targetTop - startTop;
@@ -930,9 +895,9 @@ const STACK_SHIFT_INSTANT_CLASS = THUMBNAIL_STACK_SHIFT_INSTANT_CLASS;
 /** Classes the stack controller owns; React must preserve them across renders. */
 export function thumbnailStackMotionClassNames(card: HTMLElement | null): string[] {
   if (!card) return [];
-  return [STACK_SHIFTING_CLASS, STACK_SHIFT_INSTANT_CLASS].filter((name) => (
-    card.classList.contains(name)
-  ));
+  return [STACK_SHIFTING_CLASS, STACK_SHIFT_INSTANT_CLASS].filter((name) =>
+    card.classList.contains(name),
+  );
 }
 
 /**
@@ -975,8 +940,10 @@ export function readComputedTranslateY(card: HTMLElement): number | null {
 }
 
 function isDustDeleteCard(card: HTMLElement): boolean {
-  return card.classList.contains("thumbnail-exit-delete")
-    && card.classList.contains("thumbnail-exit-dust");
+  return (
+    card.classList.contains("thumbnail-exit-delete") &&
+    card.classList.contains("thumbnail-exit-dust")
+  );
 }
 
 function isDismissCard(card: HTMLElement): boolean {
@@ -1018,8 +985,10 @@ function clearTranslatePx(card: HTMLElement): void {
 
 /** Compact / collapsed / expanding piles pose with `transform`, not slot `translate`. */
 export function thumbnailStackSuppressesSlotShift(stack: HTMLElement): boolean {
-  return stack.classList.contains("thumbnail-stack-compact")
-    || stack.classList.contains("thumbnail-stack-clearing");
+  return (
+    stack.classList.contains("thumbnail-stack-compact") ||
+    stack.classList.contains("thumbnail-stack-clearing")
+  );
 }
 
 /** True when survivors should slide up into holes (Show less is on the top edge). */
@@ -1052,17 +1021,20 @@ function clearShiftSlots(card: HTMLElement): void {
 }
 
 function hasExpandedSlotShift(card: HTMLElement): boolean {
-  return card.classList.contains(STACK_SHIFTING_CLASS)
-    || card.classList.contains(STACK_SHIFT_INSTANT_CLASS)
-    || hasThumbnailStackShiftPx(readStackShiftPx(card))
-    || Boolean(card.style.translate);
+  return (
+    card.classList.contains(STACK_SHIFTING_CLASS) ||
+    card.classList.contains(STACK_SHIFT_INSTANT_CLASS) ||
+    hasThumbnailStackShiftPx(readStackShiftPx(card)) ||
+    Boolean(card.style.translate)
+  );
 }
 
 function writeStackShiftPx(card: HTMLElement, shiftPx: number, animate: boolean): void {
   if (!hasThumbnailStackShiftPx(shiftPx) && !animate) {
-    const hadVisualShift = card.classList.contains(STACK_SHIFTING_CLASS)
-      || hasThumbnailStackShiftPx(readStackShiftPx(card))
-      || Boolean(card.style.translate);
+    const hadVisualShift =
+      card.classList.contains(STACK_SHIFTING_CLASS) ||
+      hasThumbnailStackShiftPx(readStackShiftPx(card)) ||
+      Boolean(card.style.translate);
     if (hadVisualShift) {
       // Snap with layout reflow. An ease here would fight the hole collapsing
       // (cards jumping toward the anchored edge as the stack shrinks).
@@ -1122,10 +1094,7 @@ function activeThumbnailStackTransitions(stack: HTMLElement): Animation[] {
   return transitions;
 }
 
-function waitForAnimationBatch(
-  animations: readonly Animation[],
-  timeoutMs: number,
-): Promise<void> {
+function waitForAnimationBatch(animations: readonly Animation[], timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
     let complete = false;
     const finish = () => {
@@ -1135,8 +1104,7 @@ function waitForAnimationBatch(
       resolve();
     };
     const timeout = setTimeout(finish, Math.max(0, timeoutMs));
-    void Promise.allSettled(animations.map((animation) => animation.finished))
-      .then(finish);
+    void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish);
   });
 }
 
@@ -1187,18 +1155,19 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
   };
 
   const schedule = (delayMs: number) => {
-    const timer = setTimeout(() => {
-      scheduledTimers.delete(timer);
-      applyShifts();
-    }, Math.max(0, delayMs));
+    const timer = setTimeout(
+      () => {
+        scheduledTimers.delete(timer);
+        applyShifts();
+      },
+      Math.max(0, delayMs),
+    );
     scheduledTimers.add(timer);
   };
 
   const applyShifts = () => {
     if (disposed) return;
-    const cards = Array.from(
-      stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card"),
-    );
+    const cards = Array.from(stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card"));
     const previous = previousCards;
     previousCards = cards;
     const fromTop = thumbnailStackShiftsFromTop(stack);
@@ -1225,9 +1194,8 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
         const holdsLayoutSlot = isHeldLayoutExitCard(card);
         const startedAt = exitStartedAt.get(card);
         const delayMs = motionDelayMsFor(card);
-        const motionReady = holdsLayoutSlot
-          && startedAt !== undefined
-          && now - startedAt >= delayMs;
+        const motionReady =
+          holdsLayoutSlot && startedAt !== undefined && now - startedAt >= delayMs;
         return {
           exiting: isExitingCard(card),
           holdsLayoutSlot,
@@ -1274,9 +1242,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       const holdsLayoutSlot = isHeldLayoutExitCard(card);
       const startedAt = exitStartedAt.get(card);
       const delayMs = motionDelayMsFor(card);
-      const motionReady = holdsLayoutSlot
-        && startedAt !== undefined
-        && now - startedAt >= delayMs;
+      const motionReady = holdsLayoutSlot && startedAt !== undefined && now - startedAt >= delayMs;
       const exiting = isExitingCard(card);
       let currentShiftPx = readStackShiftPx(card);
       if (exiting && hasThumbnailStackShiftPx(currentShiftPx)) {
@@ -1284,10 +1250,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
         // not at the still-animating target slot. Zero is valid at the start
         // of the transition, before the browser paints its first movement.
         const visualPx = readComputedTranslateY(card);
-        if (
-          visualPx !== null
-          && Math.abs(visualPx - currentShiftPx) > 0.5
-        ) {
+        if (visualPx !== null && Math.abs(visualPx - currentShiftPx) > 0.5) {
           writeStackShiftPx(card, visualPx, false);
           currentShiftPx = visualPx;
         }
@@ -1340,12 +1303,17 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
     // Only stack membership/mode and direct card classes affect held slots.
     // Dust, hover controls, and editor labels mutate below cards without
     // changing layout; don't rescan every card for those updates.
-    if (records.some(({ target, type }) => target === stack || (
-      type === "attributes"
-      && target instanceof HTMLElement
-      && target.parentElement === stack
-      && target.classList.contains("thumbnail-card")
-    ))) queueApply();
+    if (
+      records.some(
+        ({ target, type }) =>
+          target === stack ||
+          (type === "attributes" &&
+            target instanceof HTMLElement &&
+            target.parentElement === stack &&
+            target.classList.contains("thumbnail-card")),
+      )
+    )
+      queueApply();
   });
   observer.observe(stack, {
     childList: true,

@@ -84,11 +84,7 @@ export function pointerMidpoint(a: Point, b: Point): Point {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
-export function clampPan(
-  transform: ZoomTransform,
-  viewport: Size,
-  fitted: Size,
-): ZoomTransform {
+export function clampPan(transform: ZoomTransform, viewport: Size, fitted: Size): ZoomTransform {
   const scaledW = fitted.width * transform.scale;
   const scaledH = fitted.height * transform.scale;
   const maxX = Math.max(0, (scaledW - viewport.width) / 2);
@@ -155,7 +151,11 @@ export function shouldCloseOnSwipe(deltaX: number, deltaY: number, scale: number
   return !isZoomed(scale) && deltaY > CLOSE_SWIPE_PX && deltaY > Math.abs(deltaX);
 }
 
-export function isDoubleTap(previous: { time: number; x: number; y: number } | null, next: Point, now: number) {
+export function isDoubleTap(
+  previous: { time: number; x: number; y: number } | null,
+  next: Point,
+  now: number,
+) {
   if (!previous) return false;
   return now - previous.time <= DOUBLE_TAP_MS && pointerDistance(previous, next) <= TAP_SLOP_PX * 2;
 }

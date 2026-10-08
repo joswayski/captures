@@ -117,7 +117,10 @@ export async function downloadReleaseAssets(releaseId, directory) {
       headers: { Accept: "application/octet-stream" },
     });
     if (!response.body) throw new Error(`release asset ${asset.name} returned no body`);
-    await pipeline(Readable.fromWeb(response.body), createWriteStream(join(destination, asset.name)));
+    await pipeline(
+      Readable.fromWeb(response.body),
+      createWriteStream(join(destination, asset.name)),
+    );
     process.stdout.write(`Downloaded ${asset.name} from release ${releaseId}.\n`);
   }
 }

@@ -82,9 +82,7 @@ export function preparePreviewChannelAssets(directory) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, directory] = process.argv.slice(2);
   if (!directory || (command !== "select" && command !== "prepare")) {
-    throw new Error(
-      "usage: node scripts/preview-release-assets.mjs <select|prepare> <directory>",
-    );
+    throw new Error("usage: node scripts/preview-release-assets.mjs <select|prepare> <directory>");
   }
   const result =
     command === "prepare"

@@ -289,7 +289,11 @@
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-position:
+    0 0,
+    0 4px,
+    4px -4px,
+    -4px 0;
   background-size: 8px 8px;
 }
 
@@ -720,7 +724,11 @@
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
   background-size: 16px 16px;
 }
 
@@ -838,7 +846,11 @@
     linear-gradient(45deg, transparent 75%, #c4c4c8 75%),
     linear-gradient(-45deg, transparent 75%, #c4c4c8 75%);
   background-size: 10px 10px;
-  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  background-position:
+    0 0,
+    0 5px,
+    5px -5px,
+    -5px 0;
   background-color: #ececee;
 }
 
@@ -888,7 +900,11 @@
     linear-gradient(45deg, transparent 75%, #c4c4c8 75%),
     linear-gradient(-45deg, transparent 75%, #c4c4c8 75%);
   background-size: 6px 6px;
-  background-position: 0 0, 0 3px, 3px -3px, -3px 0;
+  background-position:
+    0 0,
+    0 3px,
+    3px -3px,
+    -3px 0;
   background-color: #ececee;
 }
 
@@ -1123,7 +1139,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-drop-snap-guide.edge-bottom .screenshot-drop-snap-bloom {
@@ -1139,7 +1161,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-drop-snap-guide.edge-left .screenshot-drop-snap-bloom {
@@ -1155,7 +1183,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-drop-snap-guide.edge-right .screenshot-drop-snap-bloom {
@@ -1171,7 +1205,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-drop-snap-particles,
@@ -1602,7 +1642,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-expand-edge.edge-bottom .screenshot-canvas-expand-bloom {
@@ -1618,7 +1664,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-expand-edge.edge-left .screenshot-canvas-expand-bloom {
@@ -1634,7 +1686,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-expand-edge.edge-right .screenshot-canvas-expand-bloom {
@@ -1650,7 +1708,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-expand-action {
@@ -1826,7 +1890,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-trim-edge.edge-bottom .screenshot-canvas-trim-bloom {
@@ -1842,7 +1912,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-trim-edge.edge-left .screenshot-canvas-trim-bloom {
@@ -1858,7 +1934,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-trim-edge.edge-right .screenshot-canvas-trim-bloom {
@@ -1874,7 +1956,13 @@
     transparent 100%
   );
   mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
 }
 
 .screenshot-canvas-trim-particle {
@@ -2137,7 +2225,11 @@
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  background-position:
+    0 0,
+    0 5px,
+    5px -5px,
+    -5px 0;
   background-size: 10px 10px;
 }
 
@@ -2775,7 +2867,11 @@
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
   background-size: 16px 16px;
 }
 
@@ -3684,7 +3780,9 @@
     calc(100% - 13px) calc(50% - 1px),
     calc(100% - 9px) calc(50% - 1px);
   background-repeat: no-repeat;
-  background-size: 4px 4px, 4px 4px;
+  background-size:
+    4px 4px,
+    4px 4px;
 }
 
 .screenshot-editor input[type="number"],

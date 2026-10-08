@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   CLOSE_SWIPE_PX,
@@ -94,10 +94,7 @@ test("scale stays within the lightbox range", () => {
 });
 
 test("pan is locked when the shot still fits, then clamped when zoomed", () => {
-  assert.deepEqual(
-    clampPan({ scale: 1, x: 80, y: -40 }, viewport, fitted),
-    FIT_TRANSFORM,
-  );
+  assert.deepEqual(clampPan({ scale: 1, x: 80, y: -40 }, viewport, fitted), FIT_TRANSFORM);
 
   const overflow = { width: 400, height: 700 };
   const zoomed = clampPan({ scale: 3, x: 2000, y: -2000 }, viewport, overflow);

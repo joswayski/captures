@@ -65,9 +65,7 @@ export function rewriteGithubApiAssetUrls(latest, assets, options = {}) {
   }
 
   const assetsById = new Map(
-    (assets ?? [])
-      .filter((asset) => asset?.id != null)
-      .map((asset) => [String(asset.id), asset]),
+    (assets ?? []).filter((asset) => asset?.id != null).map((asset) => [String(asset.id), asset]),
   );
   const platforms = latest?.platforms ?? {};
   let rewritten = 0;
@@ -96,7 +94,10 @@ export function validateAndWriteChecksums(directory, appVersion) {
     ["macOS DMG", (name) => name.endsWith(".dmg")],
     ["macOS updater archive", (name) => name.endsWith(".app.tar.gz")],
     ["macOS updater signature", (name) => name.endsWith(".app.tar.gz.sig")],
-    ["Windows NSIS installer", (name) => name.endsWith("-setup.exe") || name.endsWith("_setup.exe")],
+    [
+      "Windows NSIS installer",
+      (name) => name.endsWith("-setup.exe") || name.endsWith("_setup.exe"),
+    ],
     ["Windows updater signature", (name) => name.endsWith(".exe.sig")],
     ["Linux AppImage", (name) => name.endsWith(".AppImage")],
     ["Linux updater signature", (name) => name.endsWith(".AppImage.sig")],
@@ -116,13 +117,20 @@ export function validateAndWriteChecksums(directory, appVersion) {
     ["FFmpeg LGPL license", "-COPYING.LGPLv2.1"],
     ["FFmpeg notice", "-NOTICE.md"],
   ]) {
-    if (!names.includes(`${ffmpegPrefix}${suffix}`)) throw new Error(`release is missing its ${label}`);
+    if (!names.includes(`${ffmpegPrefix}${suffix}`))
+      throw new Error(`release is missing its ${label}`);
   }
   const ffmpegConfiguration = readFileSync(join(root, `${ffmpegPrefix}-BUILD_CONFIG.txt`), "utf8");
   for (const flag of ["--disable-gpl", "--disable-nonfree", "--disable-version3"]) {
-    if (!ffmpegConfiguration.includes(flag)) throw new Error(`FFmpeg build configuration is missing ${flag}`);
+    if (!ffmpegConfiguration.includes(flag))
+      throw new Error(`FFmpeg build configuration is missing ${flag}`);
   }
-  for (const flag of ["--enable-gpl", "--enable-nonfree", "--enable-version3", "--enable-libx264"]) {
+  for (const flag of [
+    "--enable-gpl",
+    "--enable-nonfree",
+    "--enable-version3",
+    "--enable-libx264",
+  ]) {
     if (ffmpegConfiguration.includes(flag)) {
       throw new Error(`FFmpeg build configuration contains forbidden flag ${flag}`);
     }
@@ -160,7 +168,9 @@ export function validateAndWriteChecksums(directory, appVersion) {
 
   const checksumNames = names.filter((name) => name !== "SHA256SUMS");
   const checksums = checksumNames.map((name) => {
-    const hash = createHash("sha256").update(readFileSync(join(root, name))).digest("hex");
+    const hash = createHash("sha256")
+      .update(readFileSync(join(root, name)))
+      .digest("hex");
     return `${hash}  ${name}`;
   });
   writeFileSync(join(root, "SHA256SUMS"), `${checksums.join("\n")}\n`);

@@ -47,31 +47,31 @@
 
 .ui-btn:hover:not(:disabled),
 :is(
-  .settings-utility-action,
-  .directory-input button,
-  .history-edit,
-  .history-reveal,
-  .history-delete,
-  .viewer-toolbar-actions button,
-  .recording-recovery-row button,
-  .custom-theme-editor-heading button,
-  .onboarding-permission-button,
-  .recording-save-actions button,
-  .recording-editor-header-actions button,
-  .screenshot-editor-draft-banner-actions > button
-):hover:not(:disabled) {
+    .settings-utility-action,
+    .directory-input button,
+    .history-edit,
+    .history-reveal,
+    .history-delete,
+    .viewer-toolbar-actions button,
+    .recording-recovery-row button,
+    .custom-theme-editor-heading button,
+    .onboarding-permission-button,
+    .recording-save-actions button,
+    .recording-editor-header-actions button,
+    .screenshot-editor-draft-banner-actions > button
+  ):hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--control-hover);
 }
 
 .ui-btn:active:not(:disabled),
 :is(
-  .settings-utility-action,
-  .history-edit,
-  .history-reveal,
-  .recording-save-actions button,
-  .onboarding-permission-button
-):active:not(:disabled) {
+    .settings-utility-action,
+    .history-edit,
+    .history-reveal,
+    .recording-save-actions button,
+    .onboarding-permission-button
+  ):active:not(:disabled) {
   transform: translateY(0.5px);
 }
 
@@ -92,12 +92,7 @@
 }
 
 .ui-btn svg,
-:is(
-  .history-actions,
-  .viewer-toolbar-actions,
-  .recording-save-actions,
-  .settings-utility-row
-) svg {
+:is(.history-actions, .viewer-toolbar-actions, .recording-save-actions, .settings-utility-row) svg {
   width: 15px;
   height: 15px;
   flex: 0 0 auto;
@@ -168,7 +163,9 @@
 }
 
 .ui-btn-danger:hover:not(:disabled),
-:is(.history-delete, .history-clear-all, .recording-recovery-row button.danger):hover:not(:disabled) {
+:is(.history-delete, .history-clear-all, .recording-recovery-row button.danger):hover:not(
+    :disabled
+  ) {
   border-color: transparent;
   color: var(--danger-text);
   background: var(--danger-surface);
@@ -496,20 +493,24 @@
   transition: color var(--dur-3) var(--ease-standard);
 }
 
-:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented) button:hover:not(:disabled):not(.active) {
+:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented)
+  button:hover:not(:disabled):not(.active) {
   color: var(--text);
 }
 
-:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented) button.active {
+:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented)
+  button.active {
   color: var(--text);
 }
 
-:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented) button:disabled {
+:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented)
+  button:disabled {
   cursor: not-allowed;
   opacity: 0.35;
 }
 
-:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented) button:focus-visible {
+:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented)
+  button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring-tight);
 }
@@ -526,9 +527,14 @@
 }
 
 /* Segmented controls without a sliding indicator still need a visible thumb. */
-:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented):not(:has(.capture-segmented-indicator)) button.active {
+:is(.capture-action-switch, .recording-target-switch, .editor-segmented, .ui-segmented):not(
+    :has(.capture-segmented-indicator)
+  )
+  button.active {
   background: var(--surface-raised);
-  box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border-subtle);
+  box-shadow:
+    var(--shadow-xs),
+    inset 0 0 0 1px var(--border-subtle);
 }
 
 .capture-segmented-indicator {
@@ -540,7 +546,9 @@
   width: 0;
   border-radius: var(--r-sm);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border-subtle);
+  box-shadow:
+    var(--shadow-xs),
+    inset 0 0 0 1px var(--border-subtle);
   pointer-events: none;
   will-change: width, transform;
 }
@@ -562,13 +570,17 @@
 }
 
 .on-media :is(.capture-action-switch, .recording-target-switch, .ui-segmented) button.active,
-.on-media :is(.capture-action-switch, .recording-target-switch, .ui-segmented) button:hover:not(:disabled) {
+.on-media
+  :is(.capture-action-switch, .recording-target-switch, .ui-segmented)
+  button:hover:not(:disabled) {
   color: var(--glass-text);
 }
 
 .on-media .capture-segmented-indicator {
   background: var(--glass-raised);
-  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--glass-border);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--glass-border);
 }
 
 /* --------------------------------------------------------- custom select -- */

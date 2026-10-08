@@ -72,15 +72,18 @@ const interruptedRecording: RecordingDraftManifest = {
     },
     gif: { max_width: 800, max_colors: 256, optimize: true },
   },
-  segments: [{
-    index: 0,
-    duration_ms: 4_200,
-    size_bytes: 250_000,
-    dropped_frames: 0,
-    complete: true,
-  }],
+  segments: [
+    {
+      index: 0,
+      duration_ms: 4_200,
+      size_bytes: 250_000,
+      dropped_frames: 0,
+      complete: true,
+    },
+  ],
   final_path: null,
-  last_error: "background task failed: recording failed: the recording did not contain a complete video frame",
+  last_error:
+    "background task failed: recording failed: the recording did not contain a complete video frame",
 };
 
 describe("CaptureHistory", () => {
@@ -109,16 +112,22 @@ describe("CaptureHistory", () => {
   it.each([entry, recordingEntry, { ...recordingEntry, kind: "gif" as const }])(
     "drags a $kind file directly without restoring, opening, or deleting it",
     async (capture) => {
-      const path = capture.kind === "screenshot" ? "/tmp/full-resolution.png" : `/tmp/media.${capture.kind === "gif" ? "gif" : "mp4"}`;
+      const path =
+        capture.kind === "screenshot"
+          ? "/tmp/full-resolution.png"
+          : `/tmp/media.${capture.kind === "gif" ? "gif" : "mp4"}`;
       vi.mocked(invoke).mockResolvedValue({ path, icon_path: "/tmp/drag-icon.png" });
       const deleted = vi.fn();
       render(<HistoryCard entry={capture} onDeleted={deleted} />);
       const preview = screen.getByRole("button", { name: /Open .* in editor/ });
       expect(preview).toHaveAttribute("draggable", "true");
       fireEvent.dragStart(preview);
-      await waitFor(() => expect(startDrag).toHaveBeenCalledWith(
-        { item: [path], icon: "/tmp/drag-icon.png", mode: "copy" }, expect.any(Function),
-      ));
+      await waitFor(() =>
+        expect(startDrag).toHaveBeenCalledWith(
+          { item: [path], icon: "/tmp/drag-icon.png", mode: "copy" },
+          expect.any(Function),
+        ),
+      );
       await waitFor(() => expect(preview).toBeEnabled());
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("prepare_artifact_drag", { artifactId: capture.id });
@@ -128,7 +137,8 @@ describe("CaptureHistory", () => {
   );
 
   it("retains a cancelled drag and allows retry after preparation fails", async () => {
-    vi.mocked(invoke).mockRejectedValueOnce(new Error("file unavailable"))
+    vi.mocked(invoke)
+      .mockRejectedValueOnce(new Error("file unavailable"))
       .mockResolvedValue({ path: "/tmp/original.png", icon_path: "/tmp/icon.png" });
     vi.mocked(startDrag).mockImplementation(async (_options, done) => {
       done?.({ result: "Cancelled", cursorPos: { x: 40, y: 70 } });
@@ -147,7 +157,12 @@ describe("CaptureHistory", () => {
 
   it("does not start a late drag after its History card is removed", async () => {
     let prepared!: (value: unknown) => void;
-    vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => { prepared = resolve; }));
+    vi.mocked(invoke).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          prepared = resolve;
+        }),
+    );
     const { unmount } = render(<HistoryCard entry={entry} onDeleted={vi.fn()} />);
     fireEvent.dragStart(screen.getByRole("button", { name: "Open screenshot in editor" }));
     unmount();
@@ -162,35 +177,51 @@ describe("CaptureHistory", () => {
     ["pointer cancellation", () => fireEvent.pointerCancel(window)],
     ["Escape", () => fireEvent.keyDown(window, { key: "Escape" })],
     ["lost window focus", () => fireEvent.blur(window)],
-  ] as const)("ignores preparation completing after %s and preserves later clicks", async (_name, cancel) => {
-    let prepared!: (value: unknown) => void;
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "prepare_artifact_drag") return new Promise((resolve) => { prepared = resolve; });
-      if (command === "restore_history_artifact" || command === "open_screenshot_editor") return undefined;
-      throw new Error(`unexpected command: ${command}`);
-    });
-    render(<HistoryCard entry={entry} onDeleted={vi.fn()} />);
-    const preview = screen.getByRole("button", { name: "Open screenshot in editor" });
-    fireEvent.pointerDown(preview, { button: 0, buttons: 1 });
-    fireEvent.dragStart(preview);
-    expect(preview).toBeDisabled();
-    cancel(); // The disabled source need not receive this window-level event.
-    await act(async () => prepared({ path: "/tmp/released.png", icon_path: "/tmp/icon.png" }));
-    expect(startDrag).not.toHaveBeenCalled();
-    expect(preview).toBeEnabled();
-    fireEvent.click(preview, { detail: 1 }); // Release must not become an editor click.
-    expect(invoke).toHaveBeenCalledTimes(1);
-    fireEvent.pointerDown(preview);
-    fireEvent.click(preview, { detail: 1 });
-    await waitFor(() => expect(preview).toBeEnabled());
-    fireEvent.click(preview, { detail: 0 }); // Keyboard activation has no pointer-down.
-    await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "open_screenshot_editor")).toHaveLength(2));
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
+  ] as const)(
+    "ignores preparation completing after %s and preserves later clicks",
+    async (_name, cancel) => {
+      let prepared!: (value: unknown) => void;
+      vi.mocked(invoke).mockImplementation(async (command) => {
+        if (command === "prepare_artifact_drag")
+          return new Promise((resolve) => {
+            prepared = resolve;
+          });
+        if (command === "restore_history_artifact" || command === "open_screenshot_editor")
+          return undefined;
+        throw new Error(`unexpected command: ${command}`);
+      });
+      render(<HistoryCard entry={entry} onDeleted={vi.fn()} />);
+      const preview = screen.getByRole("button", { name: "Open screenshot in editor" });
+      fireEvent.pointerDown(preview, { button: 0, buttons: 1 });
+      fireEvent.dragStart(preview);
+      expect(preview).toBeDisabled();
+      cancel(); // The disabled source need not receive this window-level event.
+      await act(async () => prepared({ path: "/tmp/released.png", icon_path: "/tmp/icon.png" }));
+      expect(startDrag).not.toHaveBeenCalled();
+      expect(preview).toBeEnabled();
+      fireEvent.click(preview, { detail: 1 }); // Release must not become an editor click.
+      expect(invoke).toHaveBeenCalledTimes(1);
+      fireEvent.pointerDown(preview);
+      fireEvent.click(preview, { detail: 1 });
+      await waitFor(() => expect(preview).toBeEnabled());
+      fireEvent.click(preview, { detail: 0 }); // Keyboard activation has no pointer-down.
+      await waitFor(() =>
+        expect(
+          vi.mocked(invoke).mock.calls.filter(([command]) => command === "open_screenshot_editor"),
+        ).toHaveLength(2),
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
 
   it("starts a delayed preparation only while its original gesture remains held", async () => {
     let prepared!: (value: unknown) => void;
-    vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => { prepared = resolve; }));
+    vi.mocked(invoke).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          prepared = resolve;
+        }),
+    );
     render(<HistoryCard entry={entry} onDeleted={vi.fn()} />);
     const preview = screen.getByRole("button", { name: "Open screenshot in editor" });
     fireEvent.pointerDown(preview, { button: 0, buttons: 1 });
@@ -198,35 +229,49 @@ describe("CaptureHistory", () => {
     expect(startDrag).not.toHaveBeenCalled();
     await act(async () => prepared({ path: "/tmp/held.png", icon_path: "/tmp/icon.png" }));
     expect(startDrag).toHaveBeenCalledExactlyOnceWith(
-      { item: ["/tmp/held.png"], icon: "/tmp/icon.png", mode: "copy" }, expect.any(Function),
+      { item: ["/tmp/held.png"], icon: "/tmp/icon.png", mode: "copy" },
+      expect.any(Function),
     );
     expect(preview).toBeEnabled();
   });
 
-  it.each(["resolve", "reject"] as const)("does not let an old preparation %s start or clear a newer held gesture", async (outcome) => {
-    const preparations: { resolve: (value: unknown) => void; reject: (error: Error) => void }[] = [];
-    vi.mocked(invoke).mockImplementation(() => new Promise((resolve, reject) => { preparations.push({ resolve, reject }); }));
-    render(<HistoryCard entry={entry} onDeleted={vi.fn()} />);
-    const preview = screen.getByRole("button", { name: "Open screenshot in editor" });
-    fireEvent.pointerDown(preview, { button: 0, buttons: 1 });
-    fireEvent.dragStart(preview);
-    fireEvent.pointerUp(window);
-    fireEvent.pointerDown(preview, { button: 0, buttons: 1 });
-    fireEvent.dragStart(preview);
-    expect(preparations).toHaveLength(2);
-    await act(async () => {
-      if (outcome === "resolve") preparations[0].resolve({ path: "/tmp/stale.png", icon_path: "/tmp/stale-icon.png" });
-      else preparations[0].reject(new Error("stale failure"));
-    });
-    expect(startDrag).not.toHaveBeenCalled();
-    expect(preview).toBeDisabled();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    await act(async () => preparations[1].resolve({ path: "/tmp/current.png", icon_path: "/tmp/current-icon.png" }));
-    expect(startDrag).toHaveBeenCalledExactlyOnceWith(
-      { item: ["/tmp/current.png"], icon: "/tmp/current-icon.png", mode: "copy" }, expect.any(Function),
-    );
-    expect(preview).toBeEnabled();
-  });
+  it.each(["resolve", "reject"] as const)(
+    "does not let an old preparation %s start or clear a newer held gesture",
+    async (outcome) => {
+      const preparations: { resolve: (value: unknown) => void; reject: (error: Error) => void }[] =
+        [];
+      vi.mocked(invoke).mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            preparations.push({ resolve, reject });
+          }),
+      );
+      render(<HistoryCard entry={entry} onDeleted={vi.fn()} />);
+      const preview = screen.getByRole("button", { name: "Open screenshot in editor" });
+      fireEvent.pointerDown(preview, { button: 0, buttons: 1 });
+      fireEvent.dragStart(preview);
+      fireEvent.pointerUp(window);
+      fireEvent.pointerDown(preview, { button: 0, buttons: 1 });
+      fireEvent.dragStart(preview);
+      expect(preparations).toHaveLength(2);
+      await act(async () => {
+        if (outcome === "resolve")
+          preparations[0].resolve({ path: "/tmp/stale.png", icon_path: "/tmp/stale-icon.png" });
+        else preparations[0].reject(new Error("stale failure"));
+      });
+      expect(startDrag).not.toHaveBeenCalled();
+      expect(preview).toBeDisabled();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await act(async () =>
+        preparations[1].resolve({ path: "/tmp/current.png", icon_path: "/tmp/current-icon.png" }),
+      );
+      expect(startDrag).toHaveBeenCalledExactlyOnceWith(
+        { item: ["/tmp/current.png"], icon: "/tmp/current-icon.png", mode: "copy" },
+        expect.any(Function),
+      );
+      expect(preview).toBeEnabled();
+    },
+  );
 
   it("hands release/cancel handling to the OS once the native drag has started", async () => {
     vi.mocked(invoke).mockResolvedValue({ path: "/tmp/full.png", icon_path: "/tmp/icon.png" });
@@ -240,7 +285,9 @@ describe("CaptureHistory", () => {
     fireEvent.blur(window);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(preview).toBeDisabled();
-    act(() => vi.mocked(startDrag).mock.calls[0][1]?.({ result: "Cancelled", cursorPos: { x: 40, y: 70 } }));
+    act(() =>
+      vi.mocked(startDrag).mock.calls[0][1]?.({ result: "Cancelled", cursorPos: { x: 40, y: 70 } }),
+    );
     expect(preview).toBeEnabled();
   });
 
@@ -254,17 +301,25 @@ describe("CaptureHistory", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     fireEvent.pointerDown(preview);
     fireEvent.click(preview, { detail: 1 });
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", { artifactId: entry.id }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", { artifactId: entry.id }),
+    );
     await waitFor(() => expect(preview).toBeEnabled());
     vi.mocked(invoke).mockRejectedValueOnce(new Error("file unavailable"));
     fireEvent.dragStart(preview);
     await screen.findByRole("alert");
     fireEvent.click(preview, { detail: 0 }); // Keyboard/assistive press has no pointer-down.
-    await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "open_screenshot_editor")).toHaveLength(2));
+    await waitFor(() =>
+      expect(
+        vi.mocked(invoke).mock.calls.filter(([command]) => command === "open_screenshot_editor"),
+      ).toHaveLength(2),
+    );
   });
 
   it("does not drag missing media, action controls, or a second in-flight gesture", async () => {
-    const { rerender } = render(<HistoryCard entry={{ ...recordingEntry, missing: true }} onDeleted={vi.fn()} />);
+    const { rerender } = render(
+      <HistoryCard entry={{ ...recordingEntry, missing: true }} onDeleted={vi.fn()} />,
+    );
     const image = screen.getByRole("img");
     expect(image.closest("button")).toHaveAttribute("draggable", "false");
     fireEvent.dragStart(image.closest("button")!);
@@ -303,8 +358,9 @@ describe("CaptureHistory", () => {
 
     fireEvent.click(deleteButton);
     expect(screen.getByRole("button", { name: "Confirm permanent deletion" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Confirm permanent deletion" }))
-      .toHaveClass("history-delete-confirm");
+    expect(screen.getByRole("button", { name: "Confirm permanent deletion" })).toHaveClass(
+      "history-delete-confirm",
+    );
     expect(invoke).not.toHaveBeenCalledWith("delete_history_artifact", expect.anything());
 
     fireEvent.click(screen.getByRole("button", { name: "Confirm permanent deletion" }));
@@ -324,7 +380,9 @@ describe("CaptureHistory", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel delete all captures" }));
     expect(screen.getByRole("button", { name: "Delete all captures" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel delete all captures" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Cancel delete all captures" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete all captures" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete all captures" }));
@@ -343,12 +401,12 @@ describe("CaptureHistory", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open screenshot in editor" }));
 
     await waitFor(() => {
-      const restoreCall = vi.mocked(invoke).mock.calls.findIndex(
-        ([command]) => command === "restore_history_artifact",
-      );
-      const editorCall = vi.mocked(invoke).mock.calls.findIndex(
-        ([command]) => command === "open_screenshot_editor",
-      );
+      const restoreCall = vi
+        .mocked(invoke)
+        .mock.calls.findIndex(([command]) => command === "restore_history_artifact");
+      const editorCall = vi
+        .mocked(invoke)
+        .mock.calls.findIndex(([command]) => command === "open_screenshot_editor");
       expect(restoreCall).toBeGreaterThanOrEqual(0);
       expect(editorCall).toBeGreaterThan(restoreCall);
     });
@@ -360,12 +418,12 @@ describe("CaptureHistory", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
 
     await waitFor(() => {
-      const restoreCall = vi.mocked(invoke).mock.calls.findIndex(
-        ([command]) => command === "restore_history_artifact",
-      );
-      const editorCall = vi.mocked(invoke).mock.calls.findIndex(
-        ([command]) => command === "open_screenshot_editor",
-      );
+      const restoreCall = vi
+        .mocked(invoke)
+        .mock.calls.findIndex(([command]) => command === "restore_history_artifact");
+      const editorCall = vi
+        .mocked(invoke)
+        .mock.calls.findIndex(([command]) => command === "open_screenshot_editor");
       expect(restoreCall).toBeGreaterThanOrEqual(0);
       expect(editorCall).toBeGreaterThan(restoreCall);
       expect(invoke).toHaveBeenCalledWith("open_screenshot_editor", {
@@ -389,17 +447,23 @@ describe("CaptureHistory", () => {
     expect(await screen.findByText("1920 × 1080 · 5.0 MB · 1:02")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("open_recording_editor", { artifactId: recordingEntry.id });
+      expect(invoke).toHaveBeenCalledWith("open_recording_editor", {
+        artifactId: recordingEntry.id,
+      });
     });
     fireEvent.click(screen.getByRole("button", { name: "Save file" }));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("save_recording_artifact", { artifactId: recordingEntry.id });
+      expect(invoke).toHaveBeenCalledWith("save_recording_artifact", {
+        artifactId: recordingEntry.id,
+      });
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete from History" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm permanent deletion" }));
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("delete_history_artifact", { artifactId: recordingEntry.id });
+      expect(invoke).toHaveBeenCalledWith("delete_history_artifact", {
+        artifactId: recordingEntry.id,
+      });
     });
   });
 
@@ -446,8 +510,9 @@ describe("CaptureHistory", () => {
         artifactId: missingRecording.id,
       });
     });
-    expect(screen.queryByRole("button", { name: "Confirm removal from History" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Confirm removal from History" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows interrupted recordings inside Capture History", async () => {
@@ -464,9 +529,13 @@ describe("CaptureHistory", () => {
 
     render(<CaptureHistory />);
 
-    expect(await screen.findByRole("heading", { name: "Interrupted recordings" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Interrupted recordings" }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/0:04 recovered so far/)).toBeInTheDocument();
-    expect(screen.getByText("The recording did not contain a complete video frame")).toBeInTheDocument();
+    expect(
+      screen.getByText("The recording did not contain a complete video frame"),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/background task failed/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete all captures" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Recover" }));
@@ -476,7 +545,9 @@ describe("CaptureHistory", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByRole("heading", { name: "Interrupted recordings" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Interrupted recordings" }),
+      ).not.toBeInTheDocument();
     });
   });
 });

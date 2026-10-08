@@ -28,10 +28,10 @@ export function nextReleaseVersion(date, tags) {
   const day = Number(dayText);
   const normalized = new Date(`${date}T12:00:00Z`);
   if (
-    Number.isNaN(normalized.valueOf())
-    || normalized.getUTCFullYear() !== year
-    || normalized.getUTCMonth() + 1 !== month
-    || normalized.getUTCDate() !== day
+    Number.isNaN(normalized.valueOf()) ||
+    normalized.getUTCFullYear() !== year ||
+    normalized.getUTCMonth() + 1 !== month ||
+    normalized.getUTCDate() !== day
   ) {
     throw new Error(`release date is not a real calendar date: ${date}`);
   }
@@ -76,7 +76,9 @@ export function configuredReleaseDate(timestamp = process.env.CAPTURES_RELEASE_T
 
   const parsed = new Date(timestamp);
   if (Number.isNaN(parsed.valueOf())) {
-    throw new Error(`CAPTURES_RELEASE_TIMESTAMP must be an ISO-8601 timestamp, received ${timestamp}`);
+    throw new Error(
+      `CAPTURES_RELEASE_TIMESTAMP must be an ISO-8601 timestamp, received ${timestamp}`,
+    );
   }
   return releaseDate(parsed);
 }

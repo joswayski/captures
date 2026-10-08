@@ -39,7 +39,9 @@ function log(message) {
 
 function commandError(command, result) {
   const detail = result.error?.message || result.stderr?.trim();
-  return new Error(detail ? `${command} failed: ${detail}` : `${command} failed with status ${result.status}`);
+  return new Error(
+    detail ? `${command} failed: ${detail}` : `${command} failed with status ${result.status}`,
+  );
 }
 
 function runChecked(command, args, options = {}) {
@@ -106,7 +108,9 @@ function detachMountedBuildImages() {
   const devices = mountedBuildDevices(info.stdout ?? "");
   if (devices.length === 0) return;
 
-  log(`Unmounting ${devices.length} stale Captures build disk image${devices.length === 1 ? "" : "s"}…`);
+  log(
+    `Unmounting ${devices.length} stale Captures build disk image${devices.length === 1 ? "" : "s"}…`,
+  );
   for (const device of devices) {
     const detached = run("/usr/bin/hdiutil", ["detach", device]);
     if (detached.status === 0) continue;
@@ -121,11 +125,15 @@ function findAppleDevelopmentIdentity() {
   const result = run("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"]);
   if (result.status !== 0) return null;
 
-  const identities = [...(result.stdout ?? "").matchAll(/^\s*\d+\)\s+[0-9A-Fa-f]+\s+"([^"]+)"/gmu)]
-    .map((match) => match[1]);
-  return identities.find((identity) =>
-    identity.startsWith("Apple Development:") || identity.startsWith("Mac Developer:"),
-  ) ?? null;
+  const identities = [
+    ...(result.stdout ?? "").matchAll(/^\s*\d+\)\s+[0-9A-Fa-f]+\s+"([^"]+)"/gmu),
+  ].map((match) => match[1]);
+  return (
+    identities.find(
+      (identity) =>
+        identity.startsWith("Apple Development:") || identity.startsWith("Mac Developer:"),
+    ) ?? null
+  );
 }
 
 function quitRunningCaptures() {
@@ -255,15 +263,11 @@ tauriArgs.push(...process.argv.slice(2));
 if (tauriArgs.length > 0) {
   args.push("--", ...tauriArgs);
 }
-const result = spawnSync(
-  process.execPath,
-  [npmCli, ...args],
-  {
-    env: environment,
-    stdio: "inherit",
-    cwd: ROOT,
-  },
-);
+const result = spawnSync(process.execPath, [npmCli, ...args], {
+  env: environment,
+  stdio: "inherit",
+  cwd: ROOT,
+});
 
 if (result.error) {
   console.error(`Failed to start the desktop build through npm: ${result.error.message}`);
@@ -280,7 +284,9 @@ if (isMac && !skipInstall) {
     if (resetPermissions) {
       resetScreenRecordingPermission();
     } else {
-      log("Keeping existing Screen Recording permission (set CAPTURES_RESET_PERMISSIONS=1 to wipe it).");
+      log(
+        "Keeping existing Screen Recording permission (set CAPTURES_RESET_PERMISSIONS=1 to wipe it).",
+      );
     }
     installToApplications();
     hideCheckoutMacAppFromLaunchers({
@@ -292,7 +298,9 @@ if (isMac && !skipInstall) {
     if (openAfterInstall) {
       log(`Launching ${APP_NAME}…`);
       runChecked("/usr/bin/open", [APPLICATIONS_APP], { stdio: "inherit" });
-      log("If Screen Recording was never granted for this build, approve it when prompted, then retry the shortcut once.");
+      log(
+        "If Screen Recording was never granted for this build, approve it when prompted, then retry the shortcut once.",
+      );
     } else {
       log(`Launch with: open -a ${APP_NAME}`);
     }

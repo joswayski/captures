@@ -94,8 +94,9 @@ function pauseHtmlImageLoading() {
  * cannot drop a per-element spy before pointer handlers read bounds.
  */
 function mockGuidanceBounds(rect: DOMRect = guidanceBounds) {
-  return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function mockRect(this: HTMLElement) {
+  return vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function mockRect(this: HTMLElement) {
       if (this.classList?.contains("capture-guidance")) {
         return rect;
       }
@@ -110,8 +111,7 @@ function mockGuidanceBounds(rect: DOMRect = guidanceBounds) {
         height: 0,
         toJSON: () => undefined,
       } as DOMRect;
-    },
-  );
+    });
 }
 
 /** Re-dispatch the move until the listener is attached. waitFor alone will not. */
@@ -148,15 +148,15 @@ describe("CaptureOverlay guidance", () => {
         return capturePointer;
       }
       if (
-        command === "show_capture_overlay"
-        || command === "reveal_capture_overlay"
-        || command === "sync_capture_cursor"
-        || command === "cancel_capture"
-        || command === "commit_window"
-        || command === "commit_display"
-        || command === "commit_region"
-        || command === "dismiss_capture_surface"
-        || command === "cancel_active_capture"
+        command === "show_capture_overlay" ||
+        command === "reveal_capture_overlay" ||
+        command === "sync_capture_cursor" ||
+        command === "cancel_capture" ||
+        command === "commit_window" ||
+        command === "commit_display" ||
+        command === "commit_region" ||
+        command === "dismiss_capture_surface" ||
+        command === "cancel_active_capture"
       ) {
         return undefined;
       }
@@ -178,45 +178,36 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("uses the selector guidance for a region shortcut", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     render(<App />);
 
-    const guidance = (await screen.findByText("Drag to select a region"))
-      .closest(".capture-guidance");
+    const guidance = (await screen.findByText("Drag to select a region")).closest(
+      ".capture-guidance",
+    );
     expect(guidance).toHaveTextContent("Shift for square · Esc to cancel");
     expect(screen.queryByText("Drag to capture · Esc to cancel")).not.toBeInTheDocument();
   });
 
   it("uses the selector guidance for a window shortcut", async () => {
     activeSession = { ...session, mode: "window" };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     render(<App />);
 
-    const guidance = (await screen.findByText("Select a window to continue"))
-      .closest(".capture-guidance");
+    const guidance = (await screen.findByText("Select a window to continue")).closest(
+      ".capture-guidance",
+    );
     expect(guidance).toHaveTextContent("Esc to cancel");
     expect(screen.queryByText("Select a window · Esc to cancel")).not.toBeInTheDocument();
   });
 
   it("fades region guidance when the cursor enters its bounds and restores on leave", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     mockGuidanceBounds();
     render(<App />);
 
-    const guidance = (await screen.findByText("Drag to select a region"))
-      .closest(".capture-guidance") as HTMLElement;
+    const guidance = (await screen.findByText("Drag to select a region")).closest(
+      ".capture-guidance",
+    ) as HTMLElement;
     expect(guidance).not.toHaveAttribute("data-faded");
 
     await movePointerOverGuidance(guidance, { clientX: 620, clientY: 150 }, true);
@@ -224,16 +215,13 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("keeps region guidance faded while the cursor rests on the leave slack edge", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     mockGuidanceBounds();
     render(<App />);
 
-    const guidance = (await screen.findByText("Drag to select a region"))
-      .closest(".capture-guidance") as HTMLElement;
+    const guidance = (await screen.findByText("Drag to select a region")).closest(
+      ".capture-guidance",
+    ) as HTMLElement;
 
     await movePointerOverGuidance(guidance, { clientX: 620, clientY: 150 }, true);
     // Just outside the painted box but inside the 40px leave zone — stay faded.
@@ -243,16 +231,13 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("fades region guidance as the cursor approaches the chip", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     mockGuidanceBounds();
     render(<App />);
 
-    const guidance = (await screen.findByText("Drag to select a region"))
-      .closest(".capture-guidance") as HTMLElement;
+    const guidance = (await screen.findByText("Drag to select a region")).closest(
+      ".capture-guidance",
+    ) as HTMLElement;
 
     // On the painted left edge — fade immediately.
     await movePointerOverGuidance(guidance, { clientX: 500, clientY: 150 }, true);
@@ -262,16 +247,13 @@ describe("CaptureOverlay guidance", () => {
 
   it("fades window guidance when the cursor enters its bounds", async () => {
     activeSession = { ...session, mode: "window" };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     mockGuidanceBounds();
     render(<App />);
 
-    const guidance = (await screen.findByText("Select a window to continue"))
-      .closest(".capture-guidance") as HTMLElement;
+    const guidance = (await screen.findByText("Select a window to continue")).closest(
+      ".capture-guidance",
+    ) as HTMLElement;
 
     await movePointerOverGuidance(guidance, { clientX: 620, clientY: 150 }, true);
   });
@@ -290,14 +272,11 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("hides region guidance while the user is dragging a selection", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
-    const guidance = (await screen.findByText("Drag to select a region"))
-      .closest(".capture-guidance");
+    const guidance = (await screen.findByText("Drag to select a region")).closest(
+      ".capture-guidance",
+    );
     expect(guidance).not.toHaveAttribute("data-faded");
 
     const surface = container.querySelector<HTMLElement>(".capture-surface");
@@ -320,11 +299,7 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("constrains a shortcut-started region to a square while Shift is held", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -369,11 +344,7 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("commits the freeform region if Shift is released before the mouse", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -422,11 +393,7 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("starts hiding the native overlay as soon as a region drag is released", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -455,12 +422,12 @@ describe("CaptureOverlay guidance", () => {
       sessionId: "capture-1",
       rect: { x: 120, y: 80, width: 500, height: 400 },
     });
-    const dismissCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
-      command === "dismiss_capture_surface"
-    ));
-    const commitCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
-      command === "commit_region"
-    ));
+    const dismissCall = vi
+      .mocked(invoke)
+      .mock.calls.findIndex(([command]) => command === "dismiss_capture_surface");
+    const commitCall = vi
+      .mocked(invoke)
+      .mock.calls.findIndex(([command]) => command === "commit_region");
     expect(dismissCall).toBeGreaterThanOrEqual(0);
     expect(commitCall).toBeGreaterThanOrEqual(0);
     expect(vi.mocked(invoke).mock.invocationCallOrder[dismissCall]).toBeLessThan(
@@ -472,11 +439,7 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("starts hiding the native overlay as soon as Escape cancels the session", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -485,12 +448,12 @@ describe("CaptureOverlay guidance", () => {
     expect(hideCurrentWindow).toHaveBeenCalledOnce();
     expect(invoke).toHaveBeenCalledWith("dismiss_capture_surface");
     expect(invoke).toHaveBeenCalledWith("cancel_capture", { sessionId: "capture-1" });
-    const dismissCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
-      command === "dismiss_capture_surface"
-    ));
-    const cancelCall = vi.mocked(invoke).mock.calls.findIndex(([command]) => (
-      command === "cancel_capture"
-    ));
+    const dismissCall = vi
+      .mocked(invoke)
+      .mock.calls.findIndex(([command]) => command === "dismiss_capture_surface");
+    const cancelCall = vi
+      .mocked(invoke)
+      .mock.calls.findIndex(([command]) => command === "cancel_capture");
     expect(dismissCall).toBeGreaterThanOrEqual(0);
     expect(cancelCall).toBeGreaterThanOrEqual(0);
     expect(vi.mocked(invoke).mock.invocationCallOrder[dismissCall]).toBeLessThan(
@@ -508,12 +471,12 @@ describe("CaptureOverlay guidance", () => {
         return null;
       }
       if (
-        command === "show_capture_overlay"
-        || command === "reveal_capture_overlay"
-        || command === "sync_capture_cursor"
-        || command === "cancel_capture"
-        || command === "cancel_active_capture"
-        || command === "dismiss_capture_surface"
+        command === "show_capture_overlay" ||
+        command === "reveal_capture_overlay" ||
+        command === "sync_capture_cursor" ||
+        command === "cancel_capture" ||
+        command === "cancel_active_capture" ||
+        command === "dismiss_capture_surface"
       ) {
         return undefined;
       }
@@ -531,11 +494,7 @@ describe("CaptureOverlay guidance", () => {
 
   it("cancels a live overlay with the Escape key code", async () => {
     activeSession = { ...session, frozen: false, snapshot_url: "" };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1&frozen=0",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1&frozen=0");
     render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -545,11 +504,7 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("does not reveal a freeze-frame after Escape cancels the overlay", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -562,19 +517,15 @@ describe("CaptureOverlay guidance", () => {
       await Promise.resolve();
     });
 
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "reveal_capture_overlay"
-    ))).toHaveLength(0);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "reveal_capture_overlay"),
+    ).toHaveLength(0);
     expect(invoke).toHaveBeenCalledWith("cancel_capture", { sessionId: "capture-1" });
   });
 
   it("keeps a top-left region square and moves its dimensions on-screen", async () => {
     activeSession = { ...session, display_corner_radius: 40 };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -606,8 +557,10 @@ describe("CaptureOverlay guidance", () => {
       });
       expect(surface!.style.borderRadius).toBe("");
       expect(selection!.style.borderRadius).toBe("");
-      expect(selection!.querySelector(".selection-dimensions"))
-        .toHaveAttribute("data-screen-edge", "top");
+      expect(selection!.querySelector(".selection-dimensions")).toHaveAttribute(
+        "data-screen-edge",
+        "top",
+      );
     });
   });
 
@@ -624,11 +577,7 @@ describe("CaptureOverlay guidance", () => {
       },
       window_coordinate_scale: 1.5,
     };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -659,8 +608,9 @@ describe("CaptureOverlay guidance", () => {
       });
       expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
       expect(container.querySelector(".capture-shade-full")).toHaveStyle({
-        clipPath: "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
-          + "200px 150px, 200px 565px, 513px 565px, 513px 150px, 200px 150px)",
+        clipPath:
+          "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, " +
+          "200px 150px, 200px 565px, 513px 565px, 513px 150px, 200px 150px)",
       });
       expect(container.querySelector(".capture-snapshot")).toHaveStyle({
         clipPath: "",
@@ -669,11 +619,7 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("wakes the overlay when a region session is ready without revealing yet", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -682,17 +628,13 @@ describe("CaptureOverlay guidance", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("show_capture_overlay", { sessionId: "capture-1" });
     });
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "reveal_capture_overlay"
-    ))).toHaveLength(0);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "reveal_capture_overlay"),
+    ).toHaveLength(0);
   });
 
   it("reveals the overlay after the frozen snapshot paints", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -706,18 +648,14 @@ describe("CaptureOverlay guidance", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("sync_capture_cursor", { sessionId: "capture-1" });
     });
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "show_capture_overlay"
-    ))).toHaveLength(1);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "show_capture_overlay"),
+    ).toHaveLength(1);
   });
 
   it("reveals a live overlay without a freeze-frame snapshot", async () => {
     activeSession = { ...session, frozen: false, snapshot_url: "" };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -731,11 +669,7 @@ describe("CaptureOverlay guidance", () => {
   });
 
   it("applies the region cursor class as soon as the session is ready", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     render(<App />);
     await screen.findByText("Drag to select a region");
     expect(document.documentElement).toHaveClass("capture-region-cursor");
@@ -743,11 +677,7 @@ describe("CaptureOverlay guidance", () => {
 
   it("applies the window cursor class for window capture", async () => {
     activeSession = { ...session, mode: "window" };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     render(<App />);
     await screen.findByText("Select a window to continue");
     expect(document.documentElement).toHaveClass("capture-window-cursor");
@@ -783,11 +713,7 @@ describe("CaptureOverlay guidance", () => {
         },
       ],
     };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Select a window to continue");
 
@@ -855,11 +781,7 @@ describe("CaptureOverlay guidance", () => {
         },
       ],
     };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Select a window to continue");
 
@@ -897,11 +819,7 @@ describe("CaptureOverlay guidance", () => {
       shell_chrome: [],
       windows_ready: false,
     };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Select a window to continue");
 
@@ -936,11 +854,7 @@ describe("CaptureOverlay guidance", () => {
       return () => undefined;
     });
     activeSession = { ...session, mode: "window", windows: [], windows_ready: false };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Select a window to continue");
     expect(container.querySelectorAll(".window-target")).toHaveLength(0);
@@ -954,9 +868,9 @@ describe("CaptureOverlay guidance", () => {
     await waitFor(() => {
       expect(container.querySelector(".capture-surface")).toHaveClass("capture-visible");
     });
-    const wakeCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "show_capture_overlay"
-    )).length;
+    const wakeCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "show_capture_overlay").length;
 
     await act(async () => {
       sessionReady?.({
@@ -964,35 +878,33 @@ describe("CaptureOverlay guidance", () => {
           ...session,
           mode: "window",
           windows_ready: false,
-          windows: [{
-            id: "notes",
-            title: "Notes",
-            app_name: "Notes",
-            z_order: 10,
-            x: 300,
-            y: 160,
-            width: 900,
-            height: 640,
-            display_id: "display-1",
-            corner_radius: 12,
-          }],
+          windows: [
+            {
+              id: "notes",
+              title: "Notes",
+              app_name: "Notes",
+              z_order: 10,
+              x: 300,
+              y: 160,
+              width: 900,
+              height: 640,
+              display_id: "display-1",
+              corner_radius: 12,
+            },
+          ],
         },
       });
     });
 
     expect(await screen.findByTitle("Notes")).toBeInTheDocument();
     expect(container.querySelector(".capture-surface")).toHaveClass("capture-visible");
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "show_capture_overlay"
-    ))).toHaveLength(wakeCalls);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "show_capture_overlay"),
+    ).toHaveLength(wakeCalls);
   });
 
   it("releases a region click so a double-click cannot cover the display", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=region&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
     const { container } = render(<App />);
     await screen.findByText("Drag to select a region");
 
@@ -1058,11 +970,7 @@ describe("CaptureOverlay guidance", () => {
         },
       ],
     };
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=overlay&mode=window&session_id=capture-1",
-    );
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
     render(<App />);
     await screen.findByText("Select a window to continue");
 
