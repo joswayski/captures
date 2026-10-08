@@ -9,6 +9,7 @@ import {
   color,
   easing,
   boxShadow,
+  dropShadow,
   componentShadows,
   themes,
   particleFixture,
@@ -74,6 +75,12 @@ test("native tokens carry box-shadow layers, including the preview card shadow",
     () => boxShadow("0 1px 2px rgba(0, 0, 0, 0.3), inset 0 0 1px #ffffff"),
     /Unsupported box-shadow/,
   );
+  assert.deepEqual(dropShadow("drop-shadow(-3px 2px 6px rgba(0, 0, 0, 0.24))"), [
+    { x: -3, y: 2, blur: 12, spread: 0, color: [0, 0, 0, 0.24] },
+  ]);
+  assert.equal(dropShadow("#ffffff"), null);
+  assert.throws(() => dropShadow("drop-shadow(0 2px 6px 1px #ffffff)"), /Unsupported/);
+  assert.throws(() => dropShadow("drop-shadow(0 2px -6px #ffffff)"), /Invalid/);
   assert.throws(() => componentShadows(".other { --x: 1; }"), /Missing/);
   const temporary = await mkdtemp(join(tmpdir(), "captures-native-"));
   t.onTestFinished(() => rm(temporary, { recursive: true, force: true }));
@@ -85,7 +92,14 @@ test("native tokens carry box-shadow layers, including the preview card shadow",
       { x: 0, y: 2, blur: 5, spread: 0, color: [0, 0, 0, 0.26] },
     ]);
     assert.equal(variant.shadows["glass-shadow"].length, 2);
-    assert.equal(variant.shadows["tooltip-shadow"], undefined);
+    assert.deepEqual(variant.shadows["tooltip-shadow"], [
+      { x: 0, y: 4, blur: 20, spread: 0, color: [0, 0, 0, 0.32] },
+    ]);
+    assert.deepEqual(variant.shadows["tooltip-shadow-compact"], [
+      { x: 0, y: 2, blur: 12, spread: 0, color: [0, 0, 0, 0.24] },
+    ]);
+    assert.equal(variant.numbers["startup-notice-width"], 296);
+    assert.equal(variant.numbers["startup-notice-height"], 54);
   }
   assert.deepEqual(tokens["dark-cobalt"].shadows["shadow-sm"], [
     { x: 0, y: 2, blur: 6, spread: 0, color: [0, 0, 0, 0.32] },

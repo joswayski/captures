@@ -686,24 +686,28 @@ impl Workbench {
                     .ok()
                     .filter(|shortcut| !shortcut.trim().is_empty())
                     .unwrap_or_else(captures_settings::default_new_capture_shortcut);
+                let keys = if ctx
+                    .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
+                    == Some(true)
+                {
+                    // Desktop trigger descriptions are not local chord syntax;
+                    // never advertise the requested keys as granted.
+                    Vec::new()
+                } else {
+                    captures_app::shortcuts::shortcut_display_tokens(
+                        &shortcut,
+                        crate::preferences::shortcut_platform(),
+                    )
+                };
+                let height = crate::startup_notice::fallback_height(ctx, &self.tokens(ctx), &keys);
                 self.startup_notice_generation = self.startup_notice_generation.wrapping_add(1);
                 self.startup_notice = Some(crate::startup_notice::Notice::new(
                     crate::startup_notice::placement(
                         frame.winit_window().map(AsRef::as_ref),
                         self.tray.as_ref().and_then(Tray::rect),
+                        height,
                     ),
-                    if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
-                        == Some(true)
-                    {
-                        // Desktop trigger descriptions are not local chord
-                        // syntax; never advertise the requested keys as granted.
-                        Vec::new()
-                    } else {
-                        captures_app::shortcuts::shortcut_display_tokens(
-                            &shortcut,
-                            crate::preferences::shortcut_platform(),
-                        )
-                    },
+                    keys,
                     self.startup_notice_generation,
                     visible_for,
                     now,
@@ -721,6 +725,7 @@ impl Workbench {
                 let placement = crate::startup_notice::placement(
                     frame.winit_window().map(AsRef::as_ref),
                     Some(tray),
+                    notice.placement.card_rect().height as f32,
                 );
                 if placement != notice.placement {
                     notice.placement = placement;

@@ -3233,6 +3233,21 @@ smoke checks the setup-completion notice title, size, focus retention and Close
 dismissal. AppKit has XCTest layout/copy/dismiss coverage. The macOS, Windows,
 Wayland and quiet-login paths have not been verified on physical hosts.
 
+The unanchored launch notice now follows the compact fallback selected for
+shipping [#1026](https://github.com/joswayski/captures/pull/1026): a 296px-wide,
+54px-minimum-height, left-aligned dark card, 10px corners, glass border and the
+smaller shared drop shadow. Both hosts measure wrapped shortcut rows before
+creating the native window and reserve space for the unchanged 28px Close control.
+Actual anchors retain the centered pill/triangle, geometry and lifetime. No tray
+coordinates are fabricated. The existing X11 onboarding smoke also exercises
+long-shortcut quiet launches in both appearances and Close without activating
+the hidden root (`--notices-only` runs the focused default/long-shortcut checks).
+Broader onboarding runs did not complete consistently here around initial root
+hiding/recovery input; the focused checks do not close that gate.
+AppKit adds measured-layout XCTest coverage; it is source-only
+in this Linux orb. Windows, Wayland and physical/macOS renderer acceptance remain
+open; this presentation change is not updater/restart acceptance.
+
 Native region recordings now retain a passive display-local guide from countdown
 until finalization/discard/cancellation. AppKit and wgpu paint the fixed glass veil
 and accent border strictly outside an outward-pixel-rounded transparent hole;

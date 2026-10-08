@@ -69,10 +69,11 @@ impl Notice {
 pub fn placement(
     window: Option<&winit::window::Window>,
     tray: Option<(f64, f64, f64, f64)>,
+    fallback_height: f32,
 ) -> Placement {
     let fallback = LogicalRect::new(0., 0., 1440., 900.);
     let Some(window) = window else {
-        return resolve(fallback, fallback, None);
+        return resolve(fallback, fallback, None, fallback_height);
     };
     let monitors: Vec<_> = window.available_monitors().collect();
     let contains = |monitor: &winit::monitor::MonitorHandle, (x, y, w, h): (f64, f64, f64, f64)| {
@@ -89,7 +90,7 @@ pub fn placement(
         .or_else(|| window.primary_monitor())
         .or_else(|| monitors.first().cloned());
     let Some(monitor) = monitor else {
-        return resolve(fallback, fallback, None);
+        return resolve(fallback, fallback, None, fallback_height);
     };
     let scale = monitor.scale_factor().max(1.);
     let position = monitor.position();
@@ -118,16 +119,34 @@ pub fn placement(
             f64::from(work.height),
         ),
         tray.map(|(x, y, w, h)| logical(x, y, w, h)),
+        fallback_height,
     )
 }
 
-fn resolve(monitor: LogicalRect, work: LogicalRect, tray: Option<LogicalRect>) -> Placement {
-    tray_notice::startup_notice_placement(
+fn resolve(
+    monitor: LogicalRect,
+    work: LogicalRect,
+    tray: Option<LogicalRect>,
+    fallback_height: f32,
+) -> Placement {
+    let placement = tray_notice::startup_notice_placement(
         monitor,
         work,
         tray,
         false,
         FallbackEdge::for_current_platform(),
+    );
+    if placement.caret != Caret::None {
+        return placement;
+    }
+    tray_notice::resolve_tray_notice_placement(
+        monitor,
+        work,
+        None,
+        false,
+        FallbackEdge::for_current_platform(),
+        tray_notice::STARTUP_NOTICE_WIDTH,
+        f64::from(fallback_height),
     )
 }
 
@@ -155,23 +174,127 @@ pub fn close_rect(tokens: &Tokens, placement: &Placement) -> egui::Rect {
     )
 }
 
+struct Content {
+    title: std::sync::Arc<egui::Galley>,
+    hint: std::sync::Arc<egui::Galley>,
+    chips: Vec<std::sync::Arc<egui::Galley>>,
+    rows: Vec<egui::Rect>,
+    width: f32,
+    height: f32,
+}
+
+fn content(ctx: &egui::Context, tokens: &Tokens, keys: &[String], compact: bool) -> Content {
+    let text = tokens.color("glass-text");
+    let subtle = tokens.color(if compact {
+        "glass-text-muted"
+    } else {
+        "glass-text-subtle"
+    });
+    let (title, hint, chips) = ctx.fonts_mut(|fonts| {
+        let small = FontId::proportional(tokens.number("text-sm"));
+        (
+            fonts.layout_no_wrap(
+                STARTUP_NOTICE_TITLE.into(),
+                FontId::proportional(tokens.number("text-md")),
+                text,
+            ),
+            fonts.layout_no_wrap(
+                if keys.is_empty() {
+                    "Open History from the tray menu"
+                } else {
+                    STARTUP_NOTICE_HINT
+                }
+                .into(),
+                small.clone(),
+                subtle,
+            ),
+            keys.iter()
+                .map(|key| fonts.layout_no_wrap(key.clone(), small.clone(), text))
+                .collect::<Vec<_>>(),
+        )
+    });
+    let pad = egui::vec2(tokens.number("s-1") + 1., 1.);
+    let sizes: Vec<_> = std::iter::once(hint.size())
+        .chain(chips.iter().map(|chip| chip.size() + pad * 2.))
+        .collect();
+    let row_height = sizes.iter().map(|size| size.y).fold(0., f32::max);
+    let available = tokens.number("startup-notice-width")
+        - tokens.number("s-5")
+        - tokens.number("h-sm")
+        - tokens.number("s-5");
+    let (mut x, mut y, mut width) = (0., 0., 0_f32);
+    let mut rows = Vec::new();
+    for (index, size) in sizes.into_iter().enumerate() {
+        let gap = if index == 0 {
+            0.
+        } else if index == 1 {
+            tokens.number("s-2")
+        } else {
+            tokens.number("s-1")
+        };
+        if compact && x > 0. && x + gap + size.x > available {
+            x = 0.;
+            y += row_height + tokens.number("s-1");
+        } else {
+            x += gap;
+        }
+        rows.push(egui::Rect::from_min_size(
+            egui::pos2(x, y + (row_height - size.y) / 2.),
+            size,
+        ));
+        x += size.x;
+        width = width.max(x);
+    }
+    let height = title.size().y + tokens.number("s-1") + y + row_height;
+    Content {
+        title,
+        hint,
+        chips,
+        rows,
+        width,
+        height,
+    }
+}
+
+/// Measure before creating the native window, so a long shortcut never clips
+/// its first frame. Anchored notices retain the shipping fixed-height pill.
+pub fn fallback_height(ctx: &egui::Context, tokens: &Tokens, keys: &[String]) -> f32 {
+    (content(ctx, tokens, keys, true).height + tokens.number("s-4") * 2.)
+        .max(tokens.number("startup-notice-height"))
+}
+
 /// Paints the notice at the window origin. Returns true when Close is clicked.
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> bool {
     let placement = notice.placement;
     let card = rect(placement.card_rect());
+    let compact = placement.caret == Caret::None;
     let fill = tokens.color("glass-strong-solid");
     let painter = ui.painter().clone();
-    // `--tooltip-shadow` (drop-shadow 0 4px 10px, 32% black); the token
-    // export only carries colors and plain numbers, not filter values.
-    painter.add(
-        egui::Shadow {
-            offset: [0, 4],
-            blur: 10,
-            spread: 0,
-            color: egui::Color32::from_black_alpha(82),
-        }
-        .as_shape(card, egui::CornerRadius::same((card.height() / 2.) as u8)),
-    );
+    let radius = if compact {
+        tokens.number("r-lg")
+    } else {
+        tokens.number("r-pill").min(card.height() / 2.)
+    };
+    if compact {
+        crate::effects::paint_box_shadows(
+            &painter,
+            card,
+            radius,
+            tokens.shadow("tooltip-shadow-compact"),
+            1.,
+        );
+    } else {
+        // Keep the existing anchored pill's silhouette and shadow.
+        painter.add(
+            egui::Shadow {
+                offset: [0, 4],
+                blur: 10,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(82),
+            }
+            .as_shape(card, egui::CornerRadius::same((card.height() / 2.) as u8)),
+        );
+    }
     if let Some(points) = placement.caret_triangle(STARTUP_NOTICE_CARET_SPAN) {
         painter.add(egui::Shape::convex_polygon(
             points
@@ -182,62 +305,53 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> bool {
             Stroke::NONE,
         ));
     }
-    // `--r-pill` clamps to a full half-height end cap.
-    let radius = tokens.number("r-pill").min(card.height() / 2.);
-    painter.rect_filled(card, radius, fill);
+    painter.rect(
+        card,
+        radius,
+        fill,
+        if compact {
+            Stroke::new(1., tokens.color("glass-border"))
+        } else {
+            Stroke::NONE
+        },
+        egui::StrokeKind::Inside,
+    );
 
     let text = tokens.color("glass-text");
-    let subtle = tokens.color("glass-text-subtle");
-    let title = painter.layout_no_wrap(
-        STARTUP_NOTICE_TITLE.to_owned(),
-        FontId::proportional(tokens.number("text-md")),
-        text,
-    );
-    let small = FontId::proportional(tokens.number("text-sm"));
-    let hint = if notice.keys.is_empty() {
-        "Open History from the tray menu"
+    let subtle = tokens.color(if compact {
+        "glass-text-muted"
     } else {
-        STARTUP_NOTICE_HINT
-    };
-    let hint = painter.layout_no_wrap(hint.to_owned(), small.clone(), subtle);
+        "glass-text-subtle"
+    });
+    let content = content(ui.ctx(), tokens, &notice.keys, compact);
     let chip_pad = egui::vec2(tokens.number("s-1") + 1., 1.);
-    let chips: Vec<_> = notice
-        .keys
-        .iter()
-        .map(|key| painter.layout_no_wrap(key.clone(), small.clone(), text))
-        .collect();
-    let chip_gap = tokens.number("s-1");
-    let chips_width: f32 = chips
-        .iter()
-        .map(|chip| chip.size().x + chip_pad.x * 2. + chip_gap)
-        .sum();
-    // A space follows the hint before the first chip's own margin.
-    let space = tokens.number("s-2") - chip_gap;
-    let row_height = chips
-        .iter()
-        .map(|chip| chip.size().y + chip_pad.y * 2.)
-        .fold(hint.size().y, f32::max);
-    let row_width = hint.size().x + space + chips_width;
     let gap = tokens.number("s-1");
-    let content_height = title.size().y + gap + row_height;
-    let top = card.center().y - content_height / 2.;
-    let title_pos = egui::pos2(card.center().x - title.size().x / 2., top);
-    let title_rect = egui::Rect::from_min_size(title_pos, title.size());
-    painter.galley(title_pos, title, text);
-    let row_top = top + title_rect.height() + gap;
-    let mut x = card.center().x - row_width / 2.;
-    painter.galley(
-        egui::pos2(x, row_top + (row_height - hint.size().y) / 2.),
-        hint.clone(),
-        subtle,
+    let top = card.center().y - content.height / 2.;
+    let left = card.left() + tokens.number("s-5");
+    let title_pos = egui::pos2(
+        if compact {
+            left
+        } else {
+            card.center().x - content.title.size().x / 2.
+        },
+        top,
     );
-    x += hint.size().x + space;
-    for chip in chips {
-        x += chip_gap;
-        let chip_rect = egui::Rect::from_min_size(
-            egui::pos2(x, row_top + (row_height - chip.size().y) / 2. - chip_pad.y),
-            chip.size() + chip_pad * 2.,
-        );
+    let row_origin = egui::vec2(
+        if compact {
+            left
+        } else {
+            card.center().x - content.width / 2.
+        },
+        top + content.title.size().y + gap,
+    );
+    painter.galley(title_pos, content.title, text);
+    painter.galley(content.rows[0].min + row_origin, content.hint, subtle);
+    for (chip, chip_rect) in content
+        .chips
+        .into_iter()
+        .zip(content.rows.into_iter().skip(1))
+    {
+        let chip_rect = chip_rect.translate(row_origin);
         painter.rect(
             chip_rect,
             tokens.number("r-sm"),
@@ -246,7 +360,6 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, notice: &Notice) -> bool {
             egui::StrokeKind::Inside,
         );
         painter.galley(chip_rect.min + chip_pad, chip, text);
-        x = chip_rect.right();
     }
 
     let close = close_rect(tokens, &placement);
@@ -398,10 +511,80 @@ mod tests {
         // A light theme still paints the dark media glass.
         assert_eq!(card.fill, tokens().color("glass-strong-solid"));
         assert_ne!(card.fill, tokens().color("surface-raised"));
+        assert_eq!(card.corner_radius.nw, 10);
+        assert_eq!(card.stroke, Stroke::new(1., tokens().color("glass-border")));
         assert_eq!(
-            card.corner_radius.nw as f32,
-            (card.rect.height() / 2.).floor()
+            tokens().color("glass-strong-solid"),
+            crate::tokens::load()["dark-cobalt"].color("glass-strong-solid")
         );
+    }
+
+    #[test]
+    fn fallback_measures_wrapped_keys_before_placement_and_reserves_close_space() {
+        let tokens = tokens();
+        let ctx = egui::Context::default();
+        let normal = ["Ctrl", "Shift", "Space"].map(String::from);
+        let long = ["Ctrl", "Alt", "Shift", "Super", "F12"].map(String::from);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert_eq!(fallback_height(ui.ctx(), &tokens, &normal), 54.);
+            let measured = content(ui.ctx(), &tokens, &long, true);
+            let height = fallback_height(ui.ctx(), &tokens, &long);
+            assert!(height > 54., "a long chord grows rather than clipping");
+            let monitor = LogicalRect::new(-1440., -100., 1440., 900.);
+            let work = LogicalRect::new(-1440., -100., 1440., 840.);
+            let placement = resolve(monitor, work, None, height);
+            let card = rect(placement.card_rect());
+            assert_eq!(card.width(), 296.);
+            assert_eq!(card.height(), height);
+            assert!(placement.y >= work.y);
+            assert!(placement.y + placement.height <= work.y + work.height);
+            let close = close_rect(&tokens, &placement);
+            let left = card.left() + 12.;
+            let top = card.center().y - measured.height / 2.;
+            assert!(top >= card.top() + 8.);
+            assert!(top + measured.height <= card.bottom() - 8.);
+            assert!(measured.rows.last().unwrap().top() > measured.rows[0].top());
+            for row in measured.rows {
+                assert!(row.right() + left <= card.right() - 40.);
+                assert!(row.right() + left < close.left());
+            }
+            let anchored = resolve(
+                monitor,
+                work,
+                Some(LogicalRect::new(-200., 750., 24., 24.)),
+                height,
+            );
+            assert_eq!(anchored.caret, Caret::Bottom);
+            assert_eq!(
+                anchored.card_rect().height,
+                55.,
+                "anchored geometry is unchanged"
+            );
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn fallback_left_aligns_but_real_tray_anchors_keep_centered_text() {
+        for tray in [None, Some(LogicalRect::new(1860., 1048., 24., 24.))] {
+            let notice = notice(tray, &["Ctrl", "Shift", "Space"]);
+            let (_, shapes) = render(&notice, Vec::new());
+            let title = shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == STARTUP_NOTICE_TITLE => {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let card = rect(notice.placement.card_rect());
+            if tray.is_none() {
+                assert_eq!(title.pos.x, card.left() + 12.);
+            } else {
+                assert_eq!(title.pos.x + title.galley.size().x / 2., card.center().x);
+            }
+        }
     }
 
     #[test]
