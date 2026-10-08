@@ -745,6 +745,24 @@ Disabling it closes the list; retained closed/replaced rows cannot act.
 
 No screen-reader or platform parity gate closes from these synthetic action tests.
 
+The wgpu capture menu confirms Return after its toolbar and selects have handled
+the frame's input. A target release batched with Return therefore captures the
+new target, not the old one; Return choosing a display option does not also start
+capture. An explicit Window click clears a retained desktop selection without
+discarding real window selections. Escape still closes an open select and cancels
+the capture on the same press. Directed unit tests and seven private-X11
+capture-controls cases verify exact region/window pixels and metadata, countdown,
+live/frozen backgrounds, occlusion, automatic selection and cancellation.
+The smoke waits for the target pill's painted state before sending surface input;
+XSync alone does not establish that the new surface is ready.
+
+| Platform | Capture-menu confirmation follow-up |
+| --- | --- |
+| AppKit/macOS | Existing event-based confirmation unchanged; no macOS runtime verification in this follow-up |
+| Windows | Shared wgpu input-ordering fix and unit coverage; physical runtime verification open |
+| X11 | All seven disposable capture-controls cases pass, with independent artifact-size and pixel checks |
+| Wayland | Shared wgpu toolbar path; compositor/runtime verification of this change open |
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,
