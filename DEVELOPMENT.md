@@ -186,12 +186,12 @@ browser or native-platform acceptance claims.
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the
 default gate. `npm run check:python` runs pinned Ruff 0.16.10 correctness checks
-over the native Python scripts, then `npm run test:python` runs their existing
+over all 36 Python scripts, then `npm run test:python` runs the native scripts' existing
 unittest suite through `uv run --no-project`. Ruff checks syntax, undefined names
 and invalid expressions/control flow; there was no existing Python formatter
 gate, so this does not impose a large Python style baseline.
 
-These scripts use the standard library or OS-installed D-Bus/GI/Xlib bindings;
+The 34 native scripts use the standard library or OS-installed D-Bus/GI/Xlib bindings;
 there is no Python application package, pip dependency list or environment to
 lock. `uv.toml` forbids interpreter downloads and selects existing system/CI
 Python. No managed interpreter, project venv or Python runtime is added to the
@@ -201,6 +201,16 @@ commands below with `uv run --no-project`, for example:
 ```sh
 uv run --no-project python apps/native/package.py --help
 uv run --no-project /usr/bin/python3 -c 'import dbus, gi, Xlib'
+```
+
+The two optional font-fixture generators already used uv. They now declare
+FontTools 4.60.2 in PEP 723 metadata and have per-script locks, without adding a
+repository-wide Python package. This stable version retains Python 3.9/3.10
+compatibility; current FontTools 4.66.1 requires Python 3.11. Regenerate with:
+
+```sh
+uv run --script --locked crates/captures-image/tests/make_test_font.py
+uv run --script --locked crates/captures-image/tests/make_shaping_font.py
 ```
 
 Keep explicit `/usr/bin/python3` for Linux graphical smokes: uv cannot replace
