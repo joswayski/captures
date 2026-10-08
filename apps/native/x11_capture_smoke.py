@@ -335,7 +335,15 @@ def main():
                     run("xdotool", "key", f"ctrl+shift+{key}", "sleep", ".2")
                     assert windows(title) == [selector], "target shortcut replaced or captured the selector"
                 else:
-                    click(selector, {"region": 530, "window": 627, "display": 738}[target], 811)
+                    x = {"region": 530, "window": 627, "display": 738}[target]
+                    click(selector, x, 811)
+                    # XSync acknowledges X11 input, not the rendered target.
+                    # The fixed-glass raised pill is brighter than the toolbar;
+                    # sample below its label, then require two stable reads.
+                    # Otherwise software GL can batch the next surface click
+                    # with this target release while the old surface still owns it.
+                    settled(selector, f"1x1+{x}+825", lambda rgb: min(rgb) > 30,
+                            f"{target} target indicator settles")
 
             def begin_selection(full_display=False, select=True, check_guidance=False,
                                 display_shortcut=False):
