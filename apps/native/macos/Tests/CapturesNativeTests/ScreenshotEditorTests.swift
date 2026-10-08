@@ -31,8 +31,20 @@ final class ScreenshotEditorTests: XCTestCase {
                     "endX": action == "curve" ? 580.0 : 220.0, "endY": action == "curve" ? 150.0 : 140.0,
                     "controls": [], "locked": false, "visible": true, "opacity": 100.0,
                     "blendMode": "source-over", "style": ["color": "#ff3b5c", "fill": NSNull(), "strokeWidth": 8.0]]
+                // Real worker snapshots publish cached selection outlines;
+                // document JSON alone is not the host's transform-grip contract.
+                // Half the 8px stroke plus 1px selection pad extends each edge by 5px;
+                // the horizontal line retains the selection box's 1px minimum height.
+                let outline: [[String: Double]] = action == "curve" ? [
+                    ["x": 175, "y": 145], ["x": 585, "y": 145],
+                    ["x": 585, "y": 156], ["x": 175, "y": 156],
+                ] : [
+                    ["x": 95, "y": 75], ["x": 225, "y": 75],
+                    ["x": 225, "y": 145], ["x": 95, "y": 145],
+                ]
                 let original = snapshot(id: "shot", layers: [element],
-                    extra: action == "curve" ? ["curve_handles": ["front": curveHandlesValue()]] : [:])
+                    extra: ["selection_outlines": ["front": outline],
+                            "curve_handles": action == "curve" ? ["front": curveHandlesValue()] : [:]])
                 let worker = FakeEditorWorker(snapshot: original)
                 worker.deferDrawingPreviews = true
                 let controller = fittedController(worker)
