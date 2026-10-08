@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import test from 'node:test';
 import { dragSelectionRect, constrainSelectionToAspect } from '../apps/desktop/ui/src/lib/selection.ts';
 
 const directory = new URL('../crates/captures-app/tests/', import.meta.url);
@@ -46,6 +45,7 @@ if (process.argv.includes('--write')) {
   // One complete case per line keeps generated provenance reviewable and bounded.
   await writeFile(fixture, `[\n${shippingCases().map(c => JSON.stringify(c)).join(',\n')}\n]\n`);
 } else {
+  const { test } = await import('vitest');
   test('native region vectors match the shipping TypeScript oracle', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), shippingCases());
   });

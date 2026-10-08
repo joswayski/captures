@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import test from 'node:test';
 import {
   arrowFillPolygon,
   elementRotationOrigin,
@@ -96,6 +95,7 @@ if (process.argv.includes('--write')) {
   await mkdir(directory, { recursive: true });
   await writeFile(fixture, `${JSON.stringify(serializableCases(), null, 2)}\n`);
 } else {
+  const { test } = await import('vitest');
   test('native open-stroke vectors match shipping TypeScript geometry', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), serializableCases());
   });

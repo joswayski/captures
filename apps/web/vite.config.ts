@@ -157,6 +157,10 @@ export default defineConfig(async () => {
     define: {
       __LATEST_CHANGES__: JSON.stringify(latestChanges),
     },
+    build: {
+      // Retain Vite 7's browser floor instead of adopting Vite 8's newer baseline.
+      target: ["chrome107", "edge107", "firefox104", "safari16"],
+    },
     server: {
       port: 5174,
       fs: {

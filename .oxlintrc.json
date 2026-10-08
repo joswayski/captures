@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "react", "react-hooks"],
+  "categories": { "correctness": "error" },
+  "env": { "browser": true, "node": true },
+  "overrides": [
+    {
+      "files": ["apps/web/src/useImageZoom.ts"],
+      "rules": { "react/refs": "off" }
+    },
+    {
+      "files": ["apps/web/src/ProductLightbox.tsx", "apps/web/src/pages/Home.tsx"],
+      "rules": { "react/set-state-in-effect": "off" }
+    }
+  ],
+  "ignorePatterns": [
+    "**/target/**",
+    "**/.build/**",
+    "**/.output/**",
+    "**/dist/**",
+    "apps/web/src/routeTree.gen.ts"
+  ]
+}

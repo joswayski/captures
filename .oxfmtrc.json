@@ -1,0 +1,12 @@
+{
+  "printWidth": 100,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "**/target/**",
+    "**/.build/**",
+    "**/.output/**",
+    "**/dist/**",
+    "apps/web/src/routeTree.gen.ts",
+    "**/public/**"
+  ]
+}

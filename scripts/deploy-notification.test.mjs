@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import test from 'node:test'
+import { test } from 'vitest'
 
 for (const [file, component, slug] of [
   ['aws-image.yml', 'web', 'captures'],

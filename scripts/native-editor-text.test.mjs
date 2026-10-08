@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import test from 'node:test';
 import {
   applyTextStylePreset, createPlacedTextElement, elementLocalBounds, resizeElement,
   fitAutoWidthTextElement, fitEditingAutoWidthTextElement,
@@ -93,6 +92,7 @@ if (process.argv.includes('--write')) {
   await writeFile(fixture, `${JSON.stringify(cases(), null, 2)}\n`);
   await writeFile(presetFixture, `${JSON.stringify(presets(), null, 2)}\n`);
 } else {
+  const { test } = await import('vitest');
   test('shipping new text placement centers only box presets at fractional points and sizes', () => {
     const create = preset => createPlacedTextElement({
       id: 'new-text', point: { x: 101.75, y: 22.125 }, fontSize: 31.25,

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import test from 'node:test';
 import {
   ARROW_MIN_DRAW_LENGTH,
   arrowPathLength,
@@ -1251,6 +1250,7 @@ if (process.argv.includes('--write')) {
   await mkdir(directory, { recursive: true });
   await writeFile(fixture, fixtureText(serializableCases()));
 } else {
+  const { test } = await import('vitest');
   test('native editor vectors match the shipping TypeScript oracle', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), serializableCases());
   });

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import test from 'node:test';
 import { buildCustomThemeVariables } from '../shared/themes.ts';
 
 const fixtureUrl = new URL('../crates/captures-settings/tests/custom-theme-golden.json', import.meta.url);
@@ -45,6 +44,7 @@ function shippingCase(input) {
 if (process.argv.includes('--write')) {
   await writeFile(fixtureUrl, `${JSON.stringify(cases.map(shippingCase), null, 2)}\n`);
 } else {
+  const { test } = await import('vitest');
   test('native custom-theme golden vectors come from shipping TypeScript', async () => {
     const fixture = JSON.parse(await readFile(fixtureUrl, 'utf8'));
     assert.deepEqual(fixture, cases.map(shippingCase));

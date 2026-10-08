@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -32,7 +32,7 @@ test('native tokens carry every ease token as cubic-bezier control points', asyn
   assert.throws(() => easing('cubic-bezier(1.5, 0, 0, 1)'), /Invalid easing/);
   assert.throws(() => easing('cubic-bezier(0, 0, 1)'), /Invalid easing/);
   const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(temporary, { recursive: true, force: true }));
   await prepare(temporary);
   const tokens = JSON.parse(await readFile(join(temporary, 'tokens.json'), 'utf8'));
   for (const variant of Object.values(tokens)) {
@@ -54,7 +54,7 @@ test('native tokens carry box-shadow layers, including the preview card shadow',
   assert.throws(() => boxShadow('0 1px 2px rgba(0, 0, 0, 0.3), inset 0 0 1px #ffffff'), /Unsupported box-shadow/);
   assert.throws(() => componentShadows('.other { --x: 1; }'), /Missing/);
   const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(temporary, { recursive: true, force: true }));
   await prepare(temporary);
   const tokens = JSON.parse(await readFile(join(temporary, 'tokens.json'), 'utf8'));
   for (const variant of Object.values(tokens)) {
@@ -91,7 +91,7 @@ test('shared dust fixtures include asymmetric delay boundaries and complete end 
 
 test('prepare writes portable app resources without an implicit test oracle', async t => {
   const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(temporary, { recursive: true, force: true }));
   const output = join(temporary, 'resources');
 
   await prepare(output);
@@ -110,7 +110,7 @@ test('prepare writes portable app resources without an implicit test oracle', as
 
 test('prepare writes poses only to an explicit test output', async t => {
   const temporary = await mkdtemp(join(tmpdir(), 'captures-native-'));
-  t.after(() => rm(temporary, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(temporary, { recursive: true, force: true }));
   const output = join(temporary, 'resources');
   const testOutput = join(temporary, 'tests');
 

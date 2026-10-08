@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import test from 'node:test';
 import { recordShortcut, shortcutDisplayTokens } from '../apps/desktop/ui/src/lib/shortcut.ts';
 
 const fixture = new URL('../crates/captures-app/tests/shortcut-golden.json', import.meta.url);
@@ -46,6 +45,7 @@ if (process.argv.includes('--write')) {
   const { recording, display } = shippingCases();
   await writeFile(fixture, `{"recording":[\n${recording.map(c => JSON.stringify(c)).join(',\n')}\n],"display":[\n${display.map(c => JSON.stringify(c)).join(',\n')}\n]}\n`);
 } else {
+  const { test } = await import('vitest');
   test('native shortcut vectors match the shipping recorder and display oracle', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), shippingCases());
   });

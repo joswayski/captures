@@ -161,6 +161,25 @@ Run the default repository gate:
 npm run check
 ```
 
+The JS/TS toolchain uses Vite 8 (Rolldown/Oxc), Vitest 5, stable native Go
+TypeScript 7 (`tsc`), Oxlint and Oxfmt. Node 24/npm 11 remain the runtime and
+package manager. `npm test` runs all isolated desktop, web and repository-script
+suites; `npm run test:release-version` retains its historical name but runs all
+repository-script tests. Workspace test commands remain available.
+
+`npm run lint` covers first-party JS/TS with Oxlint correctness and React/hooks
+rules. Three existing web hooks retain narrow React Compiler-rule exceptions;
+this migration does not refactor their behavior. `npm run fmt` applies the
+formatter baseline and `npm run fmt:check` enforces it. Generated routes, native
+build output and public assets are excluded. Golden fixture generators still
+run directly with `node scripts/native-*.test.mjs --write`; their test branches
+load Vitest only when not generating fixtures.
+
+The desktop retains its ES2022 build target. The website explicitly retains
+Vite 7's Chrome/Edge 107, Firefox 104 and Safari 16 target instead of silently
+adopting Vite 8's newer baseline. These are build targets, not new physical
+browser or native-platform acceptance claims.
+
 For Rust changes, also run:
 
 ```sh

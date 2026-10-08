@@ -18,6 +18,9 @@ on:
       - 'Cargo.lock'
       - 'shared/**'
       - 'scripts/native-tokens.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vitest.config.ts'
       - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
       - 'apps/desktop/assets/icon.svg'
       - '.github/workflows/native-wgpu.yml'
@@ -65,7 +68,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libasound2-plugins pulseaudio libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
       - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
-      - run: node --test scripts/native-tokens.test.mjs
+      - run: npm ci
+      - run: npm run test:release-version -- scripts/native-tokens.test.mjs
       - run: python -m unittest discover -s apps/native -p 'test_*.py'
       - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import test from 'node:test';
 import { windowPointerHoverAtPoint } from '../apps/desktop/ui/src/lib/selection.ts';
 
 const fixture = new URL('../crates/captures-app/tests/window-hit-golden.json', import.meta.url);
@@ -39,6 +38,7 @@ function shippingCases() {
 if (process.argv.includes('--write')) {
   await writeFile(fixture, `[\n${shippingCases().map(c => JSON.stringify(c)).join(',\n')}\n]\n`);
 } else {
+  const { test } = await import('vitest');
   test('native window hit vectors match the shipping TypeScript oracle', async () => {
     assert.deepEqual(JSON.parse(await readFile(fixture, 'utf8')), shippingCases());
   });
