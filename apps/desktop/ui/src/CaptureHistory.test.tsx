@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
@@ -107,6 +108,107 @@ describe("CaptureHistory", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each(["success", "failure"])(
+    "ignores an older refresh's %s after a newer snapshot has loaded",
+    async (outcome) => {
+      let completeOlder!: () => void;
+      let completeNewer!: () => void;
+      const older = new Promise<HistoryEntry[]>((resolve, reject) => {
+        completeOlder = () =>
+          outcome === "success" ? resolve([entry]) : reject(new Error("old request failed"));
+      });
+      const newer = new Promise<HistoryEntry[]>((resolve) => {
+        completeNewer = () => resolve([recordingEntry]);
+      });
+      vi.mocked(invoke).mockImplementation(async (command) => {
+        if (command === "get_capture_history") {
+          return vi.mocked(invoke).mock.calls.filter(([name]) => name === command).length === 1
+            ? older
+            : newer;
+        }
+        if (command === "get_recording_drafts") return [];
+        throw new Error(`unexpected command: ${command}`);
+      });
+      render(<CaptureHistory />);
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_capture_history"));
+      const changed = vi
+        .mocked(listen)
+        .mock.calls.find(([name]) => name === "capture-history-changed")![1];
+      act(() => changed({ event: "capture-history-changed", id: 0, payload: undefined }));
+      await act(async () => completeNewer());
+      expect(screen.getByRole("button", { name: "Open video in editor" })).toBeInTheDocument();
+      await act(async () => completeOlder());
+      expect(screen.getByRole("button", { name: "Open video in editor" })).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Open screenshot in editor" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["one", "all"])(
+    "does not resurrect captures deleted while a refresh is pending (%s)",
+    async (scope) => {
+      let completeRefresh!: () => void;
+      vi.mocked(invoke).mockImplementation(async (command) => {
+        if (command === "get_capture_history") {
+          if (vi.mocked(invoke).mock.calls.filter(([name]) => name === command).length === 1) {
+            return [entry, recordingEntry];
+          }
+          return new Promise((resolve) => {
+            completeRefresh = () => resolve([entry, recordingEntry]);
+          });
+        }
+        if (command === "get_recording_drafts") return [];
+        if (command === "delete_history_artifact" || command === "clear_capture_history")
+          return undefined;
+        throw new Error(`unexpected command: ${command}`);
+      });
+      render(<CaptureHistory />);
+      await screen.findByRole("button", { name: "Open screenshot in editor" });
+      const changed = vi
+        .mocked(listen)
+        .mock.calls.find(([name]) => name === "capture-history-changed")![1];
+      act(() => changed({ event: "capture-history-changed", id: 0, payload: undefined }));
+      if (scope === "all") {
+        fireEvent.click(screen.getByRole("button", { name: "Delete all captures" }));
+        fireEvent.click(screen.getByRole("button", { name: "Confirm delete all captures" }));
+      } else {
+        fireEvent.click(screen.getAllByRole("button", { name: "Delete from History" })[0]);
+        fireEvent.click(screen.getByRole("button", { name: "Confirm permanent deletion" }));
+      }
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Open screenshot in editor" }),
+        ).not.toBeInTheDocument(),
+      );
+      await act(async () => completeRefresh());
+      expect(
+        screen.queryByRole("button", { name: "Open screenshot in editor" }),
+      ).not.toBeInTheDocument();
+      if (scope === "all") expect(screen.getByText("No captures yet")).toBeInTheDocument();
+      else expect(screen.getByRole("button", { name: "Open video in editor" })).toBeInTheDocument();
+    },
+  );
+
+  it("explains an empty filter after its last capture is deleted", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_capture_history") return [entry, recordingEntry];
+      if (command === "get_recording_drafts") return [];
+      if (command === "delete_history_artifact") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<CaptureHistory />);
+    await screen.findByRole("button", { name: "Open video in editor" });
+    fireEvent.click(screen.getByRole("button", { name: "Video" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete from History" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm permanent deletion" }));
+    expect(await screen.findByText("No captures in this filter")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByRole("button", { name: "Open screenshot in editor" })).toBeInTheDocument();
+    expect(screen.queryByText("No captures in this filter")).not.toBeInTheDocument();
   });
 
   it.each([entry, recordingEntry, { ...recordingEntry, kind: "gif" as const }])(
