@@ -17,6 +17,8 @@ on:
       - 'crates/captures-media/**'
       - 'Cargo.lock'
       - 'shared/**'
+      - 'uv.toml'
+      - 'ruff.toml'
       - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
       - 'apps/desktop/assets/icon.svg'
       - '.github/workflows/native-macos.yml'
@@ -47,6 +49,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.23'
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
@@ -195,7 +200,8 @@ jobs:
           name: native-pixels
           path: ${{ runner.temp }}/native-pixels
           if-no-files-found: ignore
-      - run: python3 -m unittest discover -s apps/native -p 'test_*.py'
+      - run: uvx --from ruff==0.16.10 ruff check apps/native
+      - run: uv run --no-project python3 -m unittest discover -s apps/native -p 'test_*.py'
       - uses: actions/upload-artifact@v4
         with:
           name: native-macos-build
@@ -237,11 +243,14 @@ jobs:
           name: native-macos-build
           path: native-build
       - uses: ./.github/actions/prepare-media
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.23'
       - name: Stage the isolated native test app with pinned media tools
         shell: bash
         run: |
           target="$(rustc -vV | sed -n 's/^host: //p')"
-          python apps/native/package.py --platform macos \
+          uv run --no-project python apps/native/package.py --platform macos \
             --binary native-build/CapturesNative \
             --resources native-build/CapturesNative_CapturesNative.bundle \
             --media-target "$target" --adhoc-sign --output native-package \

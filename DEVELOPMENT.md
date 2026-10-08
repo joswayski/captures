@@ -6,6 +6,8 @@ This guide covers local setup, validation, and packaging. Maintainer release pro
 
 - Rust 1.94 with `rustfmt` and `clippy`
 - Node.js 24 and npm 11
+- uv 0.12.23 and an existing Python interpreter (CI uses Python 3.12;
+  Linux native smokes use the distro interpreter and its bindings)
 - macOS: macOS 26 SDK
 - Windows: Visual Studio C++ build tools, Windows 11 SDK, and MSYS2/MinGW
 - Linux: PipeWire and ALSA development packages
@@ -179,6 +181,33 @@ The desktop retains its ES2022 build target. The website explicitly retains
 Vite 7's Chrome/Edge 107, Firefox 104 and Safari 16 target instead of silently
 adopting Vite 8's newer baseline. These are build targets, not new physical
 browser or native-platform acceptance claims.
+
+### Python native tooling
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the
+default gate. `npm run check:python` runs pinned Ruff 0.16.10 correctness checks
+over the native Python scripts, then `npm run test:python` runs their existing
+unittest suite through `uv run --no-project`. Ruff checks syntax, undefined names
+and invalid expressions/control flow; there was no existing Python formatter
+gate, so this does not impose a large Python style baseline.
+
+These scripts use the standard library or OS-installed D-Bus/GI/Xlib bindings;
+there is no Python application package, pip dependency list or environment to
+lock. `uv.toml` forbids interpreter downloads and selects existing system/CI
+Python. No managed interpreter, project venv or Python runtime is added to the
+website image. To run standalone packaging with the same policy, prefix the
+commands below with `uv run --no-project`, for example:
+
+```sh
+uv run --no-project python apps/native/package.py --help
+uv run --no-project /usr/bin/python3 -c 'import dbus, gi, Xlib'
+```
+
+Keep explicit `/usr/bin/python3` for Linux graphical smokes: uv cannot replace
+the distro bindings with a generic managed Python. Those commands and their
+child-process interpreter selection remain unchanged. Native CI keeps its
+existing `actions/setup-python` 3.12 selection where configured; uv wraps the
+dependency-free unit/packaging commands without changing deployment behavior.
 
 For Rust changes, also run:
 
