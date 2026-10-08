@@ -251,6 +251,8 @@ with controls mirrored for right-side placement. Hover blurs and dims the image;
 cards show byte sizes, clipboard confirmation and editor-presence pills. Delete
 uses a white icon on the signal-colored hover background. Native previews also
 animate arrival, dismissal, pile expansion and settling, respecting reduced motion.
+Clear all retains each screenshot card's current appearance while it streaks out,
+without forcing idle cards into hover dimming; later captures and retained files stay.
 After export, Show in Folder selects the saved file in the file manager (on Linux
 through the desktop's FileManager1 service, or by opening its folder when none
 answers) instead of saving another copy; a missing export leaves the capture available.

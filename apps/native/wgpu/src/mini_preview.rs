@@ -34,6 +34,26 @@ pub enum Busy {
     Trash,
 }
 
+/// The last painted expanded card, frozen by Clear all before its stagger.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Presentation {
+    pub filter: f32,
+    pub scale: f32,
+    pub arrive_blur: f32,
+    pub pose: captures_app::motion::Pose,
+}
+
+impl Default for Presentation {
+    fn default() -> Self {
+        Self {
+            filter: 0.,
+            scale: 0.,
+            arrive_blur: 0.,
+            pose: captures_app::motion::Pose::REST,
+        }
+    }
+}
+
 /// A compact card's shipping 3D pile pose about its centre
 /// (`captures_app::preview::collapsed_card_pose`): the host moves the card's
 /// rect by the pose offset; this carries the spin, recession and `rotateX`
@@ -173,7 +193,7 @@ pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
     egui::lerp(stops[index]..=stops[index + 1], position - index as f32)
 }
 
-pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action> {
+pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Action>, Presentation) {
     let mut action = None;
     let size = egui::vec2(
         ui.available_width(),
@@ -185,7 +205,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
 
     if view.collapsed && view.depth > 0 && !view.pile.is_flat() {
         paint_posed_pile_card(ui, tokens, card, radius, &view);
-        return None;
+        return (None, Presentation::default());
     }
     if view.collapsed {
         paint_card_shadow(ui, tokens, card, radius, view.pile, &|point| point);
@@ -259,7 +279,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
             // Shipping's collapsed hit target has no tooltip.
             response.on_hover_cursor(egui::CursorIcon::Grab);
         }
-        return action;
+        return (action, Presentation::default());
     }
 
     let inset = 8.;
@@ -584,7 +604,15 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
         }
     }
 
-    action
+    (
+        action,
+        Presentation {
+            filter: media.0,
+            scale: media.1,
+            arrive_blur: view.arrive_blur.0,
+            ..Default::default()
+        },
+    )
 }
 
 /// `thumbnail-capture-highlight`'s `0 0 18px rgba(accent, .24)` glow. Paint
@@ -656,6 +684,10 @@ fn clipboard_chip_pose(
 pub struct ExitView<'a> {
     pub texture: &'a egui::TextureHandle,
     pub blurred: Option<&'a egui::TextureHandle>,
+    pub arrive_blurred: Option<&'a egui::TextureHandle>,
+    /// Clear all freezes the current presentation; individual Close/Delete
+    /// retain their existing locked-hover treatment.
+    pub presentation: Option<Presentation>,
     pub kind: captures_app::preview_motion::ExitKind,
     /// Milliseconds into the exit's own animation (after any Clear all delay).
     pub elapsed_ms: f64,
@@ -669,8 +701,7 @@ pub struct ExitView<'a> {
     pub reduced_motion: bool,
 }
 
-/// Paint an exiting card in `card`. Shipping locks the hover look (blur and
-/// half brightness) for every exit. Returns whether it is still moving.
+/// Paint an exiting card in its held slot. Returns whether it is still moving.
 pub fn show_exit(ui: &mut egui::Ui, tokens: &Tokens, card: egui::Rect, view: ExitView<'_>) -> bool {
     use captures_app::motion::Motion;
     use captures_app::preview_motion::ExitKind;
@@ -687,6 +718,12 @@ pub fn show_exit(ui: &mut egui::Ui, tokens: &Tokens, card: egui::Rect, view: Exi
             let mut pose = tokens.motion(motion).pose_at(elapsed, view.reduced_motion);
             if view.right_anchor {
                 pose.translate_x = -pose.translate_x;
+            }
+            if let Some(base) = view.presentation {
+                pose.opacity *= base.pose.opacity;
+                pose.scale *= base.pose.scale;
+                pose.translate_x += base.pose.translate_x;
+                pose.translate_y += base.pose.translate_y;
             }
             // The streak stretches and blurs the media inside its clip.
             let streak = if view.kind == ExitKind::Dismiss {
@@ -720,18 +757,29 @@ pub fn show_exit(ui: &mut egui::Ui, tokens: &Tokens, card: egui::Rect, view: Exi
     running
 }
 
-/// The media, stretched by `streak.scale_x`. Close steps through the
-/// shipping horizontal Gaussian streaks ([`streak_step`]); until the first
-/// step, and for the Delete fallback, it keeps the locked hover look.
+/// The media, stretched by `streak.scale_x`. Individual Close keeps its locked
+/// hover look until the first streak step; Clear all keeps its captured filter
+/// and scale underneath every step.
 fn paint_streaked_media(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     card: egui::Rect,
     radius: f32,
     view: &ExitView<'_>,
     streak: captures_app::motion::Pose,
 ) {
     use captures_app::preview_chrome::HOVER_MEDIA_BRIGHTNESS;
-    let (scale_x, scale_y) = streak.scales();
+    let (mut scale_x, mut scale_y) = streak.scales();
+    if view.presentation.is_some() {
+        // The legacy streak starts at locked-hover scale. Clear already holds
+        // its actual media scale, so apply only the change from that first frame.
+        let initial = captures_app::motion::Motion::PreviewDismissStreak
+            .keyframes()
+            .frames[0]
+            .pose
+            .scales();
+        scale_x /= initial.0;
+        scale_y /= initial.1;
+    }
     let rect = egui::Rect::from_center_size(
         card.center(),
         egui::vec2(
@@ -745,6 +793,42 @@ fn paint_streaked_media(
         .then(|| streak_step(streak.blur))
         .flatten()
         .and_then(|step| view.streak.get(step));
+    if let Some(base) = view.presentation {
+        let brightness = egui::lerp(1.0..=HOVER_MEDIA_BRIGHTNESS as f32, base.filter);
+        if let Some(texture) = stepped {
+            let scale = egui::lerp(1.0..=preview_chrome::HOVER_MEDIA_SCALE as f32, base.scale);
+            let rect = egui::Rect::from_center_size(rect.center(), rect.size() * scale);
+            let value = (brightness * 255.).round() as u8;
+            painter.add(
+                egui::epaint::RectShape::filled(
+                    rect,
+                    radius,
+                    Color32::from_rgba_premultiplied(value, value, value, 255),
+                )
+                .with_texture(texture.id(), whole),
+            );
+        } else {
+            let mut media_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            media_ui.set_clip_rect(ui.clip_rect().intersect(card));
+            paint_media(
+                &media_ui,
+                rect,
+                radius,
+                view.texture,
+                view.blurred,
+                base.filter,
+                base.scale,
+            );
+            paint_arrive_blur(
+                &media_ui,
+                rect,
+                radius,
+                (base.arrive_blur, view.arrive_blurred),
+                brightness,
+            );
+        }
+        return;
+    }
     let (texture, uv, brightness) = match (stepped, view.blurred) {
         (Some(streaked), _) => (streaked.id(), whole, 1.),
         (None, Some(blurred)) => (blurred.id(), whole, HOVER_MEDIA_BRIGHTNESS as f32),
@@ -2215,8 +2299,32 @@ fn card_fill() -> Color32 {
 
 /// The dismiss streak's stepped `feGaussianBlur stdDeviation="σ 0"` copies
 /// (`thumbnail-motion-blur-a/b/c`), each horizontal only.
-pub fn streak_blur_images(media: &egui::ColorImage) -> Vec<egui::ColorImage> {
-    let half = crate::effects::downsample(media);
+pub fn streak_blur_images(
+    media: &egui::ColorImage,
+    presentation: Option<Presentation>,
+) -> Vec<egui::ColorImage> {
+    let mut half = crate::effects::downsample(media);
+    if let Some(base) = presentation {
+        crate::effects::composite_over(&mut half, card_fill());
+        for (prepare, weight) in [
+            (
+                hover_blur_image as fn(&egui::ColorImage) -> egui::ColorImage,
+                base.filter,
+            ),
+            (
+                arrive_blur_image as fn(&egui::ColorImage) -> egui::ColorImage,
+                (base.arrive_blur / arrive_blur_radius()).clamp(0., 1.),
+            ),
+        ] {
+            if weight <= 0. {
+                continue;
+            }
+            let blurred = prepare(media);
+            for (pixel, blurred) in half.pixels.iter_mut().zip(blurred.pixels) {
+                *pixel = pixel.lerp_to_gamma(blurred, weight);
+            }
+        }
+    }
     STREAK_BLURS
         .iter()
         .map(|&sigma| crate::effects::gaussian_blur(&half, [sigma, 0.], [0, 0]))
@@ -2440,7 +2548,7 @@ mod tests {
         );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
-        action
+        action.0
     }
 
     #[test]
@@ -3247,6 +3355,8 @@ mod tests {
                     streak: &[],
                     texture: &texture,
                     blurred: None,
+                    arrive_blurred: None,
+                    presentation: None,
                     kind,
                     elapsed_ms: elapsed,
                     dust: &particles,
@@ -3267,6 +3377,165 @@ mod tests {
             assert_eq!(chips, mesh, "{kind:?}");
             output.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn clear_media_holds_each_filter_and_scale_before_and_during_the_streak() {
+        use captures_app::motion::Pose;
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "clear-media",
+            egui::ColorImage::filled([4, 4], Color32::WHITE),
+            Default::default(),
+        );
+        let streak: Vec<_> = (0..3)
+            .map(|index| {
+                ctx.load_texture(
+                    format!("clear-streak-{index}"),
+                    egui::ColorImage::filled([4, 4], Color32::WHITE),
+                    Default::default(),
+                )
+            })
+            .collect();
+        let card = egui::Rect::from_min_size(egui::pos2(100., 80.), egui::vec2(284., 160.));
+        // A forced hover fails the first two; dropping the base tint at the
+        // SVG/filter switch fails the latter two. Scale has independent progress.
+        for (filter, scale, brightness, width) in [
+            (0., 0., 255, 284.),
+            (0.4, 0.7, 204, 286.982),
+            (1., 1., 128, 288.26),
+        ] {
+            for blur in [0., 3.5, 8., 14.] {
+                ctx.begin_pass(Default::default());
+                let mut ui = egui::Ui::new(
+                    ctx.clone(),
+                    egui::Id::unique("clear-media-test"),
+                    egui::UiBuilder::new().max_rect(card),
+                );
+                paint_streaked_media(
+                    &mut ui,
+                    card,
+                    12.,
+                    &ExitView {
+                        texture: &texture,
+                        blurred: None,
+                        arrive_blurred: None,
+                        presentation: Some(Presentation {
+                            filter,
+                            scale,
+                            ..Default::default()
+                        }),
+                        streak: &streak,
+                        kind: captures_app::preview_motion::ExitKind::Dismiss,
+                        elapsed_ms: 0.,
+                        dust: &[],
+                        dust_atlas: None,
+                        right_anchor: true,
+                        reduced_motion: false,
+                    },
+                    Pose {
+                        blur,
+                        scale: 1.015,
+                        ..Pose::REST
+                    },
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                let media = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.brush.is_some() => Some(rect),
+                        _ => None,
+                    })
+                    .expect("media rect");
+                assert_eq!(
+                    media.fill,
+                    Color32::from_rgb(brightness, brightness, brightness)
+                );
+                assert!((media.rect.width() - width).abs() < 0.01, "{media:?}");
+                assert_eq!(media.rect.center(), card.center());
+                assert_eq!(
+                    media.brush.as_ref().unwrap().fill_texture_id,
+                    if blur == 0. {
+                        texture.id()
+                    } else {
+                        streak[if blur == 3.5 {
+                            0
+                        } else if blur == 8. {
+                            1
+                        } else {
+                            2
+                        }]
+                        .id()
+                    }
+                );
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn clear_exit_holds_partial_arrival_opacity_and_pose_during_stagger() {
+        use captures_app::motion::Pose;
+        let ctx = egui::Context::default();
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let texture = ctx.load_texture(
+            "partial-arrival",
+            egui::ColorImage::filled([4, 4], Color32::WHITE),
+            Default::default(),
+        );
+        let card = egui::Rect::from_min_size(egui::pos2(100., 80.), egui::vec2(284., 160.));
+        ctx.begin_pass(Default::default());
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("clear-arrival-test"),
+            egui::UiBuilder::new().max_rect(card),
+        );
+        show_exit(
+            &mut ui,
+            &tokens,
+            card,
+            ExitView {
+                texture: &texture,
+                blurred: None,
+                arrive_blurred: None,
+                presentation: Some(Presentation {
+                    pose: Pose {
+                        opacity: 0.63,
+                        scale: 0.98,
+                        translate_x: 7.,
+                        translate_y: -4.,
+                        ..Pose::REST
+                    },
+                    ..Default::default()
+                }),
+                streak: &[],
+                kind: captures_app::preview_motion::ExitKind::Dismiss,
+                elapsed_ms: -20.,
+                dust: &[],
+                dust_atlas: None,
+                right_anchor: false,
+                reduced_motion: false,
+            },
+        );
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let media = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.brush.is_some() => Some(rect),
+                _ => None,
+            })
+            .expect("held media");
+        assert_eq!(
+            media.fill,
+            Color32::from_rgba_premultiplied(161, 161, 161, 161)
+        );
+        assert!((media.rect.width() - 278.32).abs() < 0.01, "{media:?}");
+        assert_eq!(media.rect.center(), egui::pos2(249., 156.));
+        output.textures_delta.clear();
     }
 
     #[test]
@@ -3767,11 +4036,37 @@ mod tests {
         // The blur fades past the card edge into the card's fill.
         assert_eq!(blurred.pixels[row + 283].a(), 255);
         assert!(blurred.pixels[row + 283].r() < 200);
-        let streaks = streak_blur_images(&media);
+        let streaks = streak_blur_images(&media, None);
         assert_eq!(streaks.len(), 3);
         // Horizontal only: rows keep full alpha at the top edge.
         assert_eq!(streaks[2].pixels[142].a(), 255);
         assert!(streaks[2].pixels[row + 142].r() > streaks[0].pixels[row + 142].r() / 2);
+
+        // Horizontal streaks cannot smear this horizontal boundary vertically.
+        // A retained partial hover/arrival can: omission of either base blur
+        // keeps the row immediately above the white half completely black.
+        let mut horizontal = egui::ColorImage::filled([568, 320], Color32::BLACK);
+        horizontal.pixels[160 * 568..].fill(Color32::WHITE);
+        for base in [
+            Presentation {
+                filter: 0.4,
+                ..Default::default()
+            },
+            Presentation {
+                arrive_blur: 1.2,
+                ..Default::default()
+            },
+        ] {
+            let held = streak_blur_images(&horizontal, Some(base));
+            for image in held {
+                assert!(image.pixels[79 * 284 + 100].r() > 20);
+                assert_eq!(image.pixels[20 * 284 + 100].r(), 0);
+            }
+        }
+        assert_eq!(
+            streak_blur_images(&horizontal, None)[0].pixels[79 * 284 + 100].r(),
+            0
+        );
     }
 
     #[test]

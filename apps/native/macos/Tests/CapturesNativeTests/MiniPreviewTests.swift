@@ -993,6 +993,67 @@ final class MiniPreviewTests: XCTestCase {
             "late decode from the cleared snapshot cannot remove or resurrect previews")
     }
 
+    func testClearExitPreservesDistinctMediaAndPartialCardOpacityThroughDelay() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        let panel = fixturePanel(ids: ["idle", "hovered", "partial"], images: [
+            "idle": solidImage(.white), "hovered": solidImage(.white), "partial": solidImage(.white)])
+        defer { panel.close() }
+        panel.orderFrontRegardless(); panel.display()
+        let view = panel.previewView
+        let hover = try hoverEvent(for: panel)
+        let hovered = try XCTUnwrap(view.card(for: "hovered"))
+        hovered.mouseEntered(with: hover)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(hovered.mediaDimOpacity, 0.5, accuracy: 0.01)
+        for (id, blur, scale, opacity) in [
+            ("idle", 0.0, 1.0, 1.0), ("hovered", 2.0, 1.015, 1.0), ("partial", 0.8, 1.006, 0.73)] {
+            let card = try XCTUnwrap(view.card(for: id))
+            let image = try XCTUnwrap(card.subviewsRecursive.first {
+                $0.accessibilityLabel() == "Screenshot thumbnail"
+            })
+            let layer = try XCTUnwrap(image.layer)
+            // A deterministic partial presentation, independent of CI frame timing.
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            layer.removeAllAnimations()
+            layer.setValue(blur, forKeyPath: "filters.blur.inputRadius")
+            let clip = try XCTUnwrap(image.superview)
+            let size = NSSize(width: clip.bounds.width * scale, height: clip.bounds.height * scale)
+            image.frame = NSRect(x: (clip.bounds.width - size.width) / 2,
+                                 y: (clip.bounds.height - size.height) / 2,
+                                 width: size.width, height: size.height)
+            image.alphaValue = opacity
+            card.layer?.removeAllAnimations(); card.layer?.opacity = 0.61
+            CATransaction.commit(); CATransaction.flush()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            let dim = card.mediaDimOpacity
+            XCTAssertNotNil(view.playExit(for: id, kind: .dismiss, delay: 0.5, preserveAppearance: true))
+            XCTAssertEqual(card.mediaDimOpacity, dim, accuracy: 0.01,
+                           "Clear must not force idle/partial media to hover dimming")
+            XCTAssertEqual(card.mediaScale, scale, accuracy: 0.001)
+            XCTAssertEqual(image.alphaValue, opacity, accuracy: 0.01)
+            XCTAssertEqual(try XCTUnwrap(layer.value(forKeyPath: "filters.blur.inputRadius") as? NSNumber)
+                .doubleValue, blur, accuracy: 0.01)
+            let exit = try XCTUnwrap(card.layer?.animation(forKey: "preview-exit") as? CAAnimationGroup)
+            let cardFade = try XCTUnwrap(exit.animations?.first as? CAKeyframeAnimation)
+            XCTAssertEqual(try XCTUnwrap(cardFade.values?.first as? NSNumber).doubleValue, 0.61, accuracy: 0.01)
+            XCTAssertEqual(exit.fillMode, .both, "snapshot must hold before the stagger starts")
+            let streak = try XCTUnwrap(layer.animation(forKey: "preview-dismiss-streak") as? CAAnimationGroup)
+            let mediaFade = try XCTUnwrap(streak.animations?.first as? CAKeyframeAnimation)
+            XCTAssertEqual(try XCTUnwrap(mediaFade.values?.first as? NSNumber).doubleValue, opacity, accuracy: 0.01)
+            let mediaMove = try XCTUnwrap(streak.animations?.last as? CAKeyframeAnimation)
+            let firstMove = try XCTUnwrap(mediaMove.values?.first as? NSValue).caTransform3DValue
+            XCTAssertEqual(firstMove.m11, 1, accuracy: 0.001, "do not double-apply locked-hover scale")
+            XCTAssertEqual(firstMove.m22, 1, accuracy: 0.001)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertEqual(card.mediaDimOpacity, dim, accuracy: 0.01)
+            XCTAssertEqual(card.mediaScale, scale, accuracy: 0.001)
+        }
+        try write(render(panel), name: "mini-preview-clear-preserved-presentation.png")
+    }
+
     func testIncomingCapturePreservesCollapsedState() throws {
         _ = NSApplication.shared
         let image = NSImage(cgImage: PreviewView.fixtureImage(scale: 1),

@@ -724,22 +724,42 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         warningLabel.isHidden = warning == nil || dimensions.isHidden || isExiting
     }
 
-    /// Freeze the card for its exit: shipping locks the hover look, hides the
-    /// metadata and ignores input while the card leaves.
-    func beginExit() {
+    /// Clear all retains the presented media, including a partial hover/arrival.
+    /// Individual Close/Delete keep the existing locked-hover treatment.
+    func beginExit(preserveAppearance: Bool = false) {
         isExiting = true
-        setMediaHovered(true, animated: false)
+        if preserveAppearance {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            for view in [imageView as NSView, mediaDim] {
+                guard let layer = view.layer else { continue }
+                let current = layer.presentation() ?? layer
+                let frame = current.frame
+                let position = current.position, bounds = current.bounds
+                let transform = current.transform, opacity = current.opacity
+                let filters = current.filters?.map { ($0 as? CIFilter)?.copy() ?? $0 }
+                layer.removeAllAnimations()
+                // Freeze AppKit's model too; a later layout must not restore
+                // the animator's hover target over this presentation snapshot.
+                view.frame = frame; view.alphaValue = CGFloat(opacity)
+                layer.position = position; layer.bounds = bounds
+                layer.transform = transform; layer.opacity = opacity; layer.filters = filters
+            }
+            CATransaction.commit()
+        } else {
+            setMediaHovered(true, animated: false)
+        }
         dimensions.isHidden = true; warningLabel.isHidden = true; status.isHidden = true
         actionButtons.forEach { $0.tooltipChanged?($0, false) }
     }
 
     /// `thumbnail-dismiss-streak`: the media stretches and smears into a
     /// horizontal motion blur inside its clip.
-    func playDismissStreak(delay: Double) {
+    func playDismissStreak(delay: Double, preserveAppearance: Bool = false) {
         guard let layer = imageView.layer,
               let spec = NativeMotion.catalog.keyframes["preview_dismiss_streak"] else { return }
         NativeMotion.play("preview_dismiss_streak", onLayer: layer, down: 1, tokens: tokens,
-                          holdEnd: true, delay: delay, key: "preview-dismiss-streak")
+                          holdEnd: true, delay: delay, key: "preview-dismiss-streak",
+                          preservePresentation: preserveAppearance)
         guard let streak = CIFilter(name: "CIMotionBlur") else { return }
         streak.setDefaults()
         streak.setValue(0, forKey: kCIInputRadiusKey)
@@ -747,7 +767,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         streak.name = "streak"
         layer.filters = (layer.filters ?? []) + [streak]
         let blur = CAKeyframeAnimation(keyPath: "filters.streak.inputRadius")
-        // The first key is the locked 2 pt hover blur, already on the media.
+        // The existing base filters stay composed underneath the streak.
         blur.values = spec.frames.map { NSNumber(value: $0.offset == 0 ? 0 : $0.blur) }
         blur.keyTimes = spec.frames.map { NSNumber(value: $0.offset) }
         let timing = NativeMotion.timingFunction(spec.easing, tokens: tokens)
@@ -1544,7 +1564,7 @@ final class MiniPreviewView: NSView {
     /// settle, or nil when nothing plays (reduced motion, a hidden panel, a
     /// compact pile, or an unknown card).
     func playExit(for id: String, kind: MiniPreviewExitKind, delay: Double = 0,
-                  textures: DustTextures? = nil) -> PreviewMotionTables.Exit? {
+                  textures: DustTextures? = nil, preserveAppearance: Bool = false) -> PreviewMotionTables.Exit? {
         guard let card = cards[id], !card.isExiting, !stackCollapsed, window?.isVisible == true,
               !NativeMotion.reduceMotion else { return nil }
         let tables = PreviewMotionTables.shared
@@ -1561,16 +1581,18 @@ final class MiniPreviewView: NSView {
             CATransaction.commit()
         }
         // Paint above the survivors that slide into the slot.
-        if let superview = card.superview {
+        // Clear all has no settlers; retain its presentation tree until frozen.
+        if !preserveAppearance, let superview = card.superview {
             card.removeFromSuperview(); superview.addSubview(card)
         }
-        card.beginExit()
+        card.beginExit(preserveAppearance: preserveAppearance)
         exitingArtifactIDs.insert(id)
         switch kind {
         case .dismiss:
             NativeMotion.play("preview_dismiss", on: card, tokens: tokens, holdEnd: true, delay: delay,
-                              mirrorX: anchoredRight, key: "preview-exit")
-            card.playDismissStreak(delay: delay)
+                              mirrorX: anchoredRight, key: "preview-exit",
+                              preservePresentation: preserveAppearance)
+            card.playDismissStreak(delay: delay, preserveAppearance: preserveAppearance)
             return PreviewMotionTables.Exit(hold: delay + tables.dismiss.hold,
                                             settleDelay: delay + tables.dismiss.settleDelay)
         case .dust:
@@ -2656,7 +2678,7 @@ final class MiniPreviewController {
         if let view = panel?.previewView {
             for (index, id) in snapshot.enumerated() {
                 let delay = captures_preview_clear_delay_ms_v1(snapshot.count, index, topAnchor) / 1000
-                if let played = view.playExit(for: id, kind: .dismiss, delay: delay) {
+                if let played = view.playExit(for: id, kind: .dismiss, delay: delay, preserveAppearance: true) {
                     hold = max(hold ?? 0, played.hold)
                 }
             }
