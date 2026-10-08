@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
+    parser.add_argument("--record-clear", action="store_true", help="Record Clear all presentation in the stack smoke")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--sharing-only", action="store_true", help="Exercise Share lifetime and exact capture exclusion")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
@@ -51,6 +52,8 @@ def main():
         parser.error("--shortcut-editing requires --lifecycle for real global registrations")
     if args.login_item_only and not args.lifecycle:
         parser.error("--login-item-only requires --lifecycle for a real tray and disposable configuration")
+    if args.record_clear and not args.stack:
+        parser.error("--record-clear requires --stack")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -973,8 +976,18 @@ def main():
                     run("xdotool", "mousemove", "--sync", "--window", preview, "84", "50")
                     before_error = settled_preview(preview)
                     click(preview, 84, 50, activate=False)
-                    wait(lambda: windows(PREVIEW) and settled_preview(preview) != before_error,
-                         "missing export Trash error paints")
+
+                    def error_preview_painted():
+                        nonlocal preview
+                        visible = windows(PREVIEW)
+                        if not visible:
+                            return False
+                        # Reduced motion removes the old viewport immediately;
+                        # a failed Trash restores the card in a new X11 window.
+                        preview = visible[0]
+                        return settled_preview(preview) != before_error
+
+                    wait(error_preview_painted, "missing export Trash error paints")
                     shot(preview, f"{prefix}-trash-error")
                     assert {path: path.read_bytes() for path in trash_export.parent.iterdir()} == (
                         other_exports | {held: trash_export_bytes}), "failed Trash replaced or changed an export"
@@ -1288,9 +1301,25 @@ def main():
 
                     wait(stack_settled, "expanded stack settles before Clear all")
                     height = int(window_geometry(preview)["HEIGHT"])
+                    shot(preview, f"{prefix}-before-clear")
+                    recording = None
+                    if args.record_clear:
+                        # Only this disposable X11 desktop, never the caller's.
+                        recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                            "-video_size", "1280x900", "-framerate", "30", "-i", env["DISPLAY"],
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                            str(output / f"{prefix}-clear.mp4")], env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-clear.ffmpeg.log").open("w"))
+                        children.append(recording)
+                        time.sleep(.3)
                     click(preview, 298 if placement.endswith("right") else 42,
                           26 if placement.startswith("top") else height - 26, activate=False)
                     wait(lambda: not windows(PREVIEW), "Clear all empties previews")
+                    if recording:
+                        recording.communicate(input=b"q\n", timeout=10)
+                        assert recording.returncode == 0, "Clear all recording failed"
+                    if args.record_clear or args.reduced_motion:
+                        shot("root", f"{prefix}-after-clear")
                     assert entries() == set(preserved), "Clear all removed history"
                     assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
                     capture((170, 190, 110, 80))

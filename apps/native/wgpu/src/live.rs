@@ -642,7 +642,7 @@ enum SelectorMessage {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum PreviewMessage {
     DragStarted {
         artifact_id: String,
@@ -696,6 +696,7 @@ enum PreviewMessage {
     ToggleCollapsed,
     ClearAll {
         artifact_ids: Vec<String>,
+        presentations: HashMap<String, crate::mini_preview::Presentation>,
     },
 }
 
@@ -810,6 +811,8 @@ impl PreviewCard {
 struct ExitingCard {
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
+    arrive_blurred: Option<egui::TextureHandle>,
+    presentation: Option<crate::mini_preview::Presentation>,
     dust: std::sync::Arc<Vec<captures_app::preview_motion::DustParticle>>,
     media: Option<std::sync::Arc<egui::ColorImage>>,
     /// The Close streak's stepped blurs, built when the exit first paints.
@@ -822,6 +825,8 @@ struct ExitingCard {
 struct PreviewExitRender {
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
+    arrive_blurred: Option<egui::TextureHandle>,
+    presentation: Option<crate::mini_preview::Presentation>,
     streak: Vec<egui::TextureHandle>,
     dust_atlas: Option<(egui::TextureHandle, std::sync::Arc<Vec<egui::Rect>>)>,
     kind: captures_app::preview_motion::ExitKind,
@@ -1147,6 +1152,7 @@ impl MiniPreviews {
         delay_ms: f64,
         settles: bool,
         reduced_motion: bool,
+        presentation: Option<crate::mini_preview::Presentation>,
     ) {
         use captures_app::preview::{THUMBNAIL_CARD_HEIGHT, THUMBNAIL_PADDING, THUMBNAIL_WIDTH};
         use captures_app::preview_motion::{self, ExitKind};
@@ -1179,6 +1185,7 @@ impl MiniPreviews {
             Vec::new()
         };
         let blurred = card.blurred.clone();
+        let arrive_blurred = card.arrive_blurred.clone();
         let media = card.media.clone();
         let live = self.stack.ids().to_vec();
         let now = self.now_ms();
@@ -1200,6 +1207,8 @@ impl MiniPreviews {
                 ExitingCard {
                     texture,
                     blurred,
+                    arrive_blurred,
+                    presentation,
                     dust: std::sync::Arc::new(dust),
                     media,
                     streak: Vec::new(),
@@ -1218,7 +1227,7 @@ impl MiniPreviews {
         kind: captures_app::preview_motion::ExitKind,
         reduced_motion: bool,
     ) -> bool {
-        self.begin_exit(artifact_id, kind, 0., true, reduced_motion);
+        self.begin_exit(artifact_id, kind, 0., true, reduced_motion, None);
         self.remove_after_exit(artifact_id)
     }
 
@@ -1245,6 +1254,7 @@ impl MiniPreviews {
             0.,
             true,
             reduced_motion,
+            None,
         );
         let Some(card) = self.cards.remove(artifact_id) else {
             return false;
@@ -1334,7 +1344,12 @@ impl MiniPreviews {
     }
 
     /// Clear all: every card streaks out, bottom first, without settling.
-    fn clear_with_exit(&mut self, artifact_ids: &[String], reduced_motion: bool) -> usize {
+    fn clear_with_exit(
+        &mut self,
+        artifact_ids: &[String],
+        presentations: &HashMap<String, crate::mini_preview::Presentation>,
+        reduced_motion: bool,
+    ) -> usize {
         let live = self.stack.ids().to_vec();
         let top_anchor = self.placement.is_top();
         for (index, artifact_id) in live.iter().enumerate() {
@@ -1347,6 +1362,7 @@ impl MiniPreviews {
                     delay,
                     false,
                     reduced_motion,
+                    Some(presentations.get(artifact_id).copied().unwrap_or_default()),
                 );
             }
         }
@@ -4490,11 +4506,15 @@ impl Live {
                     request_hidden_root_paint(ctx);
                     ctx.request_repaint();
                 }
-                PreviewMessage::ClearAll { artifact_ids } => {
-                    if self
-                        .previews
-                        .clear_with_exit(&artifact_ids, crate::motion::reduced(ctx))
-                        > 0
+                PreviewMessage::ClearAll {
+                    artifact_ids,
+                    presentations,
+                } => {
+                    if self.previews.clear_with_exit(
+                        &artifact_ids,
+                        &presentations,
+                        crate::motion::reduced(ctx),
+                    ) > 0
                     {
                         request_hidden_root_paint(ctx);
                         ctx.request_repaint();
@@ -7054,12 +7074,17 @@ impl Live {
                 && exiting.streak.is_empty()
                 && let Some(media) = &exiting.media
             {
-                exiting.streak = crate::mini_preview::streak_blur_images(media)
-                    .into_iter()
-                    .map(|image| {
-                        ctx.load_texture("mini-preview-streak", image, egui::TextureOptions::LINEAR)
-                    })
-                    .collect();
+                exiting.streak =
+                    crate::mini_preview::streak_blur_images(media, exiting.presentation)
+                        .into_iter()
+                        .map(|image| {
+                            ctx.load_texture(
+                                "mini-preview-streak",
+                                image,
+                                egui::TextureOptions::LINEAR,
+                            )
+                        })
+                        .collect();
             }
         }
         let cards = display
@@ -7142,6 +7167,8 @@ impl Live {
                 Some(PreviewExitRender {
                     texture: card.texture.clone(),
                     blurred: card.blurred.clone(),
+                    arrive_blurred: card.arrive_blurred.clone(),
+                    presentation: card.presentation,
                     streak: card.streak.clone(),
                     dust_atlas: card.dust_atlas.clone(),
                     kind: exit.kind,
@@ -7247,6 +7274,7 @@ impl Live {
                 if ui.input(|input| input.viewport().close_requested()) {
                     let _ = sender.send(PreviewMessage::ClearAll {
                         artifact_ids: clear_ids.clone(),
+                        presentations: HashMap::new(),
                     });
                     ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                     return;
@@ -7304,6 +7332,7 @@ impl Live {
                     }
                     (fly.collapsing, fly_tween.progress(elapsed, reduced_motion) as f32)
                 });
+                let mut presentations = HashMap::new();
                 let mut show_card = |ui: &mut egui::Ui,
                                      card: &PreviewRenderCard,
                                      compact: bool,
@@ -7356,7 +7385,7 @@ impl Live {
                         true,
                         card.copy_failed,
                     );
-                    let action = crate::motion::with_pose(ui, arrival, card_rect, |ui| {
+                    let (action, mut presentation) = crate::motion::with_pose(ui, arrival, card_rect, |ui| {
                         crate::mini_preview::show(
                             ui,
                             &tokens,
@@ -7400,6 +7429,9 @@ impl Live {
                             },
                         )
                     });
+                    presentation.pose = arrival;
+                    presentation.pose.translate_x += f64::from(reject_offset);
+                    presentations.insert(card.artifact_id.clone(), presentation);
                     let next_message = match action {
                         Some(crate::mini_preview::Action::DragFile) => {
                             let artifact_id = card.artifact_id.clone();
@@ -7801,6 +7833,8 @@ impl Live {
                                             crate::mini_preview::ExitView {
                                                 texture: &exit.texture,
                                                 blurred: exit.blurred.as_ref(),
+                                                arrive_blurred: exit.arrive_blurred.as_ref(),
+                                                presentation: exit.presentation,
                                                 streak: &exit.streak,
                                                 dust_atlas: exit.dust_atlas.as_ref().map(
                                                     |(atlas, cells)| (atlas, cells.as_slice()),
@@ -7909,6 +7943,7 @@ impl Live {
                             Some(crate::mini_preview::StackAction::ClearAll) => {
                                 message = Some(PreviewMessage::ClearAll {
                                     artifact_ids: clear_ids.clone(),
+                                    presentations,
                                 });
                             }
                             None => {}
@@ -12664,8 +12699,91 @@ mod tests {
             .iter()
             .map(|guard| guard.artifact_id.clone())
             .collect();
-        assert_eq!(previews.clear_with_exit(&ids, true), 2);
+        assert_eq!(previews.clear_with_exit(&ids, &HashMap::new(), true), 2);
         assert!(previews.exiting.is_empty() && !previews.is_visible());
+    }
+
+    #[test]
+    fn clear_exit_freezes_distinct_presentations_and_spares_later_captures() {
+        use crate::mini_preview::Presentation;
+        use captures_app::motion::Pose;
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "clear-snapshot",
+            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        for placement in [
+            captures_settings::MiniPreviewPlacement::BottomRight,
+            captures_settings::MiniPreviewPlacement::TopLeft,
+        ] {
+            let settings = AppSettings {
+                mini_preview_placement: placement,
+                ..Default::default()
+            };
+            let mut previews = MiniPreviews::default();
+            let artifacts: Vec<_> = [11, 37, 91]
+                .into_iter()
+                .map(|red| preview_artifact(root.path(), [red, 22, 33, 255]))
+                .collect();
+            for (frame, artifact) in artifacts[..2].iter().enumerate() {
+                previews
+                    .begin_capture(&settings, Some(preview_target()), frame as u64)
+                    .unwrap();
+                let (guard, _) = previews.start_artifact(artifact).unwrap().unwrap();
+                previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture.clone());
+                previews.mark_ready(&guard.artifact_id);
+            }
+            let ids = previews.stack.ids().to_vec();
+            let partial = Presentation {
+                filter: 0.4,
+                scale: 0.7,
+                arrive_blur: 1.2,
+                pose: Pose {
+                    opacity: 0.63,
+                    scale: 0.98,
+                    translate_y: -4.,
+                    ..Pose::REST
+                },
+            };
+            let presentations = HashMap::from([
+                (ids[0].clone(), partial),
+                (ids[1].clone(), Presentation::default()),
+            ]);
+            assert_eq!(previews.clear_with_exit(&ids, &presentations, false), 2);
+            assert_eq!(previews.exiting[&ids[0]].presentation, Some(partial));
+            assert_eq!(
+                previews.exiting[&ids[1]].presentation,
+                Some(Presentation::default())
+            );
+            assert_eq!(
+                previews.exits.exiting(&ids[0]).unwrap().delay_ms,
+                if placement.is_top() { 0. } else { 36. }
+            );
+            assert_eq!(
+                previews.exits.exiting(&ids[1]).unwrap().delay_ms,
+                if placement.is_top() { 36. } else { 0. }
+            );
+            previews
+                .begin_capture(&settings, Some(preview_target()), 3)
+                .unwrap();
+            let (later, _) = previews.start_artifact(&artifacts[2]).unwrap().unwrap();
+            previews.cards.get_mut(&later.artifact_id).unwrap().texture = Some(texture.clone());
+            previews.mark_ready(&later.artifact_id);
+            previews.settle_exits(true);
+            assert_eq!(
+                previews.stack.ids(),
+                std::slice::from_ref(&later.artifact_id)
+            );
+            assert!(previews.is_visible() && previews.exiting.is_empty());
+            assert!(
+                artifacts
+                    .iter()
+                    .all(|artifact| artifact.image_path.exists())
+            );
+        }
+        assert_eq!(captures_app::list(root.path()).unwrap().len(), 6);
     }
 
     #[test]

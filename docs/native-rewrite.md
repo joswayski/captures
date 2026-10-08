@@ -2914,6 +2914,23 @@ transitions remain follow-up work; this does not close the visual parity gate.
 Share/sign-in UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
+The Clear all presentation follow-up mirrors shipping [#1023](https://github.com/joswayski/captures/pull/1023):
+AppKit freezes the presented media and card layers; wgpu carries per-card filter,
+scale, arrival blur and pose snapshots into its exits. Neither forces idle cards
+into hover dimming, and both compose the streak relative to its first frame to
+avoid double-applying hover scale. Close/Delete keep their existing behavior.
+Directed tests distinguish idle, partial and full hover, independent scale,
+partial opacity/pose, top/bottom staggers and later captures. The private-X11
+stack smoke covers retained bytes and new captures in all four corners; its
+optional `--record-clear` records only that disposable desktop. AppKit tests
+require macOS execution. Windows and physical macOS/X11 animation acceptance,
+mixed-DPI and accessibility remain open; Wayland preview positioning is still
+unsupported. Recording-ready notices are separate, not video-stack coverage.
+Optimized llvmpipe recordings retain the base media treatment but skip exit
+frames (roughly 130–170 ms between major paint changes in the right-edge sample).
+They do not establish smooth-motion acceptance; CPU effect preparation remains
+a performance follow-up. The reduced-motion smoke also reacquires the restored
+X11 window after a failed Trash instead of sampling its destroyed predecessor.
 Reveal uses the current exported path, with file checks off the UI thread and
 guarded async completion. A missing export reports an error without another save
 or removal of the capture. Saves through History also update the preview action.
