@@ -460,6 +460,10 @@ The `--canvas-interactions-only` suite also checks locked-line Curve/Straighten
 Properties: held-drag pixels and draft geometry in both normal/minimum windows,
 one undo step per pointer gesture, and individually ordered keyboard steps, while
 locked canvas curve gestures stay blocked. Run it in both appearances.
+Use `--shape-transforms-only` in both appearances for held canvas move/rotate/resize/
+curve-dot pixels, byte-identical drafts while held, Escape restoring the committed
+frame, single-step undo/redo, and minimum-size curve previews and draft reopen.
+Unlike the Properties Curve slider, canvas gestures do not save edits while held.
 Use `--output-presets-only` to exercise native compression presets and their
 descriptions, the automatic before/after comparison with a dragged split handle,
 Page Up/Home keys and Hide/Show, folder reveals after each Save, exact Highest

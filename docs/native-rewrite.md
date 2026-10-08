@@ -989,8 +989,8 @@ edges. Unsupported text layout returns an explicit error; no approximate font
 metrics or silent selection through unsupported content. A press inside the fitted
 edited image picks once at eight view points of tolerance. A click selects or clears
 without changing the document or encoded output. A drag of at least three view points
-shows a translated shared outline and submits one `LayerEdit::Translate` on release;
-pixels update only after the worker succeeds. Failed moves preserve prior selection.
+shows a translated shared outline and live pixels, then submits one `LayerEdit::DragMove`
+on release. Failed moves preserve prior selection.
 Escape, focus loss, close, leaving Layers, a pending command or preview resizing cancels
 transient input. AppKit picks from cached immutable document JSON, never a borrowed
 worker session; wgpu handles raw events once, in order, across egui layout passes.
@@ -1009,7 +1009,7 @@ render-before-publish, undo and draft ownership; clicks and cancellation do not 
 the document. Partial overflow remains clipped; fully outside rotated bounds expand
 the canvas. AppKit's C boundary is allocation-free, without per-event JSON or worker
 session access. TypeScript-oracle fixtures check angles, grip placement, gestures and
-document edits. Both hosts retain outline-only feedback until release.
+document edits. Both hosts show live pixels beneath the outline while held.
 Custom-increment tests distinguish 37-degree stops from the former hard-coded 15,
 including stationary Shift changes, release, cancellation and draft restore.
 X11 software-rendered checks and AppKit host fixtures are diagnostics, not physical
@@ -1021,7 +1021,7 @@ Shift locks corner aspect ratio while edge grips stay single-axis. Unrotated
 resizes snap to canvas and other visible-layer edges (including locked layers);
 rotated resizes skip axis snapping and preserve the opposite world anchor.
 Images retain D4 orientation; arrows scale controls and stroke, while paths retain
-their stroke width. Preview outlines and guides do not modify pixels or drafts.
+their stroke width. Preview pixels, outlines and guides do not publish edits or drafts.
 A release after three view points submits one worker transaction; cancellation,
 clicks and failures preserve the document, and fully outside content expands the
 canvas. Text layers use the text resize rules described with the text slices below.
@@ -1030,9 +1030,21 @@ bounds to canvas and visible-layer edges, including locked and zero-opacity laye
 but excluding hidden layers. Shared Rust matches Tauri's strict ten-view-point
 threshold, line/edge tie rules and up to four coincident-edge guides. Hosts keep
 clicks and movement below three view points unsnapped. A `drag_move` release
-commits once; numeric `translate` remains exact. Preview is outline-only, and
-fully outside moves expand the canvas. TypeScript oracle fixtures cover rotated
+commits once; numeric `translate` remains exact. Preview retains the original canvas;
+fully outside moves expand it only on commit. TypeScript oracle fixtures cover rotated
 geometry, threshold boundaries, ties, hidden/locked siblings and overflow.
+Move, rotate, resize and curve-dot previews share the existing drawing worker's
+one-in-flight/latest-pending queue and epoch cancellation. Shared Rust clones the
+document/assets and suppresses canvas growth while rendering; published pixels,
+undo/redo, output and saved draft bytes remain owned by the committed session.
+Inactive drawing cleanup cannot cancel a layer-owned frame. wgpu only requests
+changed geometry on the first layout pass, including stationary modifier changes.
+Linux X11 has dark/light private-desktop held-pixel, cancellation, undo/draft and
+minimum-window coverage. Windows shares the wgpu implementation but physical
+Windows input remains unverified. AppKit connects the same queue with fake-worker
+ownership and real-worker pixel fixtures; its current-source tests require macOS CI.
+Wayland uses the wgpu UI, but real-compositor gesture/latency, accessibility and
+mixed-DPI acceptance remain open. These fixtures do not close a platform parity gate.
 Both hosts now connect ephemeral viewport state through shared Rust geometry:
 Fit, 100%, 1.25× zoom steps, Recenter, anchored Cmd/Ctrl-wheel/native magnification
 and Cmd/Ctrl-primary or middle-button pan. Manual zoom uses Tauri's 5–800% bounds

@@ -754,20 +754,23 @@ persistence.
 Both native hosts keep the Properties title visible while its fields scroll,
 including at the minimum window size; the title does not cover the controls.
 In both native hosts, **Layers** supports clicking the edited preview to select an
-unlocked visible layer, or empty space to clear selection. Drag shows a translated
-selection outline; release moves the layer in one undoable edit. Escape, focus loss,
-preview resizing or leaving Layers cancels the drag. Pixels update on release, not
-continuously during dragging; selection alone does not change the document.
+unlocked visible layer, or empty space to clear selection. Move, rotate, resize and
+curve-dot drags show edited pixels while held, with selection guides over them.
+The background renderer keeps only the newest pending position; a large image can
+lag behind the pointer. Held previews do not change the document or saved draft;
+release commits one undoable edit. Escape, focus loss, preview resizing or leaving
+Layers cancels the drag and restores the unchanged pixels.
 The selected layer also exposes a **rotation grip** when it fits inside the image.
 Drag it to rotate; hold Shift for stops configured under **Properties → Shift rotation snap**
 (1–180°, initially 15°). The increment is per-editor UI state, not a document edit
-or saved preference. Rotation uses the same outline-only
+or saved preference. Rotation uses the same live-pixel
 preview, cancellation, undo and draft behavior. Hidden or locked layers have no
 grip.
 Eight border grips resize images, shapes and drawings. Shift keeps corner drags
 proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
 visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
-Resizing uses an outline-only preview and commits on release.
+Resizing previews pixels without growing the canvas; fully outside content can
+expand the canvas when the edit commits on release.
 Selected lines and arrows show curve dots: drag a dot to bend the stroke, double-click
 the path to add a point and double-click a point to remove it. Layers offers a Curve
 slider for straight or single-bend strokes and Straighten for multi-point ones. Curves
