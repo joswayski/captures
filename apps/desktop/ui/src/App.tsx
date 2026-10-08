@@ -8825,6 +8825,20 @@ export function ThumbnailCard({
 
   useLayoutEffect(() => {
     if (!stackDismissing) return;
+    // Clear all starts from each card's presentation, not the hovered Close
+    // look. Freeze before exit classes cancel arrival/hover, including the
+    // stagger wait so the whole pile cannot flash dim and then bright again.
+    const card = cardRef.current;
+    const image = card?.querySelector("img");
+    if (card && image) {
+      const cardStyle = getComputedStyle(card);
+      const imageStyle = getComputedStyle(image);
+      card.style.setProperty("--thumbnail-clear-opacity", cardStyle.opacity);
+      card.style.setProperty("--thumbnail-clear-transform", cardStyle.transform);
+      card.style.setProperty("--thumbnail-clear-filter", cardStyle.filter);
+      card.style.setProperty("--thumbnail-clear-image-filter", imageStyle.filter);
+      card.style.setProperty("--thumbnail-clear-image-transform", imageStyle.transform);
+    }
     exitWith("dismiss", STACK_CLEAR_EXIT_ACTION);
     // One-shot when Clear all marks this live card. exitWith is a render closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
