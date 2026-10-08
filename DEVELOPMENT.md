@@ -150,7 +150,9 @@ module per family of surfaces from `apps/desktop/ui/src/styles/`.
   wallpaper.
 - The update notice is a solid `--surface-raised` card in a transparent native
   window. The launch notice is a dark glass pill with a CSS triangle caret pointing
-  at the tray or menu bar icon, not a rotated square.
+  at the tray or menu bar icon, not a rotated square. Without reliable icon geometry,
+  it uses a compact, left-aligned rounded rectangle instead. Its 296px width and
+  54px minimum height do not stretch with the native window; long shortcuts can wrap.
 - Accent is reserved for the primary capture action, selection, and focus. Status
   colors keep stable meanings: signal for recording and destructive, green for saved,
   blue for progress.
