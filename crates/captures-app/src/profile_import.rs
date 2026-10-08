@@ -1,19 +1,27 @@
-//! Explicit offline import into a NEW native development profile.
+//! Explicit offline import and snapshotting of isolated native development profiles.
 //! Sources remain untouched. Hosts never invoke this or discover installed paths.
 use std::{
     fs::{self, File},
     io::{Read, Write},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 use captures_media::CancelToken;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const ROOTS: [(&str, &str); 3] = [
     ("capture-history", "history"),
     ("screenshot-editor-drafts", "editor-drafts"),
     ("recording-recovery", "recording-recovery"),
+];
+const DEVELOPMENT_MARKER: &str = ".captures-native-development-profile.json";
+const NATIVE_ROOTS: [&str; 5] = [
+    "settings.json",
+    "history",
+    "editor-drafts",
+    "recording-recovery",
+    DEVELOPMENT_MARKER,
 ];
 const MAX_ENTRIES: usize = 100_000;
 const MAX_BYTES: u64 = 64 * 1024 * 1024 * 1024;
@@ -57,6 +65,178 @@ impl Drop for ImportLock {
     fn drop(&mut self) {
         let _ = self.0.unlock();
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentMarker {
+    schema_version: u8,
+    identity: String,
+    root: PathBuf,
+}
+
+// Only new empty/imported profiles are enrolled. Bind the marker to the FINAL
+// canonical root, not an import's scratch directory. This is cooperative safety,
+// not authentication against a malicious same-user writer.
+pub(crate) fn mark_development_profile(root: &Path, destination: &Path) -> Result<(), Error> {
+    let mut marker = File::options()
+        .write(true)
+        .create_new(true)
+        .open(root.join(DEVELOPMENT_MARKER))?;
+    serde_json::to_writer_pretty(
+        &mut marker,
+        &DevelopmentMarker {
+            schema_version: 1,
+            identity: crate::updater::DEVELOPMENT_IDENTITY.into(),
+            root: destination.to_owned(),
+        },
+    )?;
+    marker.sync_all()?;
+    Ok(())
+}
+
+/// Validate an explicit, previously created development profile without enrolling
+/// it, discovering installed paths, or migrating/writing its settings. Copied or
+/// moved markers do not authorize a different canonical root. Parents must remain
+/// trusted; this marker is not a security boundary against its owner.
+pub fn validate_development_profile(root: &Path) -> Result<PathBuf, Error> {
+    if !root.is_absolute() {
+        return Err(invalid(
+            "Select an explicit absolute development profile path",
+        ));
+    }
+    let metadata = fs::symlink_metadata(root)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(invalid(
+            "Select a real absolute development profile directory",
+        ));
+    }
+    let root = root.canonicalize()?;
+    let marker_path = root.join(DEVELOPMENT_MARKER);
+    let metadata = match fs::symlink_metadata(&marker_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(invalid("Profile is not enrolled as a development profile"));
+        }
+        metadata => metadata?,
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(invalid("Development profile marker must be a regular file"));
+    }
+    let marker: DevelopmentMarker = serde_json::from_value(json(&marker_path)?)?;
+    if marker.schema_version != 1
+        || marker.identity != crate::updater::DEVELOPMENT_IDENTITY
+        || marker.root != root
+    {
+        return Err(invalid("Profile is not enrolled at this development root"));
+    }
+    let settings_path = root.join("settings.json");
+    let metadata = fs::symlink_metadata(&settings_path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(invalid("Development settings must be a regular file"));
+    }
+    // captures_settings::load can WRITE migrations, so do not use it here.
+    let settings: captures_settings::AppSettings = serde_json::from_value(json(&settings_path)?)?;
+    if settings.settings_schema_version > captures_settings::CURRENT_SETTINGS_SCHEMA_VERSION {
+        return Err(invalid(
+            "Development settings use a newer unsupported schema",
+        ));
+    }
+    for name in &NATIVE_ROOTS[1..4] {
+        match fs::symlink_metadata(root.join(name)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return Err(invalid("Development data roots must be real directories")),
+        }
+    }
+    Ok(root)
+}
+
+/// A validated working profile and a retained pre-update data snapshot.
+/// Create BEFORE package activation, with every app/data writer stopped and
+/// excluded throughout. The bounded private sibling snapshot includes settings,
+/// History (including its local diagnostics), editor drafts, recording recovery
+/// and the development marker, not external exports, OS credentials, profile-root
+/// logs or previous snapshots. No secret store is queried or copied.
+/// It survives success/failure/cancellation after preparation. There is no
+/// automatic profile copyback or cross-platform power-loss durability guarantee.
+pub struct PreparedDevelopmentProfile {
+    root: PathBuf,
+    snapshot: PathBuf,
+    digests: Vec<Option<TreeDigest>>,
+}
+
+impl PreparedDevelopmentProfile {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn snapshot(&self) -> &Path {
+        &self.snapshot
+    }
+
+    /// Recheck original AND snapshot bytes immediately before activation/launch.
+    /// Exposed paths are mutable; a prepared snapshot is not an immutable handle.
+    pub fn verify(&self, cancel: &CancelToken) -> Result<(), Error> {
+        check_cancel(cancel)?;
+        validate_development_profile(&self.root)?;
+        let metadata = fs::symlink_metadata(&self.snapshot)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(invalid("Pre-update snapshot must be a real directory"));
+        }
+        for root in [&self.root, &self.snapshot] {
+            let mut budget = Budget::default();
+            for (name, expected) in NATIVE_ROOTS.iter().zip(&self.digests) {
+                if tree(&root.join(name), None, cancel, &mut budget)? != *expected {
+                    return Err(invalid(
+                        "Development profile or pre-update snapshot changed",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn prepare_development_profile(
+    root: &Path,
+    cancel: &CancelToken,
+) -> Result<PreparedDevelopmentProfile, Error> {
+    check_cancel(cancel)?;
+    let root = validate_development_profile(root)?;
+    let stage = tempfile::Builder::new()
+        .prefix(".captures-native-pre-update-")
+        .tempdir_in(
+            root.parent()
+                .ok_or_else(|| invalid("Invalid profile parent"))?,
+        )?;
+    let mut budget = Budget::default();
+    let mut digests = Vec::new();
+    for name in NATIVE_ROOTS {
+        digests.push(tree(
+            &root.join(name),
+            Some(&stage.path().join(name)),
+            cancel,
+            &mut budget,
+        )?);
+    }
+    let prepared = PreparedDevelopmentProfile {
+        root,
+        snapshot: stage.path().to_owned(),
+        digests,
+    };
+    prepared.verify(cancel)?;
+    let mut receipt = File::create(stage.path().join("snapshot-receipt.json"))?;
+    serde_json::to_writer_pretty(
+        &mut receipt,
+        &serde_json::json!({"schema_version":1, "source_root":prepared.root,
+            "roots":NATIVE_ROOTS, "source_trees":prepared.digests}),
+    )?;
+    receipt.sync_all()?;
+    drop(receipt);
+    check_cancel(cancel)?;
+    let _ = stage.keep();
+    Ok(prepared)
 }
 
 /// Copy explicitly selected SHIPPING settings/data into a new, isolated native
@@ -172,6 +352,7 @@ fn import_with(
         }
     }
     prepare_working_copy(stage.path(), &destination, cancel)?;
+    mark_development_profile(stage.path(), &destination)?;
     before_publish()?;
     let mut checked = Budget::default();
     for ((source, _), expected) in sources.iter().zip(&digests) {
@@ -918,6 +1099,208 @@ mod tests {
             assert!(fixture.import().is_err());
             assert!(fixture.destination.is_symlink());
         }
+    }
+
+    #[test]
+    fn pre_update_snapshot_preserves_working_bytes_without_migration_or_permission_reset() {
+        let fixture = Fixture::new();
+        fixture.import().unwrap();
+        let settings = fixture.destination.join("settings.json");
+        let mut value = super::json(&settings).unwrap();
+        value["settings_schema_version"] = 0.into();
+        value["onboarding_completed"] = true.into();
+        value["launch_at_login"] = true.into();
+        value["output_directory"] = fixture
+            .root
+            .path()
+            .join("external exports")
+            .to_str()
+            .unwrap()
+            .into();
+        value["future_setting"] = json!({"keep": [17, 3, 91]});
+        fs::write(&settings, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        fs::write(fixture.destination.join("startup.log"), b"old startup log").unwrap();
+        let diagnostic = fixture.destination.join("history/.crash-diagnostics");
+        fs::create_dir(&diagnostic).unwrap();
+        fs::write(diagnostic.join("local.json"), b"retained local diagnostics").unwrap();
+        let paths = [
+            PathBuf::from("settings.json"),
+            PathBuf::from("history")
+                .join(&fixture.capture_id)
+                .join("capture.png"),
+            PathBuf::from("editor-drafts")
+                .join(&fixture.capture_id)
+                .join("manifest.json"),
+            PathBuf::from("recording-recovery")
+                .join(&fixture.recovery_id)
+                .join("segment-003.mp4"),
+            PathBuf::from("history/.crash-diagnostics/local.json"),
+            PathBuf::from(DEVELOPMENT_MARKER),
+        ];
+        let before: Vec<_> = paths
+            .iter()
+            .map(|path| fs::read(fixture.destination.join(path)).unwrap())
+            .collect();
+        let prepared =
+            prepare_development_profile(&fixture.destination, &CancelToken::default()).unwrap();
+        prepared.verify(&CancelToken::default()).unwrap();
+        let snapshot = prepared.snapshot().to_owned();
+        for (path, expected) in paths.iter().zip(&before) {
+            assert_eq!(fs::read(fixture.destination.join(path)).unwrap(), *expected);
+            assert_eq!(fs::read(snapshot.join(path)).unwrap(), *expected);
+        }
+        assert!(snapshot.join("history/.retained/empty é").is_dir());
+        for excluded in [
+            "startup.log",
+            "source-snapshot",
+            "exports",
+            "account-session.json",
+        ] {
+            assert!(!snapshot.join(excluded).exists(), "{excluded}");
+        }
+        let receipt = super::json(&snapshot.join("snapshot-receipt.json")).unwrap();
+        assert_eq!(
+            receipt["source_root"],
+            fixture
+                .destination
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        drop(prepared);
+        assert!(
+            snapshot.is_dir(),
+            "dropping preparation must not discard rollback data"
+        );
+    }
+
+    #[test]
+    fn snapshot_reverification_rejects_changed_source_snapshot_and_empty_directory_layout() {
+        for (snapshot, change) in [(false, "bytes"), (true, "bytes"), (false, "directory")] {
+            let fixture = Fixture::new();
+            fixture.import().unwrap();
+            let prepared =
+                prepare_development_profile(&fixture.destination, &CancelToken::default()).unwrap();
+            let root = if snapshot {
+                prepared.snapshot()
+            } else {
+                prepared.root()
+            };
+            if change == "directory" {
+                fs::remove_dir(root.join("history/.retained/empty é")).unwrap();
+            } else {
+                fs::write(
+                    root.join("history")
+                        .join(&fixture.capture_id)
+                        .join("capture.png"),
+                    b"changed bytes",
+                )
+                .unwrap();
+            }
+            assert!(prepared.verify(&CancelToken::default()).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_root_alias_cannot_substitute_for_independent_rollback_data() {
+        let fixture = Fixture::new();
+        fixture.import().unwrap();
+        let prepared =
+            prepare_development_profile(&fixture.destination, &CancelToken::default()).unwrap();
+        fs::remove_dir_all(prepared.snapshot()).unwrap();
+        std::os::unix::fs::symlink(prepared.root(), prepared.snapshot()).unwrap();
+        // Every content digest still matches, but these are now the SAME files.
+        assert!(prepared.verify(&CancelToken::default()).is_err());
+    }
+
+    #[test]
+    fn development_marker_rejects_unenrolled_copied_foreign_and_oversized_profiles() {
+        let fixture = Fixture::new();
+        fixture.import().unwrap();
+        let marker = fixture.destination.join(DEVELOPMENT_MARKER);
+        let original = fs::read(&marker).unwrap();
+        assert_eq!(
+            validate_development_profile(&fixture.destination).unwrap(),
+            fixture.destination.canonicalize().unwrap()
+        );
+        let settings_path = fixture.destination.join("settings.json");
+        let settings_bytes = fs::read(&settings_path).unwrap();
+        let mut future_settings = super::json(&settings_path).unwrap();
+        future_settings["settings_schema_version"] =
+            json!(captures_settings::CURRENT_SETTINGS_SCHEMA_VERSION + 1);
+        let future_bytes = serde_json::to_vec(&future_settings).unwrap();
+        fs::write(&settings_path, &future_bytes).unwrap();
+        assert!(
+            prepare_development_profile(&fixture.destination, &CancelToken::default())
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("newer unsupported schema")
+        );
+        assert_eq!(fs::read(&settings_path).unwrap(), future_bytes);
+        fs::write(&settings_path, settings_bytes).unwrap();
+        let other = fixture.root.path().join("copied profile");
+        fs::create_dir(&other).unwrap();
+        fs::copy(&marker, other.join(DEVELOPMENT_MARKER)).unwrap();
+        fs::copy(
+            fixture.destination.join("settings.json"),
+            other.join("settings.json"),
+        )
+        .unwrap();
+        assert!(validate_development_profile(&other).is_err());
+        for (field, value) in [
+            ("schema_version", json!(2)),
+            ("identity", json!("shipping")),
+            ("unknown", json!(true)),
+        ] {
+            let mut value_json: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            value_json[field] = value;
+            fs::write(&marker, serde_json::to_vec(&value_json).unwrap()).unwrap();
+            assert!(
+                validate_development_profile(&fixture.destination).is_err(),
+                "{field}"
+            );
+        }
+        File::create(&marker)
+            .unwrap()
+            .set_len(MAX_JSON_BYTES + 1)
+            .unwrap();
+        assert!(validate_development_profile(&fixture.destination).is_err());
+        fs::remove_file(marker).unwrap();
+        assert!(validate_development_profile(&fixture.destination).is_err());
+    }
+
+    #[test]
+    fn cancelled_or_unsafe_snapshot_preparation_leaves_no_partial_snapshot() {
+        let fixture = Fixture::new();
+        fixture.import().unwrap();
+        let cancel = CancelToken::default();
+        cancel.cancel();
+        assert!(matches!(
+            prepare_development_profile(&fixture.destination, &cancel),
+            Err(Error::Cancelled)
+        ));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                &fixture.settings,
+                fixture.destination.join("history/foreign-link"),
+            )
+            .unwrap();
+            assert!(
+                prepare_development_profile(&fixture.destination, &CancelToken::default()).is_err()
+            );
+        }
+        assert!(!fs::read_dir(fixture.root.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".captures-native-pre-update-")
+        }));
+        assert!(fixture.destination.is_dir());
     }
 
     #[test]

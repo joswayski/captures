@@ -2429,9 +2429,11 @@ Preferences retained, no repeated restore, setup priority and secondary exclusio
 
 **Automatic installed restoration remains open.** The helper accepts an operator
 value, not a GUI snapshot; its fresh empty/imported profiles need setup, which wins
-over restoration. A future GUI updater must snapshot actual Preferences visibility
-at successful-update shutdown, not focus or update-click origin, matching shipping
-PR #1025. This slice enables neither GUI installation nor installed-profile writes.
+over restoration. Explicit reuse of enrolled development profiles can retain
+completed setup, as described below. A future GUI updater must snapshot actual
+Preferences visibility at successful-update shutdown, not focus or update-click
+origin, matching shipping PR #1025. This slice enables neither GUI installation
+nor installed-profile writes.
 
 | Platform | Restart-intent implementation / verification |
 | --- | --- |
@@ -2533,6 +2535,42 @@ the CI Linux executable requires a newer glibc than this orb. It is not a test o
 that unmodified CI archive. Installed replacement, process-tree containment,
 OS permission identity, signing/channel activation and physical parity remain open.
 Tauri still ships; no release, deployment or cutover occurred.
+
+### Existing development-profile restart and retained pre-update data
+
+The helper's exclusive `--existing-development-profile` mode reuses an explicit
+enrolled development root only with `--all-app-processes-stopped`. New empty/imported
+profiles carry a bounded, canonical-root-bound development marker; unmarked, copied,
+moved and installed roots are not silently enrolled. This is cooperative safety,
+not authentication against the profile owner. Existing valid settings are required.
+
+Before activation, shared Rust creates a private retained sibling snapshot of exact
+settings, History (including nested local diagnostics), editor drafts, recording
+recovery and the marker. It uses the existing bounded streaming-copy engine. It
+does not load/write settings migrations, reset setup/permission/export settings,
+copy external exports or query OS credentials. Original and snapshot bytes/layout
+are rechecked before activation and launch; the snapshot cannot be a root symlink.
+Startup uses the same exact-token/live-root/packaged-tools protocol and a unique
+log, preserving old logs. Confirmation, failure and explicit package recovery retain
+the snapshot. **Package rollback does not undo profile migrations**; data restoration
+is a separate manual offline operation. No process-detection or power-loss claim.
+
+Shared regressions cover real editor-draft pixels, retained recovery media and
+unknown/legacy settings, mutation, marker/path/link rejection, partial health with
+the lock held, failure/recovery and cancellation. `native_profile_restart_smoke.py`
+provides signed loopback real-host checks of completed-profile settings/History,
+opaque draft/recovery byte retention, dark/light restoration and closed intent.
+Preferences visibility remains operator-supplied, not captured at GUI shutdown.
+
+| Platform | Existing development-profile implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared preparation/helper and existing AppKit health protocol implemented; regression execution and real-host restart not verified on macOS in this orb |
+| Windows | Same shared preparation/helper and wgpu health protocol; regression execution and real-host restart not verified on Windows in this orb |
+| X11 | Shared runnable signed-host regressions pass; real local-build host with packaged tools passes signed dark/light restoration and closed-intent checks, preserving snapshots/logs and exiting visible hosts through real Ctrl+Q with status zero; private X11/software GL only |
+| Wayland | Same window-independent preparation/helper and wgpu health protocol; live compositor restart not verified |
+
+This does not establish installed migration, a GUI installer, process-tree containment,
+OS permission/signing identity, distribution or native cutover. Tauri still ships.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
