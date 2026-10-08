@@ -57,7 +57,7 @@ Preview builds automatically publish installed-app changes from `main`, and may 
 
 After an in-app update, Captures shows its ready tooltip and reopens Preferences if that window was open when the app restarted. Otherwise it stays in the tray or menu bar.
 
-On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow.
+On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow. When the tray icon's position is unavailable, including on Linux, the launch notice uses a compact, unpointed card.
 
 ## Features
 
