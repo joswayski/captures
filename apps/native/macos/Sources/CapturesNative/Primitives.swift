@@ -174,8 +174,9 @@ final class ClosurePopUpButton: NSPopUpButton {
         listbox.map { [$0] } ?? []
     }
 
-    override func accessibilityFocusedUIElement() -> Any? {
-        listbox?.accessibilityFocusedUIElement() ?? super.accessibilityFocusedUIElement()
+    // Keyboard focus stays on the trigger while the active AX row shares it.
+    override func accessibilitySharedFocusElements() -> [Any]? {
+        listbox?.accessibilitySharedFocusElements() ?? super.accessibilitySharedFocusElements()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -490,9 +491,9 @@ final class TokenSelectListView: NSView {
         options.indices.contains(selected) ? [accessibilityOptions[selected]] : []
     }
 
-    override func accessibilityFocusedUIElement() -> Any? {
-        guard options.indices.contains(active), options[active].enabled else { return self }
-        return accessibilityOptions[active]
+    override func accessibilitySharedFocusElements() -> [Any]? {
+        guard acceptsAccessibilityActions, options.indices.contains(active), options[active].enabled else { return [] }
+        return [accessibilityOptions[active]]
     }
 
     func announceActive() {

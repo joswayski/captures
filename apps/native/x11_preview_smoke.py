@@ -20,6 +20,7 @@ import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
+from Xlib import X, display, protocol
 
 from x11_capture_smoke import BACKGROUNDS, ScreenSaver
 
@@ -304,7 +305,18 @@ def main():
             assert len(motion_events()) == count, "unrelated settings must not report motion"
             run("xdotool", "windowactivate", "--sync", root, "windowfocus", "--sync", root)
             shot(root, "motion-foreground")
-            run("xdotool", "windowactivate", "--sync", root, "key", "alt+F4")
+            # Use the normal WM close protocol, not a host-specific Alt+F4
+            # binding or xdotool windowclose's forced destruction. Shutdown
+            # still has to drain accepted work and exit successfully.
+            connection = display.Display(env["DISPLAY"])
+            try:
+                target = connection.create_resource_object("window", int(root))
+                target.send_event(protocol.event.ClientMessage(
+                    window=target, client_type=connection.intern_atom("WM_PROTOCOLS"),
+                    data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])))
+                connection.sync()
+            finally:
+                connection.close()
             try:
                 wait(lambda: app.poll() is not None, "motion workspace closes")
             except AssertionError:

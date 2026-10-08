@@ -426,25 +426,28 @@ describe("Preferences", () => {
   it("suppresses New Capture only while assigning its shortcut", async () => {
     render(<Preferences />);
     const recorder = await screen.findByRole("button", { name: "New Capture" });
-    expect(invoke).not.toHaveBeenCalledWith("set_shortcut_capture_suppressed", {
-      suppressed: true,
-    });
+    // Unrelated reads can interleave with these calls during rendering.
+    const suppressionCalls = () =>
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_shortcut_capture_suppressed")
+        .map(([, args]) => args);
+    expect(suppressionCalls()).toEqual([]);
 
     fireEvent.click(recorder);
-    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", {
-      suppressed: true,
-    });
+    expect(suppressionCalls()).toEqual([{ suppressed: true }]);
     fireEvent.keyDown(recorder, { key: "Escape", code: "Escape" });
-    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", {
-      suppressed: false,
-    });
+    expect(suppressionCalls()).toEqual([{ suppressed: true }, { suppressed: false }]);
     expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
 
     fireEvent.click(recorder);
     fireEvent.keyDown(recorder, { key: "n", code: "KeyN", ctrlKey: true, shiftKey: true });
-    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", {
-      suppressed: false,
-    });
+    expect(suppressionCalls()).toEqual([
+      { suppressed: true },
+      { suppressed: false },
+      { suppressed: true },
+      { suppressed: false },
+    ]);
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("update_settings", {
         settings: expect.objectContaining({ new_capture_shortcut: "Control+Shift+KeyN" }),
