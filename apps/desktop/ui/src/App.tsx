@@ -1368,28 +1368,33 @@ export function CaptureHistory() {
   const [clearingAll, setClearingAll] = useState(false);
   const [confirmingClearAll, setConfirmingClearAll] = useState(false);
   const activeRef = useRef(true);
+  const refreshRequest = useRef(0);
   const clearAllTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
+    const request = ++refreshRequest.current;
     try {
       const [history, interrupted] = await Promise.all([
         invoke<ArtifactSummary[]>("get_capture_history"),
         invoke<RecordingDraftManifest[]>("get_recording_drafts"),
       ]);
-      if (!activeRef.current) return;
+      if (!activeRef.current || request !== refreshRequest.current) return;
       setEntries(history);
       setDrafts(interrupted);
       setError("");
     } catch (error) {
-      if (activeRef.current) setError(`Couldn’t load capture history: ${String(error)}`);
+      if (activeRef.current && request === refreshRequest.current) {
+        setError(`Couldn’t load capture history: ${String(error)}`);
+      }
     } finally {
-      if (activeRef.current) setLoading(false);
+      if (activeRef.current && request === refreshRequest.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     const cleanup = createCleanupRegistry();
     activeRef.current = true;
+    ++refreshRequest.current;
 
     void (async () => {
       const unlisten = await listen("capture-history-changed", () => {
@@ -1420,6 +1425,7 @@ export function CaptureHistory() {
     try {
       await invoke("clear_capture_history");
       if (!activeRef.current) return;
+      ++refreshRequest.current;
       setEntries([]);
       setConfirmingClearAll(false);
     } catch (error) {
@@ -1540,10 +1546,19 @@ export function CaptureHistory() {
                 key={entry.id}
                 entry={entry}
                 onDeleted={(artifactId) => {
+                  ++refreshRequest.current;
                   setEntries((current) => current.filter(({ id }) => id !== artifactId));
                 }}
               />
             ))}
+          </section>
+        ) : entries.length > 0 ? (
+          <section className="history-empty">
+            <span className="history-empty-icon" aria-hidden="true">
+              <HistoryIcon />
+            </span>
+            <h2>No captures in this filter</h2>
+            <p>Choose All to see your other captures.</p>
           </section>
         ) : null}
       </div>
