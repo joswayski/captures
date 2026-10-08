@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import select
+import signal as os_signal
 import subprocess
 import threading
 import time
@@ -451,6 +452,10 @@ def main():
                 hidden = wait(lambda: subprocess.run(["xdotool", "search", "--name", "^Capture History$"],
                     env=env, capture_output=True, text=True).stdout.split(), "hidden login window")[0]
                 pid = int(run("xdotool", "getwindowpid", hidden))
+                # GIO's child is not ours to reap. A pidfd reports actual exit
+                # even if the runner's PID1 retains its /proc entry as a zombie;
+                # it also keeps cleanup bound to this process, not a reused PID.
+                pidfd = os.pidfd_open(pid)
                 try:
                     time.sleep(1)
                     assert not windows("Capture History"), "login launch showed the root"
@@ -467,11 +472,20 @@ def main():
                     click_login(prefs, f"gio-login-{appearance}")
                     wait(lambda: not entry.exists(), "explicit disable after hidden launch")
                     run("xdotool", "key", "ctrl+q")
-                    wait(lambda: not Path(f"/proc/{pid}").exists(), "normal exit after login launch")
+                    try:
+                        wait(lambda: select.select([pidfd], [], [], 0)[0], "normal exit after login launch")
+                    except AssertionError:
+                        stat = Path(f"/proc/{pid}/stat")
+                        print(f"GIO login process did not exit: {stat.read_text() if stat.exists() else 'proc entry absent'}", flush=True)
+                        raise
                 finally:
-                    # Only the PID obtained from our private X server/profile.
-                    if Path(f"/proc/{pid}").exists():
-                        os.kill(pid, 15)
+                    try:
+                        if not select.select([pidfd], [], [], 0)[0]:
+                            os_signal.pidfd_send_signal(pidfd, os_signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass  # It exited between the poll and cleanup signal.
+                    finally:
+                        os.close(pidfd)
                 other_app.terminate()
                 other_app.wait(timeout=5)
                 assert owned.startswith(b"[Desktop Entry]\n")
