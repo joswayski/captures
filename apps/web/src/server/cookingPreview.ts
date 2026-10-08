@@ -148,8 +148,7 @@ export async function resolveCookingPreviewShas(
     .catch((error: unknown) => {
       // Back off instead of retrying GitHub on every request during an
       // outage. Serve the last known value (possibly expired) meanwhile.
-      const fallback =
-        cookingPreviewCache?.key === cacheKey ? cookingPreviewCache.value : [];
+      const fallback = cookingPreviewCache?.key === cacheKey ? cookingPreviewCache.value : [];
       cookingPreviewCache = {
         key: cacheKey,
         expiresAt: Date.now() + FAILURE_RETRY_MS,

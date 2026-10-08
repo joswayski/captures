@@ -7,13 +7,7 @@ describe("NumberInput", () => {
   it("exposes a spinbutton and larger custom steppers", () => {
     const onChange = vi.fn();
     render(
-      <NumberInput
-        ariaLabel="Canvas width"
-        value={100}
-        min={1}
-        max={200}
-        onChange={onChange}
-      />,
+      <NumberInput ariaLabel="Canvas width" value={100} min={1} max={200} onChange={onChange} />,
     );
 
     expect(screen.getByRole("spinbutton", { name: "Canvas width" })).toHaveValue(100);
@@ -24,28 +18,14 @@ describe("NumberInput", () => {
   it("increments and decrements with the custom buttons", () => {
     const onChange = vi.fn();
     const { rerender } = render(
-      <NumberInput
-        ariaLabel="Size"
-        value={10}
-        min={0}
-        max={20}
-        step={2}
-        onChange={onChange}
-      />,
+      <NumberInput ariaLabel="Size" value={10} min={0} max={20} step={2} onChange={onChange} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Increase Size" }));
     expect(onChange).toHaveBeenLastCalledWith(12);
 
     rerender(
-      <NumberInput
-        ariaLabel="Size"
-        value={12}
-        min={0}
-        max={20}
-        step={2}
-        onChange={onChange}
-      />,
+      <NumberInput ariaLabel="Size" value={12} min={0} max={20} step={2} onChange={onChange} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Decrease Size" }));

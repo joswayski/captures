@@ -1324,8 +1324,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         window.orderOut(nil)
         let launchAction = interactiveLaunch(onboardingComplete: true,
                                              launchedQuietly: !startup.showsWindow,
-                                             openingFiles: !pendingOpenImages.isEmpty)
-        if retry == nil, !onboardingWasPresented, launchAction == .preferences {
+                                             openingFiles: !pendingOpenImages.isEmpty,
+                                             restorePreferences: options.nativeUpdateRestorePreferences)
+        if retry == nil, !onboardingWasPresented,
+           launchAction == .preferences || launchAction == .startupNoticeAndPreferences {
             showPreferences()
             NSApp.activate(ignoringOtherApps: true)
         }

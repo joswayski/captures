@@ -1,6 +1,10 @@
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["fonttools==4.60.2"]
+# ///
 """Generate the original, deliberately asymmetric L glyph used by raster tests.
 
-Regenerate with: uv run --with fonttools python crates/captures-image/tests/make_test_font.py
+Regenerate with: uv run --script --locked crates/captures-image/tests/make_test_font.py
 No system font, downloaded artwork, or production font fallback is involved.
 """
 

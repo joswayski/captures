@@ -65,9 +65,9 @@ describe("applyThumbnailNativeHover", () => {
     const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
     const image = document.querySelector<HTMLImageElement>("img")!;
     const button = document.querySelector<HTMLButtonElement>("button")!;
-    const elementFromPoint = vi.fn(() => card.hasAttribute("data-thumbnail-native-active")
-        ? button
-        : image);
+    const elementFromPoint = vi.fn(() =>
+      card.hasAttribute("data-thumbnail-native-active") ? button : image,
+    );
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
       value: elementFromPoint,
@@ -93,8 +93,10 @@ describe("applyThumbnailNativeHover", () => {
     });
 
     expect(applyThumbnailNativeHover({ x: 40, y: 80, inside: true })).toBe("grab");
-    expect(document.querySelector(".thumbnail-card"))
-      .toHaveAttribute("data-thumbnail-native-active", "true");
+    expect(document.querySelector(".thumbnail-card")).toHaveAttribute(
+      "data-thumbnail-native-active",
+      "true",
+    );
     expectNativePointerHover(document.querySelector("button"), false);
   });
 
@@ -119,8 +121,10 @@ describe("applyThumbnailNativeHover", () => {
 
     expect(applyThumbnailNativeHover({ x: 12, y: 12, inside: true })).toBe("grab");
     expect(applyThumbnailNativeHover({ x: 12, y: 12, inside: true })).toBe("grab");
-    expect(document.querySelector(".thumbnail-card"))
-      .toHaveAttribute("data-thumbnail-native-active", "true");
+    expect(document.querySelector(".thumbnail-card")).toHaveAttribute(
+      "data-thumbnail-native-active",
+      "true",
+    );
     expect(
       document.querySelectorAll(`[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`),
     ).toHaveLength(0);
@@ -134,8 +138,9 @@ describe("applyThumbnailNativeHover", () => {
     `;
 
     expect(applyThumbnailNativeHover({ x: 0, y: 0, inside: false })).toBe("default");
-    expect(document.querySelector(".thumbnail-card"))
-      .not.toHaveAttribute("data-thumbnail-native-active");
+    expect(document.querySelector(".thumbnail-card")).not.toHaveAttribute(
+      "data-thumbnail-native-active",
+    );
     expectNativePointerHover(document.querySelector("button"), false);
   });
 
@@ -186,7 +191,7 @@ describe("applyThumbnailNativeHover", () => {
     let handoff = false;
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
-      value: vi.fn(() => handoff ? image : button),
+      value: vi.fn(() => (handoff ? image : button)),
     });
 
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
@@ -297,9 +302,7 @@ describe("applyThumbnailNativeHover", () => {
         <button>Copy</button>
       </article>
     `;
-    const overflowCue = document.querySelector<HTMLButtonElement>(
-      ".thumbnail-overflow-cue",
-    )!;
+    const overflowCue = document.querySelector<HTMLButtonElement>(".thumbnail-overflow-cue")!;
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
       value: vi.fn(() => overflowCue),
@@ -307,8 +310,9 @@ describe("applyThumbnailNativeHover", () => {
 
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     expectNativePointerHover(overflowCue, true);
-    expect(document.querySelector(".thumbnail-card"))
-      .not.toHaveAttribute("data-thumbnail-native-active");
+    expect(document.querySelector(".thumbnail-card")).not.toHaveAttribute(
+      "data-thumbnail-native-active",
+    );
   });
 
   it("keeps preview toolbar controls clickable without activating a preview card", () => {
@@ -326,8 +330,9 @@ describe("applyThumbnailNativeHover", () => {
 
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     expectNativePointerHover(control, true);
-    expect(document.querySelector(".thumbnail-card"))
-      .not.toHaveAttribute("data-thumbnail-native-active");
+    expect(document.querySelector(".thumbnail-card")).not.toHaveAttribute(
+      "data-thumbnail-native-active",
+    );
   });
 
   it("keeps the toolbar pointer when WebKit reports the card underneath", () => {
@@ -577,9 +582,7 @@ describe("applyThumbnailNativeHover", () => {
         <button class="thumbnail-collapsed-hit-target">Expand previews</button>
       </main>
     `;
-    const target = document.querySelector<HTMLButtonElement>(
-      ".thumbnail-collapsed-hit-target",
-    )!;
+    const target = document.querySelector<HTMLButtonElement>(".thumbnail-collapsed-hit-target")!;
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
       value: vi.fn(() => target),
@@ -588,8 +591,9 @@ describe("applyThumbnailNativeHover", () => {
 
     expect(applyThumbnailNativeHover({ x: 40, y: 20, inside: true })).toBe("pointer");
     expectNativePointerHover(target, true);
-    expect(document.querySelector(".thumbnail-card"))
-      .not.toHaveAttribute("data-thumbnail-native-active");
+    expect(document.querySelector(".thumbnail-card")).not.toHaveAttribute(
+      "data-thumbnail-native-active",
+    );
   });
 
   it("keeps pointer on Show less after expand while card hover is suppressed", () => {
@@ -766,8 +770,7 @@ describe("clearThumbnailNativeHover", () => {
 
     clearThumbnailNativeHover();
 
-    expect(document.querySelector("article"))
-      .not.toHaveAttribute("data-thumbnail-native-active");
+    expect(document.querySelector("article")).not.toHaveAttribute("data-thumbnail-native-active");
     expectNativePointerHover(document.querySelector("button"), false);
   });
 });
@@ -955,9 +958,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
       </main>
     `;
     const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
-    const target = document.querySelector<HTMLButtonElement>(
-      ".thumbnail-collapsed-hit-target",
-    )!;
+    const target = document.querySelector<HTMLButtonElement>(".thumbnail-collapsed-hit-target")!;
     vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
       x: 28,
       y: 40,
@@ -1000,9 +1001,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     `;
     const stack = document.querySelector<HTMLElement>(".thumbnail-stack")!;
     const card = document.querySelector<HTMLElement>(".thumbnail-card")!;
-    const target = document.querySelector<HTMLButtonElement>(
-      ".thumbnail-collapsed-hit-target",
-    )!;
+    const target = document.querySelector<HTMLButtonElement>(".thumbnail-collapsed-hit-target")!;
     vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
       x: 28,
       y: 52,
@@ -1058,9 +1057,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
         >Expand preview</button>
       </main>
     `;
-    const target = document.querySelector<HTMLButtonElement>(
-      ".thumbnail-collapsed-hit-target",
-    )!;
+    const target = document.querySelector<HTMLButtonElement>(".thumbnail-collapsed-hit-target")!;
 
     expect(applyThumbnailNativeHover({ x: 0, y: 0, inside: false })).toBe("default");
     expectNativePointerHover(target, false);
@@ -1076,9 +1073,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
         >Expand preview</button>
       </main>
     `;
-    const target = document.querySelector<HTMLButtonElement>(
-      ".thumbnail-collapsed-hit-target",
-    )!;
+    const target = document.querySelector<HTMLButtonElement>(".thumbnail-collapsed-hit-target")!;
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
       value: vi.fn(() => target),
@@ -1121,9 +1116,7 @@ describe("shouldIgnoreThumbnailCursorEvents", () => {
     expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(false)).toBe(true);
     expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(true)).toBe(false);
     expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(false, true)).toBe(true);
-    expect(
-      thumbnailUnknownPointerShouldIgnoreCursorEvents(false, false),
-    ).toBe(false);
+    expect(thumbnailUnknownPointerShouldIgnoreCursorEvents(false, false)).toBe(false);
   });
 
   it("keeps a minimized stack toolbar control interactive", () => {
@@ -1172,54 +1165,21 @@ describe("thumbnailCursorSyncAction", () => {
 
   it("reasserts interactive cursors on every poll so macOS cannot flash the arrow", () => {
     expect(
-      thumbnailCursorSyncAction(
-        "pointer",
-        "pointer",
-        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
-      ),
+      thumbnailCursorSyncAction("pointer", "pointer", THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS),
     ).toBe("reassert");
-    expect(
-      thumbnailCursorSyncAction(
-        "grab",
-        "grab",
-        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS,
-      ),
-    ).toBe("reassert");
+    expect(thumbnailCursorSyncAction("grab", "grab", THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS)).toBe(
+      "reassert",
+    );
     // Negative elapsed is only used in tests; production always passes >= 0.
     expect(
-      thumbnailCursorSyncAction(
-        "pointer",
-        "pointer",
-        THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS - 1,
-      ),
+      thumbnailCursorSyncAction("pointer", "pointer", THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS - 1),
     ).toBeNull();
   });
 
   it("force-reasserts interactive cursors for clicks and focus handoffs", () => {
-    expect(
-      thumbnailCursorSyncAction(
-        "pointer",
-        "pointer",
-        0,
-        { force: true },
-      ),
-    ).toBe("reassert");
-    expect(
-      thumbnailCursorSyncAction(
-        "grab",
-        "grab",
-        0,
-        { force: true },
-      ),
-    ).toBe("reassert");
-    expect(
-      thumbnailCursorSyncAction(
-        "default",
-        "default",
-        0,
-        { force: true },
-      ),
-    ).toBeNull();
+    expect(thumbnailCursorSyncAction("pointer", "pointer", 0, { force: true })).toBe("reassert");
+    expect(thumbnailCursorSyncAction("grab", "grab", 0, { force: true })).toBe("reassert");
+    expect(thumbnailCursorSyncAction("default", "default", 0, { force: true })).toBeNull();
   });
 
   it("does not reassert the default cursor", () => {
@@ -1241,10 +1201,7 @@ describe("thumbnailCssCursor", () => {
   it("mirrors the hit-tested kind on the document without redundant writes", () => {
     applyThumbnailCssCursor("grab");
     expect(document.documentElement.style.cursor).toBe("grab");
-    expect(document.documentElement).toHaveAttribute(
-      THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
-      "grab",
-    );
+    expect(document.documentElement).toHaveAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE, "grab");
 
     // Same kind must not thrash style.cursor — WebKit treats each write as a
     // cursor-rectangle update and can flash the default arrow.
@@ -1254,10 +1211,7 @@ describe("thumbnailCssCursor", () => {
 
     applyThumbnailCssCursor("pointer");
     expect(document.documentElement.style.cursor).toBe("pointer");
-    expect(document.documentElement).toHaveAttribute(
-      THUMBNAIL_CURSOR_KIND_ATTRIBUTE,
-      "pointer",
-    );
+    expect(document.documentElement).toHaveAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE, "pointer");
 
     applyThumbnailCssCursor("default");
     expect(document.documentElement.style.cursor).toBe("");
@@ -1332,11 +1286,13 @@ describe("thumbnail card hover lock", () => {
     const origin = { x: 40, y: 80 };
     expect(thumbnailCardHoverLockReleased(null, { x: 40, y: 80, inside: true })).toBe(false);
     expect(thumbnailCardHoverLockReleased(origin, { x: 40, y: 80, inside: true })).toBe(false);
-    expect(thumbnailCardHoverLockReleased(origin, {
-      x: 40 + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX - 1,
-      y: 80,
-      inside: true,
-    })).toBe(false);
+    expect(
+      thumbnailCardHoverLockReleased(origin, {
+        x: 40 + THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX - 1,
+        y: 80,
+        inside: true,
+      }),
+    ).toBe(false);
     expect(thumbnailCardHoverLockReleased(origin, { x: 80, y: 20, inside: true })).toBe(true);
     expect(thumbnailCardHoverLockReleased(origin, { x: 40, y: 80, inside: false })).toBe(true);
   });
@@ -1350,8 +1306,10 @@ describe("thumbnail card hover lock", () => {
     expect(thumbnailStackHoldsCollapsedPose()).toBe(false);
     expect(thumbnailStackSuppressesCardHover()).toBe(false);
     setThumbnailCardHoverSuppressed(true);
-    expect(document.querySelector(".thumbnail-stack"))
-      .toHaveAttribute(THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE, "true");
+    expect(document.querySelector(".thumbnail-stack")).toHaveAttribute(
+      THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE,
+      "true",
+    );
     expect(thumbnailStackSuppressesCardHover()).toBe(true);
   });
 

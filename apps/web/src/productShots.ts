@@ -10,7 +10,8 @@ export const PRODUCT_SHOTS = [
     width: 1600,
     height: 1000,
     title: "Capture what you need",
-    description: "A region, a window, or the full display. Screenshot and record from the same menu.",
+    description:
+      "A region, a window, or the full display. Screenshot and record from the same menu.",
     alt: "Captures region recording over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box and the full Record menu showing Start recording",
   },
   {

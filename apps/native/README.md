@@ -258,6 +258,24 @@ Completing import alone never confirms the replacement: it must pass the same
 exact-token, packaged-tools and live-root health checks as the empty-profile mode.
 An import failure leaves the replacement unconfirmed and does not launch a host.
 
+Optionally add `--restore-preferences true|false` to carry an **operator-supplied**
+Preferences visibility value through the development handoff. A private one-shot
+JSON sidecar is consumed only by the elected primary before choosing its windows.
+For a completed profile, `true` selects the existing ready notice plus Preferences;
+`false` and an empty legacy sidecar select the notice alone. An absent sidecar
+preserves ordinary launch routing. The intent never substitutes for health: a host
+that acknowledges readiness without consuming it cannot confirm replacement.
+Malformed, oversized or linked markers are retained and fail primary startup.
+
+**This is not automatic installed Settings restoration.** There is no native GUI
+successful-update shutdown boundary to snapshot visibility yet. The helper's new
+empty/imported profiles require setup, which takes priority over restoration;
+permission-recovery capture and explicit media-open routing also keep their priority.
+Injected markers with completed isolated profiles exercise the window routing only.
+A future GUI updater must snapshot actual Preferences visibility immediately before
+successful-update shutdown, not focus or the origin of the update click. No installed
+profile, global marker or production update channel is discovered by this protocol.
+
 The helper acquires/stages signed bytes, activates the replacement and launches
 the packaged executable directly. It disables system-shortcut takeover and passes
 only the new history/settings paths. AppKit and wgpu acknowledge only as the elected
@@ -907,7 +925,12 @@ current presentation (zero is valid), holds until the new exit is ready, then
 eases the accumulated distance. Removing a held slot rebases the Rust trajectory
 without moving its survivor. AppKit retargets its Core Animation presentation
 rather than scheduling independent model-frame shifts.
-Clear all streaks every card out, bottom first. Show less and expand fly the
+Clear all streaks every card out, bottom first, holding each card's current
+brightness, blur, media scale, opacity and arrival pose through its stagger and
+composing the streak underneath that appearance. It does not force idle cards
+into the dimmed hover look. Individual Close/Delete keep their existing treatment.
+This is screenshot-stack behavior; recording-ready notices are separate surfaces.
+Show less and expand fly the
 cards between the list and the compact pile, and the stack toolbar enters, leaves
 and clears with its shipping keyframes; the Show less pill morphs over 240 ms.
 New cards fade an accent capture highlight, main-action glyphs pop when they
@@ -966,7 +989,11 @@ window never receives keyboard focus, so its controls are pointer-only there. Pr
 placement, focus and actions; `x11_preview_smoke.py --stack` additionally checks
 per-card routing, compact arrivals/cancellation and nondestructive Clear all in
 all four corners, plus eight-card overflow at bottom-left. CI runs this stack
-mode. macOS CI covers AppKit/ABI lifecycles and renders.
+mode. Add `--record-clear` to record the dismissal on that disposable desktop,
+and `--reduced-motion` to exercise immediate removal. Asymmetric egui paint
+tests distinguish idle, partial and full-hover filters; AppKit source tests check
+preserved media and the first animation frame, but require a macOS host to run.
+macOS CI covers AppKit/ABI lifecycles and renders.
 Physical macOS/Windows desktops, mixed-DPI monitors, compositor behavior,
 transparent hit-region parity and screen-reader/keyboard access still need
 acceptance. Wayland mini-preview positioning remains unsupported; portal

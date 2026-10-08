@@ -773,6 +773,9 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var onMove: ((String, CGFloat, CGFloat, Double) -> Void)?
     var onRotate: ((String, Double) -> Void)?
     var onResize: ((String, String, CGPoint, Double, Bool) -> Void)?
+    var onPreview: ((String, [String: Any]) -> Void)?
+    var onPreviewCancel: (() -> Void)?
+    var pixelPreviewVisible = false { didSet { needsDisplay = true } }
     var onDoubleClick: ((CGPoint, Double) -> Bool)?
     var onError: ((Error) -> Void)?
     /// Curve dots for the selected visible, unlocked line/arrow.
@@ -970,7 +973,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             startPoint = point; currentPoint = point; needsDisplay = true
         } catch { cancelGesture(); onError?(error) }
     }
-    func drag(to point: CGPoint, snap: Bool? = nil) {
+    func drag(to point: CGPoint, snap: Bool? = nil, previewPixels: Bool = true) {
         guard let startPoint else { return }; currentPoint = point
         if let id = curveLayerID, let handle = curveHandle {
             if hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3 {
@@ -986,7 +989,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             resizePreview = resizeDrag.preview(current: canvasPoint(for: point), lockAspect: lockResizeAspect)
         } else if let moveDrag {
             guard hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3 else {
-                movePreview = nil; needsDisplay = true; return
+                movePreview = nil; needsDisplay = true; onPreviewCancel?(); return
             }
             let scale = presentedImageRect.width / canvasSize.width
             movePreview = moveDrag.preview(delta: CGPoint(
@@ -998,6 +1001,25 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             }
         }
         needsDisplay = true
+        guard previewPixels else { return } // Release commits; do not render another uncommitted frame.
+        let current = canvasPoint(for: point)
+        let scale = presentedImageRect.width / canvasSize.width
+        let moved = hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3
+        if let id = curveLayerID, let handle = curveHandle, moved {
+            onPreview?(id, ["action": "curve", "edit": ["kind": "move", "handle": handle as [String: Any],
+                "point": ["x": Double(current.x), "y": Double(current.y)]]])
+        } else if let id = rotatingLayerID, let angle = rotationPreview?.radians, angle != rotationStartRadians {
+            onPreview?(id, ["action": "rotate", "radians": angle])
+        } else if let id = selectedLayerID, let handle = resizeHandle, moved {
+            onPreview?(id, ["action": "resize", "handle": Self.resizeHandleNames[handle],
+                "current": ["x": current.x, "y": current.y], "display_scale": scale,
+                "lock_aspect": lockResizeAspect])
+        } else if let id = hitLayerID, moved {
+            onPreview?(id, ["action": "drag_move", "delta_x": (point.x - startPoint.x) / scale,
+                "delta_y": (point.y - startPoint.y) / scale, "display_scale": scale])
+        } else {
+            onPreviewCancel?()
+        }
     }
     func end(at point: CGPoint, snap: Bool? = nil) {
         guard let start = startPoint else { return }
@@ -1012,14 +1034,14 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             return
         }
         if let id = rotatingLayerID {
-            drag(to: point, snap: snap)
+            drag(to: point, snap: snap, previewPixels: false)
             let angle = rotationPreview?.radians
             cancelGesture()
             if let angle, angle != rotationStartRadians { onRotate?(id, angle) }
             return
         }
         if let id = selectedLayerID, let handle = resizeHandle {
-            drag(to: point, snap: snap)
+            drag(to: point, snap: snap, previewPixels: false)
             let distance = hypot(point.x - start.x, point.y - start.y)
             let current = canvasPoint(for: point)
             let scale = presentedImageRect.width / canvasSize.width
@@ -1038,11 +1060,13 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         else { onSelect?(hit) }
     }
     func cancelGesture() {
+        let active = startPoint != nil
         startPoint = nil; currentPoint = nil; hitLayerID = nil; transientOutline = nil
         rotationStartOutline = nil; rotatingLayerID = nil; rotationPreview = nil; needsDisplay = true
         resizeDrag = nil; resizeHandle = nil; resizePreview = nil; lockResizeAspect = false
         moveDrag = nil; movePreview = nil
         curveLayerID = nil; curveHandle = nil; curvePreview = nil
+        if active { onPreviewCancel?() }
         layoutExpandButton()
     }
     override func mouseDown(with event: NSEvent) {
@@ -1168,7 +1192,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             }
         }
         if let handles = curvePreview ?? (startPoint == nil ? curveHandles : nil) {
-            if curvePreview != nil, handles.path.count >= 2 {
+            if curvePreview != nil, !pixelPreviewVisible, handles.path.count >= 2 {
                 let path = NSBezierPath()
                 for (index, point) in handles.path.enumerated() {
                     if index == 0 { path.move(to: map(point)) } else { path.line(to: map(point)) }
@@ -2278,7 +2302,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             if self.drawingPreviewPending == nil { self.cancelDrawingPreview() }
             else { self.drainDrawingPreview() }
         }
-        drawOverlay.onPreviewCancel = { [weak self] in self?.cancelDrawingPreview() }
+        drawOverlay.onPreviewCancel = { [weak self] in
+            guard let self, self.selectionOverlay.startPoint == nil else { return }
+            self.cancelDrawingPreview()
+        }
         drawOverlay.onWand = { [weak self] point in self?.removeImageBackground(at: point) }
         drawOverlay.onHover = { [weak self] point in self?.wandHover(point) }
         drawOverlay.brushOverImage = { [weak self] point in
@@ -2313,6 +2340,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.onResize = { [weak self] id, handle, current, scale, lockAspect in
             self?.resizeCanvasLayer(id, handle: handle, current: current,
                                     displayScale: scale, lockAspect: lockAspect)
+        }
+        selectionOverlay.onPreview = { [weak self] id, edit in
+            guard let self, !self.state.busy,
+                  let layer = self.state.snapshot?.layers.first(where: { $0.id == id }),
+                  layer.visible, !layer.locked else { return }
+            self.drawingPreviewPending = ["operation": "layer", "id": id, "edit": edit]
+            self.drainDrawingPreview()
+        }
+        selectionOverlay.onPreviewCancel = { [weak self] in
+            guard let self, self.drawOverlay.startPoint == nil else { return }
+            self.cancelDrawingPreview()
         }
         selectionOverlay.onDoubleClick = { [weak self] point, tolerance in
             guard let self else { return false }
@@ -4905,8 +4943,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func cancelDrawingPreview() {
         drawingPreviewEpoch += 1
         drawingPreviewPending = nil
-        if drawOverlay.pixelPreviewVisible { preview.image = editedImage }
+        if drawOverlay.pixelPreviewVisible || selectionOverlay.pixelPreviewVisible { preview.image = editedImage }
         drawOverlay.pixelPreviewVisible = false
+        selectionOverlay.pixelPreviewVisible = false
     }
 
     private func drainDrawingPreview() {
@@ -4918,14 +4957,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard let self else { return }
             self.drawingPreviewInFlight = false
             if self.drawingPreviewEpoch == epoch, self.state.generation == generation,
-               !self.state.busy, self.drawOverlay.startPoint != nil {
+               !self.state.busy, self.drawOverlay.startPoint != nil || self.selectionOverlay.startPoint != nil {
                 switch result {
                 case .success(let image):
                     self.preview.image = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-                    self.drawOverlay.pixelPreviewVisible = true
+                    self.drawOverlay.pixelPreviewVisible = self.drawOverlay.startPoint != nil
+                    self.selectionOverlay.pixelPreviewVisible = self.selectionOverlay.startPoint != nil
                 case .failure:
-                    if self.drawOverlay.pixelPreviewVisible { self.preview.image = self.editedImage }
+                    if self.drawOverlay.pixelPreviewVisible || self.selectionOverlay.pixelPreviewVisible {
+                        self.preview.image = self.editedImage
+                    }
                     self.drawOverlay.pixelPreviewVisible = false
+                    self.selectionOverlay.pixelPreviewVisible = false
                 }
             }
             self.drainDrawingPreview()

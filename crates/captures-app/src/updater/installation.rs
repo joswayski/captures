@@ -25,11 +25,21 @@ pub struct PendingInstallation {
     paths: Paths,
     info: ReleaseInfo,
     id: uuid::Uuid,
+    restore_preferences: Option<bool>,
 }
 
 impl PendingInstallation {
     pub fn info(&self) -> &ReleaseInfo {
         &self.info
+    }
+
+    /// Carry an explicit pre-shutdown Preferences VISIBILITY snapshot to the
+    /// development health launch. Focus/update-click origin are not substitutes.
+    /// The helper currently accepts an operator-supplied value: no native GUI
+    /// update shutdown/installation boundary exists to supply this automatically.
+    pub fn with_restart_preferences(mut self, visible: bool) -> Self {
+        self.restore_preferences = Some(visible);
+        self
     }
 
     /// Accept the replacement and remove the retained previous package.
@@ -145,7 +155,12 @@ impl StagedUpdate {
             }
             return Err(error);
         }
-        Ok(PendingInstallation { paths, info, id })
+        Ok(PendingInstallation {
+            paths,
+            info,
+            id,
+            restore_preferences: None,
+        })
     }
 }
 

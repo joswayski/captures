@@ -2,7 +2,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  root: "ui",
+  root: import.meta.dirname,
   plugins: [react()],
   server: {
     host: "127.0.0.1",
@@ -15,6 +15,8 @@ export default defineConfig({
     emptyOutDir: true,
   },
   test: {
+    name: "desktop",
+    isolate: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     globals: true,

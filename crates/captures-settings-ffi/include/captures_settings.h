@@ -1224,6 +1224,12 @@ void captures_recording_free_v1(CapturesRecordingSession *handle);
  * {"millis":n}; easing is {"token":"ease-x"} or {"bezier":[x1,y1,x2,y2]};
  * frames are [{offset,opacity,translate_y,scale,blur}] (translate_y in points,
  * positive downward; the easing applies to each segment).
+ * update_restart_take {ready_file:absolute_path} consumes only the private
+ * development-health sidecar and returns {ok:true,restore_preferences:null|bool}.
+ * Call only after primary election, before UI startup. null preserves ordinary
+ * routing; false (including an empty legacy sidecar) is tray-only; true restores
+ * Preferences beside the ready notice. This does not acknowledge health, write
+ * installed data or enable GUI update installation.
  * `request_json` must be a non-null, NUL-terminated UTF-8
  * string no larger than 8 MiB. The returned string is always NUL-terminated,
  * owned by Rust, and must be released exactly once with captures_settings_free_v1.

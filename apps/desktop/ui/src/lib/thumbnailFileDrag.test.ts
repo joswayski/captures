@@ -9,11 +9,11 @@ import {
 } from "./thumbnailFileDrag";
 
 const thumbnailStyles = readFileSync(
-  resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
+  resolve(import.meta.dirname, "../styles/mini-preview.css"),
   "utf8",
 );
 const designTokens = readFileSync(
-  resolve(process.cwd(), "../../shared/design.css"),
+  resolve(import.meta.dirname, "../../../../../shared/design.css"),
   "utf8",
 );
 
@@ -51,19 +51,16 @@ describe("mini-preview file-drop landing", () => {
     expect(thumbnailStyles).toMatch(
       /translate:\s*calc\(-1 \* var\(--thumbnail-drop-reject-x-1\)\) 0/,
     );
-    expect(thumbnailStyles).toMatch(
-      /translate:\s*var\(--thumbnail-drop-reject-x-1\) 0/,
-    );
+    expect(thumbnailStyles).toMatch(/translate:\s*var\(--thumbnail-drop-reject-x-1\) 0/);
     expect(thumbnailStyles).not.toMatch(/translate:\s*-9px 0/);
   });
 
   it("lets the reject shake override the settled arrive animation", () => {
     expect(thumbnailStyles).toMatch(
-      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\.thumbnail-drop-rejected\)/,
+      /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived:not\(\.thumbnail-exiting\):not\(\s*\.thumbnail-drop-rejected\s*\)/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card\.thumbnail-ready\.thumbnail-arrived\.thumbnail-drop-rejected/,
     );
   });
 });
-

@@ -1,0 +1,4 @@
+# These are standalone native test/packaging scripts, not a Python package.
+# Preserve CI's setup-python selection and distro D-Bus/GI/Xlib installations.
+python-preference = "only-system"
+python-downloads = "never"

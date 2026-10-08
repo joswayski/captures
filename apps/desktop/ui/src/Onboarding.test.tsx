@@ -58,7 +58,9 @@ describe("Onboarding", () => {
   it("guides a new macOS user through screen access before enabling capture", async () => {
     render(<Onboarding />);
 
-    expect(await screen.findByRole("heading", { name: "Required permissions" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Required permissions" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Captures needs screen access to work/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Screen Recording is required/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Pick audio sources when you record/)).not.toBeInTheDocument();
@@ -76,7 +78,9 @@ describe("Onboarding", () => {
     expect(screen.queryByText("Screenshot")).not.toBeInTheDocument();
     expect(screen.queryByText(/Setup for/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Your work stays yours/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Everything ready before your first capture/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Everything ready before your first capture/),
+    ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Captures")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Microphone Settings" })).not.toBeInTheDocument();
 
@@ -86,8 +90,12 @@ describe("Onboarding", () => {
       expect(invoke).toHaveBeenCalledWith("request_onboarding_screen_permission");
     });
     expect(await screen.findByText("Restart required")).toBeInTheDocument();
-    expect(screen.getByText(/Turn the switch on next to this copy of Captures/)).toBeInTheDocument();
-    expect(screen.getByText(/A local build is a different row from a downloaded app/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Turn the switch on next to this copy of Captures/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/A local build is a different row from a downloaded app/),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     const restart = screen.getByRole("button", { name: "Restart Captures" });
     expect(restart).toBeInTheDocument();
@@ -126,7 +134,9 @@ describe("Onboarding", () => {
     render(<Onboarding />);
 
     expect(await screen.findByText("Still off")).toBeInTheDocument();
-    expect(screen.getByText(/The switch for this copy of Captures is still off/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/The switch for this copy of Captures is still off/),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start capturing" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Start capturing" })).not.toHaveClass("cta-pulse");
@@ -167,8 +177,14 @@ describe("Onboarding", () => {
     };
     render(<Onboarding />);
 
-    expect(await screen.findByRole("heading", { name: "You’re ready to capture" })).toBeInTheDocument();
-    expect(screen.getByText("Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private.")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "You’re ready to capture" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Windows provides screen capture access without a separate permission prompt. Secure and protected windows remain private.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByText("Desktop audio")).not.toBeInTheDocument();
     expect(screen.queryByText("Microphone")).not.toBeInTheDocument();
@@ -188,7 +204,9 @@ describe("Onboarding", () => {
       expect(invoke).toHaveBeenCalledWith("request_onboarding_microphone_permission");
     });
     expect(await screen.findByText("Granted")).toBeInTheDocument();
-    expect(screen.getByText(/Turn the microphone on when you start a recording/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Turn the microphone on when you start a recording/),
+    ).toBeInTheDocument();
     expect(screen.queryByText("On by default")).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_desktop_audio", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_microphone", expect.anything());

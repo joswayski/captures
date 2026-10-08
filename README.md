@@ -55,7 +55,9 @@ These links always download the **latest** validated Preview:
 
 Preview builds automatically publish installed-app changes from `main`, and may contain bugs or incomplete features. Changes arriving during a build are grouped into the next Preview instead of waiting for an installer for every merge. Installed copies check captur.es for a new Preview shortly after launch and about every five minutes; the site caches GitHub's updater note so those checks stay off GitHub. The notice lists every Preview published since the version you have, then installs the latest. Turn **Show what’s new on update notices** off in Preferences for a compact Update now prompt. Installing still downloads the signed archive from GitHub and closes open captures; unsaved edits are kept as drafts and stay in Capture History. The update notice stays on screen during a capture so you can screenshot the changelog or an error. GitHub 403s are often a short rate limit, and Try again usually works. If the download is missing (404), use **download from captur.es** on the error, or the installer links above. You can also check from Preferences → Updates, or the tray **Check for Updates…** item. If Captures will not open or cannot install an update, download the installer for your OS from the table above. The macOS disk image, Windows setup, and Debian package replace the installed app. For the AppImage, copy it over `~/.local/bin/Captures.AppImage` and make it executable (`chmod +x`); running it from Downloads starts a second copy. Settings, capture history, and OS permissions stay. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
 
-On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow.
+After an in-app update, Captures shows its ready tooltip and reopens Preferences if that window was open when the app restarted. Otherwise it stays in the tray or menu bar.
+
+On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow. When the tray icon's position is unavailable, including on Linux, the launch notice uses a compact, unpointed card.
 
 ## Features
 
@@ -227,7 +229,9 @@ Wayland screenshot permission is handled by the desktop portal at capture time.
 Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
 "Captures is ready to use" notice with the New Capture shortcut on direct hosts;
 Wayland names the tray without advertising ungranted keys. Without a tray icon's
-screen position, the compositor places the notice and it has no directional caret.
+screen position, it uses a compact, left-aligned, unpointed card that grows to fit
+long shortcuts. On Wayland the compositor places it. Real tray/menu-bar anchors
+keep the centered pill and triangle.
 The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:
@@ -249,6 +253,8 @@ with controls mirrored for right-side placement. Hover blurs and dims the image;
 cards show byte sizes, clipboard confirmation and editor-presence pills. Delete
 uses a white icon on the signal-colored hover background. Native previews also
 animate arrival, dismissal, pile expansion and settling, respecting reduced motion.
+Clear all retains each screenshot card's current appearance while it streaks out,
+without forcing idle cards into hover dimming; later captures and retained files stay.
 After export, Show in Folder selects the saved file in the file manager (on Linux
 through the desktop's FileManager1 service, or by opening its folder when none
 answers) instead of saving another copy; a missing export leaves the capture available.
@@ -500,7 +506,9 @@ update channel is enabled. An explicit [development helper](apps/native/README.m
 can replace a stopped development package and test startup with a new empty
 profile or an explicitly imported isolated copy, or recover a failed replacement
 after all app processes stop. It does not update installed copies or reuse their
-profiles. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
+profiles. Its optional Preferences visibility intent is development-only; fresh
+profiles still require setup, and automatic installed Settings restoration is not
+connected. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
 also available separately, copies explicitly selected shipping settings, retained
 History and drafts with an original-data snapshot. Shipping data and exports stay
 unchanged, copied profiles survive failed startup and package recovery, and the
@@ -754,20 +762,23 @@ persistence.
 Both native hosts keep the Properties title visible while its fields scroll,
 including at the minimum window size; the title does not cover the controls.
 In both native hosts, **Layers** supports clicking the edited preview to select an
-unlocked visible layer, or empty space to clear selection. Drag shows a translated
-selection outline; release moves the layer in one undoable edit. Escape, focus loss,
-preview resizing or leaving Layers cancels the drag. Pixels update on release, not
-continuously during dragging; selection alone does not change the document.
+unlocked visible layer, or empty space to clear selection. Move, rotate, resize and
+curve-dot drags show edited pixels while held, with selection guides over them.
+The background renderer keeps only the newest pending position; a large image can
+lag behind the pointer. Held previews do not change the document or saved draft;
+release commits one undoable edit. Escape, focus loss, preview resizing or leaving
+Layers cancels the drag and restores the unchanged pixels.
 The selected layer also exposes a **rotation grip** when it fits inside the image.
 Drag it to rotate; hold Shift for stops configured under **Properties → Shift rotation snap**
 (1–180°, initially 15°). The increment is per-editor UI state, not a document edit
-or saved preference. Rotation uses the same outline-only
+or saved preference. Rotation uses the same live-pixel
 preview, cancellation, undo and draft behavior. Hidden or locked layers have no
 grip.
 Eight border grips resize images, shapes and drawings. Shift keeps corner drags
 proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
 visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
-Resizing uses an outline-only preview and commits on release.
+Resizing previews pixels without growing the canvas; fully outside content can
+expand the canvas when the edit commits on release.
 Selected lines and arrows show curve dots: drag a dot to bend the stroke, double-click
 the path to add a point and double-click a point to remove it. Layers offers a Curve
 slider for straight or single-bend strokes and Straighten for multi-point ones. Curves

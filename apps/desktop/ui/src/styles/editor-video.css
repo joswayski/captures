@@ -418,17 +418,16 @@
   position: absolute;
   z-index: 5;
   top: -3px;
-  left: calc(
-    var(--timeline-inset)
-    + (var(--trim) * (100% - (var(--timeline-inset) * 2)))
-  );
+  left: calc(var(--timeline-inset) + (var(--trim) * (100% - (var(--timeline-inset) * 2))));
   width: calc(var(--timeline-inset) * 2);
   height: 82px;
   border: 0;
   border-radius: var(--r-xs);
   padding: 0;
   background: var(--theme-accent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28), var(--shadow-sm);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.28),
+    var(--shadow-sm);
   transform: translateX(-50%);
   cursor: ew-resize;
   touch-action: none;

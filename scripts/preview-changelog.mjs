@@ -10,12 +10,14 @@ export function previewChangelog(releases) {
       const encoded = encodedPreviewVersion(release.tag_name);
       if (!encoded) return [];
       const notes = typeof release.body === "string" ? release.body : "";
-      return [{
-        version: encoded.version,
-        display_version: encoded.displayVersion,
-        notes,
-        order: encoded.order,
-      }];
+      return [
+        {
+          version: encoded.version,
+          display_version: encoded.displayVersion,
+          notes,
+          order: encoded.order,
+        },
+      ];
     })
     .sort((left, right) => comparePreviewVersions(right.order, left.order))
     .map((entry) => ({
@@ -41,7 +43,9 @@ export function applyPreviewChangelog(latest, releases) {
 function main() {
   const [command, latestPath, releasesPath] = process.argv.slice(2);
   if (command !== "apply" || !latestPath || !releasesPath) {
-    throw new Error("usage: node scripts/preview-changelog.mjs apply <latest.json> <releases.json>");
+    throw new Error(
+      "usage: node scripts/preview-changelog.mjs apply <latest.json> <releases.json>",
+    );
   }
   const latest = JSON.parse(readFileSync(latestPath, "utf8"));
   const releases = JSON.parse(readFileSync(releasesPath, "utf8"));

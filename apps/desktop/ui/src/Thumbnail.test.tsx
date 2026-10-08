@@ -54,11 +54,11 @@ const secondArtifact: CaptureArtifact = {
 
 function useArtifactFixture(artifacts: CaptureArtifact[]) {
   const invokeDefault = vi.mocked(invoke).getMockImplementation()!;
-  vi.mocked(invoke).mockImplementation((command, args, options) => (
+  vi.mocked(invoke).mockImplementation((command, args, options) =>
     command === "get_artifacts"
       ? Promise.resolve(artifacts)
-      : invokeDefault(command, args, options)
-  ));
+      : invokeDefault(command, args, options),
+  );
 }
 
 /** A preview that appeared under the cursor ignores the first sample. */
@@ -118,9 +118,11 @@ describe("Thumbnail", () => {
     const card = await screen.findByRole("article");
     const stack = card.closest(".thumbnail-stack") as HTMLElement;
 
-    window.dispatchEvent(new CustomEvent("captures-thumbnail-collapsed-layout", {
-      detail: { contentY: 52 },
-    }));
+    window.dispatchEvent(
+      new CustomEvent("captures-thumbnail-collapsed-layout", {
+        detail: { contentY: 52 },
+      }),
+    );
 
     expect(stack.style.getPropertyValue("--thumbnail-collapsed-content-y")).toBe("52px");
   });
@@ -134,9 +136,7 @@ describe("Thumbnail", () => {
         return { revision: 0, artifact_id: artifact.id };
       }
       if (command === "get_thumbnail_pointer_position") {
-        return pointerReady
-          ? { x: 40, y: 20, inside: true }
-          : new Promise(() => undefined);
+        return pointerReady ? { x: 40, y: 20, inside: true } : new Promise(() => undefined);
       }
       return undefined;
     });
@@ -168,44 +168,40 @@ describe("Thumbnail", () => {
       expect(edit).toHaveAttribute("data-native-pointer-hover", "true");
     });
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "set_thumbnail_cursor",
-        { kind: "pointer" },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "pointer" });
     });
     vi.mocked(invoke).mockClear();
 
     // Clicks reset the AppKit arrow; pointerdown must reassert without waiting
     // for a poll. Follow-up delays cover WebKit's post-click arrow and the
     // Edit→editor key-window handoff.
-    edit.dispatchEvent(new PointerEvent("pointerdown", {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      pointerType: "mouse",
-    }));
+    edit.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerType: "mouse",
+      }),
+    );
 
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "reassert_thumbnail_cursor",
-        { kind: "pointer" },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("reassert_thumbnail_cursor", {
+        kind: "pointer",
+      });
     });
 
     vi.mocked(invoke).mockClear();
     window.dispatchEvent(new Event("blur"));
 
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-      "reassert_thumbnail_cursor",
-      { kind: "pointer" },
-    );
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("reassert_thumbnail_cursor", {
+      kind: "pointer",
+    });
 
     // Delayed handoff ticks must keep reasserting while the editor steals focus.
     await waitFor(() => {
       expect(
-        vi.mocked(invoke).mock.calls.filter(
-          ([command]) => command === "reassert_thumbnail_cursor",
-        ).length,
+        vi.mocked(invoke).mock.calls.filter(([command]) => command === "reassert_thumbnail_cursor")
+          .length,
       ).toBeGreaterThan(1);
     });
   });
@@ -219,9 +215,7 @@ describe("Thumbnail", () => {
         return { revision: 0, artifact_id: artifact.id };
       }
       if (command === "get_thumbnail_pointer_position") {
-        return pointerReady
-          ? { x: 40, y: 80, inside: true }
-          : new Promise(() => undefined);
+        return pointerReady ? { x: 40, y: 80, inside: true } : new Promise(() => undefined);
       }
       return undefined;
     });
@@ -242,24 +236,15 @@ describe("Thumbnail", () => {
       expect(card).toHaveAttribute("data-thumbnail-native-active", "true");
     });
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "set_thumbnail_cursor",
-        { kind: "grab" },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "grab" });
     });
-    expect(document.documentElement).toHaveAttribute(
-      "data-thumbnail-cursor",
-      "grab",
-    );
+    expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "grab");
     expect(document.documentElement.style.cursor).toBe("grab");
 
     // Stationary first entry must also schedule a handoff reassert so AppKit
     // open-hand survives makeKey without requiring a detour over a button.
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "reassert_thumbnail_cursor",
-        { kind: "grab" },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("reassert_thumbnail_cursor", { kind: "grab" });
     });
   });
 
@@ -620,17 +605,18 @@ describe("Thumbnail", () => {
   });
 
   it("lets the Windows WebView own cursors through repeated moves, polls and focus handoffs", async () => {
-    const userAgent = vi.spyOn(navigator, "userAgent", "get")
+    const userAgent = vi
+      .spyOn(navigator, "userAgent", "get")
       .mockReturnValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
     try {
       let target: HTMLElement | null = null;
       let position = { x: 40, y: 80, inside: true };
       const invokeDefault = vi.mocked(invoke).getMockImplementation()!;
-      vi.mocked(invoke).mockImplementation((command, args, options) => (
+      vi.mocked(invoke).mockImplementation((command, args, options) =>
         command === "get_thumbnail_pointer_position"
           ? Promise.resolve(position)
-          : invokeDefault(command, args, options)
-      ));
+          : invokeDefault(command, args, options),
+      );
       Object.defineProperty(document, "elementFromPoint", {
         configurable: true,
         value: vi.fn(() => target),
@@ -652,7 +638,9 @@ describe("Thumbnail", () => {
         expect(document.documentElement).toHaveAttribute("data-thumbnail-cursor", "grab");
       }
       window.dispatchEvent(new Event("captures-thumbnail-ready"));
-      await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_thumbnail_pointer_position"));
+      await waitFor(() =>
+        expect(vi.mocked(invoke)).toHaveBeenCalledWith("get_thumbnail_pointer_position"),
+      );
       target = edit;
       position = { x: 100, y: 100, inside: true };
       fireEvent.pointerMove(edit, { clientX: 100, clientY: 100, pointerType: "mouse" });
@@ -661,9 +649,14 @@ describe("Thumbnail", () => {
       fireEvent.pointerUp(edit, { button: 0, pointerType: "mouse" });
       window.dispatchEvent(new Event("blur"));
       expect(document.documentElement).toHaveAttribute("data-thumbnail-platform", "windows");
-      expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-        command === "set_thumbnail_cursor" || command === "reassert_thumbnail_cursor"
-      ))).toHaveLength(0);
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(
+            ([command]) =>
+              command === "set_thumbnail_cursor" || command === "reassert_thumbnail_cursor",
+          ),
+      ).toHaveLength(0);
       target = null;
       window.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }));
       expect(document.documentElement).not.toHaveAttribute("data-thumbnail-cursor");
@@ -685,10 +678,13 @@ describe("Thumbnail", () => {
     window.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerType: "mouse" }));
 
     expect(
-      vi.mocked(invoke).mock.calls.filter(
-        ([command, payload]) => command === "set_thumbnail_ignore_cursor_events"
-          && (payload as { ignore?: boolean } | undefined)?.ignore === true,
-      ),
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(
+          ([command, payload]) =>
+            command === "set_thumbnail_ignore_cursor_events" &&
+            (payload as { ignore?: boolean } | undefined)?.ignore === true,
+        ),
     ).toHaveLength(0);
   });
 
@@ -700,14 +696,15 @@ describe("Thumbnail", () => {
     fireEvent(window, new Event("captures-thumbnail-resumed"));
 
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "set_thumbnail_ignore_cursor_events",
-        { ignore: true },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_ignore_cursor_events", {
+        ignore: true,
+      });
     });
-    expect(vi.mocked(invoke).mock.calls.some(([command]) => (
-      command === "refresh_thumbnail_interactivity"
-    ))).toBe(false);
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "refresh_thumbnail_interactivity"),
+    ).toBe(false);
   });
 
   it("rejects inbound drags so a dropped screenshot cannot replace the preview UI", async () => {
@@ -763,8 +760,7 @@ describe("Thumbnail", () => {
 
     stack.scrollTop = 50;
     fireEvent.scroll(stack);
-    expect(await screen.findByRole("button", { name: "Show newer captures" }))
-      .toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Show newer captures" })).toBeInTheDocument();
   });
 
   it("keeps other previews interactive while a deleted slot passes clicks through", async () => {
@@ -803,16 +799,18 @@ describe("Thumbnail", () => {
     expect(minimizePreviews).not.toBeInTheDocument();
 
     await waitFor(() => {
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
 
     pointerTarget = secondDelete;
     window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
     await waitFor(() => {
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
     });
 
@@ -882,7 +880,8 @@ describe("Thumbnail", () => {
       full_url: "captures-capture://artifact-full/capture-2",
     };
     vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_artifacts") return [artifact, secondArtifact, { ...artifact, id: "capture-3" }];
+      if (command === "get_artifacts")
+        return [artifact, secondArtifact, { ...artifact, id: "capture-3" }];
       if (command === "get_clipboard_state") {
         return { revision: 0, artifact_id: secondArtifact.id };
       }
@@ -938,7 +937,8 @@ describe("Thumbnail", () => {
       full_url: "captures-capture://artifact-full/capture-2",
     };
     vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_artifacts") return [artifact, secondArtifact, { ...artifact, id: "capture-3" }];
+      if (command === "get_artifacts")
+        return [artifact, secondArtifact, { ...artifact, id: "capture-3" }];
       if (command === "get_clipboard_state") {
         return { revision: 0, artifact_id: secondArtifact.id };
       }
@@ -1110,16 +1110,15 @@ describe("Thumbnail", () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("dismiss_artifact", {
         artifactId: artifact.id,
       });
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "refresh_thumbnail_interactivity",
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("refresh_thumbnail_interactivity");
       const pollsAfterRemoval = pointerPolls;
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
       expect(pointerPolls).toBe(pollsAfterRemoval);
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     } finally {
       vi.useRealTimers();
@@ -1164,10 +1163,9 @@ describe("Thumbnail", () => {
     pointerResolver.current?.({ x: 40, y: 40, inside: true });
 
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "set_thumbnail_ignore_cursor_events",
-        { ignore: false },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_ignore_cursor_events", {
+        ignore: false,
+      });
     });
   });
 
@@ -1189,8 +1187,9 @@ describe("Thumbnail", () => {
     expect(document.querySelector(".thumbnail-stack-toolbar")).toBeNull();
 
     await waitFor(() => {
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
   });
@@ -1217,8 +1216,9 @@ describe("Thumbnail", () => {
     expect(document.querySelector(".thumbnail-stack-toolbar")).toBeNull();
 
     await waitFor(() => {
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
   });
@@ -1238,8 +1238,9 @@ describe("Thumbnail", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => {
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
 
@@ -1247,8 +1248,9 @@ describe("Thumbnail", () => {
       await new Promise((resolve) => setTimeout(resolve, 600));
     });
 
-    const ignoreCalls = vi.mocked(invoke).mock.calls
-      .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+    const ignoreCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
     expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("refresh_thumbnail_interactivity");
   });
@@ -1309,8 +1311,9 @@ describe("Thumbnail", () => {
       await Promise.resolve();
     });
 
-    const ignoreCalls = vi.mocked(invoke).mock.calls
-      .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+    const ignoreCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
     expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: false });
   });
 
@@ -1356,18 +1359,16 @@ describe("Thumbnail", () => {
     clickThroughGate.release?.();
 
     await waitFor(() => {
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
     expect(nativeClickThrough).toBe(true);
   });
 
   it("minimizes previews into a layered stack and expands them again", async () => {
-    const stacked = [
-      artifact,
-      { ...artifact, id: "capture-2" },
-    ];
+    const stacked = [artifact, { ...artifact, id: "capture-2" }];
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_artifacts") return stacked;
       if (command === "get_clipboard_state") {
@@ -1418,22 +1419,21 @@ describe("Thumbnail", () => {
     expect(screen.queryByRole("button", { name: "Minimize previews" })).toBeNull();
     const expand = screen.getByRole("button", { name: "Expand 2 previews" });
     expect(expand).toHaveClass("thumbnail-collapsed-hit-target");
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-      "set_mini_previews_collapsed",
-      { collapsed: true },
-    );
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_mini_previews_collapsed", {
+      collapsed: true,
+    });
     await act(async () => {
       fireEvent.click(expand);
       await Promise.resolve();
     });
     expect(stack).toHaveClass("thumbnail-stack-expanding");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"))
-      .toHaveClass("thumbnail-stack-toolbar-entering");
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-      "set_mini_previews_collapsed",
-      { collapsed: false },
-    );
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).toHaveClass("thumbnail-stack-toolbar-entering");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_mini_previews_collapsed", {
+      collapsed: false,
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
     });
@@ -1441,9 +1441,13 @@ describe("Thumbnail", () => {
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
     expect(card).not.toHaveAttribute("aria-hidden");
     expect(screen.getByRole("button", { name: "Minimize previews" })).toBeEnabled();
-    expect(stack.contains(
-      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
-    )).toBe(false);
+    expect(
+      stack.contains(
+        screen
+          .getByRole("button", { name: "Minimize previews" })
+          .closest(".thumbnail-stack-toolbar"),
+      ),
+    ).toBe(false);
   });
 
   it("does not show a collapse control for a single preview", async () => {
@@ -1504,9 +1508,7 @@ describe("Thumbnail", () => {
     expect(collapsedCards).toHaveLength(8);
     collapsedCards.forEach((card, index) => {
       const depth = collapsedCards.length - index - 1;
-      expect(card.style.getPropertyValue("--thumbnail-stack-base-depth")).toBe(
-        String(depth),
-      );
+      expect(card.style.getPropertyValue("--thumbnail-stack-base-depth")).toBe(String(depth));
       expect(card.style.getPropertyValue("--thumbnail-stack-peek-jitter")).toBe(
         `${thumbnailStackPeekJitterPx(depth)}px`,
       );
@@ -1540,7 +1542,8 @@ describe("Thumbnail", () => {
     expect(screen.queryByRole("button", { name: "Show newer captures" })).toBeNull();
     expect(screen.getByRole("button", { name: "Show older captures" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear all previews" })).toBeEnabled();
-    const restack = screen.getByRole("button", { name: "Minimize previews" })
+    const restack = screen
+      .getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar");
     expect(stack.contains(restack)).toBe(false);
   });
@@ -1581,8 +1584,22 @@ describe("Thumbnail", () => {
     expect(clear.closest(".thumbnail-stack-toolbar")).toBe(
       minimize.closest(".thumbnail-stack-toolbar"),
     );
-    expect(clear.compareDocumentPosition(minimize) & Node.DOCUMENT_POSITION_FOLLOWING)
-      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(clear.compareDocumentPosition(minimize) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+
+    // Different presentation states catch a blanket hovered/resting snapshot.
+    const [arriving, resting] = screen.getAllByRole("article");
+    arriving!.style.opacity = "0.63";
+    arriving!.style.transform = "translateY(9px) scale(0.99)";
+    arriving!.style.filter = "blur(1.8px)";
+    arriving!.querySelector("img")!.style.filter = "blur(1.25px) brightness(0.72)";
+    arriving!.querySelector("img")!.style.transform = "scale(1.008)";
+    resting!.style.opacity = "1";
+    resting!.style.transform = "none";
+    resting!.style.filter = "none";
+    resting!.querySelector("img")!.style.filter = "blur(0px) brightness(1)";
+    resting!.querySelector("img")!.style.transform = "none";
 
     vi.useFakeTimers();
     try {
@@ -1596,6 +1613,20 @@ describe("Thumbnail", () => {
       expect(cards[0]!.closest(".thumbnail-stack")).toHaveClass("thumbnail-stack-clearing");
       expect(cards[0]).toHaveClass("thumbnail-exit-dismiss");
       expect(cards[1]).toHaveClass("thumbnail-exit-dismiss");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-opacity")).toBe("0.63");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-transform"))
+        .toBe("translateY(9px) scale(0.99)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-filter")).toBe("blur(1.8px)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-filter"))
+        .toBe("blur(1.25px) brightness(0.72)");
+      expect(arriving!.style.getPropertyValue("--thumbnail-clear-image-transform"))
+        .toBe("scale(1.008)");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-opacity")).toBe("1");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-transform")).toBe("none");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-filter")).toBe("none");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-image-filter"))
+        .toBe("blur(0px) brightness(1)");
+      expect(resting!.style.getPropertyValue("--thumbnail-clear-image-transform")).toBe("none");
       expect(minimize.closest(".thumbnail-stack-toolbar")).toHaveClass(
         "thumbnail-stack-toolbar-clearing",
       );
@@ -1714,8 +1745,9 @@ describe("Thumbnail", () => {
         fireEvent.click(screen.getByRole("button", { name: "Clear all previews" }));
         await Promise.resolve();
       });
-      expect(screen.getAllByRole("article")[0]!.closest(".thumbnail-stack"))
-        .toHaveClass("thumbnail-stack-clearing");
+      expect(screen.getAllByRole("article")[0]!.closest(".thumbnail-stack")).toHaveClass(
+        "thumbnail-stack-clearing",
+      );
 
       const nextArtifact = {
         ...artifact,
@@ -1945,18 +1977,19 @@ describe("Thumbnail", () => {
     expect(document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-x")).toBe(
       "80px",
     );
-    expect(Number.parseFloat(
-      document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y"),
-    )).toBeCloseTo(offsetAfterGrowth - 40);
+    expect(
+      Number.parseFloat(
+        document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y"),
+      ),
+    ).toBeCloseTo(offsetAfterGrowth - 40);
     fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
     await waitFor(() => {
       expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     });
     expect(stack).toHaveClass("thumbnail-stack-minimized");
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
-      "set_mini_previews_collapsed",
-      { collapsed: false },
-    );
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("set_mini_previews_collapsed", {
+      collapsed: false,
+    });
   });
 
   it("drags the collapsed pile instead of expanding once the pointer moves", async () => {
@@ -2000,24 +2033,28 @@ describe("Thumbnail", () => {
       expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     });
     expect(stack).toHaveClass("thumbnail-stack-minimized");
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
-      "set_mini_previews_collapsed",
-      { collapsed: false },
-    );
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("set_mini_previews_collapsed", {
+      collapsed: false,
+    });
   });
 
   it("pauses native hover polling during a pile drag and resumes on drop", async () => {
     vi.useFakeTimers();
     useArtifactFixture([artifact, secondArtifact]);
     const invokeDefault = vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation((command, args, options) => (
+    vi.mocked(invoke).mockImplementation((command, args, options) =>
       command === "get_thumbnail_pointer_position"
         ? Promise.resolve({ x: 0, y: 0, inside: false })
-        : invokeDefault(command, args, options)
-    ));
+        : invokeDefault(command, args, options),
+    );
     render(<Thumbnail />);
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    const polls = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === "get_thumbnail_pointer_position").length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const polls = () =>
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "get_thumbnail_pointer_position").length;
     fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(32 + THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
@@ -2026,14 +2063,20 @@ describe("Thumbnail", () => {
     const expand = screen.getByRole("button", { name: "Expand 2 previews" });
     fireEvent.pointerDown(expand, { button: 0, pointerId: 1, screenX: 40, screenY: 400 });
     fireEvent.pointerMove(window, { pointerId: 1, screenX: 120, screenY: 340 });
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     const stack = expand.closest(".thumbnail-stack")!;
     expect(stack).toHaveClass("thumbnail-stack-dragging");
     const before = polls();
-    await act(async () => { await vi.advanceTimersByTimeAsync(320); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(320);
+    });
     expect(polls()).toBe(before);
     fireEvent.pointerUp(window, { pointerId: 1 });
-    await act(async () => { await vi.advanceTimersByTimeAsync(80); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(80);
+    });
     expect(stack).not.toHaveClass("thumbnail-stack-dragging");
     expect(polls()).toBeGreaterThan(before);
   });
@@ -2116,146 +2159,156 @@ describe("Thumbnail", () => {
 
     expect(stack).toHaveClass("thumbnail-stack-anchor-top");
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
-    const toolbar = screen.getByRole("button", { name: "Minimize previews" })
+    const toolbar = screen
+      .getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
     expect(within(card).getByRole("button", { name: "Delete" })).toBeInTheDocument();
   });
 
-  it.each([1, 8, 24])("flips a %i-card pile around mid-screen without moving its origin", async (count) => {
-    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1_200 });
+  it.each([1, 8, 24])(
+    "flips a %i-card pile around mid-screen without moving its origin",
+    async (count) => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1_200 });
 
-    type ArtifactRemovedHandler = (event: { payload: string }) => void;
-    let onArtifactRemoved: ArtifactRemovedHandler | undefined;
-    vi.mocked(listen).mockImplementation(async (event, handler) => {
-      if (event === "artifact-removed") onArtifactRemoved = handler as ArtifactRemovedHandler;
-      return () => undefined;
-    });
-    const initialCount = Math.max(2, count);
-    const invokeDefault = vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation((command, args, options) => (
-      command === "get_artifacts"
-        ? Promise.resolve(Array.from({ length: initialCount }, (_, index) => ({ ...artifact, id: `capture-${index}` })))
-        : invokeDefault(command, args, options)
-    ));
-    render(<Thumbnail />);
-    const [card] = await screen.findAllByRole("article");
-    if (!card) throw new Error("missing preview");
-    const stack = card.closest(".thumbnail-stack")!;
-    vi.useFakeTimers();
-    fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(32);
-      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
-    });
-    if (count === 1) {
+      type ArtifactRemovedHandler = (event: { payload: string }) => void;
+      let onArtifactRemoved: ArtifactRemovedHandler | undefined;
+      vi.mocked(listen).mockImplementation(async (event, handler) => {
+        if (event === "artifact-removed") onArtifactRemoved = handler as ArtifactRemovedHandler;
+        return () => undefined;
+      });
+      const initialCount = Math.max(2, count);
+      const invokeDefault = vi.mocked(invoke).getMockImplementation()!;
+      vi.mocked(invoke).mockImplementation((command, args, options) =>
+        command === "get_artifacts"
+          ? Promise.resolve(
+              Array.from({ length: initialCount }, (_, index) => ({
+                ...artifact,
+                id: `capture-${index}`,
+              })),
+            )
+          : invokeDefault(command, args, options),
+      );
+      render(<Thumbnail />);
+      const [card] = await screen.findAllByRole("article");
+      if (!card) throw new Error("missing preview");
+      const stack = card.closest(".thumbnail-stack")!;
+      vi.useFakeTimers();
+      fireEvent.click(screen.getByRole("button", { name: "Minimize previews" }));
       await act(async () => {
-        onArtifactRemoved!({ payload: "capture-0" });
+        await vi.advanceTimersByTimeAsync(32);
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS);
       });
-      expect(screen.getAllByRole("article", { hidden: true })).toHaveLength(1);
-      expect(screen.getByRole("button", { name: "Expand preview" })).toBeInTheDocument();
-    }
-    vi.useRealTimers();
+      if (count === 1) {
+        await act(async () => {
+          onArtifactRemoved!({ payload: "capture-0" });
+        });
+        expect(screen.getAllByRole("article", { hidden: true })).toHaveLength(1);
+        expect(screen.getByRole("button", { name: "Expand preview" })).toBeInTheDocument();
+      }
+      vi.useRealTimers();
 
-    const expand = screen.getByRole("button", { name: /^Expand .*preview/ });
-    fireEvent.pointerDown(expand, {
-      button: 0,
-      pointerId: 1,
-      screenX: 40,
-      screenY: 700,
-    });
-
-    const cardTop = () => {
-      const offsetY = Number.parseFloat(
-        document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y") || "0",
-      ) || 0;
-      return offsetY + 800 - thumbnailCollapsedPadding(count) - THUMBNAIL_CARD_HEIGHT_PX;
-    };
-    const tops: number[] = [];
-    for (const screenY of [640, 520, 400]) {
-      fireEvent.pointerMove(window, {
+      const expand = screen.getByRole("button", { name: /^Expand .*preview/ });
+      fireEvent.pointerDown(expand, {
+        button: 0,
         pointerId: 1,
         screenX: 40,
-        screenY,
-        bubbles: true,
+        screenY: 700,
       });
-      await waitFor(() => {
-        expect(stack).toHaveClass("thumbnail-stack-dragging");
-      });
-      expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
-      tops.push(cardTop());
-    }
 
-    for (const screenY of [280, 200]) {
-      fireEvent.pointerMove(window, {
-        pointerId: 1,
-        screenX: 40,
-        screenY,
-        bubbles: true,
-      });
+      const cardTop = () => {
+        const offsetY =
+          Number.parseFloat(
+            document.documentElement.style.getPropertyValue("--thumbnail-stack-drag-y") || "0",
+          ) || 0;
+        return offsetY + 800 - thumbnailCollapsedPadding(count) - THUMBNAIL_CARD_HEIGHT_PX;
+      };
+      const tops: number[] = [];
+      for (const screenY of [640, 520, 400]) {
+        fireEvent.pointerMove(window, {
+          pointerId: 1,
+          screenX: 40,
+          screenY,
+          bubbles: true,
+        });
+        await waitFor(() => {
+          expect(stack).toHaveClass("thumbnail-stack-dragging");
+        });
+        expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+        tops.push(cardTop());
+      }
+
+      for (const screenY of [280, 200]) {
+        fireEvent.pointerMove(window, {
+          pointerId: 1,
+          screenX: 40,
+          screenY,
+          bubbles: true,
+        });
+        await waitFor(() => {
+          expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+        });
+        expect(stack).toHaveClass("thumbnail-stack-dragging", "thumbnail-stack-pressing");
+        tops.push(cardTop());
+      }
+
+      for (let index = 1; index < tops.length; index += 1) {
+        expect(tops[index]! - tops[index - 1]!).toBe(index === tops.length - 1 ? -80 : -120);
+      }
+
+      fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
       await waitFor(() => {
         expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+        expect(stack).not.toHaveClass("thumbnail-stack-dragging");
       });
-      expect(stack).toHaveClass("thumbnail-stack-dragging", "thumbnail-stack-pressing");
-      tops.push(cardTop());
-    }
+      expect(cardTop()).toBeLessThan(200);
+      expect((stack as HTMLElement).style.translate).toBe("");
 
-    for (let index = 1; index < tops.length; index += 1) {
-      expect(tops[index]! - tops[index - 1]!).toBe(index === tops.length - 1 ? -80 : -120);
-    }
-
-    fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
-    await waitFor(() => {
-      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
-      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
-    });
-    expect(cardTop()).toBeLessThan(200);
-    expect((stack as HTMLElement).style.translate).toBe("");
-
-    fireEvent.pointerDown(expand, {
-      button: 0,
-      pointerId: 2,
-      screenX: 40,
-      screenY: 80,
-    });
-    for (const screenY of [200, 320]) {
-      fireEvent.pointerMove(window, {
+      fireEvent.pointerDown(expand, {
+        button: 0,
         pointerId: 2,
         screenX: 40,
-        screenY,
-        bubbles: true,
+        screenY: 80,
       });
+      for (const screenY of [200, 320]) {
+        fireEvent.pointerMove(window, {
+          pointerId: 2,
+          screenX: 40,
+          screenY,
+          bubbles: true,
+        });
+        await waitFor(() => {
+          expect(stack).toHaveClass("thumbnail-stack-dragging");
+        });
+        expect(stack).toHaveClass("thumbnail-stack-anchor-top");
+        tops.push(cardTop());
+      }
+      for (const screenY of [440, 560, 680]) {
+        fireEvent.pointerMove(window, {
+          pointerId: 2,
+          screenX: 40,
+          screenY,
+          bubbles: true,
+        });
+        await waitFor(() => {
+          expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+        });
+        expect(stack).toHaveClass("thumbnail-stack-dragging", "thumbnail-stack-pressing");
+        tops.push(cardTop());
+      }
+      const downTops = tops.slice(-5);
+      for (let index = 1; index < downTops.length; index += 1) {
+        expect(Math.abs(downTops[index]! - downTops[index - 1]!)).toBeLessThan(160);
+      }
+      fireEvent.pointerUp(window, { pointerId: 2, bubbles: true });
       await waitFor(() => {
-        expect(stack).toHaveClass("thumbnail-stack-dragging");
+        expect(stack).not.toHaveClass("thumbnail-stack-dragging");
       });
-      expect(stack).toHaveClass("thumbnail-stack-anchor-top");
-      tops.push(cardTop());
-    }
-    for (const screenY of [440, 560, 680]) {
-      fireEvent.pointerMove(window, {
-        pointerId: 2,
-        screenX: 40,
-        screenY,
-        bubbles: true,
-      });
-      await waitFor(() => {
-        expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
-      });
-      expect(stack).toHaveClass("thumbnail-stack-dragging", "thumbnail-stack-pressing");
-      tops.push(cardTop());
-    }
-    const downTops = tops.slice(-5);
-    for (let index = 1; index < downTops.length; index += 1) {
-      expect(Math.abs(downTops[index]! - downTops[index - 1]!)).toBeLessThan(160);
-    }
-    fireEvent.pointerUp(window, { pointerId: 2, bubbles: true });
-    await waitFor(() => {
-      expect(stack).not.toHaveClass("thumbnail-stack-dragging");
-    });
-    expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
-    expect((stack as HTMLElement).style.translate).toBe("");
-  });
+      expect(stack).not.toHaveClass("thumbnail-stack-anchor-top");
+      expect((stack as HTMLElement).style.translate).toBe("");
+    },
+  );
 
   it("keeps Show less on the right after the pile is dragged to the right", async () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
@@ -2305,8 +2358,9 @@ describe("Thumbnail", () => {
     });
 
     expect(stack).not.toHaveClass("thumbnail-stack-compact");
-    expect(screen.getByRole("button", { name: "Minimize previews" })
-      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).toHaveClass("thumbnail-stack-toolbar-anchor-right");
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
   });
@@ -2378,10 +2432,9 @@ describe("Thumbnail", () => {
       "-70px",
     );
     expect(expand.setPointerCapture).toHaveBeenCalled();
-    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
-      "set_mini_previews_collapsed",
-      { collapsed: false },
-    );
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith("set_mini_previews_collapsed", {
+      collapsed: false,
+    });
 
     fireEvent.pointerUp(window, { pointerId: 1, bubbles: true });
     await waitFor(() => {
@@ -2432,8 +2485,11 @@ describe("Thumbnail", () => {
     fireEvent.click(expand);
     fireEvent.click(expand);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Minimize previews" })
-        .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-top");
+      expect(
+        screen
+          .getByRole("button", { name: "Minimize previews" })
+          .closest(".thumbnail-stack-toolbar"),
+      ).toHaveClass("thumbnail-stack-toolbar-anchor-top");
     });
     expect(stack).toHaveClass("thumbnail-stack-anchor-top");
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
@@ -2460,10 +2516,12 @@ describe("Thumbnail", () => {
     await waitFor(() => {
       expect(stack).toHaveClass("thumbnail-stack-anchor-top");
     });
-    expect(screen.getByRole("button", { name: "Minimize previews" })
-      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-top");
-    expect(screen.getByRole("button", { name: "Minimize previews" })
-      .closest(".thumbnail-stack-toolbar")).not.toHaveClass("thumbnail-stack-toolbar-anchor-right");
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).toHaveClass("thumbnail-stack-toolbar-anchor-top");
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).not.toHaveClass("thumbnail-stack-toolbar-anchor-right");
   });
 
   it("keeps Show less on the right from a bottom-right preference", async () => {
@@ -2483,19 +2541,24 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     await screen.findAllByRole("article");
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Minimize previews" })
-        .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
+      expect(
+        screen
+          .getByRole("button", { name: "Minimize previews" })
+          .closest(".thumbnail-stack-toolbar"),
+      ).toHaveClass("thumbnail-stack-toolbar-anchor-right");
     });
-    expect(screen.getByRole("button", { name: "Minimize previews" })
-      .closest(".thumbnail-stack-toolbar")).not.toHaveClass("thumbnail-stack-toolbar-anchor-top");
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).not.toHaveClass("thumbnail-stack-toolbar-anchor-top");
   });
 
   it("mirrors preview close controls and Clear all to the right edge", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_artifacts") return [
-        { ...artifact, path: "/Users/example/Captures/capture-1.png" },
-        { ...secondArtifact, path: "/Users/example/Captures/capture-2.png" },
-      ];
+      if (command === "get_artifacts")
+        return [
+          { ...artifact, path: "/Users/example/Captures/capture-1.png" },
+          { ...secondArtifact, path: "/Users/example/Captures/capture-2.png" },
+        ];
       if (command === "get_clipboard_state") {
         return { revision: 0, artifact_id: artifact.id };
       }
@@ -2513,7 +2576,8 @@ describe("Thumbnail", () => {
     const stack = card.closest(".thumbnail-stack")!;
     await waitFor(() => expect(stack).toHaveClass("thumbnail-stack-anchor-right"));
 
-    const toolbar = screen.getByRole("button", { name: "Minimize previews" })
+    const toolbar = screen
+      .getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar")!;
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-right");
     expect(screen.getByRole("button", { name: "Clear all previews" })).toBeInTheDocument();
@@ -2541,7 +2605,8 @@ describe("Thumbnail", () => {
     await waitFor(() => {
       expect(stack).toHaveClass("thumbnail-stack-anchor-top");
     });
-    const toolbar = screen.getByRole("button", { name: "Minimize previews" })
+    const toolbar = screen
+      .getByRole("button", { name: "Minimize previews" })
       .closest(".thumbnail-stack-toolbar");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-top");
     expect(toolbar).toHaveClass("thumbnail-stack-toolbar-anchor-right");
@@ -2560,9 +2625,9 @@ describe("Thumbnail", () => {
       return () => undefined;
     });
     const defaultInvoke = vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation((command, args, options) => (
-      command === "get_settings" ? initial : defaultInvoke(command, args, options)
-    ));
+    vi.mocked(invoke).mockImplementation((command, args, options) =>
+      command === "get_settings" ? initial : defaultInvoke(command, args, options),
+    );
     render(<Thumbnail />);
     const [card] = await screen.findAllByRole("article");
     const stack = card.closest(".thumbnail-stack")!;
@@ -2574,8 +2639,9 @@ describe("Thumbnail", () => {
       finishSettings({ mini_preview_placement: "bottom_left" });
     });
     expect(stack).toHaveClass("thumbnail-stack-anchor-top");
-    expect(screen.getByRole("button", { name: "Minimize previews" })
-      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).toHaveClass("thumbnail-stack-toolbar-anchor-right");
   });
 
   it("scrolls to the newest card when settings move an expanded pile between top and bottom", async () => {
@@ -2630,10 +2696,12 @@ describe("Thumbnail", () => {
       expect(stack).toHaveClass("thumbnail-stack-anchor-top");
     });
     expect(stack.scrollTop).toBe(0);
-    expect(screen.getByRole("button", { name: "Minimize previews" })
-      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-top");
-    expect(screen.getByRole("button", { name: "Minimize previews" })
-      .closest(".thumbnail-stack-toolbar")).toHaveClass("thumbnail-stack-toolbar-anchor-right");
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).toHaveClass("thumbnail-stack-toolbar-anchor-top");
+    expect(
+      screen.getByRole("button", { name: "Minimize previews" }).closest(".thumbnail-stack-toolbar"),
+    ).toHaveClass("thumbnail-stack-toolbar-anchor-right");
   });
 
   it("keeps the hover pose on press and gathers only when a drag starts", async () => {
@@ -2831,10 +2899,12 @@ describe("Thumbnail", () => {
 
     pointer = { x: 88, y: 36, inside: true };
     await act(async () => {
-      window.dispatchEvent(new PointerEvent("pointermove", {
-        clientX: 88,
-        clientY: 36,
-      }));
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          clientX: 88,
+          clientY: 36,
+        }),
+      );
       await vi.advanceTimersByTimeAsync(50);
     });
 
@@ -2876,10 +2946,7 @@ describe("Thumbnail", () => {
     movePointerPastAppearHoverLock(window, 40, 20);
 
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "set_thumbnail_cursor",
-        { kind: "pointer" },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "pointer" });
     });
     expect(document.documentElement).toHaveClass("thumbnail-native-tracking");
 
@@ -2896,15 +2963,13 @@ describe("Thumbnail", () => {
     window.dispatchEvent(new Event("captures-thumbnail-layout-changed"));
 
     await waitFor(() => {
-      const ignoreCalls = vi.mocked(invoke).mock.calls
-        .filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
+      const ignoreCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "set_thumbnail_ignore_cursor_events");
       expect(ignoreCalls.at(-1)?.[1]).toEqual({ ignore: true });
     });
     await waitFor(() => {
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "set_thumbnail_cursor",
-        { kind: "default" },
-      );
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "default" });
     });
     expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
     expect(document.documentElement).not.toHaveAttribute("data-thumbnail-cursor");

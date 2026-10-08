@@ -86,14 +86,13 @@ export type CoverBackgroundLayout = {
   offsetY: number;
 };
 
-export function prefersReducedMotion(
-  media?: Pick<MediaQueryList, "matches"> | null,
-): boolean {
-  const query = media === undefined
-    ? typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia("(prefers-reduced-motion: reduce)")
-      : null
-    : media;
+export function prefersReducedMotion(media?: Pick<MediaQueryList, "matches"> | null): boolean {
+  const query =
+    media === undefined
+      ? typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")
+        : null
+      : media;
   return Boolean(query?.matches);
 }
 
@@ -182,10 +181,7 @@ export function buildThumbnailDustParticles(
   // Farthest corner from the trash origin — normalizes radial delays to [0, 1].
   const maxDist = Math.max(
     1,
-    Math.hypot(
-      Math.max(originX, width - originX),
-      Math.max(originY, height - originY),
-    ),
+    Math.hypot(Math.max(originX, width - originX), Math.max(originY, height - originY)),
   );
   const particles: ThumbnailDustParticle[] = [];
   let id = 0;
@@ -396,10 +392,7 @@ export function cubicBezierProgress(
   return sampleCubicBezier(t, y1, y2);
 }
 
-function lerpStepped(
-  keys: readonly { at: number; value: number }[],
-  t: number,
-): number {
+function lerpStepped(keys: readonly { at: number; value: number }[], t: number): number {
   const first = keys[0];
   const last = keys[keys.length - 1];
   if (!first || !last || t <= first.at) return first?.value ?? 0;
@@ -488,8 +481,8 @@ export function thumbnailDustCanvasIsPaintable(): boolean {
     context.fillRect(2, 2, 4, 4);
     const center = context.getImageData(3, 3, 1, 1).data;
     const edge = context.getImageData(1, 3, 1, 1).data;
-    cachedDustCanvasPaintable = center[0] >= 125 && center[0] <= 129
-      && edge[3] > 0 && edge[3] < center[3];
+    cachedDustCanvasPaintable =
+      center[0] >= 125 && center[0] <= 129 && edge[3] > 0 && edge[3] < center[3];
   } catch {
     cachedDustCanvasPaintable = false;
   }
@@ -570,21 +563,36 @@ export function playThumbnailDustCanvas(
   try {
     sourceContext.setTransform(dpr, 0, 0, dpr, 0, 0);
     sourceContext.beginPath();
-    sourceContext.roundRect(0, 0, sample.cardWidth, sample.cardHeight,
-      Math.min(THUMBNAIL_CARD_BORDER_RADIUS_PX, sample.cardWidth / 2, sample.cardHeight / 2));
+    sourceContext.roundRect(
+      0,
+      0,
+      sample.cardWidth,
+      sample.cardHeight,
+      Math.min(THUMBNAIL_CARD_BORDER_RADIUS_PX, sample.cardWidth / 2, sample.cardHeight / 2),
+    );
     sourceContext.clip();
-    sourceContext.drawImage(image, sample.surfaceOffsetX, sample.surfaceOffsetY,
-      sample.surfaceWidth, sample.surfaceHeight);
+    sourceContext.drawImage(
+      image,
+      sample.surfaceOffsetX,
+      sample.surfaceOffsetY,
+      sample.surfaceWidth,
+      sample.surfaceHeight,
+    );
 
     // Separate the sharp chips with transparent padding, then filter the atlas
     // in one pass. Filtering each draw into a large canvas is far more costly.
     particles.forEach((particle, index) => {
-      tilesContext.drawImage(source,
-        particle.sourceLeft * dpr, particle.sourceTop * dpr,
-        particle.width * dpr, particle.height * dpr,
+      tilesContext.drawImage(
+        source,
+        particle.sourceLeft * dpr,
+        particle.sourceTop * dpr,
+        particle.width * dpr,
+        particle.height * dpr,
         (index % columns) * cellWidth + blurPad * dpr,
         Math.floor(index / columns) * cellHeight + blurPad * dpr,
-        particle.width * dpr, particle.height * dpr);
+        particle.width * dpr,
+        particle.height * dpr,
+      );
     });
     // Canvas filters use backing pixels, unlike CSS filters.
     atlasContext.filter = `blur(${2 * dpr}px) brightness(0.5)`;
@@ -595,10 +603,9 @@ export function playThumbnailDustCanvas(
   }
 
   const now = options.now ?? (() => performance.now());
-  const frame = options.frame
-    ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
-  const cancelFrame = options.cancelFrame
-    ?? ((id: number) => cancelAnimationFrame(id));
+  const frame =
+    options.frame ?? ((callback: FrameRequestCallback) => requestAnimationFrame(callback));
+  const cancelFrame = options.cancelFrame ?? ((id: number) => cancelAnimationFrame(id));
   const startedAt = now();
   let frameId = 0;
   let stopped = false;

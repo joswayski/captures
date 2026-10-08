@@ -19,9 +19,9 @@ export function isPointerOverCaptureGuidance(
   const leaveSlack = options?.leaveSlack ?? GUIDANCE_LEAVE_SLACK_PX;
   const pad = currentlyOver ? approachPad + leaveSlack : approachPad;
   return (
-    clientX >= bounds.left - pad
-    && clientX <= bounds.right + pad
-    && clientY >= bounds.top - pad
-    && clientY <= bounds.bottom + pad
+    clientX >= bounds.left - pad &&
+    clientX <= bounds.right + pad &&
+    clientY >= bounds.top - pad &&
+    clientY <= bounds.bottom + pad
   );
 }

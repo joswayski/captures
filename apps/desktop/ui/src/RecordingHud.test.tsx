@@ -125,17 +125,22 @@ describe("RecordingHud", () => {
     expect(container.querySelector(".recording-hud-main")).toContainElement(
       screen.getByRole("button", { name: "Hide recording controls" }),
     );
-    expect(screen.getByRole("button", { name: "Hide recording controls" }))
-      .not.toHaveAttribute("title");
-    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(expect.arrayContaining([
-      "Stop and save",
-      "Pause recording",
-      "Restart recording",
-      "Take a region screenshot",
-      "Delete recording",
-      "Hide controls",
-    ]));
-    expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide recording controls" })).not.toHaveAttribute(
+      "title",
+    );
+    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(
+      expect.arrayContaining([
+        "Stop and save",
+        "Pause recording",
+        "Restart recording",
+        "Take a region screenshot",
+        "Delete recording",
+        "Hide controls",
+      ]),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Move recording controls" }),
+    ).not.toBeInTheDocument();
     fireEvent.pointerDown(container.querySelector(".recording-hud")!, {
       button: 0,
     });
@@ -158,7 +163,9 @@ describe("RecordingHud", () => {
       });
     });
     expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Move recording controls" }),
+    ).not.toBeInTheDocument();
   });
 
   it("explains how to restore controls after they are hidden", async () => {
@@ -174,7 +181,9 @@ describe("RecordingHud", () => {
     render(<RecordingControlsHiddenNotice />);
 
     expect(screen.getByText("Recording controls hidden")).toBeInTheDocument();
-    expect(screen.getByText(/Open Captures from the (menu bar|tray), or press/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Open Captures from the (menu bar|tray), or press/),
+    ).toBeInTheDocument();
     expect(await screen.findByText("Ctrl")).toBeInTheDocument();
     expect(screen.getByText("Shift")).toBeInTheDocument();
     expect(screen.getByText("Space")).toBeInTheDocument();
@@ -216,9 +225,7 @@ describe("RecordingHud", () => {
     expect(screen.getByText("Captures is ready to use")).toBeInTheDocument();
     expect(notice).toHaveAttribute("data-caret", "top");
     expect(container.querySelector(".tray-notice-card")).not.toBeInTheDocument();
-    expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe(
-      "180px",
-    );
+    expect((notice as HTMLElement | null)?.style.getPropertyValue("--tray-caret-x")).toBe("180px");
     expect(container.querySelector(".tray-notice-caret")).toBeInTheDocument();
   });
 

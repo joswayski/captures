@@ -538,44 +538,61 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     }
 
     tokio::time::sleep(RESTART_FADE_DURATION).await;
-    prepare_update_restart();
+    prepare_update_restart(&app);
     app.restart();
 }
 
-fn prepare_update_restart() {
-    if let Err(error) = mark_update_restart_pending() {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateRestart {
+    pub restore_preferences: bool,
+}
+
+fn prepare_update_restart(app: &AppHandle) {
+    let restart = UpdateRestart {
+        restore_preferences: app
+            .get_webview_window("preferences")
+            .is_some_and(|window| window.is_visible().unwrap_or(false)),
+    };
+    if let Err(error) = mark_restart_pending(&restart_marker_path(), restart) {
         eprintln!("failed to remember update restart: {error}");
     }
     crate::crash_report::mark_clean_exit();
 }
 
-pub fn take_update_restart_pending() -> bool {
+pub fn take_update_restart_pending() -> Option<UpdateRestart> {
     match take_restart_marker(&restart_marker_path()) {
         Ok(pending) => pending,
         Err(error) => {
             eprintln!("failed to clear update restart marker: {error}");
-            false
+            None
         }
     }
 }
 
-fn mark_update_restart_pending() -> std::io::Result<()> {
-    let path = restart_marker_path();
+fn mark_restart_pending(path: &Path, restart: UpdateRestart) -> std::io::Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, [])
+    fs::write(path, serde_json::to_vec(&restart)?)
 }
 
-fn take_restart_marker(path: &Path) -> std::io::Result<bool> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
+fn take_restart_marker(path: &Path) -> std::io::Result<Option<UpdateRestart>> {
+    let contents = match fs::read(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    fs::remove_file(path)?;
+    // Older Previews write an empty marker: retain their tray-only restart.
+    let restart = if contents.is_empty() {
+        UpdateRestart::default()
+    } else {
+        serde_json::from_slice(&contents)?
+    };
+    Ok(Some(restart))
 }
 
 fn restart_marker_path() -> std::path::PathBuf {
@@ -622,7 +639,7 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
     let checked = match app
         .updater_builder()
         .on_before_exit(move || {
-            prepare_update_restart();
+            prepare_update_restart(&exit_app);
             // Replacing the updater's default hook must preserve Tauri cleanup.
             exit_app.cleanup_before_exit();
         })
@@ -1349,10 +1366,10 @@ mod tests {
 
     use super::{
         AtomicFlagGuard, CHECK_INTERVAL, DOWNLOAD_ATTEMPTS, DOWNLOAD_PAGE_URL, NoticeDisposition,
-        NoticeRestorePlan, RELEASES_URL, UpdateChangelogEntry, UpdateStatus,
+        NoticeRestorePlan, RELEASES_URL, UpdateChangelogEntry, UpdateRestart, UpdateStatus,
         capture_window_should_close_for_update, changelog_pull_request_url, check_error_status,
         display_version, download_error_is_retryable, download_retry_delay, install_error_message,
-        manifest_download_size, notice_disposition, notice_restore_plan,
+        manifest_download_size, mark_restart_pending, notice_disposition, notice_restore_plan,
         open_captures_will_close_from, release_channel_enabled, restart_blocker,
         should_begin_deferred_restore, should_hide_update_notice_status,
         should_refresh_update_notice, should_wait_for_capture_start, stacked_changelog,
@@ -1541,13 +1558,41 @@ mod tests {
     }
 
     #[test]
-    fn consumes_update_restart_marker_once() {
+    fn consumes_legacy_update_restart_marker_without_reopening_preferences() {
         let directory = tempfile::tempdir().expect("temporary directory should exist");
         let marker = directory.path().join("update-restart-pending");
         std::fs::write(&marker, []).expect("marker should be written");
 
-        assert!(take_restart_marker(&marker).expect("marker should be consumed"));
-        assert!(!take_restart_marker(&marker).expect("consumed marker should stay absent"));
+        assert_eq!(
+            take_restart_marker(&marker).expect("marker should be consumed"),
+            Some(UpdateRestart {
+                restore_preferences: false,
+            })
+        );
+        assert_eq!(
+            take_restart_marker(&marker).expect("consumed marker should stay absent"),
+            None
+        );
+    }
+
+    #[test]
+    fn restores_update_preferences_intent_once_for_open_and_closed_settings() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let marker = directory.path().join("profile/update-restart-pending");
+        for restore_preferences in [true, false] {
+            let restart = UpdateRestart {
+                restore_preferences,
+            };
+            mark_restart_pending(&marker, restart).expect("marker should be written");
+            assert_eq!(
+                take_restart_marker(&marker).expect("marker should be consumed"),
+                Some(restart)
+            );
+            assert_eq!(
+                take_restart_marker(&marker).expect("consumed marker should stay absent"),
+                None
+            );
+        }
     }
 
     #[test]

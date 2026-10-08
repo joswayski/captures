@@ -12,9 +12,7 @@ export function isPreviewFileDropLanding(value: unknown): value is PreviewFileDr
 }
 
 /** Dropping onto the source stack is invalid; keep the card and shake. */
-export function previewFileDropShouldReject(
-  landing: PreviewFileDropLanding,
-): boolean {
+export function previewFileDropShouldReject(landing: PreviewFileDropLanding): boolean {
   return landing === "preview_stack";
 }
 

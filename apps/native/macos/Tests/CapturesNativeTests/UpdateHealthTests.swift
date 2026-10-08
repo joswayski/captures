@@ -30,6 +30,33 @@ final class UpdateHealthTests: XCTestCase {
                              "a bundled launch must still include explicit --live")
     }
 
+    func testRestartVisibilityIsConsumedOnceAndPreservesOrdinaryLaunch() throws {
+        let fixture = try makeEmptyFile()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let arguments = ["--live", "--history-root", fixture.directory.appendingPathComponent("history").path,
+                         "--settings-file", fixture.directory.appendingPathComponent("settings.json").path,
+                         "--native-update-ready-file", fixture.file.path, "--native-update-ready-token", token]
+        let marker = fixture.file.deletingPathExtension().appendingPathExtension("restart.json")
+        for visible in [true, false] {
+            try Data("{\"restore_preferences\":\(visible)}".utf8).write(to: marker)
+            var options = try Options(arguments)
+            try options.takeUpdateRestartIntent()
+            XCTAssertEqual(options.scene, "idle")
+            XCTAssertEqual(options.nativeUpdateRestorePreferences, visible)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+            var next = try Options(arguments)
+            try next.takeUpdateRestartIntent()
+            XCTAssertEqual(next.scene, "preferences", "absent intent keeps ordinary launch behavior")
+            XCTAssertFalse(next.nativeUpdateRestorePreferences)
+        }
+        try Data().write(to: marker)
+        var legacy = try Options(arguments)
+        try legacy.takeUpdateRestartIntent()
+        XCTAssertEqual(legacy.scene, "idle")
+        XCTAssertFalse(legacy.nativeUpdateRestorePreferences)
+        XCTAssertEqual(try Data(contentsOf: fixture.file), Data(), "intent is not readiness")
+    }
+
     func testAcknowledgementWritesExactBytesOnlyOnce() throws {
         let fixture = try makeEmptyFile()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

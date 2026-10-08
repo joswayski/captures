@@ -28,8 +28,9 @@ function keyEvent(
 
 describe("preference find matching", () => {
   it("matches setting copy without depending on extra whitespace", () => {
-    expect(preferenceTextMatches("Automatically copy captures\n  to the clipboard", "clipboard"))
-      .toBe(true);
+    expect(
+      preferenceTextMatches("Automatically copy captures\n  to the clipboard", "clipboard"),
+    ).toBe(true);
     expect(preferenceTextMatches("Accent color", "  ACCENT ")).toBe(true);
     expect(preferenceTextMatches("Accent color", "")).toBe(false);
     expect(preferenceTextMatches("Accent color", "clipboard")).toBe(false);
@@ -72,30 +73,44 @@ describe("preference find matching", () => {
 
 describe("preference find shortcuts", () => {
   it("opens find with the platform find chord", () => {
-    expect(preferencesFindCommand(keyEvent("f", "KeyF", { metaKey: true }), "macos", false))
-      .toBe("open");
-    expect(preferencesFindCommand(keyEvent("f", "KeyF", { ctrlKey: true }), "macos", false))
-      .toBeNull();
-    expect(preferencesFindCommand(keyEvent("f", "KeyF", { ctrlKey: true }), "windows", false))
-      .toBe("open");
-    expect(preferencesFindCommand(keyEvent("f", "KeyF", { ctrlKey: true }), "linux", false))
-      .toBe("open");
-    expect(preferencesFindCommand(keyEvent("f", "KeyF", { metaKey: true }), "windows", false))
-      .toBeNull();
+    expect(preferencesFindCommand(keyEvent("f", "KeyF", { metaKey: true }), "macos", false)).toBe(
+      "open",
+    );
+    expect(
+      preferencesFindCommand(keyEvent("f", "KeyF", { ctrlKey: true }), "macos", false),
+    ).toBeNull();
+    expect(preferencesFindCommand(keyEvent("f", "KeyF", { ctrlKey: true }), "windows", false)).toBe(
+      "open",
+    );
+    expect(preferencesFindCommand(keyEvent("f", "KeyF", { ctrlKey: true }), "linux", false)).toBe(
+      "open",
+    );
+    expect(
+      preferencesFindCommand(keyEvent("f", "KeyF", { metaKey: true }), "windows", false),
+    ).toBeNull();
   });
 
   it("keeps find-next chords inert until the find bar is open", () => {
-    expect(preferencesFindCommand(keyEvent("g", "KeyG", { metaKey: true }), "macos", false))
-      .toBeNull();
-    expect(preferencesFindCommand(keyEvent("g", "KeyG", { metaKey: true }), "macos", true))
-      .toBe("next");
-    expect(preferencesFindCommand(keyEvent("g", "KeyG", { metaKey: true, shiftKey: true }), "macos", true))
-      .toBe("previous");
-    expect(preferencesFindCommand(keyEvent("F3", "F3", { ctrlKey: true }), "linux", true))
-      .toBeNull();
+    expect(
+      preferencesFindCommand(keyEvent("g", "KeyG", { metaKey: true }), "macos", false),
+    ).toBeNull();
+    expect(preferencesFindCommand(keyEvent("g", "KeyG", { metaKey: true }), "macos", true)).toBe(
+      "next",
+    );
+    expect(
+      preferencesFindCommand(
+        keyEvent("g", "KeyG", { metaKey: true, shiftKey: true }),
+        "macos",
+        true,
+      ),
+    ).toBe("previous");
+    expect(
+      preferencesFindCommand(keyEvent("F3", "F3", { ctrlKey: true }), "linux", true),
+    ).toBeNull();
     expect(preferencesFindCommand(keyEvent("F3", "F3"), "linux", true)).toBe("next");
-    expect(preferencesFindCommand(keyEvent("F3", "F3", { shiftKey: true }), "windows", true))
-      .toBe("previous");
+    expect(preferencesFindCommand(keyEvent("F3", "F3", { shiftKey: true }), "windows", true)).toBe(
+      "previous",
+    );
   });
 
   it("closes find with Escape once the bar is open", () => {
@@ -114,16 +129,21 @@ describe("preference find shortcuts", () => {
     close.setAttribute("aria-label", "Close find");
     find.append(input, previous, close);
 
-    expect(preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: input }, "linux", true))
-      .toBe("next");
-    expect(preferencesFindCommand(
-      { ...keyEvent("Enter", "Enter", { shiftKey: true }), target: input },
-      "linux",
-      true,
-    )).toBe("previous");
-    expect(preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: previous }, "linux", true))
-      .toBeNull();
-    expect(preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: close }, "linux", true))
-      .toBeNull();
+    expect(
+      preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: input }, "linux", true),
+    ).toBe("next");
+    expect(
+      preferencesFindCommand(
+        { ...keyEvent("Enter", "Enter", { shiftKey: true }), target: input },
+        "linux",
+        true,
+      ),
+    ).toBe("previous");
+    expect(
+      preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: previous }, "linux", true),
+    ).toBeNull();
+    expect(
+      preferencesFindCommand({ ...keyEvent("Enter", "Enter"), target: close }, "linux", true),
+    ).toBeNull();
   });
 });

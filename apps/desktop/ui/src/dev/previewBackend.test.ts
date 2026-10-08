@@ -60,9 +60,7 @@ describe("previewBackend capture display switching", () => {
       await invoke("open_update_changelog_url", {
         url: "https://github.com/joswayski/captures/pull/249",
       });
-      expect(opened).toEqual([
-        ["https://github.com/joswayski/captures/pull/249", "_blank"],
-      ]);
+      expect(opened).toEqual([["https://github.com/joswayski/captures/pull/249", "_blank"]]);
     } finally {
       window.open = originalOpen;
     }
@@ -97,9 +95,11 @@ describe("previewBackend capture display switching", () => {
 
   it("rejects an unknown display without returning undefined", async () => {
     const current = await invoke<RecordingSelectionSession>("get_recording_selection");
-    await expect(invoke("select_capture_display", {
-      selectionId: current.id,
-      displayId: "missing",
-    })).rejects.toThrow(/display is unavailable/);
+    await expect(
+      invoke("select_capture_display", {
+        selectionId: current.id,
+        displayId: "missing",
+      }),
+    ).rejects.toThrow(/display is unavailable/);
   });
 });

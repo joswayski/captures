@@ -228,14 +228,16 @@ enum NativeMotion {
                      segment: ClosedRange<Double> = 0...1, holdEnd: Bool = false,
                      delay extraDelay: Double = 0, mirrorX: Bool = false,
                      key: String = NativeMotion.animationKey,
-                     reduced: Bool = NativeMotion.reduceMotion) -> Double {
+                     reduced: Bool = NativeMotion.reduceMotion,
+                     preservePresentation: Bool = false) -> Double {
         guard catalog.keyframes[name] != nil else { return 0 }
         if reduced && !holdEnd { return 0 }
         view.wantsLayer = true
         guard let layer = view.layer else { return 0 }
         let flipped = layer.superlayer?.contentsAreFlipped() ?? view.superview?.isFlipped ?? false
         return play(name, onLayer: layer, down: flipped ? 1 : -1, tokens: tokens, segment: segment,
-                    holdEnd: holdEnd, delay: extraDelay, mirrorX: mirrorX, key: key, reduced: reduced)
+                    holdEnd: holdEnd, delay: extraDelay, mirrorX: mirrorX, key: key, reduced: reduced,
+                    preservePresentation: preservePresentation)
     }
 
     /// [`play(_:on:)`] for a bare layer. `down` is +1 when its superlayer's y
@@ -248,7 +250,8 @@ enum NativeMotion {
                      delay extraDelay: Double = 0, mirrorX: Bool = false,
                      startedAgo: Double = 0, repeats: Bool = false,
                      key: String = NativeMotion.animationKey,
-                     reduced: Bool = NativeMotion.reduceMotion) -> Double {
+                     reduced: Bool = NativeMotion.reduceMotion,
+                     preservePresentation: Bool = false) -> Double {
         guard let spec = catalog.keyframes[name] else { return 0 }
         if reduced && !holdEnd { return 0 }
         let span = segment.upperBound - segment.lowerBound
@@ -261,13 +264,24 @@ enum NativeMotion {
         let timing = timingFunction(spec.easing, tokens: tokens)
         let segments = Array(repeating: timing, count: frames.count - 1)
 
+        // Clear all composes the exit with the currently presented arrival/hover,
+        // including during its stagger. Other animations keep their existing base.
+        let presented = layer.presentation() ?? layer
+        let baseOpacity = preservePresentation ? Double(presented.opacity) : 1
+        // The streak's first frame already has locked-hover scale. Remove it
+        // before composing with the captured pose, so time zero cannot jump.
+        let baseTransform = preservePresentation
+            ? CATransform3DConcat(presented.transform,
+                CATransform3DInvert(transform(frames[0], layer: layer, down: down, mirrorX: mirrorX)))
+            : CATransform3DIdentity
         let opacity = CAKeyframeAnimation(keyPath: "opacity")
-        opacity.values = frames.map { NSNumber(value: $0.opacity) }
+        opacity.values = frames.map { NSNumber(value: $0.opacity * baseOpacity) }
         opacity.keyTimes = keyTimes
         opacity.timingFunctions = segments
         let move = CAKeyframeAnimation(keyPath: "transform")
         move.values = frames.map {
-            NSValue(caTransform3D: transform($0, layer: layer, down: down, mirrorX: mirrorX))
+            NSValue(caTransform3D: CATransform3DConcat(baseTransform,
+                transform($0, layer: layer, down: down, mirrorX: mirrorX)))
         }
         move.keyTimes = keyTimes
         move.timingFunctions = segments

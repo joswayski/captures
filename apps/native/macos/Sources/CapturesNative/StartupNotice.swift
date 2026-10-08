@@ -151,7 +151,7 @@ final class StartupNoticeCloseButton: NSButton {
 }
 
 final class StartupNoticeView: NSView {
-    let layout: StartupNoticeLayout
+    private(set) var layout: StartupNoticeLayout
     let keys: [String]
     let closeButton: StartupNoticeCloseButton
     private let tokens: Tokens
@@ -166,6 +166,15 @@ final class StartupNoticeView: NSView {
             x: layout.card.maxX - tokens.number("s-3") - side,
             y: layout.card.midY - side / 2, width: side, height: side), tokens: tokens)
         super.init(frame: NSRect(origin: .zero, size: layout.frame.size))
+        if layout.caret == .none {
+            let height = ceil(max(tokens.number("startup-notice-height"),
+                contentLayout().height + tokens.number("s-4") * 2))
+            self.layout.frame.size.height += height - layout.card.height
+            self.layout.card.size.height = height
+            setFrameSize(self.layout.frame.size)
+            closeButton.setFrameOrigin(NSPoint(x: self.layout.card.maxX - tokens.number("s-3") - side,
+                y: self.layout.card.midY - side / 2))
+        }
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         addSubview(closeButton)
@@ -182,15 +191,15 @@ final class StartupNoticeView: NSView {
     }
     var hintAttributes: [NSAttributedString.Key: Any] {
         [.font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
-         .foregroundColor: tokens.color("glass-text-subtle")]
+         .foregroundColor: tokens.color(layout.caret == .none ? "glass-text-muted" : "glass-text-subtle")]
     }
     var keyAttributes: [NSAttributedString.Key: Any] {
         [.font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .semibold),
          .foregroundColor: tokens.color("glass-text")]
     }
 
-    /// Centered title and the hint row (text plus one chip per key), flipped.
-    func contentLayout() -> (title: NSRect, hint: NSRect, chips: [NSRect]) {
+    /// Flipped content geometry; fallback rows wrap inside the reserved Close area.
+    func contentLayout() -> (title: NSRect, hint: NSRect, chips: [NSRect], height: CGFloat) {
         let card = layout.card
         let titleSize = (StartupNoticeCopy.title as NSString).size(withAttributes: titleAttributes)
         let hintSize = (StartupNoticeCopy.hint as NSString).size(withAttributes: hintAttributes)
@@ -201,6 +210,27 @@ final class StartupNoticeView: NSView {
         }
         let space = tokens.number("s-2") - gap
         let rowHeight = max(hintSize.height, chipSizes.map(\.height).max() ?? 0)
+        if layout.caret == .none {
+            let available = tokens.number("startup-notice-width") - tokens.number("s-5")
+                - tokens.number("h-sm") - tokens.number("s-5")
+            var x: CGFloat = 0, y: CGFloat = 0
+            var rows: [NSRect] = []
+            for (index, size) in ([hintSize] + chipSizes).enumerated() {
+                let margin: CGFloat = index == 0 ? 0 : (index == 1 ? space + gap : gap)
+                if x > 0, x + margin + size.width > available {
+                    x = 0; y += rowHeight + gap
+                } else { x += margin }
+                rows.append(NSRect(x: x, y: y + (rowHeight - size.height) / 2,
+                    width: size.width, height: size.height))
+                x += size.width
+            }
+            let height = titleSize.height + gap + y + rowHeight
+            let left = card.minX + tokens.number("s-5"), top = card.midY - height / 2
+            let rowTop = top + titleSize.height + gap
+            return (NSRect(x: left, y: top, width: titleSize.width, height: titleSize.height),
+                rows[0].offsetBy(dx: left, dy: rowTop),
+                rows.dropFirst().map { $0.offsetBy(dx: left, dy: rowTop) }, height)
+        }
         let rowWidth = hintSize.width + space + chipSizes.reduce(0) { $0 + $1.width + gap }
         let contentHeight = titleSize.height + gap + rowHeight
         let top = card.midY - contentHeight / 2
@@ -216,13 +246,14 @@ final class StartupNoticeView: NSView {
             chips.append(NSRect(x: x, y: rowTop + (rowHeight - size.height) / 2, width: size.width, height: size.height))
             x += size.width
         }
-        return (title, hint, chips)
+        return (title, hint, chips, contentHeight)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let fill = tokens.color("glass-strong-solid")
         let card = layout.card
-        let pill = NSBezierPath(roundedRect: card, xRadius: card.height / 2, yRadius: card.height / 2)
+        let radius = layout.caret == .none ? tokens.number("r-lg") : card.height / 2
+        let pill = NSBezierPath(roundedRect: card, xRadius: radius, yRadius: radius)
         let caret = layout.caretTriangle.map { points -> NSBezierPath in
             let path = NSBezierPath()
             path.move(to: points[0]); path.line(to: points[1]); path.line(to: points[2]); path.close()
@@ -232,8 +263,15 @@ final class StartupNoticeView: NSView {
         // --tooltip-shadow: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.32)). NSShadow
         // offsets use base coordinates, so negative height is downward here too.
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.32)
-        shadow.shadowBlurRadius = 10; shadow.shadowOffset = NSSize(width: 0, height: -4)
+        if layout.caret == .none {
+            let layer = tokens.shadow("tooltip-shadow-compact")[0]
+            shadow.shadowColor = layer.nsColor
+            shadow.shadowBlurRadius = CGFloat(layer.blur / 2)
+            shadow.shadowOffset = NSSize(width: layer.x, height: -layer.y)
+        } else {
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.32)
+            shadow.shadowBlurRadius = 10; shadow.shadowOffset = NSSize(width: 0, height: -4)
+        }
         shadow.set()
         // One layer so the caret and pill cast a single drop shadow, like CSS filter.
         let context = NSGraphicsContext.current?.cgContext
@@ -242,6 +280,11 @@ final class StartupNoticeView: NSView {
         context?.endTransparencyLayer()
         NSGraphicsContext.restoreGraphicsState()
 
+        if layout.caret == .none {
+            let border = NSBezierPath(roundedRect: card.insetBy(dx: 0.5, dy: 0.5),
+                xRadius: radius - 0.5, yRadius: radius - 0.5)
+            tokens.color("glass-border").setStroke(); border.lineWidth = 1; border.stroke()
+        }
         let content = contentLayout()
         (StartupNoticeCopy.title as NSString).draw(in: content.title, withAttributes: titleAttributes)
         (StartupNoticeCopy.hint as NSString).draw(in: content.hint, withAttributes: hintAttributes)
@@ -265,8 +308,9 @@ final class StartupNoticePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     init(layout: StartupNoticeLayout, keys: [String], tokens: Tokens, primaryHeight: CGFloat) {
-        noticeView = StartupNoticeView(layout: layout, keys: keys, tokens: tokens)
-        super.init(contentRect: layout.appKitFrame(primaryHeight: primaryHeight),
+        let view = StartupNoticeView(layout: layout, keys: keys, tokens: tokens)
+        noticeView = view
+        super.init(contentRect: view.layout.appKitFrame(primaryHeight: primaryHeight),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         title = StartupNoticeCopy.windowTitle
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
@@ -333,7 +377,7 @@ final class StartupNoticeController {
         self.panel = panel
         // Never activates Captures or takes key focus from the frontmost app.
         panel.orderFrontRegardless()
-        panel.apply(layout, primaryHeight: primaryHeight)
+        panel.apply(panel.noticeView.layout, primaryHeight: primaryHeight)
         // Shipping `startup-arrive`, rising from below when the caret points down.
         NativeMotion.play(layout.caret == .bottom ? "startup_notice_in_from_below" : "startup_notice_in",
                           on: panel.noticeView, tokens: tokens)

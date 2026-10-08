@@ -70,14 +70,14 @@ const session: RecordingSelectionSession = {
   initial_mode: "recording",
   initial_target: "region",
   recording_available: true,
-    recording_capabilities: {
-      system_audio: true,
-      microphone: true,
-      cursor_control: true,
-      click_highlights: true,
-      controls_excluded: true,
-      can_exclude_controls: true,
-    },
+  recording_capabilities: {
+    system_audio: true,
+    microphone: true,
+    cursor_control: true,
+    click_highlights: true,
+    controls_excluded: true,
+    can_exclude_controls: true,
+  },
   display: {
     id: "display-1",
     name: "Built-in Retina Display",
@@ -184,12 +184,12 @@ function mockSelectorSurfaceForDrag(container: HTMLElement) {
 /** WebKit does not activate `display: none` buttons via `HTMLElement.click()`. */
 function ignoreClicksOnHiddenButtons() {
   const nativeClick = HTMLButtonElement.prototype.click;
-  return vi.spyOn(HTMLButtonElement.prototype, "click").mockImplementation(
-    function mockHiddenSafeClick(this: HTMLButtonElement) {
+  return vi
+    .spyOn(HTMLButtonElement.prototype, "click")
+    .mockImplementation(function mockHiddenSafeClick(this: HTMLButtonElement) {
       if (this.hidden) return;
       nativeClick.call(this);
-    },
-  );
+    });
 }
 
 async function enableAutoStartPreference() {
@@ -206,9 +206,7 @@ describe("RecordingSelector", () => {
   let selectorShowError: Error | null;
   let preparedSession: RecordingSelectionSession;
   let audioDevices: AudioDevice[];
-  let recordingSelectionReady:
-    | ((event: { payload: RecordingSelectionSession }) => void)
-    | null;
+  let recordingSelectionReady: ((event: { payload: RecordingSelectionSession }) => void) | null;
   let capturePointer: { x: number; y: number; inside: boolean } | null;
 
   beforeEach(() => {
@@ -222,9 +220,9 @@ describe("RecordingSelector", () => {
     recordingSelectionReady = null;
     vi.mocked(listen).mockImplementation(async (event, handler) => {
       if (event === "recording-selection-ready") {
-        recordingSelectionReady = handler as (
-          event: { payload: RecordingSelectionSession },
-        ) => void;
+        recordingSelectionReady = handler as (event: {
+          payload: RecordingSelectionSession;
+        }) => void;
       }
       return () => undefined;
     });
@@ -250,13 +248,13 @@ describe("RecordingSelector", () => {
         };
       }
       if (
-        command === "reveal_recording_selector"
-        || command === "sync_selector_cursor"
-        || command === "capture_selection_screenshot"
-        || command === "start_recording"
-        || command === "start_capture"
-        || command === "cancel_recording_selection"
-        || command === "open_preferences"
+        command === "reveal_recording_selector" ||
+        command === "sync_selector_cursor" ||
+        command === "capture_selection_screenshot" ||
+        command === "start_recording" ||
+        command === "start_capture" ||
+        command === "cancel_recording_selection" ||
+        command === "open_preferences"
       ) {
         return undefined;
       }
@@ -291,7 +289,9 @@ describe("RecordingSelector", () => {
     });
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_recording_audio_devices"));
     fireEvent.click(screen.getByRole("combobox", { name: "Microphone" }));
-    expect(await screen.findByRole("option", { name: "Default — Studio Microphone" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("option", { name: "Default — Studio Microphone" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Studio Microphone")).not.toBeInTheDocument();
 
     fireEvent.load(snapshot);
@@ -418,8 +418,9 @@ describe("RecordingSelector", () => {
       "Use Hide controls to keep them out",
     );
     expect(container.querySelector(".capture-selector-note strong")).toHaveTextContent("will");
-    expect(screen.queryByRole("button", { name: /These controls will show in recordings/ }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /These controls will show in recordings/ }),
+    ).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
     fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
@@ -452,7 +453,8 @@ describe("RecordingSelector", () => {
       pressed: true,
     });
     const actionSwitch = screenshotMode.closest(".capture-action-switch");
-    const targetSwitch = screen.getByRole("button", { name: "Region" })
+    const targetSwitch = screen
+      .getByRole("button", { name: "Region" })
       .closest(".recording-target-switch");
     expect(actionSwitch).toHaveAttribute("data-active", "screenshot");
     expect(actionSwitch?.querySelector(".capture-segmented-indicator")).not.toBeNull();
@@ -463,8 +465,7 @@ describe("RecordingSelector", () => {
     expect(regionGuidance).toHaveTextContent("Shift for square · Esc to cancel");
     const aspectPicker = screen.getByRole("combobox", { name: "Region aspect ratio" });
     expect(aspectPicker).toBeInTheDocument();
-    expect(aspectPicker.closest(".recording-region-aspect-picker"))
-      .toHaveTextContent(/Aspect/);
+    expect(aspectPicker.closest(".recording-region-aspect-picker")).toHaveTextContent(/Aspect/);
     expect(container.querySelector(".capture-selector-note")).toHaveTextContent(
       "These controls won’t show in screenshots",
     );
@@ -472,17 +473,22 @@ describe("RecordingSelector", () => {
       "Press Enter to confirm",
     );
     expect(container.querySelector(".capture-selector-note strong")).toHaveTextContent("won’t");
-    expect(screen.getByRole("button", { name: /These controls won’t show in screenshots/ }))
-      .toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Take screenshot" }))
-      .toHaveAttribute("aria-keyshortcuts", "Enter");
+    expect(
+      screen.getByRole("button", { name: /These controls won’t show in screenshots/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Take screenshot" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Enter",
+    );
     expect(screen.queryByRole("combobox", { name: "Frames per second" })).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("list_recording_audio_devices");
 
     fireEvent.click(screen.getByRole("button", { name: "Window" }));
     expect(targetSwitch).toHaveAttribute("data-active", "window");
     expect(screen.queryByRole("combobox", { name: "Region aspect ratio" })).not.toBeInTheDocument();
-    const windowGuidance = screen.getByText("Select a window to continue").closest(".capture-guidance");
+    const windowGuidance = screen
+      .getByText("Select a window to continue")
+      .closest(".capture-guidance");
     expect(windowGuidance).toHaveTextContent("Esc to cancel");
     const surface = mockSelectorSurface(container);
     // (950, 400) is inside Front eligible window and outside Preferences.
@@ -529,10 +535,12 @@ describe("RecordingSelector", () => {
     };
     const { container } = render(<RecordingSelector />);
 
-    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
-      .toBeInTheDocument();
-    expect((container.querySelector<HTMLElement>(".recording-selector"))?.style.borderRadius)
-      .toBe("");
+    expect(
+      await screen.findByRole("button", { name: "Full screen", pressed: true }),
+    ).toBeInTheDocument();
+    expect(container.querySelector<HTMLElement>(".recording-selector")?.style.borderRadius).toBe(
+      "",
+    );
     expect(container.querySelector(".recording-display-outline")).toHaveStyle({
       borderRadius: "40px",
     });
@@ -582,8 +590,10 @@ describe("RecordingSelector", () => {
     });
     expect(surface!.style.borderRadius).toBe("");
     expect(selection!.style.borderRadius).toBe("");
-    expect(selection!.querySelector(".selection-dimensions"))
-      .toHaveAttribute("data-screen-edge", "top");
+    expect(selection!.querySelector(".selection-dimensions")).toHaveAttribute(
+      "data-screen-edge",
+      "top",
+    );
   });
 
   it("starts full-screen capture on the current display and can switch displays before capture", async () => {
@@ -594,8 +604,9 @@ describe("RecordingSelector", () => {
     };
     const { container } = render(<RecordingSelector />);
 
-    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Full screen", pressed: true }),
+    ).toBeInTheDocument();
     expect(container.querySelector(".recording-display-outline")).toBeInTheDocument();
     expect(container.querySelector(".recording-display-outline")).not.toHaveStyle({
       borderRadius: "40px",
@@ -645,8 +656,9 @@ describe("RecordingSelector", () => {
     });
 
     render(<RecordingSelector />);
-    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Full screen", pressed: true }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("combobox", { name: "Display" }));
     fireEvent.click(screen.getByRole("option", { name: /Studio Display/ }));
@@ -749,8 +761,9 @@ describe("RecordingSelector", () => {
     };
     render(<RecordingSelector />);
 
-    expect(await screen.findByRole("button", { name: "Full screen", pressed: true }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Full screen", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Take screenshot" })).toBeEnabled();
 
     fireEvent.keyDown(window, { key: "Enter" });
@@ -899,9 +912,7 @@ describe("RecordingSelector", () => {
         return Promise.resolve({ ...settings, auto_start_on_selection: true });
       }
       if (command === "open_preferences") return preferencesOpened;
-      return defaultInvoke
-        ? defaultInvoke(command, args)
-        : Promise.resolve(undefined);
+      return defaultInvoke ? defaultInvoke(command, args) : Promise.resolve(undefined);
     });
 
     render(<RecordingSelector />);
@@ -924,9 +935,12 @@ describe("RecordingSelector", () => {
         selectionId: preparedSession.id,
       });
     });
-    const actionCalls = vi.mocked(invoke).mock.calls
-      .map(([command]) => command)
-      .filter((command) => command === "open_preferences" || command === "cancel_recording_selection");
+    const actionCalls = vi
+      .mocked(invoke)
+      .mock.calls.map(([command]) => command)
+      .filter(
+        (command) => command === "open_preferences" || command === "cancel_recording_selection",
+      );
     expect(actionCalls).toEqual(["open_preferences", "cancel_recording_selection"]);
   });
 
@@ -942,9 +956,7 @@ describe("RecordingSelector", () => {
     });
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "open_preferences") return preferencesOpened;
-      return defaultInvoke
-        ? defaultInvoke(command, args)
-        : Promise.resolve(undefined);
+      return defaultInvoke ? defaultInvoke(command, args) : Promise.resolve(undefined);
     });
 
     render(<RecordingSelector />);
@@ -952,8 +964,7 @@ describe("RecordingSelector", () => {
       name: /These controls won’t show in screenshots/,
     });
     expect(visibility.querySelector(".capture-selector-preferences-icon")).not.toBeNull();
-    expect(screen.queryByRole("button", { name: /Auto-capture is on/ }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Auto-capture is on/ })).not.toBeInTheDocument();
     fireEvent.click(visibility);
 
     await waitFor(() => {
@@ -994,7 +1005,9 @@ describe("RecordingSelector", () => {
     const autoCapture = screen.getByRole("button", { name: /Auto-capture is on/ });
     expect(visibility).toHaveTextContent("These controls won’t show in screenshots");
     expect(visibility.querySelector(".capture-selector-preferences-icon")).not.toBeNull();
-    expect(autoCapture).toHaveTextContent("Auto-capture is on. Selecting a target starts immediately.");
+    expect(autoCapture).toHaveTextContent(
+      "Auto-capture is on. Selecting a target starts immediately.",
+    );
     expect(autoCapture.querySelector(".capture-selector-preferences-icon")).not.toBeNull();
     expect(screen.queryByText("Change…")).not.toBeInTheDocument();
     fireEvent.click(visibility);
@@ -1217,24 +1230,31 @@ describe("RecordingSelector", () => {
     hiddenClick.mockRestore();
   });
 
-  it.each([true, false])("confirms a full-screen recording by click or Enter (auto-start %s)", async (autoStart) => {
-    preparedSession = { ...session, initial_target: "display" };
-    if (autoStart) await enableAutoStartPreference();
-    const { container } = render(<RecordingSelector />);
-    await screen.findByRole("button", { name: "Full screen", pressed: true });
-    const surface = mockSelectorSurface(container);
-    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 80, clientY: 90 });
-    if (!autoStart) {
-      expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
-      fireEvent.keyDown(window, { key: "Enter" });
-    }
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_recording", {
-      request: {
-        selection_id: session.id,
-        options: expect.objectContaining({ target: { type: "display", display_id: "display-1" } }),
-      },
-    }));
-  });
+  it.each([true, false])(
+    "confirms a full-screen recording by click or Enter (auto-start %s)",
+    async (autoStart) => {
+      preparedSession = { ...session, initial_target: "display" };
+      if (autoStart) await enableAutoStartPreference();
+      const { container } = render(<RecordingSelector />);
+      await screen.findByRole("button", { name: "Full screen", pressed: true });
+      const surface = mockSelectorSurface(container);
+      fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 80, clientY: 90 });
+      if (!autoStart) {
+        expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
+        fireEvent.keyDown(window, { key: "Enter" });
+      }
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("start_recording", {
+          request: {
+            selection_id: session.id,
+            options: expect.objectContaining({
+              target: { type: "display", display_id: "display-1" },
+            }),
+          },
+        }),
+      );
+    },
+  );
 
   it("retries an auto-start recording by clicking the same window after failure", async () => {
     preparedSession = { ...session, initial_target: "window" };
@@ -1258,33 +1278,36 @@ describe("RecordingSelector", () => {
     await waitFor(() => expect(attempts).toBe(2));
   });
 
-  it.each(["resolve", "reject"])("ignores a stale recording start %s after opening a new selector", async (outcome) => {
-    preparedSession = { ...session, initial_target: "display" };
-    const defaultInvoke = vi.mocked(invoke).getMockImplementation();
-    let resolveStart!: () => void;
-    let rejectStart!: (error: Error) => void;
-    const pending = new Promise<void>((resolve, reject) => {
-      resolveStart = resolve;
-      rejectStart = reject;
-    });
-    vi.mocked(invoke).mockImplementation(async (command, args) => {
-      if (command === "start_recording") return pending;
-      return defaultInvoke?.(command, args);
-    });
-    render(<RecordingSelector />);
-    fireEvent.click(await screen.findByRole("button", { name: "Start recording" }));
-    fireEvent.keyDown(window, { key: "Escape" });
-    await act(async () => {
-      recordingSelectionReady?.({ payload: { ...session, id: "selection-2" } });
-    });
-    await screen.findByRole("button", { name: "Region", pressed: true });
-    await act(async () => {
-      if (outcome === "resolve") resolveStart();
-      else rejectStart(new Error("old recording failed"));
-    });
-    expect(screen.getByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
+  it.each(["resolve", "reject"])(
+    "ignores a stale recording start %s after opening a new selector",
+    async (outcome) => {
+      preparedSession = { ...session, initial_target: "display" };
+      const defaultInvoke = vi.mocked(invoke).getMockImplementation();
+      let resolveStart!: () => void;
+      let rejectStart!: (error: Error) => void;
+      const pending = new Promise<void>((resolve, reject) => {
+        resolveStart = resolve;
+        rejectStart = reject;
+      });
+      vi.mocked(invoke).mockImplementation(async (command, args) => {
+        if (command === "start_recording") return pending;
+        return defaultInvoke?.(command, args);
+      });
+      render(<RecordingSelector />);
+      fireEvent.click(await screen.findByRole("button", { name: "Start recording" }));
+      fireEvent.keyDown(window, { key: "Escape" });
+      await act(async () => {
+        recordingSelectionReady?.({ payload: { ...session, id: "selection-2" } });
+      });
+      await screen.findByRole("button", { name: "Region", pressed: true });
+      await act(async () => {
+        if (outcome === "resolve") resolveStart();
+        else rejectStart(new Error("old recording failed"));
+      });
+      expect(screen.getByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
 
   it("keeps the recording menu open when choosing Region or Window with auto-start on", async () => {
     await enableAutoStartPreference();
@@ -1293,13 +1316,17 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Window" }));
-    expect(await screen.findByRole("button", { name: "Window", pressed: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Window", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", expect.anything());
 
     fireEvent.click(screen.getByRole("button", { name: "Region" }));
-    expect(await screen.findByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Region", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", expect.anything());
@@ -1346,13 +1373,16 @@ describe("RecordingSelector", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Record", pressed: false }));
 
-    expect(animate).toHaveBeenCalledWith([
-      { width: "590px", height: "85px" },
-      { width: "790px", height: "161px" },
-    ], {
-      duration: 280,
-      easing: "cubic-bezier(.2,.8,.2,1)",
-    });
+    expect(animate).toHaveBeenCalledWith(
+      [
+        { width: "590px", height: "85px" },
+        { width: "790px", height: "161px" },
+      ],
+      {
+        duration: 280,
+        easing: "cubic-bezier(.2,.8,.2,1)",
+      },
+    );
     expect(panel).toHaveAttribute("data-resizing", "true");
   });
 
@@ -1363,7 +1393,9 @@ describe("RecordingSelector", () => {
 
     const surface = mockSelectorSurface(container);
     expect(screen.queryByText(/Window selected/)).not.toBeInTheDocument();
-    const windowGuidance = screen.getByText("Select a window to continue").closest(".capture-guidance");
+    const windowGuidance = screen
+      .getByText("Select a window to continue")
+      .closest(".capture-guidance");
     expect(windowGuidance).toHaveTextContent("Esc to cancel");
     expect(screen.queryByText(/enable (Capture|Record)/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Select Captures Preferences" })).toBeInTheDocument();
@@ -1395,8 +1427,7 @@ describe("RecordingSelector", () => {
       expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
         "d",
         expect.stringContaining(
-          "M325 160H1175A25 25 0 0 1 1200 185V775"
-          + "A25 25 0 0 1 1175 800H325",
+          "M325 160H1175A25 25 0 0 1 1200 185V775" + "A25 25 0 0 1 1175 800H325",
         ),
       );
     });
@@ -1415,10 +1446,7 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
     expect(container.querySelector(".capture-shade-path")).toHaveAttribute(
       "d",
-      expect.stringContaining(
-        "M112 80H888A12 12 0 0 1 900 92V668"
-        + "A12 12 0 0 1 888 680H112",
-      ),
+      expect.stringContaining("M112 80H888A12 12 0 0 1 900 92V668" + "A12 12 0 0 1 888 680H112"),
     );
   });
 
@@ -1463,10 +1491,14 @@ describe("RecordingSelector", () => {
     expect(screen.getByRole("button", { name: "Select Safari" })).not.toHaveClass("hovered");
 
     fireEvent.pointerDown(surface, { pointerId: 1, clientX: 20, clientY: 8 });
-    expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
-    expect(container.querySelector(".recording-display-identity")?.textContent)
-      .toContain("Built-in Retina Display");
+    expect(container.querySelector(".recording-display-identity")?.textContent).toContain(
+      "Built-in Retina Display",
+    );
   });
 
   it("does not treat a miss as full screen while window listing is still deferred", async () => {
@@ -1484,7 +1516,10 @@ describe("RecordingSelector", () => {
     expect(screen.queryByText("Click to capture this display")).not.toBeInTheDocument();
     fireEvent.pointerDown(surface, { pointerId: 1, clientX: 20, clientY: 8 });
     expect(screen.getByRole("button", { name: "Window" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Full screen" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("keeps Window highlights after a stale New Capture wake repeats the empty list", async () => {
@@ -1507,8 +1542,9 @@ describe("RecordingSelector", () => {
         },
       });
     });
-    expect(await screen.findByRole("button", { name: "Select Front eligible window" }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Select Front eligible window" }),
+    ).toBeInTheDocument();
 
     await act(async () => {
       recordingSelectionReady?.({
@@ -1546,7 +1582,9 @@ describe("RecordingSelector", () => {
     await screen.findByRole("button", { name: "Start recording" });
     const panel = container.querySelector<HTMLElement>(".recording-selector-panel");
     expect(panel).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Move recording controls" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Move recording controls" }),
+    ).not.toBeInTheDocument();
     vi.spyOn(panel!, "getBoundingClientRect").mockReturnValue({
       x: 200,
       y: 700,
@@ -1819,7 +1857,8 @@ describe("RecordingSelector", () => {
     render(<RecordingSelector />);
     fireEvent.click(await screen.findByRole("button", { name: "Window" }));
 
-    const guidance = screen.getByText("Select a window to continue")
+    const guidance = screen
+      .getByText("Select a window to continue")
       .closest(".capture-guidance") as HTMLElement;
     vi.spyOn(guidance, "getBoundingClientRect").mockReturnValue({
       x: 500,
@@ -1851,9 +1890,9 @@ describe("RecordingSelector", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(screen.queryByRole("button", { name: "Start recording" })).not.toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "cancel_recording_selection"
-    ))).toHaveLength(1);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "cancel_recording_selection"),
+    ).toHaveLength(1);
   });
 
   it("reveals through the safety path when a hidden WebView defers image loading", async () => {
@@ -1874,9 +1913,7 @@ describe("RecordingSelector", () => {
 
   it("reveals through a deadline when WebKit suspends animation frames", async () => {
     vi.useFakeTimers();
-    const animationFrame = vi
-      .spyOn(window, "requestAnimationFrame")
-      .mockImplementation(() => 1);
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     const { container } = render(<RecordingSelector />);
 
     await act(async () => {
@@ -1989,8 +2026,9 @@ describe("RecordingSelector", () => {
       // Region cutouts use CSS clip-path in marquee CSS pixels (not SVG viewBox).
       expect(container.querySelector(".capture-shade-path")).not.toBeInTheDocument();
       expect(container.querySelector(".capture-shade-full")).toHaveStyle({
-        clipPath: "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, "
-          + "100px 120px, 100px 340px, 400px 340px, 400px 120px, 100px 120px)",
+        clipPath:
+          "polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, " +
+          "100px 120px, 100px 340px, 400px 340px, 400px 120px, 100px 120px)",
       });
       expect(container.querySelector(".recording-selector-snapshot")).toHaveStyle({
         clipPath: "",
@@ -2000,7 +2038,9 @@ describe("RecordingSelector", () => {
 
   it("starts a screenshot from the matching shortcut while the capture menu is open", async () => {
     render(<RecordingSelector />);
-    expect(await screen.findByRole("button", { name: "Close capture controls" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Close capture controls" }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Screenshot" }));
     fireEvent.click(screen.getByRole("button", { name: "Window" }));
     expect(screen.getByRole("button", { name: "Window", pressed: true })).toBeInTheDocument();
@@ -2012,7 +2052,9 @@ describe("RecordingSelector", () => {
       shiftKey: true,
     });
 
-    expect(await screen.findByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Region", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Screenshot", pressed: true })).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
   });
@@ -2029,7 +2071,9 @@ describe("RecordingSelector", () => {
       shiftKey: true,
     });
 
-    expect(await screen.findByRole("button", { name: "Window", pressed: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Window", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Screenshot", pressed: true })).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
   });
@@ -2046,7 +2090,9 @@ describe("RecordingSelector", () => {
       shiftKey: true,
     });
 
-    expect(await screen.findByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Record", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Region", pressed: true })).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
@@ -2064,7 +2110,9 @@ describe("RecordingSelector", () => {
       altKey: true,
     });
 
-    expect(await screen.findByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Record", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Window", pressed: true })).toBeInTheDocument();
   });
 
@@ -2080,7 +2128,9 @@ describe("RecordingSelector", () => {
       altKey: true,
     });
 
-    expect(await screen.findByRole("button", { name: "Record", pressed: true })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Record", pressed: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Full screen", pressed: true })).toBeInTheDocument();
   });
 
@@ -2089,7 +2139,9 @@ describe("RecordingSelector", () => {
 
     render(<RecordingSelector />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("macOS could not focus the selector");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "macOS could not focus the selector",
+    );
     expect(invoke).not.toHaveBeenCalledWith("cancel_recording_selection", expect.anything());
   });
 
@@ -2112,12 +2164,12 @@ describe("RecordingSelector", () => {
         selectionId: preparedSession.id,
       });
     });
-    const revealCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "reveal_recording_selector"
-    )).length;
-    const showCalls = vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "show_recording_selector"
-    )).length;
+    const revealCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "reveal_recording_selector").length;
+    const showCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "show_recording_selector").length;
 
     await act(async () => {
       recordingSelectionReady?.({
@@ -2128,14 +2180,15 @@ describe("RecordingSelector", () => {
       });
     });
 
-    expect(await screen.findByRole("button", { name: "Select Captures Preferences" }))
-      .toBeInTheDocument();
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "reveal_recording_selector"
-    ))).toHaveLength(revealCalls);
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-      command === "show_recording_selector"
-    ))).toHaveLength(showCalls);
+    expect(
+      await screen.findByRole("button", { name: "Select Captures Preferences" }),
+    ).toBeInTheDocument();
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "reveal_recording_selector"),
+    ).toHaveLength(revealCalls);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "show_recording_selector"),
+    ).toHaveLength(showCalls);
   });
 
   it("reloads microphones when a reused selector starts a new session", async () => {
@@ -2159,9 +2212,11 @@ describe("RecordingSelector", () => {
     });
 
     await waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.filter(([command]) => (
-        command === "list_recording_audio_devices"
-      ))).toHaveLength(2);
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(([command]) => command === "list_recording_audio_devices"),
+      ).toHaveLength(2);
     });
     fireEvent.click(screen.getByRole("combobox", { name: "Microphone" }));
     expect(await screen.findByRole("option", { name: "Headset Microphone" })).toBeInTheDocument();
@@ -2196,8 +2251,9 @@ describe("RecordingSelector", () => {
     await screen.findByRole("button", { name: "Window", pressed: true });
     mockSelectorSurface(container);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Select Captures Preferences" }))
-        .toHaveClass("hovered");
+      expect(screen.getByRole("button", { name: "Select Captures Preferences" })).toHaveClass(
+        "hovered",
+      );
     });
 
     capturePointer = { x: 950, y: 400, inside: true };
@@ -2212,10 +2268,12 @@ describe("RecordingSelector", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Select Front eligible window" }))
-        .toHaveClass("hovered");
+      expect(screen.getByRole("button", { name: "Select Front eligible window" })).toHaveClass(
+        "hovered",
+      );
     });
-    expect(screen.getByRole("button", { name: "Select Captures Preferences" }))
-      .not.toHaveClass("hovered");
+    expect(screen.getByRole("button", { name: "Select Captures Preferences" })).not.toHaveClass(
+      "hovered",
+    );
   });
 });

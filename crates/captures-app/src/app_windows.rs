@@ -117,6 +117,8 @@ pub enum InteractiveLaunch {
     /// A quiet (autostart or post-update) launch stays in the tray and shows
     /// the launch notice.
     StartupNotice,
+    /// A post-update launch also restores the previously visible Preferences.
+    StartupNoticeAndPreferences,
     Preferences,
 }
 
@@ -126,11 +128,14 @@ pub fn interactive_launch(
     onboarding_complete: bool,
     launched_quietly: bool,
     opening_files: bool,
+    restore_preferences: bool,
 ) -> Option<InteractiveLaunch> {
     if opening_files {
         None
     } else if !onboarding_complete {
         Some(InteractiveLaunch::Setup)
+    } else if launched_quietly && restore_preferences {
+        Some(InteractiveLaunch::StartupNoticeAndPreferences)
     } else if launched_quietly {
         Some(InteractiveLaunch::StartupNotice)
     } else {
@@ -305,14 +310,26 @@ mod tests {
         use InteractiveLaunch::*;
         let lib = include_str!("../../../apps/desktop/src-tauri/src/lib.rs");
         assert!(lib.contains("fn interactive_launch_action("));
-        // (onboarding complete, quiet, opening files)
-        assert_eq!(interactive_launch(false, false, false), Some(Setup));
-        assert_eq!(interactive_launch(false, true, false), Some(Setup));
-        assert_eq!(interactive_launch(true, true, false), Some(StartupNotice));
-        assert_eq!(interactive_launch(true, false, false), Some(Preferences));
+        // (onboarding complete, quiet, opening files, restore Preferences)
+        assert_eq!(interactive_launch(false, false, false, false), Some(Setup));
+        assert_eq!(interactive_launch(false, true, false, true), Some(Setup));
+        assert_eq!(
+            interactive_launch(true, true, false, false),
+            Some(StartupNotice)
+        );
+        assert_eq!(
+            interactive_launch(true, true, false, true),
+            Some(StartupNoticeAndPreferences)
+        );
+        assert_eq!(
+            interactive_launch(true, false, false, false),
+            Some(Preferences)
+        );
         for complete in [false, true] {
             for quiet in [false, true] {
-                assert_eq!(interactive_launch(complete, quiet, true), None);
+                for restore in [false, true] {
+                    assert_eq!(interactive_launch(complete, quiet, true, restore), None);
+                }
             }
         }
     }

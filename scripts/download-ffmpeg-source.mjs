@@ -26,18 +26,12 @@ export function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-export function ffmpegSourceUrls({
-  filename,
-  githubUrls = [],
-  githubActions = false,
-}) {
+export function ffmpegSourceUrls({ filename, githubUrls = [], githubActions = false }) {
   const canonical = [
     `https://ffmpeg.org/releases/${filename}`,
     `https://www.ffmpeg.org/releases/${filename}`,
   ];
-  const ordered = githubActions
-    ? [...githubUrls, ...canonical]
-    : [...canonical, ...githubUrls];
+  const ordered = githubActions ? [...githubUrls, ...canonical] : [...canonical, ...githubUrls];
   return unique(ordered);
 }
 

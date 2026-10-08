@@ -149,7 +149,9 @@ export default function ProductGallery() {
   }
 
   const frameClass = imageZoom.zoomed ? "product-gallery-frame is-zoomed" : "product-gallery-frame";
-  const imageClass = imageZoom.settling ? "product-gallery-image is-settling" : "product-gallery-image";
+  const imageClass = imageZoom.settling
+    ? "product-gallery-image is-settling"
+    : "product-gallery-image";
 
   return (
     <section aria-labelledby={headingId} className="mt-14 border-t border-border pt-10">
@@ -193,11 +195,7 @@ export default function ProductGallery() {
                 <img
                   key={item.id}
                   ref={active ? imageRef : undefined}
-                  className={
-                    active
-                      ? imageClass
-                      : "product-gallery-image is-inactive"
-                  }
+                  className={active ? imageClass : "product-gallery-image is-inactive"}
                   src={SHOT_SRC[item.file]}
                   alt={active ? item.alt : ""}
                   width={item.width}

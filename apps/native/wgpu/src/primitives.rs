@@ -435,6 +435,26 @@ impl<'a> Select<'a> {
             info.current_text_value = Some(selected_label.to_owned());
             info
         });
+        // Assistive option focus moves the active descendant, not keyboard
+        // focus away from the trigger (which would otherwise close the menu).
+        if enabled && memory.state.open {
+            for (index, option) in options.iter().enumerate() {
+                let option_id = id.with(("option", index));
+                let action = egui::accesskit::Action::Focus;
+                if !option.disabled
+                    && ui.input(|input| input.has_accesskit_action_request(option_id, action))
+                {
+                    memory.state.active = index;
+                    ui.memory_mut(|memory| memory.request_focus(id));
+                    ui.input_mut(|input| {
+                        input.consume_accesskit_action_requests(option_id, |request| {
+                            request.action == action
+                        });
+                    });
+                    break;
+                }
+            }
+        }
         let focused = response.has_focus();
         let mut state = memory.state;
         let mut chosen = None;
@@ -442,7 +462,7 @@ impl<'a> Select<'a> {
             state.open = false;
         }
         // Keyboard: the focused trigger, or any open listbox (a pointer opens
-        // without taking focus, like WebKit buttons).
+        // it through the same state model).
         if enabled && (focused || state.open) {
             if focused {
                 ui.memory_mut(|memory| {
@@ -483,6 +503,7 @@ impl<'a> Select<'a> {
                 input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space)
             });
         if enabled && response.clicked() && !keyboard_click {
+            response.request_focus();
             state = if state.open {
                 select::State {
                     open: false,
@@ -606,6 +627,8 @@ impl<'a> Select<'a> {
         // Listbox.
         let mut rows = Vec::new();
         let mut list_clip = Rect::NOTHING;
+        let mut listbox_node = None;
+        let mut active_option = None;
         if open {
             let pad = t.number("s-2");
             let row_x = t.number("s-4");
@@ -698,6 +721,12 @@ impl<'a> Select<'a> {
                             .shadow(shadow_lg(dark))
                             .inner_margin(pad)
                             .show(ui, |ui| {
+                                crate::accessibility::set_group(
+                                    ui,
+                                    egui::accesskit::Role::ListBox,
+                                    self.label,
+                                );
+                                listbox_node = Some(ui.unique_id());
                                 let inner = menu_width - pad * 2. - 2.;
                                 ui.set_width(inner);
                                 let area = egui::ScrollArea::vertical()
@@ -738,8 +767,13 @@ impl<'a> Select<'a> {
                                                         .map_or(0., |small| small.size().y + 2.);
                                                 let row_height = (copy_height + row_y * 2.)
                                                     .max(t.number("h-sm"));
-                                                let (row, row_response) = ui.allocate_exact_size(
+                                                let (row, _) = ui.allocate_exact_size(
                                                     egui::vec2(inner, row_height),
+                                                    egui::Sense::hover(),
+                                                );
+                                                let row_response = ui.interact(
+                                                    row,
+                                                    id.with(("option", index)),
                                                     if option.disabled {
                                                         egui::Sense::hover()
                                                     } else {
@@ -747,13 +781,26 @@ impl<'a> Select<'a> {
                                                     },
                                                 );
                                                 row_response.widget_info(|| {
-                                                    egui::WidgetInfo::selected(
+                                                    egui::WidgetInfo::labeled(
                                                         egui::WidgetType::SelectableLabel,
                                                         !option.disabled,
-                                                        is_selected,
                                                         option.label,
                                                     )
                                                 });
+                                                ui.ctx().accesskit_node_builder(
+                                                    row_response.id,
+                                                    |node| {
+                                                        node.set_role(
+                                                            egui::accesskit::Role::ListBoxOption,
+                                                        );
+                                                        node.set_selected(is_selected);
+                                                        if !option.description.is_empty() {
+                                                            node.set_description(
+                                                                option.description,
+                                                            );
+                                                        }
+                                                    },
+                                                );
                                                 if !option.disabled && row_response.hovered() {
                                                     state.active = index;
                                                 }
@@ -763,6 +810,7 @@ impl<'a> Select<'a> {
                                                 let active =
                                                     state.active == index && !option.disabled;
                                                 if active {
+                                                    active_option = Some(row_response.id);
                                                     ui.painter().rect_filled(
                                                         row,
                                                         t.number("r-sm"),
@@ -858,10 +906,31 @@ impl<'a> Select<'a> {
                 .get(index)
                 .filter(|option| !option.disabled)
                 .map(|_| index);
+            if chosen.is_some() {
+                ui.memory_mut(|memory| memory.request_focus(id));
+            }
         }
         if !state.open {
             memory.menu = egui::Vec2::ZERO;
             memory.opened_at = None;
+        }
+        ui.ctx().accesskit_node_builder(id, |node| {
+            node.set_has_popup(egui::accesskit::HasPopup::Listbox);
+            node.set_expanded(state.open);
+            if state.open {
+                if let Some(listbox) = listbox_node {
+                    node.push_controlled(listbox.accesskit_id());
+                }
+                if let Some(option) = active_option {
+                    node.set_active_descendant(option.accesskit_id());
+                }
+            }
+        });
+        if !state.open
+            && let Some(listbox) = listbox_node
+        {
+            ui.ctx()
+                .accesskit_node_builder(listbox, |node| node.set_hidden());
         }
         // The listbox is our own foreground area, so mirror it into egui's popup
         // slot: surfaces that gate pointer gestures and shortcuts on
@@ -1654,6 +1723,157 @@ mod tests {
         run(vec![key(egui::Key::Escape)], &mut value);
         let (_, rows) = run(vec![], &mut value);
         assert_eq!((value, rows), (3, 0), "Escape closes without choosing");
+    }
+
+    #[test]
+    fn select_accessibility_tracks_popup_selection_and_keyboard_active_option() {
+        use crate::accessibility::tests::{contains, find_role};
+        use egui::accesskit::{HasPopup, Role};
+
+        for style in [SelectStyle::Field, SelectStyle::Glass, SelectStyle::Inline] {
+            let (ctx, t) = setup();
+            ctx.enable_accesskit();
+            let options = [
+                SelectOption::new(1, "One"),
+                SelectOption::new(2, "Two").disabled(true),
+                SelectOption::new(3, "Three").description("The third option"),
+            ];
+            let mut value = 1;
+            let run = |events, enabled, value: &mut i32| {
+                let mut trigger = None;
+                let output = frame(&ctx, events, |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let output = Select::new("accessible-select", "Numbers", 160.)
+                            .style(style)
+                            .height(32.)
+                            .show(ui, &t, &options, value);
+                        trigger = Some(output.response.id);
+                        if let Some(chosen) = output.chosen {
+                            *value = chosen;
+                        }
+                    });
+                });
+                (
+                    trigger.unwrap(),
+                    output.platform_output.accesskit_update.unwrap(),
+                )
+            };
+            let (trigger, closed) = run(vec![], true, &mut value);
+            let (_, combo) = find_role(&closed, Role::ComboBox, "Numbers").unwrap();
+            assert_eq!(combo.is_expanded(), Some(false));
+            assert_eq!(combo.has_popup(), Some(HasPopup::Listbox));
+            assert!(combo.controls().is_empty());
+            assert_eq!(combo.active_descendant(), None);
+
+            ctx.memory_mut(|memory| memory.request_focus(trigger));
+            run(vec![], true, &mut value);
+            let (_, open) = run(vec![key(egui::Key::ArrowDown)], true, &mut value);
+            let (combo_id, combo) = find_role(&open, Role::ComboBox, "Numbers").unwrap();
+            let (list_id, _) = find_role(&open, Role::ListBox, "Numbers").unwrap();
+            let (one_id, one) = find_role(&open, Role::ListBoxOption, "One").unwrap();
+            let (_, two) = find_role(&open, Role::ListBoxOption, "Two").unwrap();
+            let (three_id, three) = find_role(&open, Role::ListBoxOption, "Three").unwrap();
+            assert_eq!(combo.is_expanded(), Some(true));
+            assert_eq!(combo.controls(), &[list_id]);
+            assert_eq!(combo.active_descendant(), Some(one_id));
+            assert_eq!(open.focus, combo_id, "focus stays on the trigger");
+            assert!(contains(&open, list_id, one_id));
+            assert!(contains(&open, list_id, three_id));
+            assert_eq!(one.is_selected(), Some(true));
+            assert_eq!(three.is_selected(), Some(false));
+            assert_eq!(one.toggled(), None, "options are not toggle buttons");
+            assert!(two.is_disabled());
+            assert_eq!(three.description(), Some("The third option"));
+
+            let (_, moved) = run(vec![key(egui::Key::ArrowDown)], true, &mut value);
+            let (_, combo) = find_role(&moved, Role::ComboBox, "Numbers").unwrap();
+            assert_eq!(combo.active_descendant(), Some(three_id));
+            assert_eq!(value, 1, "navigation is not selection");
+            assert_eq!(combo.value(), Some("One"));
+            run(vec![key(egui::Key::Enter)], true, &mut value);
+            let (_, chosen) = run(vec![], true, &mut value);
+            let (_, combo) = find_role(&chosen, Role::ComboBox, "Numbers").unwrap();
+            assert_eq!(value, 3);
+            assert_eq!(combo.value(), Some("Three"));
+            assert_eq!(combo.is_expanded(), Some(false));
+            assert!(combo.controls().is_empty());
+            assert_eq!(combo.active_descendant(), None);
+
+            run(vec![key(egui::Key::Space)], true, &mut value);
+            let (_, disabled) = run(vec![], false, &mut value);
+            let (_, combo) = find_role(&disabled, Role::ComboBox, "Numbers").unwrap();
+            assert!(combo.is_disabled());
+            assert_eq!(combo.is_expanded(), Some(false));
+            assert!(combo.controls().is_empty());
+            assert_eq!(combo.active_descendant(), None);
+            assert!(find_role(&disabled, Role::ListBox, "Numbers").is_none());
+        }
+    }
+
+    #[test]
+    fn select_accessibility_click_and_option_focus_use_the_same_selection_state() {
+        use crate::accessibility::tests::find_role;
+        use egui::accesskit::{Action, ActionRequest, Role, TreeId};
+
+        let (ctx, t) = setup();
+        ctx.enable_accesskit();
+        let options = [
+            SelectOption::new(1, "One"),
+            SelectOption::new(2, "Two").disabled(true),
+            SelectOption::new(3, "Three"),
+        ];
+        let mut value = 1;
+        let run = |events, value: &mut i32| {
+            frame(&ctx, events, |ui| {
+                let output =
+                    Select::new("action-select", "Numbers", 160.).show(ui, &t, &options, value);
+                if let Some(chosen) = output.chosen {
+                    *value = chosen;
+                }
+            })
+            .platform_output
+            .accesskit_update
+            .unwrap()
+        };
+        let action = |target_node, action| {
+            egui::Event::AccessKitActionRequest(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node,
+                data: None,
+            })
+        };
+        let closed = run(vec![], &mut value);
+        let (combo_id, _) = find_role(&closed, Role::ComboBox, "Numbers").unwrap();
+        run(vec![action(combo_id, Action::Focus)], &mut value);
+        run(vec![action(combo_id, Action::Click)], &mut value);
+        let open = run(vec![], &mut value);
+        let (two_id, two) = find_role(&open, Role::ListBoxOption, "Two").unwrap();
+        let (three_id, three) = find_role(&open, Role::ListBoxOption, "Three").unwrap();
+        assert!(!two.supports_action(Action::Click));
+        assert!(three.supports_action(Action::Click));
+        let ignored = run(vec![action(two_id, Action::Click)], &mut value);
+        assert_eq!(value, 1);
+        assert_eq!(
+            find_role(&ignored, Role::ComboBox, "Numbers")
+                .unwrap()
+                .1
+                .is_expanded(),
+            Some(true)
+        );
+        let focused = run(vec![action(three_id, Action::Focus)], &mut value);
+        let (_, combo) = find_role(&focused, Role::ComboBox, "Numbers").unwrap();
+        assert_eq!(focused.focus, combo_id);
+        assert_eq!(combo.is_expanded(), Some(true));
+        assert_eq!(combo.active_descendant(), Some(three_id));
+        assert_eq!(value, 1, "assistive focus does not select");
+        run(vec![action(three_id, Action::Click)], &mut value);
+        let chosen = run(vec![], &mut value);
+        let (_, combo) = find_role(&chosen, Role::ComboBox, "Numbers").unwrap();
+        assert_eq!(value, 3);
+        assert_eq!(chosen.focus, combo_id);
+        assert_eq!(combo.is_expanded(), Some(false));
+        assert_eq!(combo.active_descendant(), None);
     }
 
     #[test]

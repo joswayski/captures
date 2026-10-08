@@ -87,7 +87,7 @@ pub fn png_palette_colors_for_quality(quality: u8) -> Option<u16> {
 /// Palette sizes tried when a hard maximum file size is requested for PNG.
 pub const PNG_MAXIMUM_COLOR_STEPS: [u16; 10] = [256, 192, 128, 96, 64, 48, 32, 24, 16, 8];
 
-fn encode_png_quantized(
+pub(crate) fn encode_png_quantized(
     image: &RgbaImage,
     max_colors: u16,
     dither: bool,

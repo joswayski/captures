@@ -274,6 +274,9 @@ enum Request {
     PermissionRecoveryTake {
         path: String,
     },
+    UpdateRestartTake {
+        ready_file: String,
+    },
     PermissionRecoveryReset {
         path: String,
         bundle_id: String,
@@ -445,6 +448,11 @@ fn response(request: *const c_char) -> Value {
             captures_app::permission_recovery::take_pending_capture(Path::new(&path))
                 .map(|mode| json!({"ok":true,"mode":mode}))
                 .unwrap_or_else(|error| json!({"ok":false,"error":error}))
+        }
+        Ok(Request::UpdateRestartTake { ready_file }) => {
+            captures_app::updater::take_restart_preferences(Path::new(&ready_file))
+                .map(|intent| json!({"ok":true,"restore_preferences":intent}))
+                .unwrap_or_else(|error| json!({"ok":false,"error":error.to_string()}))
         }
         Ok(Request::PermissionRecoveryReset { path, bundle_id }) => {
             permission_recovery_reset(Path::new(&path), &bundle_id)
@@ -644,6 +652,36 @@ mod tests {
             serde_json::from_slice(unsafe { CStr::from_ptr(pointer) }.to_bytes()).unwrap();
         unsafe { captures_settings_free_v1(pointer) };
         result
+    }
+
+    #[test]
+    fn update_restart_abi_consumes_visibility_once_without_acknowledging_health() {
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("ready");
+        std::fs::write(&ready, []).unwrap();
+        let request = json!({"operation":"update_restart_take","ready_file":ready});
+        for (bytes, expected) in [
+            (br#"{"restore_preferences":true}"#.as_slice(), true),
+            (br#"{"restore_preferences":false}"#.as_slice(), false),
+            (b"".as_slice(), false),
+        ] {
+            std::fs::write(ready.with_extension("restart.json"), bytes).unwrap();
+            assert_eq!(
+                settings_request(request.clone()),
+                json!({"ok":true,"restore_preferences":expected})
+            );
+            assert_eq!(
+                settings_request(request.clone()),
+                json!({"ok":true,"restore_preferences":null})
+            );
+            assert!(std::fs::read(&ready).unwrap().is_empty());
+        }
+        std::fs::write(ready.with_extension("restart.json"), b"invalid").unwrap();
+        assert_eq!(settings_request(request)["ok"], false);
+        assert_eq!(
+            std::fs::read(ready.with_extension("restart.json")).unwrap(),
+            b"invalid"
+        );
     }
 
     #[test]

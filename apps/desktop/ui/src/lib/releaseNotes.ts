@@ -1,7 +1,5 @@
-const AUTHOR_PR_SUFFIX =
-  /\s+by\s+@[\w-]+(?:\[bot\])?\s+in\s+https?:\/\/\S+\s*$/iu;
-const GITHUB_PULL_URL =
-  /https:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/iu;
+const AUTHOR_PR_SUFFIX = /\s+by\s+@[\w-]+(?:\[bot\])?\s+in\s+https?:\/\/\S+\s*$/iu;
+const GITHUB_PULL_URL = /https:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/iu;
 const TRAILING_PR_NUMBER = /\s+\(#(\d+)\)\s*$/u;
 const CAPTURES_GITHUB_OWNER = "joswayski";
 const CAPTURES_GITHUB_REPO = "captures";
@@ -79,11 +77,12 @@ export function releaseNoteItems(markdown: string): ReleaseNoteItem[] {
     const body = line.replace(/^(?:[-*+]\s+|\d+[.)]\s+)/u, "").replace(/^>\s?/u, "");
     const text = plainText(body);
     if (
-      !text
-      || isFirstContributionLine(text)
-      || isFirstContributionLine(body)
-      || isDependencyUpdateLine(text)
-    ) continue;
+      !text ||
+      isFirstContributionLine(text) ||
+      isFirstContributionLine(body) ||
+      isDependencyUpdateLine(text)
+    )
+      continue;
     items.push({ text, pullRequest: pullRequestFromLine(body) });
   }
 
@@ -97,26 +96,35 @@ export interface ReleaseNoteGroup {
 }
 
 export function stackedReleaseNotes(
-  changelog: Array<{ version: string; display_version: string; notes: string | null }> | null | undefined,
+  changelog:
+    | Array<{ version: string; display_version: string; notes: string | null }>
+    | null
+    | undefined,
   fallbackNotes: string | null | undefined,
   fallbackDisplayVersion: string,
 ): ReleaseNoteGroup[] {
   if (changelog && changelog.length > 0) {
     return changelog.flatMap((entry) => {
       const items = entry.notes ? releaseNoteItems(entry.notes) : [];
-      return items.length > 0 ? [{
-        version: entry.version,
-        displayVersion: entry.display_version,
-        items,
-      }] : [];
+      return items.length > 0
+        ? [
+            {
+              version: entry.version,
+              displayVersion: entry.display_version,
+              items,
+            },
+          ]
+        : [];
     });
   }
   if (!fallbackNotes) return [];
   const items = releaseNoteItems(fallbackNotes);
   if (items.length === 0) return [];
-  return [{
-    version: "",
-    displayVersion: fallbackDisplayVersion,
-    items,
-  }];
+  return [
+    {
+      version: "",
+      displayVersion: fallbackDisplayVersion,
+      items,
+    },
+  ];
 }

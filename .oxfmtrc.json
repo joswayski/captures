@@ -1,0 +1,13 @@
+{
+  "printWidth": 100,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "**/target/**",
+    "**/.build/**",
+    "**/.output/**",
+    "**/dist/**",
+    "apps/native/wgpu/vendor/**",
+    "apps/web/src/routeTree.gen.ts",
+    "**/public/**"
+  ]
+}

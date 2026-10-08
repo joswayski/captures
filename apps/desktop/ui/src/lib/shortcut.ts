@@ -215,8 +215,10 @@ export function isModifierCode(code: string): boolean {
 }
 
 export function isSupportedShortcutCode(code: string): boolean {
-  return /^(?:Digit[0-9]|Key[A-Z]|Numpad[0-9]|F(?:[1-9]|1[0-9]|2[0-4]))$/.test(code)
-    || SUPPORTED_NAMED_CODES.has(code);
+  return (
+    /^(?:Digit[0-9]|Key[A-Z]|Numpad[0-9]|F(?:[1-9]|1[0-9]|2[0-4]))$/.test(code) ||
+    SUPPORTED_NAMED_CODES.has(code)
+  );
 }
 
 function canonicalModifiers(event: ShortcutKeyEvent): string[] {
@@ -265,27 +267,27 @@ function canonicalShortcutToken(token: string): string {
   if (normalized === "shift") return "shift";
   if (normalized === "alt" || normalized === "option") return "alt";
   if (
-    normalized === "super"
-    || normalized === "cmd"
-    || normalized === "command"
-    || normalized === "meta"
-    || normalized === "win"
+    normalized === "super" ||
+    normalized === "cmd" ||
+    normalized === "command" ||
+    normalized === "meta" ||
+    normalized === "win"
   ) {
     return "super";
   }
   if (
-    normalized === "commandorcontrol"
-    || normalized === "commandorctrl"
-    || normalized === "cmdorctrl"
-    || normalized === "cmdorcontrol"
+    normalized === "commandorcontrol" ||
+    normalized === "commandorctrl" ||
+    normalized === "cmdorctrl" ||
+    normalized === "cmdorcontrol"
   ) {
     return "commandorcontrol";
   }
   if (
-    normalized === "printscreen"
-    || normalized === "prtscn"
-    || normalized === "prtsc"
-    || normalized === "print"
+    normalized === "printscreen" ||
+    normalized === "prtscn" ||
+    normalized === "prtsc" ||
+    normalized === "print"
   ) {
     return "printscreen";
   }
@@ -294,10 +296,7 @@ function canonicalShortcutToken(token: string): string {
   return normalized;
 }
 
-function expandCommandOrControl(
-  modifiers: Set<string>,
-  platform: ShortcutPlatform,
-): Set<string> {
+function expandCommandOrControl(modifiers: Set<string>, platform: ShortcutPlatform): Set<string> {
   const next = new Set(modifiers);
   if (next.delete("commandorcontrol")) {
     next.add(platform === "macos" ? "super" : "control");
@@ -311,10 +310,7 @@ export function eventMatchesShortcut(
   shortcut: string,
   platform: ShortcutPlatform = detectShortcutPlatform(),
 ): boolean {
-  const tokens = shortcut
-    .split("+")
-    .map(canonicalShortcutToken)
-    .filter(Boolean);
+  const tokens = shortcut.split("+").map(canonicalShortcutToken).filter(Boolean);
   const key = tokens.pop();
   if (!key) return false;
   const expected = expandCommandOrControl(new Set(tokens), platform);

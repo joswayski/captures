@@ -152,13 +152,15 @@ describe("screenshot editor geometry", () => {
       width: 2_560,
       height: 1_440,
       background: "#f7f7f5",
-      elements: [{
-        kind: "image",
-        source: "background",
-        sourceArtifactId: "capture-1",
-        width: 2_560,
-        height: 1_440,
-      }],
+      elements: [
+        {
+          kind: "image",
+          source: "background",
+          sourceArtifactId: "capture-1",
+          width: 2_560,
+          height: 1_440,
+        },
+      ],
     });
     expect(collectEditorSourceArtifactIds(document.elements)).toEqual(["capture-1"]);
   });
@@ -191,9 +193,11 @@ describe("screenshot editor geometry", () => {
       elements: [...document.elements, imported, orphan, { ...imported, id: "dup" }],
     };
     expect(collectEditorSourceArtifactIds(combined.elements)).toEqual(["base", "other"]);
-    expect(collectEditorSourceArtifactIds(
-      combined.elements.filter((element) => element.id !== "imported" && element.id !== "dup"),
-    )).toEqual(["base"]);
+    expect(
+      collectEditorSourceArtifactIds(
+        combined.elements.filter((element) => element.id !== "imported" && element.id !== "dup"),
+      ),
+    ).toEqual(["base"]);
   });
 
   it("allows a transparent document canvas background", () => {
@@ -205,11 +209,9 @@ describe("screenshot editor geometry", () => {
   });
 
   it("constrains a crop to the canvas and requested aspect ratio", () => {
-    expect(boundedCropRect(
-      { x: 900, y: 700 },
-      { x: 1_400, y: 1_100 },
-      { width: 1_000, height: 800 },
-    )).toEqual({ x: 900, y: 700, width: 100, height: 100 });
+    expect(
+      boundedCropRect({ x: 900, y: 700 }, { x: 1_400, y: 1_100 }, { width: 1_000, height: 800 }),
+    ).toEqual({ x: 900, y: 700, width: 100, height: 100 });
 
     const widescreen = boundedCropRect(
       { x: 100, y: 100 },
@@ -223,17 +225,13 @@ describe("screenshot editor geometry", () => {
   });
 
   it("snaps an off-canvas crop drag to the canvas edges", () => {
-    expect(boundedCropRect(
-      { x: -40, y: -20 },
-      { x: 1_200, y: 900 },
-      { width: 1_000, height: 800 },
-    )).toEqual({ x: 0, y: 0, width: 1_000, height: 800 });
+    expect(
+      boundedCropRect({ x: -40, y: -20 }, { x: 1_200, y: 900 }, { width: 1_000, height: 800 }),
+    ).toEqual({ x: 0, y: 0, width: 1_000, height: 800 });
 
-    expect(boundedCropRect(
-      { x: -30, y: 120 },
-      { x: 400, y: 500 },
-      { width: 1_000, height: 800 },
-    )).toEqual({ x: 0, y: 120, width: 400, height: 380 });
+    expect(
+      boundedCropRect({ x: -30, y: 120 }, { x: 400, y: 500 }, { width: 1_000, height: 800 }),
+    ).toEqual({ x: 0, y: 120, width: 400, height: 380 });
   });
 
   it("locks Shift-crop to the live box, then scales that ratio", () => {
@@ -452,12 +450,8 @@ describe("screenshot editor geometry", () => {
     expect(bounds.width).toBeGreaterThan(bubble.width);
 
     const trimmed = trimDocumentToContent(document);
-    expect(trimmed.width).toBe(
-      Math.ceil(bounds.x + bounds.width) - Math.floor(bounds.x),
-    );
-    expect(trimmed.height).toBe(
-      Math.ceil(bounds.y + bounds.height) - Math.floor(bounds.y),
-    );
+    expect(trimmed.width).toBe(Math.ceil(bounds.x + bounds.width) - Math.floor(bounds.x));
+    expect(trimmed.height).toBe(Math.ceil(bounds.y + bounds.height) - Math.floor(bounds.y));
     // Without background pad, trim would be too tight around the glyphs.
     const glyphOnlyWidth = bubble.width;
     expect(trimmed.width).toBeGreaterThan(glyphOnlyWidth);
@@ -492,10 +486,7 @@ describe("screenshot editor geometry", () => {
     };
     const document = {
       ...base,
-      elements: [
-        { ...base.elements[0], visible: false },
-        overhang,
-      ],
+      elements: [{ ...base.elements[0], visible: false }, overhang],
     };
 
     const trimmed = trimDocumentToContent(document);
@@ -562,12 +553,7 @@ describe("screenshot editor geometry", () => {
 
   it("places dropped screenshots as movable layers and expands the canvas", () => {
     const document = createScreenshotDocument("capture.png", 1_000, 800);
-    const position = positionImportedImage(
-      2_000,
-      1_000,
-      document,
-      { x: 900, y: 700 },
-    );
+    const position = positionImportedImage(2_000, 1_000, document, { x: 900, y: 700 });
     const imported: EditorImageElement = {
       ...editableLayer,
       id: "imported",
@@ -584,10 +570,12 @@ describe("screenshot editor geometry", () => {
     expect(imported.width).toBeLessThanOrEqual(650);
     expect(combined.elements).toHaveLength(2);
     expect(combined.width).toBeGreaterThanOrEqual(imported.x + imported.width);
-    expect(hitTestElement(combined.elements, {
-      x: imported.x + 10,
-      y: imported.y + 10,
-    })?.id).toBe("imported");
+    expect(
+      hitTestElement(combined.elements, {
+        x: imported.x + 10,
+        y: imported.y + 10,
+      })?.id,
+    ).toBe("imported");
   });
 
   it("accepts image drops when WebKit omits the MIME type", () => {
@@ -615,20 +603,23 @@ describe("screenshot editor geometry", () => {
     const second = { ...first, id: "second", src: "blob:second", name: "second.png" };
     const elements = [...document.elements, first, second];
 
-    expect(reorderScreenshotLayers(elements, "first", "second", "before").map(({ id }) => id))
-      .toEqual(["capture-background", "second", "first"]);
     expect(
-      reorderScreenshotLayers(elements, "second", "capture-background", "after")
-        .map(({ id }) => id),
+      reorderScreenshotLayers(elements, "first", "second", "before").map(({ id }) => id),
     ).toEqual(["capture-background", "second", "first"]);
     expect(
-      reorderScreenshotLayers(elements, "capture-background", "second", "before"),
-    ).toBe(elements);
+      reorderScreenshotLayers(elements, "second", "capture-background", "after").map(
+        ({ id }) => id,
+      ),
+    ).toEqual(["capture-background", "second", "first"]);
+    expect(reorderScreenshotLayers(elements, "capture-background", "second", "before")).toBe(
+      elements,
+    );
 
     const unlocked = elements.map((element) => ({ ...element, locked: false }));
     expect(
-      reorderScreenshotLayers(unlocked, "capture-background", "second", "before")
-        .map(({ id }) => id),
+      reorderScreenshotLayers(unlocked, "capture-background", "second", "before").map(
+        ({ id }) => id,
+      ),
     ).toEqual(["first", "second", "capture-background"]);
   });
 
@@ -800,26 +791,19 @@ describe("screenshot editor geometry", () => {
     const overlayBounds = { x: 300, y: 200, width: 400, height: 300 };
 
     // Over the exposed background (not covered by the overlay) → background.
-    expect(resolveImageDropTarget(layered, "overlay", { x: 50, y: 50 }))
-      .toEqual(background);
-    expect(imageDropGuideAtPoint(layered, "overlay", { x: 50, y: 50 }).target)
-      .toEqual(background);
+    expect(resolveImageDropTarget(layered, "overlay", { x: 50, y: 50 })).toEqual(background);
+    expect(imageDropGuideAtPoint(layered, "overlay", { x: 50, y: 50 }).target).toEqual(background);
 
     // Over the overlay → top-most layer only (never both).
-    expect(resolveImageDropTarget(layered, null, { x: 500, y: 350 }))
-      .toEqual(overlayBounds);
-    expect(imageDropGuideAtPoint(layered, null, { x: 500, y: 350 }).target)
-      .toEqual(overlayBounds);
-    expect(imageDropGuideAtPoint(layered, null, { x: 500, y: 350 }).edge)
-      .toBe("stack");
+    expect(resolveImageDropTarget(layered, null, { x: 500, y: 350 })).toEqual(overlayBounds);
+    expect(imageDropGuideAtPoint(layered, null, { x: 500, y: 350 }).target).toEqual(overlayBounds);
+    expect(imageDropGuideAtPoint(layered, null, { x: 500, y: 350 }).edge).toBe("stack");
 
     // Selection must not force a buried/off-pointer layer while hovering another.
-    expect(resolveImageDropTarget(layered, "overlay", { x: 80, y: 700 }))
-      .toEqual(background);
+    expect(resolveImageDropTarget(layered, "overlay", { x: 80, y: 700 })).toEqual(background);
 
     // Just outside the overlay but still over the background → background (visible).
-    expect(resolveImageDropTarget(layered, null, { x: 500, y: 190 }))
-      .toEqual(background);
+    expect(resolveImageDropTarget(layered, null, { x: 500, y: 190 })).toEqual(background);
 
     // Non-overlapping layers: outside every image uses the closest one.
     const left: EditorImageElement = {
@@ -849,13 +833,20 @@ describe("screenshot editor geometry", () => {
       elements: [left, right],
     };
     // Midway between them → front-most of the two equidistant layers.
-    expect(resolveImageDropTarget(sideBySide, null, { x: 300, y: 100 }))
-      .toEqual({ x: 400, y: 0, width: 200, height: 200 });
+    expect(resolveImageDropTarget(sideBySide, null, { x: 300, y: 100 })).toEqual({
+      x: 400,
+      y: 0,
+      width: 200,
+      height: 200,
+    });
     // Closer to the left layer's right edge.
-    expect(resolveImageDropTarget(sideBySide, null, { x: 250, y: 100 }))
-      .toEqual({ x: 0, y: 0, width: 200, height: 200 });
-    expect(imageDropGuideAtPoint(sideBySide, null, { x: 250, y: 100 }).edge)
-      .toBe("right");
+    expect(resolveImageDropTarget(sideBySide, null, { x: 250, y: 100 })).toEqual({
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 200,
+    });
+    expect(imageDropGuideAtPoint(sideBySide, null, { x: 250, y: 100 }).edge).toBe("right");
   });
 
   it("duplicates layers as visible unlocked imports", () => {
@@ -877,8 +868,7 @@ describe("screenshot editor geometry", () => {
     expect(hitTestElement(document.elements, { x: 20, y: 20 })).toBeNull();
     const background = { ...document.elements[0], locked: false };
     expect(hitTestElement([background], { x: 20, y: 20 })?.id).toBe("capture-background");
-    expect(hitTestElement([{ ...background, visible: false }], { x: 20, y: 20 }))
-      .toBeNull();
+    expect(hitTestElement([{ ...background, visible: false }], { x: 20, y: 20 })).toBeNull();
   });
 
   it("preserves imported image aspect ratio when resizing", () => {
@@ -1094,7 +1084,9 @@ describe("screenshot editor geometry", () => {
 
     expect(curveStrokeHoverHint(line, { x: 150, y: 80 }, 8)).toMatch(/Drag a dot to curve/);
     expect(curveStrokeHoverHint(bent, { x: 150, y: 130 }, 8)).toMatch(/Double-click to remove/);
-    expect(curveStrokeHoverHint(bent, { x: 200, y: 95 }, 8)).toMatch(/Double-click to add a curve point/);
+    expect(curveStrokeHoverHint(bent, { x: 200, y: 95 }, 8)).toMatch(
+      /Double-click to add a curve point/,
+    );
     expect(curveStrokeHoverHint(line, { x: 10, y: 10 }, 8)).toBeNull();
   });
 
@@ -1344,8 +1336,9 @@ describe("screenshot editor geometry", () => {
     expect(auto.opacity).toBe(45);
     expect(auto.offsetX).toBe(0);
     expect(auto.offsetY).toBeGreaterThan(0);
-    expect(annotationDropShadowMetrics({ ...base, dropShadow: true }).color)
-      .toBe("rgba(0, 0, 0, 0.45)");
+    expect(annotationDropShadowMetrics({ ...base, dropShadow: true }).color).toBe(
+      "rgba(0, 0, 0, 0.45)",
+    );
 
     const custom = {
       ...base,
@@ -1370,10 +1363,12 @@ describe("screenshot editor geometry", () => {
     expect(annotationDropShadowPad(custom)).toBeGreaterThan(
       annotationDropShadowPad({ ...base, dropShadow: true }),
     );
-    expect(annotationDropShadowPad({
-      ...custom,
-      dropShadowStyle: { ...custom.dropShadowStyle, opacity: 0 },
-    })).toBe(0);
+    expect(
+      annotationDropShadowPad({
+        ...custom,
+        dropShadowStyle: { ...custom.dropShadowStyle, opacity: 0 },
+      }),
+    ).toBe(0);
 
     const autoShadow: EditorShapeElement = {
       ...editableLayer,
@@ -1439,13 +1434,19 @@ describe("screenshot editor geometry", () => {
     };
     expect(elementBounds(outlined).width).toBeGreaterThan(textLayoutBounds(outlined).width);
 
-    const kept = applyTextStylePreset({ ...shadowed, dropShadowStyle: {
-      color: "#000000",
-      opacity: 70,
-      blur: 12,
-      offsetX: 4,
-      offsetY: 8,
-    } }, "outlined");
+    const kept = applyTextStylePreset(
+      {
+        ...shadowed,
+        dropShadowStyle: {
+          color: "#000000",
+          opacity: 70,
+          blur: 12,
+          offsetX: 4,
+          offsetY: 8,
+        },
+      },
+      "outlined",
+    );
     expect(kept.dropShadow).toBe(true);
     expect(kept.dropShadowStyle?.blur).toBe(12);
     expect(kept.outlined).toBe(true);
@@ -1519,19 +1520,18 @@ describe("screenshot editor geometry", () => {
       style: { color: "#f00", fill: "#f004", strokeWidth: 2 },
     };
     expect(shapeRotation(rectangle)).toBe(0);
-    expect(hitTestShapeRotationHandle(
-      rectangle,
-      shapeRotationHandlePoint(rectangle, 1),
-      8,
-      1,
-    )).toBe(true);
+    expect(
+      hitTestShapeRotationHandle(rectangle, shapeRotationHandlePoint(rectangle, 1), 8, 1),
+    ).toBe(true);
     expect(hitTestShapeRotationHandle(rectangle, { x: 150, y: 120 }, 8, 1)).toBe(false);
 
     const quarter = withShapeRotation(rectangle, Math.PI / 2);
     expect(shapeRotation(quarter)).toBeCloseTo(Math.PI / 2, 10);
     expect(shapeRotationDegrees(quarter)).toBe(90);
-    expect(withShapeRotation(rectangle, shapeRotationFromDegrees(90)).rotation)
-      .toBeCloseTo(Math.PI / 2, 10);
+    expect(withShapeRotation(rectangle, shapeRotationFromDegrees(90)).rotation).toBeCloseTo(
+      Math.PI / 2,
+      10,
+    );
     expect(snapShapeRotationDegrees(37)).toBe(30);
     expect(snapShapeRotationDegrees(-7)).toBe(0);
     const unrotated = elementBounds(rectangle);
@@ -1543,8 +1543,7 @@ describe("screenshot editor geometry", () => {
 
     const snapped = snapShapeRotation(Math.PI / 2 + 0.04, true);
     expect(snapped).toBeCloseTo(Math.PI / 2, 10);
-    expect(snapShapeRotation(52 * Math.PI / 180, true, 30))
-      .toBeCloseTo(Math.PI / 3, 10);
+    expect(snapShapeRotation((52 * Math.PI) / 180, true, 30)).toBeCloseTo(Math.PI / 3, 10);
     expect(withShapeRotation(quarter, 0).rotation).toBeUndefined();
 
     const local = shapeLocalBounds(quarter);
@@ -1560,11 +1559,7 @@ describe("screenshot editor geometry", () => {
     expect(resized.endX - resized.x).toBeCloseTo((rectangle.endX - rectangle.x) * 2, 5);
 
     const worldNw = shapeWorldPoint(quarter, { x: local.x, y: local.y });
-    const preserved = preserveShapeWorldPoint(
-      quarter,
-      resized,
-      { x: local.x, y: local.y },
-    );
+    const preserved = preserveShapeWorldPoint(quarter, resized, { x: local.x, y: local.y });
     const preservedAnchor = {
       x: local.x + (preserved.x - resized.x),
       y: local.y + (preserved.y - resized.y),
@@ -1627,7 +1622,10 @@ describe("screenshot editor geometry", () => {
         kind: "path",
         x: 100,
         y: 80,
-        points: [{ x: 100, y: 80 }, { x: 200, y: 120 }],
+        points: [
+          { x: 100, y: 80 },
+          { x: 200, y: 120 },
+        ],
         style: { color: "#fff", fill: null, strokeWidth: 2 },
       },
     ];
@@ -1661,18 +1659,23 @@ describe("screenshot editor geometry", () => {
     const insetHandle = elementRotationHandlePoint(fullCanvasImage, 1, canvas);
     expect(insetHandle).toEqual({ x: 200, y: 28 });
     expect(elementRotationHandleFitsCanvas(fullCanvasImage, 1, canvas)).toBe(true);
-    expect(hitTestElementRotationHandle(fullCanvasImage, insetHandle, 8, 1, canvas))
-      .toBe(true);
+    expect(hitTestElementRotationHandle(fullCanvasImage, insetHandle, 8, 1, canvas)).toBe(true);
 
-    const diagonalPath = withElementRotation({
-      ...editableLayer,
-      id: "diagonal",
-      kind: "path" as const,
-      x: 0,
-      y: 0,
-      points: [{ x: 0, y: 0 }, { x: 100, y: 100 }],
-      style: { color: "#fff", fill: null, strokeWidth: 2 },
-    }, -Math.PI / 4);
+    const diagonalPath = withElementRotation(
+      {
+        ...editableLayer,
+        id: "diagonal",
+        kind: "path" as const,
+        x: 0,
+        y: 0,
+        points: [
+          { x: 0, y: 0 },
+          { x: 100, y: 100 },
+        ],
+        style: { color: "#fff", fill: null, strokeWidth: 2 },
+      },
+      -Math.PI / 4,
+    );
     const diagonalBounds = elementBounds(diagonalPath);
     expect(diagonalBounds.width).toBeCloseTo(100 * Math.SQRT2 + 8, 5);
     expect(diagonalBounds.height).toBe(9);
@@ -1702,9 +1705,7 @@ describe("screenshot editor geometry", () => {
         displayScale,
       ),
     ).toBe(false);
-    expect(
-      hitTestShapeRotationHandle(rectangle, handle, handleRadius, displayScale),
-    ).toBe(true);
+    expect(hitTestShapeRotationHandle(rectangle, handle, handleRadius, displayScale)).toBe(true);
   });
 
   it("moves the rotation handle inside when the outside grip would clip", () => {
@@ -1720,14 +1721,8 @@ describe("screenshot editor geometry", () => {
       controls: [],
       style: { color: "#fff", fill: "transparent", strokeWidth: 2 },
     };
-    expect(
-      shapeRotationHandleFitsCanvas(clipped, 1, { width: 400, height: 300 }),
-    ).toBe(true);
-    const clippedHandle = elementRotationHandlePoint(
-      clipped,
-      1,
-      { width: 400, height: 300 },
-    );
+    expect(shapeRotationHandleFitsCanvas(clipped, 1, { width: 400, height: 300 })).toBe(true);
+    const clippedHandle = elementRotationHandlePoint(clipped, 1, { width: 400, height: 300 });
     expect(clippedHandle.y).toBeGreaterThan(8);
 
     const inset: EditorShapeElement = {
@@ -1737,9 +1732,7 @@ describe("screenshot editor geometry", () => {
       endX: 200,
       endY: 160,
     };
-    expect(
-      shapeRotationHandleFitsCanvas(inset, 1, { width: 400, height: 300 }),
-    ).toBe(true);
+    expect(shapeRotationHandleFitsCanvas(inset, 1, { width: 400, height: 300 })).toBe(true);
   });
 
   it("maps line and arrow handles through rotation so world drags stay on the stroke", () => {
@@ -1816,20 +1809,12 @@ describe("screenshot editor geometry", () => {
     expect(lines.horizontal).toEqual(expect.arrayContaining([0, 800, 100, 180]));
 
     // Near the right edge of the imported layer.
-    const snapped = snapTranslatedBounds(
-      { x: 305, y: 40, width: 50, height: 40 },
-      lines,
-      10,
-    );
+    const snapped = snapTranslatedBounds({ x: 305, y: 40, width: 50, height: 40 }, lines, 10);
     expect(snapped.bounds.x).toBe(300);
     expect(snapped.guides).toContainEqual({ orientation: "vertical", position: 300 });
 
     // Near the top canvas border.
-    const toCanvas = snapTranslatedBounds(
-      { x: 40, y: 6, width: 50, height: 40 },
-      lines,
-      10,
-    );
+    const toCanvas = snapTranslatedBounds({ x: 40, y: 6, width: 50, height: 40 }, lines, 10);
     expect(toCanvas.bounds.y).toBe(0);
     expect(toCanvas.guides).toContainEqual({ orientation: "horizontal", position: 0 });
   });
@@ -1843,20 +1828,22 @@ describe("screenshot editor geometry", () => {
     const free = resizeBoundsFromHandle(initial, "se", { x: 405, y: 295 }, 8);
     const snapped = snapResizedBounds(initial, "se", free, lines, 10, 8);
     expect(snapped.bounds).toMatchObject({ x: 100, y: 100, width: 300, height: 200 });
-    expect(snapped.guides).toEqual(expect.arrayContaining([
-      { orientation: "vertical", position: 400 },
-      { orientation: "horizontal", position: 300 },
-    ]));
+    expect(snapped.guides).toEqual(
+      expect.arrayContaining([
+        { orientation: "vertical", position: 400 },
+        { orientation: "horizontal", position: 300 },
+      ]),
+    );
   });
 
   it("detects canvas overflow and expands the document to fit bounds", () => {
     const document = createScreenshotDocument("capture.png", 1_000, 800);
     const overflowing = { x: -40, y: 100, width: 200, height: 100 };
     expect(canvasOverflowEdges(overflowing, document)).toEqual(["left"]);
-    expect(canvasOverflowEdges(
-      { x: 900, y: 750, width: 200, height: 100 },
-      document,
-    )).toEqual(["right", "bottom"]);
+    expect(canvasOverflowEdges({ x: 900, y: 750, width: 200, height: 100 }, document)).toEqual([
+      "right",
+      "bottom",
+    ]);
 
     expect(previewExpandedCanvasRect(overflowing, document)).toEqual({
       x: -40,
@@ -1864,32 +1851,38 @@ describe("screenshot editor geometry", () => {
       width: 1_040,
       height: 800,
     });
-    expect(previewExpandedCanvasRect(
-      { x: 900, y: 750, width: 200, height: 100 },
-      document,
-    )).toEqual({
+    expect(
+      previewExpandedCanvasRect({ x: 900, y: 750, width: 200, height: 100 }, document),
+    ).toEqual({
       x: 0,
       y: 0,
       width: 1_100,
       height: 850,
     });
-    expect(previewExpandedCanvasRect({
-      x: 10,
-      y: 10,
-      width: 100,
-      height: 100,
-    }, document)).toBeNull();
+    expect(
+      previewExpandedCanvasRect(
+        {
+          x: 10,
+          y: 10,
+          width: 100,
+          height: 100,
+        },
+        document,
+      ),
+    ).toBeNull();
 
     const expanded = expandDocumentToFitBounds(document, overflowing, 0);
     expect(expanded.width).toBe(1_040);
     expect(expanded.height).toBe(800);
     expect(expanded.elements[0]).toMatchObject({ x: 40, y: 0 });
-    expect(expandDocumentToFitBounds(document, {
-      x: 10,
-      y: 10,
-      width: 100,
-      height: 100,
-    })).toBe(document);
+    expect(
+      expandDocumentToFitBounds(document, {
+        x: 10,
+        y: 10,
+        width: 100,
+        height: 100,
+      }),
+    ).toBe(document);
 
     expect(isFullyOutsideCanvas(overflowing, document)).toBe(false);
     expect(isFullyOutsideCanvas({ x: -400, y: 100, width: 200, height: 100 }, document)).toBe(true);
@@ -1901,12 +1894,18 @@ describe("screenshot editor geometry", () => {
       x: -24,
       y: 150,
     });
-    expect(canvasExpandButtonAnchor({
-      x: 900,
-      y: 750,
-      width: 200,
-      height: 100,
-    }, document, 24)).toEqual({
+    expect(
+      canvasExpandButtonAnchor(
+        {
+          x: 900,
+          y: 750,
+          width: 200,
+          height: 100,
+        },
+        document,
+        24,
+      ),
+    ).toEqual({
       x: 1_024,
       y: 800,
     });
@@ -1966,8 +1965,9 @@ describe("screenshot editor geometry", () => {
     });
     if (shrunkArrow.kind !== "shape") throw new Error("expected arrow");
     expect(shrunkArrow.style.strokeWidth).toBeCloseTo(2, 5);
-    expect(arrowHeadLength(shrunkArrow.style.strokeWidth, arrowChordLength(shrunkArrow)))
-      .toBeLessThan(arrowHeadLength(arrow.style.strokeWidth, arrowChordLength(arrow)) * 0.5);
+    expect(
+      arrowHeadLength(shrunkArrow.style.strokeWidth, arrowChordLength(shrunkArrow)),
+    ).toBeLessThan(arrowHeadLength(arrow.style.strokeWidth, arrowChordLength(arrow)) * 0.5);
 
     const text: EditorTextElement = {
       ...editableLayer,
@@ -2013,8 +2013,9 @@ describe("screenshot editor geometry", () => {
       width: 240,
     });
     // Wider box reflows to fewer lines (or equal when already single-line).
-    expect(elementBounds(resizedWider as EditorTextElement).height)
-      .toBeLessThanOrEqual(elementBounds(text).height);
+    expect(elementBounds(resizedWider as EditorTextElement).height).toBeLessThanOrEqual(
+      elementBounds(text).height,
+    );
 
     const autoWidth: EditorTextElement = {
       ...text,
@@ -2057,10 +2058,13 @@ describe("screenshot editor geometry", () => {
     expect(stretched).toMatchObject({ kind: "text", autoWidth: true, fontSize: 44 });
     if (stretched.kind !== "text") throw new Error("expected text");
     const bubbleEnd = elementBounds(stretched);
-    expect(bubbleEnd.width / bubbleEnd.height)
-      .toBeCloseTo(bubbleStart.width / bubbleStart.height, 2);
-    expect(bubbleEnd.width / bubbleEnd.height)
-      .toBeLessThan((bubbleStart.width * 2) / (bubbleStart.height * 1.1) * 0.7);
+    expect(bubbleEnd.width / bubbleEnd.height).toBeCloseTo(
+      bubbleStart.width / bubbleStart.height,
+      2,
+    );
+    expect(bubbleEnd.width / bubbleEnd.height).toBeLessThan(
+      ((bubbleStart.width * 2) / (bubbleStart.height * 1.1)) * 0.7,
+    );
 
     // Background plates expand paint/selection bounds beyond the layout box.
     const bubble: EditorTextElement = {
@@ -2076,9 +2080,9 @@ describe("screenshot editor geometry", () => {
     expect(bubbleBounds.y).toBeLessThan(bubble.y);
     expect(bubbleBounds.width).toBeGreaterThan(bubble.width);
     expect(bubbleBounds.height).toBeGreaterThan(
-      Math.max(1, wrapTextLines(bubble.text, bubble.width, bubble.fontSize).length)
-        * bubble.fontSize
-        * TEXT_LINE_HEIGHT_RATIO,
+      Math.max(1, wrapTextLines(bubble.text, bubble.width, bubble.fontSize).length) *
+        bubble.fontSize *
+        TEXT_LINE_HEIGHT_RATIO,
     );
   });
 
@@ -2141,8 +2145,7 @@ describe("screenshot editor geometry", () => {
       text: "Hello from the screenshot editor",
     });
     expect(wrapped.width).toBe(80);
-    expect(wrapTextLines(wrapped.text, wrapped.width, wrapped.fontSize).length)
-      .toBeGreaterThan(1);
+    expect(wrapTextLines(wrapped.text, wrapped.width, wrapped.fontSize).length).toBeGreaterThan(1);
   });
 
   it("opens a wide empty text field, then hugs glyphs, with a rounded rect not a capsule", () => {
@@ -2208,11 +2211,9 @@ describe("screenshot editor geometry", () => {
     const radius = textBackgroundRadius(placed, bubbleWidth, bubbleHeight);
     expect(radius).toBeGreaterThan(8);
     expect(radius).toBeLessThan(bubbleHeight * 0.45);
-    expect(textBackgroundRadius(
-      { ...placed, roundedBackground: false },
-      bubbleWidth,
-      bubbleHeight,
-    )).toBe(0);
+    expect(
+      textBackgroundRadius({ ...placed, roundedBackground: false }, bubbleWidth, bubbleHeight),
+    ).toBe(0);
   });
 
   it("scales arrow heads with stroke and shaft length", () => {
@@ -2239,8 +2240,7 @@ describe("screenshot editor geometry", () => {
     };
     const short = scaleArrowStrokeForLength(long, { ...long, endX: 50 });
     expect(short.style.strokeWidth).toBeCloseTo(2, 5);
-    expect(arrowHeadLength(short.style.strokeWidth, arrowChordLength(short)))
-      .toBeLessThan(12);
+    expect(arrowHeadLength(short.style.strokeWidth, arrowChordLength(short))).toBeLessThan(12);
     const intermediate = scaleArrowStrokeForLength(long, { ...long, endX: 95 });
     expect(intermediate.style.strokeWidth).toBe(4);
     const longer = scaleArrowStrokeForLength(long, { ...long, endX: 400 });
@@ -2265,13 +2265,12 @@ describe("screenshot editor geometry", () => {
     const drawn = { ...arrow, endX: 210 };
     const polygon = arrowFillPolygon(drawn);
     expect(polygon.length).toBeGreaterThan(8);
-    expect(polygon.some((point) => Math.abs(point.x - 210) < 0.01 && Math.abs(point.y - 40) < 0.01))
-      .toBe(true);
+    expect(
+      polygon.some((point) => Math.abs(point.x - 210) < 0.01 && Math.abs(point.y - 40) < 0.01),
+    ).toBe(true);
 
     const widthAt = (x: number) => {
-      const ys = polygon
-        .filter((point) => Math.abs(point.x - x) < 12)
-        .map((point) => point.y);
+      const ys = polygon.filter((point) => Math.abs(point.x - x) < 12).map((point) => point.y);
       return Math.max(...ys) - Math.min(...ys);
     };
     expect(widthAt(24)).toBeLessThan(widthAt(150));
@@ -2329,12 +2328,27 @@ describe("screenshot editor geometry", () => {
 
     const expectations = {
       standard: { fontFamily: "sans", background: null, outlined: false, roundedBackground: false },
-      rounded: { fontFamily: "rounded", background: null, outlined: false, roundedBackground: false },
+      rounded: {
+        fontFamily: "rounded",
+        background: null,
+        outlined: false,
+        roundedBackground: false,
+      },
       outlined: { fontFamily: "sans", background: null, outlined: true, roundedBackground: false },
       mono: { fontFamily: "mono", background: null, outlined: false, roundedBackground: false },
       box: { fontFamily: "sans", background: "#111318", outlined: false, roundedBackground: false },
-      "mono-box": { fontFamily: "mono", background: "#111318", outlined: false, roundedBackground: false },
-      "rounded-box": { fontFamily: "rounded", background: "#111318", outlined: false, roundedBackground: true },
+      "mono-box": {
+        fontFamily: "mono",
+        background: "#111318",
+        outlined: false,
+        roundedBackground: false,
+      },
+      "rounded-box": {
+        fontFamily: "rounded",
+        background: "#111318",
+        outlined: false,
+        roundedBackground: true,
+      },
     } as const;
 
     for (const [preset, expected] of Object.entries(expectations)) {
@@ -2352,18 +2366,22 @@ describe("screenshot editor geometry", () => {
 
   it("builds a complete canvas font shorthand so rounded blobs keep their family", () => {
     expect(editorTextFontStack("rounded")).toContain("ui-rounded");
-    expect(editorTextCanvasFont({
-      italic: false,
-      bold: true,
-      fontSize: 48,
-      fontFamily: "rounded",
-    })).toMatch(/^normal 700 48px /);
-    expect(editorTextCanvasFont({
-      italic: true,
-      bold: false,
-      fontSize: 22,
-      fontFamily: "serif",
-    })).toMatch(/^italic 400 22px /);
+    expect(
+      editorTextCanvasFont({
+        italic: false,
+        bold: true,
+        fontSize: 48,
+        fontFamily: "rounded",
+      }),
+    ).toMatch(/^normal 700 48px /);
+    expect(
+      editorTextCanvasFont({
+        italic: true,
+        bold: false,
+        fontSize: 22,
+        fontFamily: "serif",
+      }),
+    ).toMatch(/^italic 400 22px /);
   });
 
   it("skips canvas families that paint as Times when rounded was requested", () => {
@@ -2388,12 +2406,14 @@ describe("screenshot editor geometry", () => {
     });
     try {
       expect(resolveEditorTextCanvasFamily("rounded")).toBe("system-ui");
-      expect(editorTextCanvasFont({
-        italic: false,
-        bold: true,
-        fontSize: 48,
-        fontFamily: "rounded",
-      })).toBe("normal 700 48px system-ui");
+      expect(
+        editorTextCanvasFont({
+          italic: false,
+          bold: true,
+          fontSize: 48,
+          fontFamily: "rounded",
+        }),
+      ).toBe("normal 700 48px system-ui");
       expect(resolveEditorTextCanvasFamily("serif")).toBe("Georgia");
     } finally {
       spy.mockRestore();
@@ -2446,14 +2466,8 @@ describe("screenshot editor geometry", () => {
     const canvas = document.createElement("canvas");
     canvas.width = 8;
     canvas.height = 8;
-    const toBlob = vi.fn((
-      callback: BlobCallback,
-      type?: string,
-      quality?: number,
-    ) => {
-      const size = type === "image/jpeg"
-        ? Math.round(1_000 * (quality ?? 1))
-        : 2_500;
+    const toBlob = vi.fn((callback: BlobCallback, type?: string, quality?: number) => {
+      const size = type === "image/jpeg" ? Math.round(1_000 * (quality ?? 1)) : 2_500;
       callback(new Blob([new Uint8Array(size)], { type: type ?? "image/png" }));
     });
     Object.defineProperty(canvas, "toBlob", { value: toBlob });
@@ -2561,7 +2575,11 @@ describe("screenshot editor geometry", () => {
 });
 
 describe("layer merge and flatten helpers", () => {
-  const baseImage = (id: string, name: string, overrides: Partial<EditorImageElement> = {}): EditorImageElement => ({
+  const baseImage = (
+    id: string,
+    name: string,
+    overrides: Partial<EditorImageElement> = {},
+  ): EditorImageElement => ({
     id,
     kind: "image",
     source: "imported",
@@ -2577,7 +2595,11 @@ describe("layer merge and flatten helpers", () => {
     ...overrides,
   });
 
-  const textLayer = (id: string, text: string, overrides: Partial<EditorTextElement> = {}): EditorTextElement => ({
+  const textLayer = (
+    id: string,
+    text: string,
+    overrides: Partial<EditorTextElement> = {},
+  ): EditorTextElement => ({
     id,
     kind: "text",
     text,
@@ -2630,11 +2652,7 @@ describe("layer merge and flatten helpers", () => {
       width: 200,
       height: 100,
       background: "#111",
-      elements: [
-        baseImage("bg", "Background"),
-        textLayer("t1", "Hello"),
-        textLayer("t2", "World"),
-      ],
+      elements: [baseImage("bg", "Background"), textLayer("t1", "Hello"), textLayer("t2", "World")],
     };
     const merged = baseImage("merged", "Merged");
     const next = applyMergeLayerDown(document, "t2", merged);

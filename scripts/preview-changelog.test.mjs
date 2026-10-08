@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import test from "node:test";
+import { test } from "vitest";
 import { fileURLToPath } from "node:url";
 
 import { applyPreviewChangelog, previewChangelog } from "./preview-changelog.mjs";
@@ -41,10 +41,10 @@ test("stacks dated Preview notes newest first and ignores other releases", () =>
 
 test("rejects a manifest that is not the newest changelog version", () => {
   assert.throws(
-    () => applyPreviewChangelog(
-      { version: "2026.8.2704", notes: "Four", platforms: {} },
-      [release({ tag: "v2026.08.27.5", body: "Five" })],
-    ),
+    () =>
+      applyPreviewChangelog({ version: "2026.8.2704", notes: "Four", platforms: {} }, [
+        release({ tag: "v2026.08.27.5", body: "Five" }),
+      ]),
     /does not match newest changelog 2026\.8\.2705/u,
   );
 });
@@ -53,19 +53,30 @@ test("writes changelog onto latest.json for the Preview channel", () => {
   const directory = mkdtempSync(join(tmpdir(), "captures-preview-changelog-"));
   const latestPath = join(directory, "latest.json");
   const releasesPath = join(directory, "releases.json");
-  writeFileSync(latestPath, JSON.stringify({
-    version: "2026.8.2705",
-    notes: "Five",
-    platforms: { "darwin-aarch64": { url: "https://example.com", signature: "sig" } },
-  }));
-  writeFileSync(releasesPath, JSON.stringify([
-    release({ tag: "v2026.08.27.4", body: "Four" }),
-    release({ tag: "v2026.08.27.5", body: "Five" }),
-  ]));
+  writeFileSync(
+    latestPath,
+    JSON.stringify({
+      version: "2026.8.2705",
+      notes: "Five",
+      platforms: { "darwin-aarch64": { url: "https://example.com", signature: "sig" } },
+    }),
+  );
+  writeFileSync(
+    releasesPath,
+    JSON.stringify([
+      release({ tag: "v2026.08.27.4", body: "Four" }),
+      release({ tag: "v2026.08.27.5", body: "Five" }),
+    ]),
+  );
 
   const result = spawnSync(
     process.execPath,
-    [fileURLToPath(new URL("./preview-changelog.mjs", import.meta.url)), "apply", latestPath, releasesPath],
+    [
+      fileURLToPath(new URL("./preview-changelog.mjs", import.meta.url)),
+      "apply",
+      latestPath,
+      releasesPath,
+    ],
     { encoding: "utf8" },
   );
   assert.equal(result.status, 0, result.stderr);

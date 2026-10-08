@@ -33,7 +33,7 @@ export function RangeSlider({
 }: RangeSliderProps) {
   const id = useId();
   const span = Math.max(1, max - min);
-  const progress = Math.min(100, Math.max(0, (value - min) / span * 100));
+  const progress = Math.min(100, Math.max(0, ((value - min) / span) * 100));
   const style = { "--range-progress": `${progress}%` } as CSSProperties;
 
   const hasMarks = marks.length > 0;
@@ -45,7 +45,9 @@ export function RangeSlider({
         hasMarks ? "has-marks" : "",
         disabled ? "disabled" : "",
         className,
-      ].filter(Boolean).join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       style={style}
     >
       <div className="range-slider-value">
@@ -69,7 +71,9 @@ export function RangeSlider({
             {marks.map((mark) => (
               <i
                 key={`${mark.value}-${mark.label}`}
-                style={{ left: `${Math.min(100, Math.max(0, (mark.value - min) / span * 100))}%` }}
+                style={{
+                  left: `${Math.min(100, Math.max(0, ((mark.value - min) / span) * 100))}%`,
+                }}
               />
             ))}
           </span>
@@ -80,7 +84,7 @@ export function RangeSlider({
           {marks.map((mark) => (
             <small
               key={`${mark.value}-${mark.label}`}
-              style={{ left: `${Math.min(100, Math.max(0, (mark.value - min) / span * 100))}%` }}
+              style={{ left: `${Math.min(100, Math.max(0, ((mark.value - min) / span) * 100))}%` }}
             >
               {mark.shortLabel ?? mark.label}
             </small>
@@ -111,7 +115,10 @@ export function NotchedSlider<Value extends string>({
   className?: string;
   onChange: (value: Value) => void;
 }) {
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
   const selected = options[selectedIndex];
 
   return (
@@ -132,9 +139,7 @@ export function NotchedSlider<Value extends string>({
           if (option) onChange(option.value);
         }}
       />
-      {selected?.description && (
-        <p className="range-slider-description">{selected.description}</p>
-      )}
+      {selected?.description && <p className="range-slider-description">{selected.description}</p>}
     </div>
   );
 }

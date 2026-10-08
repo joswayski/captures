@@ -136,24 +136,31 @@ describe("Preferences", () => {
     expect(await screen.findByText("Changes saved")).toBeInTheDocument();
   });
 
-  it.each(["macos", "windows", "linux"])("can enable and disable login startup on %s", async (platform) => {
-    window.history.replaceState({}, "", `/?view=preferences&platform=${platform}`);
-    render(<Preferences />);
+  it.each(["macos", "windows", "linux"])(
+    "can enable and disable login startup on %s",
+    async (platform) => {
+      window.history.replaceState({}, "", `/?view=preferences&platform=${platform}`);
+      render(<Preferences />);
 
-    const general = await screen.findByRole("region", { name: "General" });
-    const login = within(general).getByRole("checkbox", { name: /Start Captures on login/ });
-    expect(login).not.toBeChecked();
-    expect(login).toBeEnabled();
-    fireEvent.click(login);
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("update_settings", {
-      settings: expect.objectContaining({ launch_at_login: true }),
-    }));
+      const general = await screen.findByRole("region", { name: "General" });
+      const login = within(general).getByRole("checkbox", { name: /Start Captures on login/ });
+      expect(login).not.toBeChecked();
+      expect(login).toBeEnabled();
+      fireEvent.click(login);
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("update_settings", {
+          settings: expect.objectContaining({ launch_at_login: true }),
+        }),
+      );
 
-    fireEvent.click(login);
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("update_settings", {
-      settings: expect.objectContaining({ launch_at_login: false }),
-    }));
-  });
+      fireEvent.click(login);
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("update_settings", {
+          settings: expect.objectContaining({ launch_at_login: false }),
+        }),
+      );
+    },
+  );
 
   it("persists custom screenshot and recording countdown preferences", async () => {
     render(<Preferences />);
@@ -201,11 +208,7 @@ describe("Preferences", () => {
   });
 
   it("scrolls to and highlights auto-capture when opened with that target", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/?view=preferences&target=auto-start-on-selection",
-    );
+    window.history.replaceState({}, "", "/?view=preferences&target=auto-start-on-selection");
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
@@ -291,9 +294,9 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ show_mini_previews: false }),
       });
     });
-    expect(screen.getByText(
-      "Mini previews are off, so they won’t show in screenshots or recordings.",
-    )).toBeInTheDocument();
+    expect(
+      screen.getByText("Mini previews are off, so they won’t show in screenshots or recordings."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Bottom left" })).toBeDisabled();
   });
 
@@ -324,8 +327,9 @@ describe("Preferences", () => {
     });
     expect(includePreviews).not.toBeChecked();
     expect(includePreviews).toBeEnabled();
-    expect(screen.getByText("Mini previews won’t show in screenshots or recordings."))
-      .toBeInTheDocument();
+    expect(
+      screen.getByText("Mini previews won’t show in screenshots or recordings."),
+    ).toBeInTheDocument();
     fireEvent.click(includePreviews);
 
     await waitFor(() => {
@@ -333,9 +337,11 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ include_mini_previews_in_captures: true }),
       });
     });
-    expect(screen.getByText(
-      "Mini previews will show in screenshots and recordings. Turn this off to keep them out.",
-    )).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Mini previews will show in screenshots and recordings. Turn this off to keep them out.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("explains and updates recording control visibility in screenshots and recordings", async () => {
@@ -420,20 +426,30 @@ describe("Preferences", () => {
   it("suppresses New Capture only while assigning its shortcut", async () => {
     render(<Preferences />);
     const recorder = await screen.findByRole("button", { name: "New Capture" });
-    expect(invoke).not.toHaveBeenCalledWith("set_shortcut_capture_suppressed", { suppressed: true });
+    expect(invoke).not.toHaveBeenCalledWith("set_shortcut_capture_suppressed", {
+      suppressed: true,
+    });
 
     fireEvent.click(recorder);
-    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", { suppressed: true });
+    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", {
+      suppressed: true,
+    });
     fireEvent.keyDown(recorder, { key: "Escape", code: "Escape" });
-    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", { suppressed: false });
+    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", {
+      suppressed: false,
+    });
     expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
 
     fireEvent.click(recorder);
     fireEvent.keyDown(recorder, { key: "n", code: "KeyN", ctrlKey: true, shiftKey: true });
-    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", { suppressed: false });
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("update_settings", {
-      settings: expect.objectContaining({ new_capture_shortcut: "Control+Shift+KeyN" }),
-    }));
+    expect(invoke).toHaveBeenLastCalledWith("set_shortcut_capture_suppressed", {
+      suppressed: false,
+    });
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ new_capture_shortcut: "Control+Shift+KeyN" }),
+      }),
+    );
   });
 
   it("offers and persists shortcuts for every recording target", async () => {
@@ -484,8 +500,9 @@ describe("Preferences", () => {
     render(<Preferences />);
 
     expect(
-      await within(await screen.findByRole("radiogroup", { name: "Color theme" }))
-        .findAllByRole("radio"),
+      await within(await screen.findByRole("radiogroup", { name: "Color theme" })).findAllByRole(
+        "radio",
+      ),
     ).toHaveLength(10);
     expect(screen.getByRole("radio", { name: /Violet/ })).toHaveAttribute(
       "data-capture-theme",
@@ -499,9 +516,7 @@ describe("Preferences", () => {
       "title",
       "Vercel-like black and white",
     );
-    expect(screen.getByRole("radio", { name: /Custom/ })).toHaveClass(
-      "theme-option-custom",
-    );
+    expect(screen.getByRole("radio", { name: /Custom/ })).toHaveClass("theme-option-custom");
   });
 
   it("builds and persists a custom theme from editable colors", async () => {
@@ -625,13 +640,21 @@ describe("Preferences", () => {
     const initialCopy = versionCopy?.textContent;
     const base = { current_version: "0.1.0", current_display_version: "0.1.0" };
 
-    act(() => publish?.({ event: "update-status-changed", id: 1, payload: { ...base, state: "checking" } }));
+    act(() =>
+      publish?.({ event: "update-status-changed", id: 1, payload: { ...base, state: "checking" } }),
+    );
     expect(screen.getByRole("button", { name: "Checking now…" })).toBeDisabled();
     expect(screen.getByText("Version 0.1.0")).toBe(version);
     expect(versionCopy?.textContent).toBe(initialCopy);
     expect(screen.queryByText("Checking for updates…")).not.toBeInTheDocument();
 
-    act(() => publish?.({ event: "update-status-changed", id: 1, payload: { ...base, state: "up_to_date" } }));
+    act(() =>
+      publish?.({
+        event: "update-status-changed",
+        id: 1,
+        payload: { ...base, state: "up_to_date" },
+      }),
+    );
     const result = screen.getByText("Up to date");
     expect(result).toHaveClass("update-settings-status-current");
     expect(result).toHaveAttribute("role", "status");
@@ -654,9 +677,7 @@ describe("Preferences", () => {
 
     render(<Preferences />);
 
-    expect(
-      await screen.findByText(/If this copy cannot update itself/u),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/If this copy cannot update itself/u)).toBeInTheDocument();
     expect(screen.getByText(/~\/\.local\/bin\/Captures\.AppImage/u)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "download from captur.es" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_download_page"));
@@ -734,7 +755,8 @@ describe("Preferences", () => {
           state: "error",
           current_version: "0.1.0",
           current_display_version: "0.1.0",
-          message: "Could not install the update: Download request failed with status: 404 Not Found",
+          message:
+            "Could not install the update: Download request failed with status: 404 Not Found",
           retry_install: true,
         };
       }
@@ -825,9 +847,13 @@ describe("Preferences", () => {
 
     fireEvent.change(find, { target: { value: "clipboard" } });
     expect(await screen.findByText("1 of 1")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", {
-      name: /Automatically copy captures to the clipboard/,
-    }).closest("label")).toHaveClass("preference-find-match", "preference-find-current");
+    expect(
+      screen
+        .getByRole("checkbox", {
+          name: /Automatically copy captures to the clipboard/,
+        })
+        .closest("label"),
+    ).toHaveClass("preference-find-match", "preference-find-current");
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
   });
 

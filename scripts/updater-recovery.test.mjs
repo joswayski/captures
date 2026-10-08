@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { fileURLToPath } from "node:url";
 
 import { PREVIEW_CHANNEL_ASSET_NAMES } from "./preview-release-assets.mjs";
@@ -19,10 +19,7 @@ const INSTALLER_NAMES = Object.entries(PREVIEW_CHANNEL_ASSET_NAMES)
 test("published builds keep a signed in-app updater and a public installer page", () => {
   const config = JSON.parse(read("apps/desktop/src-tauri/tauri.conf.json"));
   assert.equal(config.bundle.createUpdaterArtifacts, true);
-  assert.equal(
-    typeof config.plugins.updater.pubkey,
-    "string",
-  );
+  assert.equal(typeof config.plugins.updater.pubkey, "string");
   assert.ok(
     config.plugins.updater.pubkey.length > 80,
     "installed copies cannot verify a later Preview without the updater public key",
@@ -33,10 +30,7 @@ test("published builds keep a signed in-app updater and a public installer page"
   ]);
 
   const updates = read("apps/desktop/src-tauri/src/updates.rs");
-  assert.match(
-    updates,
-    /const DOWNLOAD_PAGE_URL: &str = "https:\/\/captur\.es\/#download";/u,
-  );
+  assert.match(updates, /const DOWNLOAD_PAGE_URL: &str = "https:\/\/captur\.es\/#download";/u);
 
   const preferences = read("apps/desktop/ui/src/App.tsx");
   assert.match(preferences, /source="preferences"/u);
@@ -55,10 +49,7 @@ test("README, website, and Preview channel share stable installer names", () => 
     assert.ok(releases.includes(name), `docs/releases.md is missing ${name}`);
   }
 
-  assert.match(
-    readme,
-    /If Captures will not open or cannot install an update/u,
-  );
+  assert.match(readme, /If Captures will not open or cannot install an update/u);
   assert.match(readme, /~\/\.local\/bin\/Captures\.AppImage/u);
   assert.doesNotMatch(home, /Installing (?:a download|a Debian package) replaces/u);
   assert.match(home, /~\/\.local\/bin\/Captures\.AppImage/u);

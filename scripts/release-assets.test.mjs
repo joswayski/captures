@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   isGitHubUntaggedDownloadUrl,
@@ -45,10 +45,13 @@ function fixture(platforms = ["darwin-aarch64", "windows-x86_64", "linux-x86_64"
             "windows-x86_64": "Captures-setup.exe",
             "linux-x86_64": "Captures.AppImage",
           }[platform];
-          return [platform, {
-            url: `https://github.com/joswayski/captures/releases/download/v2026.07.19.1/${asset}`,
-            signature: "signed",
-          }];
+          return [
+            platform,
+            {
+              url: `https://github.com/joswayski/captures/releases/download/v2026.07.19.1/${asset}`,
+              signature: "signed",
+            },
+          ];
         }),
       ),
     }),
@@ -69,7 +72,10 @@ test("validates complete updater metadata and writes deterministic checksums", (
 
 test("rejects a release without matching FFmpeg compliance assets", () => {
   const directory = fixture();
-  writeFileSync(join(directory, "ffmpeg-8.1.2-BUILD_CONFIG.txt"), "--enable-gpl\n--enable-libx264\n");
+  writeFileSync(
+    join(directory, "ffmpeg-8.1.2-BUILD_CONFIG.txt"),
+    "--enable-gpl\n--enable-libx264\n",
+  );
   assert.throws(
     () => validateAndWriteChecksums(directory, "2026.7.1901"),
     /missing --disable-gpl/u,
@@ -174,7 +180,8 @@ test("rewrites draft untagged updater URLs to the published CalVer tag", () => {
     "https://github.com/joswayski/captures/releases/download/v2026.08.29.16/Captures_2026.8.2916_aarch64.app.tar.gz",
   );
   assert.throws(
-    () => publicGithubReleaseDownloadUrl("joswayski/captures", "untagged-abc", "Captures.app.tar.gz"),
+    () =>
+      publicGithubReleaseDownloadUrl("joswayski/captures", "untagged-abc", "Captures.app.tar.gz"),
     /public download tag/u,
   );
 });
@@ -196,10 +203,7 @@ test("rejects updater manifests that still use GitHub API asset URLs", () => {
       },
     }),
   );
-  assert.throws(
-    () => validateAndWriteChecksums(directory, "2026.7.1901"),
-    /GitHub API/u,
-  );
+  assert.throws(() => validateAndWriteChecksums(directory, "2026.7.1901"), /GitHub API/u);
 });
 
 test("rejects updater manifests that still use draft untagged download URLs", () => {
@@ -219,8 +223,5 @@ test("rejects updater manifests that still use draft untagged download URLs", ()
       },
     }),
   );
-  assert.throws(
-    () => validateAndWriteChecksums(directory, "2026.7.1901"),
-    /untagged/u,
-  );
+  assert.throws(() => validateAndWriteChecksums(directory, "2026.7.1901"), /untagged/u);
 });

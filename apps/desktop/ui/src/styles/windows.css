@@ -510,10 +510,22 @@
   cursor: pointer;
 }
 
-.mini-preview-placement-top_left { justify-self: start; align-self: start; }
-.mini-preview-placement-top_right { justify-self: end; align-self: start; }
-.mini-preview-placement-bottom_left { justify-self: start; align-self: end; }
-.mini-preview-placement-bottom_right { justify-self: end; align-self: end; }
+.mini-preview-placement-top_left {
+  justify-self: start;
+  align-self: start;
+}
+.mini-preview-placement-top_right {
+  justify-self: end;
+  align-self: start;
+}
+.mini-preview-placement-bottom_left {
+  justify-self: start;
+  align-self: end;
+}
+.mini-preview-placement-bottom_right {
+  justify-self: end;
+  align-self: end;
+}
 
 .mini-preview-placement-corner:hover:not(:disabled):not(.active) {
   border-color: var(--theme-accent);
@@ -1847,7 +1859,11 @@
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
   background-size: 16px 16px;
 }
 
@@ -2114,12 +2130,9 @@
 .tray-notice {
   -webkit-user-select: text;
   user-select: text;
-  --tray-caret-size: 8px;
   --tray-caret-span: 14px;
   --tray-caret-overlap: 1px;
   --tray-caret-fill: var(--surface-raised);
-  /* Match TRAY_NOTICE_FRAME_PAD: dark --shadow-md is 0 8px 20px (28px down). */
-  --tray-frame-pad: 28px;
   position: relative;
   display: flex;
   width: 100%;
@@ -2660,19 +2673,23 @@
 
 /* ------------------------------------------------- transient notices ------ */
 
-/* Native window is STARTUP_NOTICE_WIDTH + 2*FRAME_PAD by HEIGHT + FRAME_PAD + CARET. */
+/* Include the native shadow frame on every unanchored edge. */
 html[data-preview-harness-view="startup"] #root {
   position: fixed;
-  top: 28px;
+  top: var(--tray-frame-pad);
   left: 50%;
-  width: 352px;
-  height: 90px;
+  width: calc(var(--startup-notice-width) + 2 * var(--tray-frame-pad));
+  height: calc(var(--startup-notice-height) + 2 * var(--tray-frame-pad));
   transform: translateX(-50%);
+}
+
+html[data-preview-harness-view="startup"]:has([data-caret]) #root {
+  height: calc(var(--startup-notice-height) + var(--tray-frame-pad) + var(--tray-caret-size));
 }
 
 html[data-preview-harness-view="startup"]:has([data-caret="bottom"]) #root {
   top: auto;
-  bottom: 28px;
+  bottom: var(--tray-frame-pad);
 }
 
 /* Match the transparent native window: 440×116 card plus its 28px shadow frame. */
@@ -2709,6 +2726,29 @@ html[data-preview-harness-view="recording-saved"] #root {
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
   text-align: center;
+}
+
+.startup-notice:not([data-caret]) {
+  filter: var(--tooltip-shadow-compact);
+}
+
+.startup-notice:not([data-caret]) .startup-notice-card {
+  /* Some Linux hosts allocate a larger window; do not stretch to fill it. */
+  width: var(--startup-notice-width);
+  max-width: 100%;
+  min-height: var(--startup-notice-height);
+  padding: var(--s-4) calc(var(--h-sm) + var(--s-5)) var(--s-4) var(--s-5);
+  flex: 0 0 auto;
+  align-content: center;
+  justify-items: start;
+  gap: var(--s-1);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-lg);
+  text-align: left;
+}
+
+.startup-notice:not([data-caret]) .startup-notice-card p {
+  color: var(--glass-text-muted);
 }
 
 .startup-notice-dismiss {
@@ -3003,7 +3043,11 @@ html[data-preview-harness-view="recording-saved"] #root {
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
   background-size: 16px 16px;
 }
 
@@ -3068,13 +3112,12 @@ html[data-preview-harness-view="recording-saved"] #root {
   position: absolute;
   inset: 0;
   z-index: 2;
-  background:
-    radial-gradient(
-      ellipse at center,
-      var(--glass-veil-soft) 0%,
-      var(--glass-veil) 62%,
-      var(--glass-veil-heavy) 100%
-    );
+  background: radial-gradient(
+    ellipse at center,
+    var(--glass-veil-soft) 0%,
+    var(--glass-veil) 62%,
+    var(--glass-veil-heavy) 100%
+  );
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-2) var(--ease-standard);
@@ -3117,7 +3160,8 @@ html[data-preview-harness-view="recording-saved"] #root {
   animation: preferences-status-spin 0.72s linear infinite;
 }
 
-.compression-preview-frame[data-pending="true"]:not(.is-waiting):not(.is-processing) .compression-preview-veil {
+.compression-preview-frame[data-pending="true"]:not(.is-waiting):not(.is-processing)
+  .compression-preview-veil {
   opacity: 1;
 }
 

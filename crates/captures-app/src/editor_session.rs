@@ -1464,8 +1464,8 @@ impl EditorSession {
         Ok(())
     }
 
-    /// Render an uncommitted drawing or complete background-brush gesture on the
-    /// serialized worker, starting from published assets. Only renderer
+    /// Render an uncommitted drawing, canvas-layer or background-brush gesture
+    /// on the serialized worker, starting from published assets. Only renderer
     /// caches may change: document, history, assets, published pixels and drafts
     /// remain untouched. The returned frame owns its pixels independently.
     pub fn preview_drawing(&mut self, request: Request) -> Result<Arc<RgbaImage>, String> {
@@ -1495,9 +1495,20 @@ impl EditorSession {
             Request::CreateFreehandPath { create } => {
                 document.create_freehand_path(create)?;
             }
+            Request::Layer {
+                id,
+                edit:
+                    edit @ (LayerEdit::DragMove { .. }
+                    | LayerEdit::Rotate { .. }
+                    | LayerEdit::Resize { .. }
+                    | LayerEdit::Curve {
+                        edit: crate::editor_canvas::CurveEdit::Move { .. },
+                    }),
+            } => document.edit_layer_with_canvas_expansion(&id, edit, false)?,
             _ => {
                 return Err(
-                    "Only drawing creation and background brush requests can be previewed.".into(),
+                    "Only drawing, canvas layer gestures and background brush requests can be previewed."
+                        .into(),
                 );
             }
         }

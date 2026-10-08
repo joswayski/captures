@@ -117,7 +117,9 @@ export function Feedback() {
 
         <section className="settings-card feedback-section">
           <div className="feedback-field">
-            <span className="field-label" id="feedback-category-label">Category</span>
+            <span className="field-label" id="feedback-category-label">
+              Category
+            </span>
             <div
               className="feedback-categories"
               role="radiogroup"
@@ -141,7 +143,9 @@ export function Feedback() {
           </div>
 
           <div className="feedback-field">
-            <label className="field-label" htmlFor="feedback-message">Message</label>
+            <label className="field-label" htmlFor="feedback-message">
+              Message
+            </label>
             <textarea
               id="feedback-message"
               className="feedback-message"

@@ -11,8 +11,9 @@ const TEST_ONLY_PATH = /(?:^|\/)[^/]+\.test\.(?:[cm]?[jt]sx?)$/u;
 export function isDesktopReleasePath(path) {
   const normalized = path.replace(/^\.\//u, "");
   if (TEST_ONLY_PATH.test(normalized)) return false;
-  return DESKTOP_EXACT_PATHS.has(normalized)
-    || DESKTOP_ROOTS.some((root) => normalized.startsWith(root));
+  return (
+    DESKTOP_EXACT_PATHS.has(normalized) || DESKTOP_ROOTS.some((root) => normalized.startsWith(root))
+  );
 }
 
 function dependencyNames(pkg) {
@@ -59,9 +60,7 @@ export function desktopLockSnapshot(lock) {
   return {
     lockfileVersion: lock.lockfileVersion,
     packages: Object.fromEntries(
-      [...visited]
-        .sort()
-        .map((location) => [location, packages[location]]),
+      [...visited].sort().map((location) => [location, packages[location]]),
     ),
   };
 }
@@ -73,8 +72,8 @@ export function desktopLockChanged(before, after) {
 
 export function desktopReleaseImpact(paths, beforeLock, afterLock) {
   const direct = paths.filter(isDesktopReleasePath);
-  const lockChanged = paths.includes("package-lock.json")
-    && desktopLockChanged(beforeLock, afterLock);
+  const lockChanged =
+    paths.includes("package-lock.json") && desktopLockChanged(beforeLock, afterLock);
   return {
     shouldRelease: direct.length > 0 || lockChanged,
     paths: [...direct, ...(lockChanged ? ["package-lock.json (desktop dependency graph)"] : [])],
@@ -142,26 +141,40 @@ function firstParent(commit) {
 function noteForCommit(commit, repository) {
   const { authorName, authorEmail, subject, body } = commitMessage(commit);
   if (
-    /^dependabot(?:\[bot\])?$/iu.test(authorName)
-    || /(?:^|\+)dependabot(?:\[bot\])?@/iu.test(authorEmail)
-    || /^Bump\b/iu.test(subject)
-  ) return null;
+    /^dependabot(?:\[bot\])?$/iu.test(authorName) ||
+    /(?:^|\+)dependabot(?:\[bot\])?@/iu.test(authorEmail) ||
+    /^Bump\b/iu.test(subject)
+  )
+    return null;
 
   const squash = /^(.*?) \(#(\d+)\)$/u.exec(subject);
   if (squash) {
     const [, title, number] = squash;
-    return { key: `pr-${number}`, text: `* ${title} ([#${number}](https://github.com/${repository}/pull/${number}))` };
+    return {
+      key: `pr-${number}`,
+      text: `* ${title} ([#${number}](https://github.com/${repository}/pull/${number}))`,
+    };
   }
 
   const merge = /^Merge pull request #(\d+)\b/u.exec(subject);
   if (merge) {
     const number = merge[1];
-    const title = body.split(/\r?\n/u).find((line) => line.trim())?.trim() ?? subject;
-    return { key: `pr-${number}`, text: `* ${title} ([#${number}](https://github.com/${repository}/pull/${number}))` };
+    const title =
+      body
+        .split(/\r?\n/u)
+        .find((line) => line.trim())
+        ?.trim() ?? subject;
+    return {
+      key: `pr-${number}`,
+      text: `* ${title} ([#${number}](https://github.com/${repository}/pull/${number}))`,
+    };
   }
 
   const short = commit.slice(0, 7);
-  return { key: `commit-${commit}`, text: `* ${subject} ([${short}](https://github.com/${repository}/commit/${commit}))` };
+  return {
+    key: `commit-${commit}`,
+    text: `* ${subject} ([${short}](https://github.com/${repository}/commit/${commit}))`,
+  };
 }
 
 export function releaseNotes(commits, repository, fallbackCommit = "") {
@@ -187,8 +200,12 @@ export function releaseNotes(commits, repository, fallbackCommit = "") {
 /** Nearest published Preview on main's history, never an unfinished draft tag. */
 export function previousPreviewTag(head, releases) {
   const tags = releases
-    .filter((release) => !release.draft && release.prerelease
-      && /^v\d{4}\.\d{2}\.\d{2}\.[1-9]\d?$/u.test(release.tag_name))
+    .filter(
+      (release) =>
+        !release.draft &&
+        release.prerelease &&
+        /^v\d{4}\.\d{2}\.\d{2}\.[1-9]\d?$/u.test(release.tag_name),
+    )
     .map((release) => release.tag_name);
   if (tags.length === 0) return "";
   try {
@@ -208,22 +225,29 @@ export function previousPreviewTag(head, releases) {
 export function releaseNotesBetween(before, after, repository) {
   const range = refExists(before) ? `${before}..${after}` : after;
   const output = git(["rev-list", "--reverse", range]);
-  const qualifying = (output ? output.split(/\r?\n/u) : [])
-    .filter((commit) => releaseImpactBetween(firstParent(commit), commit).shouldRelease);
+  const qualifying = (output ? output.split(/\r?\n/u) : []).filter(
+    (commit) => releaseImpactBetween(firstParent(commit), commit).shouldRelease,
+  );
   return releaseNotes(qualifying, repository, after);
 }
 
 function appendOutput(entries) {
   const output = process.env.GITHUB_OUTPUT;
   if (!output) return;
-  appendFileSync(output, `${Object.entries(entries).map(([key, value]) => `${key}=${value}`).join("\n")}\n`);
+  appendFileSync(
+    output,
+    `${Object.entries(entries)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n")}\n`,
+  );
 }
 
 function main() {
   const [command, ...args] = process.argv.slice(2);
   if (command === "baseline") {
     const [head, releasesPath] = args;
-    if (!head || !releasesPath) throw new Error("usage: desktop-release.mjs baseline <head> <releases.json>");
+    if (!head || !releasesPath)
+      throw new Error("usage: desktop-release.mjs baseline <head> <releases.json>");
     const tag = previousPreviewTag(head, JSON.parse(readFileSync(releasesPath, "utf8")));
     appendOutput({ previous_tag: tag });
     process.stdout.write(`Previous published Preview: ${tag || "none"}.\n`);
@@ -241,10 +265,14 @@ function main() {
   if (command === "notes") {
     const [after, repository, outputPath, before] = args;
     if (!after || !repository || !outputPath || before === undefined) {
-      throw new Error("usage: desktop-release.mjs notes <after> <repository> <output-path> <previous-tag>");
+      throw new Error(
+        "usage: desktop-release.mjs notes <after> <repository> <output-path> <previous-tag>",
+      );
     }
     writeFileSync(outputPath, releaseNotesBetween(before, after, repository));
-    process.stdout.write(`Generated desktop release notes since ${before || "repository start"}.\n`);
+    process.stdout.write(
+      `Generated desktop release notes since ${before || "repository start"}.\n`,
+    );
     return;
   }
 

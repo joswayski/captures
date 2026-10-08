@@ -63,20 +63,56 @@ function validateSyntheticPipeline(ffmpeg, ffprobe) {
   const gif = join(directory, "preview.gif");
   try {
     run(ffmpeg, [
-      "-hide_banner", "-loglevel", "error", "-y",
-      "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15",
-      "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-      "-t", "1", "-shortest", "-c:v", "mpeg4", "-q:v", "3", "-c:a", "aac", source,
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=320x180:rate=15",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:sample_rate=48000",
+      "-t",
+      "1",
+      "-shortest",
+      "-c:v",
+      "mpeg4",
+      "-q:v",
+      "3",
+      "-c:a",
+      "aac",
+      source,
     ]);
     run(ffmpeg, [
-      "-hide_banner", "-loglevel", "error", "-y", "-ss", "0", "-i", source,
-      "-frames:v", "1", "-vf", "scale=160:-2", poster,
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-ss",
+      "0",
+      "-i",
+      source,
+      "-frames:v",
+      "1",
+      "-vf",
+      "scale=160:-2",
+      poster,
     ]);
     run(ffmpeg, [
-      "-hide_banner", "-loglevel", "error", "-y", "-i", source,
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      source,
       "-filter_complex",
       "[0:v]fps=10,scale=160:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=sierra2_4a",
-      "-loop", "0", gif,
+      "-loop",
+      "0",
+      gif,
     ]);
     const probe = run(ffprobe, ["-v", "error", "-show_streams", "-of", "json", source]);
     assertIncludes(probe, '"codec_type": "video"', "synthetic recording probe");
@@ -90,12 +126,14 @@ function validateSyntheticPipeline(ffmpeg, ffprobe) {
 }
 
 export function validateBuildConfigurationText(text, platform = process.platform) {
-  for (const flag of REQUIRED_CONFIGURATION_FLAGS) assertIncludes(text, flag, "FFmpeg build configuration");
+  for (const flag of REQUIRED_CONFIGURATION_FLAGS)
+    assertIncludes(text, flag, "FFmpeg build configuration");
   for (const flag of platformConfigurationFlags(platform)) {
     assertIncludes(text, flag, "FFmpeg build configuration");
   }
   for (const flag of FORBIDDEN_CONFIGURATION_FLAGS) {
-    if (text.includes(flag)) throw new Error(`FFmpeg build configuration contains forbidden flag ${flag}`);
+    if (text.includes(flag))
+      throw new Error(`FFmpeg build configuration contains forbidden flag ${flag}`);
   }
 }
 
@@ -114,13 +152,13 @@ export function validateSidecars(ffmpeg, ffprobe, buildConfiguration) {
     assertIncludes(ffmpegVersion, flag, "FFmpeg sidecar");
   }
   for (const flag of FORBIDDEN_CONFIGURATION_FLAGS) {
-    if (ffmpegVersion.includes(flag)) throw new Error(`FFmpeg sidecar contains forbidden flag ${flag}`);
+    if (ffmpegVersion.includes(flag))
+      throw new Error(`FFmpeg sidecar contains forbidden flag ${flag}`);
   }
 
   const encoders = run(ffmpeg, ["-hide_banner", "-encoders"]);
-  const requiredEncoders = process.platform === "darwin"
-    ? [...REQUIRED_ENCODERS, "h264_videotoolbox"]
-    : REQUIRED_ENCODERS;
+  const requiredEncoders =
+    process.platform === "darwin" ? [...REQUIRED_ENCODERS, "h264_videotoolbox"] : REQUIRED_ENCODERS;
   for (const encoder of requiredEncoders) {
     if (!new RegExp(`\\b${encoder.replaceAll("+", "\\+")}\\b`, "u").test(encoders)) {
       throw new Error(`FFmpeg sidecar is missing required encoder ${encoder}`);

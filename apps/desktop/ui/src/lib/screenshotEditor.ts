@@ -42,11 +42,13 @@ export type ClosedShapeKind = Extract<
 export type PolygonShapeKind = Extract<ClosedShapeKind, "triangle" | "diamond" | "star">;
 
 export function isClosedShapeKind(shape: string): shape is ClosedShapeKind {
-  return shape === "rectangle"
-    || shape === "ellipse"
-    || shape === "triangle"
-    || shape === "diamond"
-    || shape === "star";
+  return (
+    shape === "rectangle" ||
+    shape === "ellipse" ||
+    shape === "triangle" ||
+    shape === "diamond" ||
+    shape === "star"
+  );
 }
 
 export function isPolygonShapeKind(shape: string): shape is PolygonShapeKind {
@@ -230,9 +232,7 @@ export function annotationDropShadowPad(style: ElementStyle): number {
   if (!annotationHasDropShadow(style)) return 0;
   const shadow = resolvedDropShadowStyle(style);
   if (shadow.opacity <= 0) return 0;
-  return Math.ceil(
-    shadow.blur * 2 + Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)),
-  );
+  return Math.ceil(shadow.blur * 2 + Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)));
 }
 
 export type LayerBlendMode =
@@ -373,22 +373,16 @@ export const EDITOR_TEXT_FONT_STACKS = {
   sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
   mono: "'SFMono-Regular', Consolas, monospace",
-  rounded:
-    "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif",
+  rounded: "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif",
 } as const;
 
-export function editorTextFontStack(
-  family: EditorTextElement["fontFamily"],
-): string {
+export function editorTextFontStack(family: EditorTextElement["fontFamily"]): string {
   return EDITOR_TEXT_FONT_STACKS[family];
 }
 
 const SAMPLE_TEXT_FOR_FONT_PROBE = "Czadadsasd";
 
-function canvasFamilyWidth(
-  context: CanvasRenderingContext2D | null,
-  family: string,
-): number {
+function canvasFamilyWidth(context: CanvasRenderingContext2D | null, family: string): number {
   if (!context) return 0;
   context.font = `700 48px ${family}`;
   const width = context.measureText(SAMPLE_TEXT_FOR_FONT_PROBE).width;
@@ -402,10 +396,10 @@ function canvasFamilyWidth(
  * glyph width is not the serif fallback (or the serif fallback when serif
  * was requested).
  */
-export function resolveEditorTextCanvasFamily(
-  family: EditorTextElement["fontFamily"],
-): string {
-  const stack = editorTextFontStack(family).split(",").map((part) => part.trim());
+export function resolveEditorTextCanvasFamily(family: EditorTextElement["fontFamily"]): string {
+  const stack = editorTextFontStack(family)
+    .split(",")
+    .map((part) => part.trim());
   const generic = family === "serif" ? "serif" : "sans-serif";
   if (typeof document === "undefined") return stack.at(-1) ?? generic;
   const probe = createDocumentPaintCanvas(8, 8);
@@ -418,18 +412,14 @@ export function resolveEditorTextCanvasFamily(
       const width = canvasFamilyWidth(context, face);
       if (width <= 0) continue;
       if (
-        preferSans
-        && serifWidth > 0
-        && Math.abs(width - serifWidth) < 0.75
-        && Math.abs(width - sansWidth) > 1
+        preferSans &&
+        serifWidth > 0 &&
+        Math.abs(width - serifWidth) < 0.75 &&
+        Math.abs(width - sansWidth) > 1
       ) {
         continue;
       }
-      if (
-        !preferSans
-        && sansWidth > 0
-        && Math.abs(width - sansWidth) < 0.75
-      ) {
+      if (!preferSans && sansWidth > 0 && Math.abs(width - sansWidth) < 0.75) {
         continue;
       }
       return face;
@@ -460,10 +450,7 @@ export const EDITOR_PAINT_CANVAS_HOST_ID = "captures-editor-paint-canvas-host";
  * off-screen but at real pixel size — a 1×1 overflow clip makes some engines
  * ignore the font stack and fillText with the serif fallback.
  */
-export function createDocumentPaintCanvas(
-  width: number,
-  height: number,
-): HTMLCanvasElement {
+export function createDocumentPaintCanvas(width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(width));
   canvas.height = Math.max(1, Math.round(height));
@@ -473,12 +460,9 @@ export function createDocumentPaintCanvas(
       host = document.createElement("div");
       host.id = EDITOR_PAINT_CANVAS_HOST_ID;
       host.setAttribute("aria-hidden", "true");
-      host.style.cssText = [
-        "position:fixed",
-        "left:-10000px",
-        "top:0",
-        "pointer-events:none",
-      ].join(";");
+      host.style.cssText = ["position:fixed", "left:-10000px", "top:0", "pointer-events:none"].join(
+        ";",
+      );
       document.body.appendChild(host);
     }
     host.appendChild(canvas);
@@ -661,11 +645,11 @@ export function textGlyphDrawY(
   const ascent = metrics?.actualBoundingBoxAscent;
   const descent = metrics?.actualBoundingBoxDescent;
   if (
-    typeof ascent === "number"
-    && typeof descent === "number"
-    && Number.isFinite(ascent)
-    && Number.isFinite(descent)
-    && ascent + descent > 1
+    typeof ascent === "number" &&
+    typeof descent === "number" &&
+    Number.isFinite(ascent) &&
+    Number.isFinite(descent) &&
+    ascent + descent > 1
   ) {
     return { y: mid + (ascent - descent) / 2, baseline: "alphabetic" };
   }
@@ -688,10 +672,7 @@ export function estimateTextWidth(text: string, fontSize: number): number {
 
 /** Wide empty field used while placing text, before any glyphs exist. */
 export function composingTextBoxWidth(fontSize: number): number {
-  return Math.max(
-    minTextBoxWidth(fontSize),
-    Math.round(fontSize * TEXT_COMPOSING_WIDTH_EM),
-  );
+  return Math.max(minTextBoxWidth(fontSize), Math.round(fontSize * TEXT_COMPOSING_WIDTH_EM));
 }
 
 /** Default box width for newly placed text (a wide empty composing field). */
@@ -700,9 +681,7 @@ export function defaultTextBoxWidth(fontSize: number): number {
 }
 
 /** True when a text layer has nothing to keep after the inline editor blurs. */
-export function isBlankTextElement(
-  element: Pick<EditorTextElement, "text">,
-): boolean {
+export function isBlankTextElement(element: Pick<EditorTextElement, "text">): boolean {
   return element.text.trim().length === 0;
 }
 
@@ -726,9 +705,7 @@ export function textBackgroundRadius(
 }
 
 /** True when typing should grow the layout box instead of wrapping. */
-export function isAutoWidthText(
-  element: Pick<EditorTextElement, "autoWidth">,
-): boolean {
+export function isAutoWidthText(element: Pick<EditorTextElement, "autoWidth">): boolean {
   return element.autoWidth === true;
 }
 
@@ -747,25 +724,20 @@ export function fittedAutoWidthTextBox(
     widest = Math.max(widest, measure(line.length > 0 ? line : " "));
   }
   if (widest <= 0) widest = measure(" ");
-  return Math.max(
-    minTextBoxWidth(fontSize),
-    Math.ceil(widest + fontSize * 0.35),
-  );
+  return Math.max(minTextBoxWidth(fontSize), Math.ceil(widest + fontSize * 0.35));
 }
 
-function withAutoWidthBox(
-  element: EditorTextElement,
-  nextWidth: number,
-): EditorTextElement {
+function withAutoWidthBox(element: EditorTextElement, nextWidth: number): EditorTextElement {
   if (Math.abs(nextWidth - element.width) < 0.5) {
     return nextWidth === element.width ? element : { ...element, width: nextWidth };
   }
   const delta = nextWidth - element.width;
-  const x = element.align === "center"
-    ? element.x - delta / 2
-    : element.align === "right"
-      ? element.x - delta
-      : element.x;
+  const x =
+    element.align === "center"
+      ? element.x - delta / 2
+      : element.align === "right"
+        ? element.x - delta
+        : element.x;
   return { ...element, width: nextWidth, x };
 }
 
@@ -778,10 +750,7 @@ export function fitAutoWidthTextElement(
   measure?: (line: string) => number,
 ): EditorTextElement {
   if (!isAutoWidthText(element)) return element;
-  return withAutoWidthBox(
-    element,
-    fittedAutoWidthTextBox(element.text, element.fontSize, measure),
-  );
+  return withAutoWidthBox(element, fittedAutoWidthTextBox(element.text, element.fontSize, measure));
 }
 
 /**
@@ -813,30 +782,33 @@ export function createPlacedTextElement(options: {
   const align: EditorTextElement["align"] = textPresetPrefersCenter(options.preset)
     ? "center"
     : "left";
-  return applyTextStylePreset({
-    id: options.id,
-    kind: "text",
-    x: align === "center" ? options.point.x - width / 2 : options.point.x,
-    y: options.point.y,
-    text: "",
-    fontSize: options.fontSize,
-    width,
-    autoWidth: true,
-    fontFamily: "sans",
-    bold: false,
-    italic: false,
-    align,
-    color: options.color,
-    background: null,
-    outlined: false,
-    roundedBackground: false,
-    dropShadow: options.dropShadow,
-    dropShadowStyle: options.dropShadowStyle,
-    locked: false,
-    visible: true,
-    opacity: 100,
-    blendMode: "source-over",
-  }, options.preset);
+  return applyTextStylePreset(
+    {
+      id: options.id,
+      kind: "text",
+      x: align === "center" ? options.point.x - width / 2 : options.point.x,
+      y: options.point.y,
+      text: "",
+      fontSize: options.fontSize,
+      width,
+      autoWidth: true,
+      fontFamily: "sans",
+      bold: false,
+      italic: false,
+      align,
+      color: options.color,
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+      dropShadow: options.dropShadow,
+      dropShadowStyle: options.dropShadowStyle,
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    },
+    options.preset,
+  );
 }
 
 /** Background inset around the text layout box (document pixels). */
@@ -876,9 +848,10 @@ export function textDropShadowStyle(
  * Layout size of wrapped text (no background padding).
  * Origin stays at `element.x` / `element.y`.
  */
-export function textContentSize(
-  element: Pick<EditorTextElement, "text" | "width" | "fontSize">,
-): { width: number; height: number } {
+export function textContentSize(element: Pick<EditorTextElement, "text" | "width" | "fontSize">): {
+  width: number;
+  height: number;
+} {
   const boxWidth = Math.max(minTextBoxWidth(element.fontSize), element.width);
   const lines = wrapTextLines(element.text, boxWidth, element.fontSize);
   return {
@@ -915,9 +888,7 @@ export function textInteractionPad(
   element: EditorTextElement,
   fontSize: number = element.fontSize,
 ): { x: number; y: number } {
-  const plate = textHasBackgroundPlate(element)
-    ? textBackgroundPad(fontSize)
-    : { x: 0, y: 0 };
+  const plate = textHasBackgroundPlate(element) ? textBackgroundPad(fontSize) : { x: 0, y: 0 };
   const shadow = annotationDropShadowPad(textDropShadowStyle({ ...element, fontSize }));
   return { x: plate.x + shadow, y: plate.y + shadow };
 }
@@ -979,9 +950,7 @@ export function wrapTextLines(
         continue;
       }
 
-      const pieces = measure(token) <= width
-        ? [token]
-        : hardBreakToken(token, width, measure);
+      const pieces = measure(token) <= width ? [token] : hardBreakToken(token, width, measure);
 
       for (const piece of pieces) {
         const candidate = current ? `${current}${piece}` : piece;
@@ -1181,32 +1150,32 @@ export function createScreenshotDocument(
     width: Math.max(1, Math.round(width)),
     height: Math.max(1, Math.round(height)),
     background: "#f7f7f5",
-    elements: [{
-      id: "capture-background",
-      kind: "image",
-      source: "background",
-      src,
-      originalSrc: null,
-      name: "Original screenshot",
-      sourceArtifactId,
-      x: 0,
-      y: 0,
-      width,
-      height,
-      naturalWidth: width,
-      naturalHeight: height,
-      locked: true,
-      visible: true,
-      opacity: 100,
-      blendMode: "source-over",
-    }],
+    elements: [
+      {
+        id: "capture-background",
+        kind: "image",
+        source: "background",
+        src,
+        originalSrc: null,
+        name: "Original screenshot",
+        sourceArtifactId,
+        x: 0,
+        y: 0,
+        width,
+        height,
+        naturalWidth: width,
+        naturalHeight: height,
+        locked: true,
+        visible: true,
+        opacity: 100,
+        blendMode: "source-over",
+      },
+    ],
   };
 }
 
 /** Artifact IDs currently represented by image layers in a document. */
-export function collectEditorSourceArtifactIds(
-  elements: readonly ScreenshotElement[],
-): string[] {
+export function collectEditorSourceArtifactIds(elements: readonly ScreenshotElement[]): string[] {
   const ids = new Set<string>();
   for (const element of elements) {
     if (element.kind === "image" && element.sourceArtifactId) {
@@ -1307,17 +1276,14 @@ export function cropDragAspectRatio(options: {
   if (options.shiftAspect && options.shiftAspect > 0) {
     return { aspectRatio: options.shiftAspect, shiftAspect: options.shiftAspect };
   }
-  const shiftAspect = cropAspectFromLiveRect(options.liveRect)
-    ?? shiftLockedCropAspect(options.origin, options.current, options.bounds);
+  const shiftAspect =
+    cropAspectFromLiveRect(options.liveRect) ??
+    shiftLockedCropAspect(options.origin, options.current, options.bounds);
   return { aspectRatio: shiftAspect, shiftAspect };
 }
 
 function cropAspectFromLiveRect(rect: EditorRect | null | undefined): number | null {
-  if (
-    !rect
-    || rect.width < CROP_SHIFT_LOCK_MIN_SIZE
-    || rect.height < CROP_SHIFT_LOCK_MIN_SIZE
-  ) {
+  if (!rect || rect.width < CROP_SHIFT_LOCK_MIN_SIZE || rect.height < CROP_SHIFT_LOCK_MIN_SIZE) {
     return null;
   }
   return rect.width / rect.height;
@@ -1350,10 +1316,7 @@ export function shiftLockedCropAspect(
   return 1;
 }
 
-export function cropDocument(
-  document: ScreenshotDocument,
-  crop: EditorRect,
-): ScreenshotDocument {
+export function cropDocument(document: ScreenshotDocument, crop: EditorRect): ScreenshotDocument {
   const bounded = {
     x: clamp(Math.round(crop.x), 0, Math.max(0, document.width - 1)),
     y: clamp(Math.round(crop.y), 0, Math.max(0, document.height - 1)),
@@ -1366,11 +1329,7 @@ export function cropDocument(
     ...document,
     width: bounded.width,
     height: bounded.height,
-    elements: document.elements.map((element) => translateElement(
-      element,
-      -bounded.x,
-      -bounded.y,
-    )),
+    elements: document.elements.map((element) => translateElement(element, -bounded.x, -bounded.y)),
   };
 }
 
@@ -1428,12 +1387,7 @@ export function trimDocumentToContent(
   const width = Math.max(1, right - x);
   const height = Math.max(1, bottom - y);
 
-  if (
-    x === 0
-    && y === 0
-    && width === document.width
-    && height === document.height
-  ) {
+  if (x === 0 && y === 0 && width === document.width && height === document.height) {
     return document;
   }
 
@@ -1474,14 +1428,8 @@ export function canvasTrimMarginPreview(
   // Margins outside that rect on the *current* canvas are what get discarded.
   const keepLeft = Math.max(0, Math.floor(content.x) - safePadding);
   const keepTop = Math.max(0, Math.floor(content.y) - safePadding);
-  const keepRight = Math.min(
-    document.width,
-    Math.ceil(content.x + content.width) + safePadding,
-  );
-  const keepBottom = Math.min(
-    document.height,
-    Math.ceil(content.y + content.height) + safePadding,
-  );
+  const keepRight = Math.min(document.width, Math.ceil(content.x + content.width) + safePadding);
+  const keepBottom = Math.min(document.height, Math.ceil(content.y + content.height) + safePadding);
 
   if (keepRight <= keepLeft || keepBottom <= keepTop) return null;
 
@@ -1560,10 +1508,7 @@ export function positionImportedImage(
   };
 }
 
-export function closestImageSnapEdge(
-  point: EditorPoint,
-  target: EditorRect,
-): ImageSnapEdge {
+export function closestImageSnapEdge(point: EditorPoint, target: EditorRect): ImageSnapEdge {
   const distances: Array<[ImageSnapEdge, number]> = [
     ["top", Math.abs(point.y - target.y)],
     ["right", Math.abs(point.x - (target.x + target.width))],
@@ -1585,10 +1530,8 @@ export function imageDropPlacementAtPoint(
 ): ImageDropPlacement {
   const relativeX = point.x - target.x;
   const relativeY = point.y - target.y;
-  const inside = relativeX >= 0
-    && relativeY >= 0
-    && relativeX <= target.width
-    && relativeY <= target.height;
+  const inside =
+    relativeX >= 0 && relativeY >= 0 && relativeX <= target.width && relativeY <= target.height;
   if (inside && target.width > 0 && target.height > 0) {
     const edgeBandX = target.width * IMAGE_DROP_EDGE_BAND_FRACTION;
     const edgeBandY = target.height * IMAGE_DROP_EDGE_BAND_FRACTION;
@@ -1608,16 +1551,18 @@ export function imageDropPlacementAtPoint(
 
 /** Distance from a point to the nearest edge of a rect (0 when inside). */
 function distanceToRect(point: EditorPoint, rect: EditorRect): number {
-  const dx = point.x < rect.x
-    ? rect.x - point.x
-    : point.x > rect.x + rect.width
-      ? point.x - (rect.x + rect.width)
-      : 0;
-  const dy = point.y < rect.y
-    ? rect.y - point.y
-    : point.y > rect.y + rect.height
-      ? point.y - (rect.y + rect.height)
-      : 0;
+  const dx =
+    point.x < rect.x
+      ? rect.x - point.x
+      : point.x > rect.x + rect.width
+        ? point.x - (rect.x + rect.width)
+        : 0;
+  const dy =
+    point.y < rect.y
+      ? rect.y - point.y
+      : point.y > rect.y + rect.height
+        ? point.y - (rect.y + rect.height)
+        : 0;
   return Math.hypot(dx, dy);
 }
 
@@ -1652,10 +1597,10 @@ export function resolveImageDropTarget(
       if (element.kind !== "image" || !element.visible) continue;
       const bounds = elementBounds(element);
       if (
-        point.x >= bounds.x
-        && point.x <= bounds.x + bounds.width
-        && point.y >= bounds.y
-        && point.y <= bounds.y + bounds.height
+        point.x >= bounds.x &&
+        point.x <= bounds.x + bounds.width &&
+        point.y >= bounds.y &&
+        point.y <= bounds.y + bounds.height
       ) {
         return bounds;
       }
@@ -1679,11 +1624,9 @@ export function resolveImageDropTarget(
     return canvas;
   }
 
-  const selected = document.elements.find((element) => (
-    element.id === selectedId
-    && element.kind === "image"
-    && element.visible
-  ));
+  const selected = document.elements.find(
+    (element) => element.id === selectedId && element.kind === "image" && element.visible,
+  );
   if (selected) return elementBounds(selected);
 
   for (let index = document.elements.length - 1; index >= 0; index -= 1) {
@@ -1700,19 +1643,10 @@ export function resolveImageDropTarget(
  * Estimate the native drag-preview footprint under the pointer. It stays
  * smaller than the target so the light remains local to the floating preview.
  */
-export function stackDropLightFocusAtPoint(
-  point: EditorPoint,
-  target: EditorRect,
-): EditorRect {
+export function stackDropLightFocusAtPoint(point: EditorPoint, target: EditorRect): EditorRect {
   const shortSide = Math.max(1, Math.min(target.width, target.height));
-  const width = Math.max(
-    72,
-    Math.min(shortSide * 0.32, target.width * 0.36, 260),
-  );
-  const height = Math.max(
-    54,
-    Math.min(width * 0.78, target.height * 0.36, 200),
-  );
+  const width = Math.max(72, Math.min(shortSide * 0.32, target.width * 0.36, 260));
+  const height = Math.max(54, Math.min(width * 0.78, target.height * 0.36, 200));
   const rawX = point.x - width / 2;
   const rawY = point.y - height / 2;
   // Allow a little overhang so the preview emitter stays on the pointer near
@@ -1721,12 +1655,8 @@ export function stackDropLightFocusAtPoint(
   const maxX = target.x + target.width - width * 0.8;
   const minY = target.y - height * 0.2;
   const maxY = target.y + target.height - height * 0.8;
-  const x = minX <= maxX
-    ? clamp(rawX, minX, maxX)
-    : target.x + (target.width - width) / 2;
-  const y = minY <= maxY
-    ? clamp(rawY, minY, maxY)
-    : target.y + (target.height - height) / 2;
+  const x = minX <= maxX ? clamp(rawX, minX, maxX) : target.x + (target.width - width) / 2;
+  const y = minY <= maxY ? clamp(rawY, minY, maxY) : target.y + (target.height - height) / 2;
   return { x, y, width, height };
 }
 
@@ -1856,20 +1786,9 @@ export function previewExpandedCanvasRect(
   const shiftY = Math.max(0, Math.ceil(-bounds.y));
   const fittedX = bounds.x + shiftX;
   const fittedY = bounds.y + shiftY;
-  const width = Math.max(
-    canvas.width + shiftX,
-    Math.ceil(fittedX + bounds.width + padding),
-  );
-  const height = Math.max(
-    canvas.height + shiftY,
-    Math.ceil(fittedY + bounds.height + padding),
-  );
-  if (
-    shiftX === 0
-    && shiftY === 0
-    && width === canvas.width
-    && height === canvas.height
-  ) {
+  const width = Math.max(canvas.width + shiftX, Math.ceil(fittedX + bounds.width + padding));
+  const height = Math.max(canvas.height + shiftY, Math.ceil(fittedY + bounds.height + padding));
+  if (shiftX === 0 && shiftY === 0 && width === canvas.width && height === canvas.height) {
     return null;
   }
   return {
@@ -1940,11 +1859,7 @@ export function collectAlignmentSnapLines(
   };
 }
 
-function closestSnapPosition(
-  value: number,
-  lines: number[],
-  threshold: number,
-): number | null {
+function closestSnapPosition(value: number, lines: number[], threshold: number): number | null {
   let best: number | null = null;
   let bestDistance = threshold;
   for (const line of lines) {
@@ -1969,10 +1884,7 @@ export function snapTranslatedBounds(
   if (threshold <= 0) return { bounds, guides: [] };
 
   type AxisHit = { delta: number; position: number };
-  const pickAxis = (
-    candidates: number[],
-    snapLines: number[],
-  ): AxisHit | null => {
+  const pickAxis = (candidates: number[], snapLines: number[]): AxisHit | null => {
     let best: AxisHit | null = null;
     let bestAbs = threshold;
     for (const value of candidates) {
@@ -2002,10 +1914,13 @@ export function snapTranslatedBounds(
   };
   const guides: AlignmentSnapGuide[] = [];
   const pushUnique = (guide: AlignmentSnapGuide) => {
-    if (guides.some((existing) => (
-      existing.orientation === guide.orientation
-      && Math.abs(existing.position - guide.position) <= 1e-6
-    ))) {
+    if (
+      guides.some(
+        (existing) =>
+          existing.orientation === guide.orientation &&
+          Math.abs(existing.position - guide.position) <= 1e-6,
+      )
+    ) {
       return;
     }
     guides.push(guide);
@@ -2103,15 +2018,13 @@ export function snapResizedBounds(
 }
 
 /** Axis-aligned overlap. Touching edges do not count. */
-export function editorRectsIntersect(
-  a: EditorRect,
-  b: EditorRect,
-  epsilon = 0.5,
-): boolean {
-  return a.x + a.width > b.x + epsilon
-    && b.x + b.width > a.x + epsilon
-    && a.y + a.height > b.y + epsilon
-    && b.y + b.height > a.y + epsilon;
+export function editorRectsIntersect(a: EditorRect, b: EditorRect, epsilon = 0.5): boolean {
+  return (
+    a.x + a.width > b.x + epsilon &&
+    b.x + b.width > a.x + epsilon &&
+    a.y + a.height > b.y + epsilon &&
+    b.y + b.height > a.y + epsilon
+  );
 }
 
 export function canvasDocumentRect(
@@ -2208,11 +2121,9 @@ export function largestCanvasOverflowGap(
 ): CanvasOverflowGap | null {
   const gaps = canvasOverflowGaps(bounds, canvas, epsilon);
   if (gaps.length === 0) return null;
-  return gaps.reduce((best, gap) => (
-    gap.rect.width * gap.rect.height > best.rect.width * best.rect.height
-      ? gap
-      : best
-  ));
+  return gaps.reduce((best, gap) =>
+    gap.rect.width * gap.rect.height > best.rect.width * best.rect.height ? gap : best,
+  );
 }
 
 /**
@@ -2258,11 +2169,7 @@ export function reorderScreenshotLayers(
   placement: LayerDropPlacement,
 ): ScreenshotElement[] {
   const moved = elements.find((element) => element.id === movedId);
-  if (
-    !moved
-    || movedId === targetId
-    || moved.locked
-  ) {
+  if (!moved || movedId === targetId || moved.locked) {
     return elements;
   }
 
@@ -2279,9 +2186,7 @@ export function reorderScreenshotLayers(
     .map((element, index) => ({ element, index }))
     .filter(({ element, index }) => element.locked && index < movedIndex)
     .at(-1)?.index;
-  const lockedAbove = elements.findIndex(
-    (element, index) => element.locked && index > movedIndex,
-  );
+  const lockedAbove = elements.findIndex((element, index) => element.locked && index > movedIndex);
   const minimum = lockedBelow === undefined ? 0 : lockedBelow + 1;
   const maximum = lockedAbove < 0 ? remaining.length : lockedAbove - 1;
   const destination = clamp(desired, minimum, maximum);
@@ -2294,18 +2199,22 @@ export function duplicateScreenshotElement(
   id: string,
   offset = 24,
 ): ScreenshotElement {
-  const copy = translateElement({
-    ...element,
-    id,
-    locked: false,
-    visible: true,
-    ...(element.kind === "image"
-      ? {
-        source: "imported" as const,
-        name: `${element.name} copy`,
-      }
-      : {}),
-  }, offset, offset);
+  const copy = translateElement(
+    {
+      ...element,
+      id,
+      locked: false,
+      visible: true,
+      ...(element.kind === "image"
+        ? {
+            source: "imported" as const,
+            name: `${element.name} copy`,
+          }
+        : {}),
+    },
+    offset,
+    offset,
+  );
   return copy;
 }
 
@@ -2579,9 +2488,7 @@ export function closestPointOnArrow(
   }
 
   // Map sample progress (0..1) onto the control insert index (0..controls.length).
-  const progress = samples.length <= 1
-    ? 0.5
-    : bestSampleIndex / (samples.length - 1);
+  const progress = samples.length <= 1 ? 0.5 : bestSampleIndex / (samples.length - 1);
   const insertIndex = clamp(
     Math.floor(progress * (element.controls.length + 1)),
     0,
@@ -2649,10 +2556,7 @@ export function editorCanvasPaintScale(
   const cssScale = Math.max(0.01, displayScale);
   // 2× supersample so thin diagonals anti-alias on 1× displays; zoom and DPR
   // can raise this further, then the pixel cap keeps the buffer bounded.
-  let scale = Math.min(
-    EDITOR_CANVAS_MAX_DEVICE_SCALE,
-    cssScale * dpr * 2,
-  );
+  let scale = Math.min(EDITOR_CANVAS_MAX_DEVICE_SCALE, cssScale * dpr * 2);
   const area = Math.max(1, documentWidth) * Math.max(1, documentHeight) * scale * scale;
   if (area > EDITOR_CANVAS_MAX_BACKING_PIXELS) {
     scale *= Math.sqrt(EDITOR_CANVAS_MAX_BACKING_PIXELS / area);
@@ -2688,7 +2592,7 @@ export function arrowHeadLength(strokeWidth: number, shaftLength?: number): numb
 
 function arrowHeadHalfWidth(strokeWidth: number, shaftLength?: number): number {
   if (arrowHeadLength(strokeWidth, shaftLength) <= 0) return 0;
-  return strokeWidth * ARROW_HEAD_WIDTH_RATIO / 2;
+  return (strokeWidth * ARROW_HEAD_WIDTH_RATIO) / 2;
 }
 
 /**
@@ -2770,10 +2674,11 @@ export function arrowFillPolygon(element: EditorShapeElement): EditorPoint[] {
   const cumulative: number[] = [0];
   for (let index = 1; index < samples.length; index += 1) {
     cumulative.push(
-      cumulative[index - 1] + Math.hypot(
-        samples[index].x - samples[index - 1].x,
-        samples[index].y - samples[index - 1].y,
-      ),
+      cumulative[index - 1] +
+        Math.hypot(
+          samples[index].x - samples[index - 1].x,
+          samples[index].y - samples[index - 1].y,
+        ),
     );
   }
   const pathLength = cumulative[cumulative.length - 1] ?? 0;
@@ -2784,8 +2689,8 @@ export function arrowFillPolygon(element: EditorShapeElement): EditorPoint[] {
 
   const headLength = arrowHeadLength(stroke, pathLength);
   const headHalf = arrowHeadHalfWidth(stroke, pathLength);
-  const tailHalf = stroke * ARROW_TAIL_WIDTH_RATIO / 2;
-  const neckHalf = stroke * ARROW_NECK_WIDTH_RATIO / 2;
+  const tailHalf = (stroke * ARROW_TAIL_WIDTH_RATIO) / 2;
+  const neckHalf = (stroke * ARROW_NECK_WIDTH_RATIO) / 2;
   const shaftEnd = Math.max(0, pathLength - headLength);
 
   const offsetAt = (
@@ -2823,12 +2728,14 @@ export function arrowFillPolygon(element: EditorShapeElement): EditorPoint[] {
   for (let step = 0; step <= ARROW_TAIL_CAP_SEGMENTS; step += 1) {
     const angle = Math.PI * (step / ARROW_TAIL_CAP_SEGMENTS);
     cap.push({
-      x: tail.point.x
-        - tailNormal.x * tailHalf * Math.cos(angle)
-        - tail.tangent.x * tailHalf * Math.sin(angle),
-      y: tail.point.y
-        - tailNormal.y * tailHalf * Math.cos(angle)
-        - tail.tangent.y * tailHalf * Math.sin(angle),
+      x:
+        tail.point.x -
+        tailNormal.x * tailHalf * Math.cos(angle) -
+        tail.tangent.x * tailHalf * Math.sin(angle),
+      y:
+        tail.point.y -
+        tailNormal.y * tailHalf * Math.cos(angle) -
+        tail.tangent.y * tailHalf * Math.sin(angle),
     });
   }
 
@@ -2859,11 +2766,9 @@ export function scaleArrowStrokeForLength(
     ...next,
     style: {
       ...next.style,
-      strokeWidth: Math.round(clamp(
-        initial.style.strokeWidth * (nextLength / initialLength),
-        1,
-        80,
-      )),
+      strokeWidth: Math.round(
+        clamp(initial.style.strokeWidth * (nextLength / initialLength), 1, 80),
+      ),
     },
   };
 }
@@ -2932,16 +2837,12 @@ export function snapShapeRotation(
   const finiteDegrees = Number.isFinite(snapDegrees)
     ? Math.min(180, Math.max(1, snapDegrees))
     : SHAPE_ROTATION_SNAP_DEGREES;
-  const snapRadians = finiteDegrees * Math.PI / 180;
-  return normalizeShapeRotation(
-    Math.round(angle / snapRadians) * snapRadians,
-  );
+  const snapRadians = (finiteDegrees * Math.PI) / 180;
+  return normalizeShapeRotation(Math.round(angle / snapRadians) * snapRadians);
 }
 
 /** Signed degrees in (−180, 180], matching `normalizeShapeRotation`. */
-export function elementRotationDegrees(
-  element: { rotation?: number },
-): number {
+export function elementRotationDegrees(element: { rotation?: number }): number {
   return Math.round(elementRotation(element) * (180 / Math.PI));
 }
 
@@ -2957,9 +2858,7 @@ export function shapeRotationFromDegrees(degrees: number): number {
 /** Nearest 15° stop, kept in (−180, 180]. */
 export function snapShapeRotationDegrees(degrees: number): number {
   if (!Number.isFinite(degrees)) return 0;
-  return Math.round(
-    snapShapeRotation(shapeRotationFromDegrees(degrees), true) * (180 / Math.PI),
-  );
+  return Math.round(snapShapeRotation(shapeRotationFromDegrees(degrees), true) * (180 / Math.PI));
 }
 
 export function withShapeRotation(
@@ -2969,10 +2868,7 @@ export function withShapeRotation(
   return withElementRotation(element, radians);
 }
 
-export function withElementRotation<T extends ScreenshotElement>(
-  element: T,
-  radians: number,
-): T {
+export function withElementRotation<T extends ScreenshotElement>(element: T, radians: number): T {
   const rotation = normalizeShapeRotation(radians);
   if (rotation === 0) {
     if (element.rotation == null) return element;
@@ -3002,8 +2898,8 @@ export function rotatePointAround(
  * Geometry stays in this space; `rotation` is applied around the box center.
  */
 export function shapeLocalBounds(element: EditorShapeElement): EditorRect {
-  const strokePad = strokeExtent(element.style.strokeWidth)
-    + annotationDropShadowPad(element.style);
+  const strokePad =
+    strokeExtent(element.style.strokeWidth) + annotationDropShadowPad(element.style);
 
   if (isClosedShapeKind(element.shape)) {
     const rect = normalizeRect(
@@ -3024,19 +2920,17 @@ export function shapeLocalBounds(element: EditorShapeElement): EditorRect {
       if (polygon.length >= 3) {
         // The polygon already includes shaft width and the head; only pad AA
         // plus any drop shadow, not another half-stroke margin.
-        return boundsFromPoints(
-          polygon,
-          1 + annotationDropShadowPad(element.style),
-        );
+        return boundsFromPoints(polygon, 1 + annotationDropShadowPad(element.style));
       }
     }
     const samples = sampleArrowPath(element, 48);
-    const points: EditorPoint[] = samples.length > 0
-      ? [...samples]
-      : [
-        { x: element.x, y: element.y },
-        { x: element.endX, y: element.endY },
-      ];
+    const points: EditorPoint[] =
+      samples.length > 0
+        ? [...samples]
+        : [
+            { x: element.x, y: element.y },
+            { x: element.endX, y: element.endY },
+          ];
     return boundsFromPoints(points, strokePad);
   }
 
@@ -3057,17 +2951,11 @@ export function elementRotationOrigin(element: ScreenshotElement): EditorPoint {
   return rectCenter(elementLocalBounds(element));
 }
 
-export function shapeWorldPoint(
-  element: EditorShapeElement,
-  localPoint: EditorPoint,
-): EditorPoint {
+export function shapeWorldPoint(element: EditorShapeElement, localPoint: EditorPoint): EditorPoint {
   return elementWorldPoint(element, localPoint);
 }
 
-export function shapeLocalPoint(
-  element: EditorShapeElement,
-  worldPoint: EditorPoint,
-): EditorPoint {
+export function shapeLocalPoint(element: EditorShapeElement, worldPoint: EditorPoint): EditorPoint {
   return elementLocalPoint(element, worldPoint);
 }
 
@@ -3157,12 +3045,15 @@ function elementRotationHandleGeometry(
   }));
   if (!canvas) return candidates[0];
   const pad = 8 / Math.max(0.01, displayScale);
-  return candidates.find(({ handle }) => (
-    handle.x >= pad
-    && handle.y >= pad
-    && handle.x <= canvas.width - pad
-    && handle.y <= canvas.height - pad
-  )) ?? candidates[0];
+  return (
+    candidates.find(
+      ({ handle }) =>
+        handle.x >= pad &&
+        handle.y >= pad &&
+        handle.x <= canvas.width - pad &&
+        handle.y <= canvas.height - pad,
+    ) ?? candidates[0]
+  );
 }
 
 export function elementRotationHandlePoint(
@@ -3219,10 +3110,12 @@ export function elementRotationHandleFitsCanvas(
 ): boolean {
   const handle = elementRotationHandlePoint(element, displayScale, canvas);
   const pad = 8 / Math.max(0.01, displayScale);
-  return handle.x >= pad
-    && handle.y >= pad
-    && handle.x <= canvas.width - pad
-    && handle.y <= canvas.height - pad;
+  return (
+    handle.x >= pad &&
+    handle.y >= pad &&
+    handle.x <= canvas.width - pad &&
+    handle.y <= canvas.height - pad
+  );
 }
 
 /**
@@ -3256,10 +3149,7 @@ function rotatedBounds(local: EditorRect, rotation: number): EditorRect {
  * Single-control bend amount for the Curve slider (−1…1). Zero when straight
  * or multi-control. Positive/negative curve to opposite sides of the chord.
  */
-export function arrowBendAmount(
-  element: EditorShapeElement,
-  maximumBend = 1,
-): number {
+export function arrowBendAmount(element: EditorShapeElement, maximumBend = 1): number {
   if (!isCurveableStrokeShape(element) || element.controls.length !== 1) return 0;
   return arrowBendFromControlPoint(element, element.controls[0], maximumBend);
 }
@@ -3280,19 +3170,14 @@ export function arrowBendFromControlPoint(
   if (lengthSquared < 1) return 0;
   const midpointX = (element.x + element.endX) / 2;
   const midpointY = (element.y + element.endY) / 2;
-  const projected = (
-    (point.x - midpointX) * -deltaY
-    + (point.y - midpointY) * deltaX
-  ) / lengthSquared;
+  const projected =
+    ((point.x - midpointX) * -deltaY + (point.y - midpointY) * deltaX) / lengthSquared;
   const limit = Math.max(0, maximumBend);
   return clamp(projected, -limit, limit);
 }
 
 /** Build a single mid control from a normalized bend amount (Curve slider). */
-export function arrowControlFromBend(
-  element: EditorShapeElement,
-  bend: number,
-): EditorPoint {
+export function arrowControlFromBend(element: EditorShapeElement, bend: number): EditorPoint {
   const deltaX = element.endX - element.x;
   const deltaY = element.endY - element.y;
   return {
@@ -3305,10 +3190,7 @@ export function arrowControlFromBend(
  * Apply Curve-slider bend: empty/one control becomes a pure perpendicular mid
  * control; near-zero bend clears controls back to a straight stroke.
  */
-export function arrowWithBend(
-  element: EditorShapeElement,
-  bend: number,
-): EditorShapeElement {
+export function arrowWithBend(element: EditorShapeElement, bend: number): EditorShapeElement {
   if (!isCurveableStrokeShape(element)) return element;
   if (Math.abs(bend) < 0.005) {
     return { ...element, controls: [] };
@@ -3335,10 +3217,7 @@ export function insertArrowControl(
   return { ...element, controls };
 }
 
-export function removeArrowControl(
-  element: EditorShapeElement,
-  index: number,
-): EditorShapeElement {
+export function removeArrowControl(element: EditorShapeElement, index: number): EditorShapeElement {
   if (!isCurveableStrokeShape(element)) return element;
   if (index < 0 || index >= element.controls.length) return element;
   return {
@@ -3379,9 +3258,7 @@ export function hitTestArrowHandle(
     for (let index = 0; index < starters.length; index += 1) {
       const starter = starters[index];
       // Slightly larger hit targets keep the on-path dots easy to grab.
-      if (
-        Math.hypot(localPoint.x - starter.x, localPoint.y - starter.y) <= radius * 1.15
-      ) {
+      if (Math.hypot(localPoint.x - starter.x, localPoint.y - starter.y) <= radius * 1.15) {
         return { kind: "starter-control", index };
       }
     }
@@ -3433,10 +3310,7 @@ export function curveStrokeHoverHint(
   }
 
   const closest = closestPointOnArrow(element, point);
-  const pathHitRadius = Math.max(
-    handleRadius,
-    element.style.strokeWidth * 2 + handleRadius * 0.6,
-  );
+  const pathHitRadius = Math.max(handleRadius, element.style.strokeWidth * 2 + handleRadius * 0.6);
   if (closest.distance > pathHitRadius) return null;
   return "Double-click to add a curve point";
 }
@@ -3445,26 +3319,9 @@ export function curveStrokeHoverHint(
  * Selection resize grips: four corners plus mid-edge handles so dragging the
  * dashed selection border resizes, not only the corner squares.
  */
-export type ResizeHandle =
-  | "nw"
-  | "n"
-  | "ne"
-  | "e"
-  | "se"
-  | "s"
-  | "sw"
-  | "w";
+export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
-const RESIZE_HANDLES: ResizeHandle[] = [
-  "nw",
-  "n",
-  "ne",
-  "e",
-  "se",
-  "s",
-  "sw",
-  "w",
-];
+const RESIZE_HANDLES: ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 const RESIZE_CORNER_HANDLES: ResizeHandle[] = ["nw", "ne", "se", "sw"];
 
@@ -3486,10 +3343,7 @@ export function hitTestResizeHandle(
   // Corners first so diagonal grips win over edge strips near the same pixel.
   for (const handle of RESIZE_CORNER_HANDLES) {
     const corner = resizeHandlePoint(bounds, handle);
-    if (
-      Math.abs(point.x - corner.x) <= radius
-      && Math.abs(point.y - corner.y) <= radius
-    ) {
+    if (Math.abs(point.x - corner.x) <= radius && Math.abs(point.y - corner.y) <= radius) {
       return handle;
     }
   }
@@ -3497,10 +3351,7 @@ export function hitTestResizeHandle(
     for (const handle of RESIZE_HANDLES) {
       if (RESIZE_CORNER_HANDLES.includes(handle)) continue;
       const mid = resizeHandlePoint(bounds, handle);
-      if (
-        Math.abs(point.x - mid.x) <= radius
-        && Math.abs(point.y - mid.y) <= radius
-      ) {
+      if (Math.abs(point.x - mid.x) <= radius && Math.abs(point.y - mid.y) <= radius) {
         return handle;
       }
     }
@@ -3579,10 +3430,10 @@ export function resizeBoundsFromHandle(
 ): EditorRect {
   const min = Math.max(1, minimumSize);
   if (
-    lockAspectRatio
-    && isResizeCornerHandle(handle)
-    && initial.width >= 1
-    && initial.height >= 1
+    lockAspectRatio &&
+    isResizeCornerHandle(handle) &&
+    initial.width >= 1 &&
+    initial.height >= 1
   ) {
     return resizeBoundsProportional(initial, handle, current, min);
   }
@@ -3742,10 +3593,7 @@ export function resizeElement(
         ...element,
         x: nextBounds.x + pad.x,
         y: nextBounds.y + pad.y,
-        width: Math.max(
-          minTextBoxWidth(element.fontSize),
-          nextBounds.width - pad.x * 2,
-        ),
+        width: Math.max(minTextBoxWidth(element.fontSize), nextBounds.width - pad.x * 2),
         autoWidth: false,
       };
     }
@@ -3754,11 +3602,7 @@ export function resizeElement(
       : heightOnly
         ? scaleY
         : Math.min(Math.abs(scaleX), Math.abs(scaleY));
-    const nextFontSize = clamp(
-      Math.round(element.fontSize * Math.max(0.05, fontScale)),
-      8,
-      512,
-    );
+    const nextFontSize = clamp(Math.round(element.fontSize * Math.max(0.05, fontScale)), 8, 512);
     const pad = textInteractionPad(element, nextFontSize);
     const originX = nextBounds.x + pad.x;
     const originY = nextBounds.y + pad.y;
@@ -3778,10 +3622,7 @@ export function resizeElement(
       fontSize: nextFontSize,
       x: originX,
       y: originY,
-      width: Math.max(
-        minTextBoxWidth(nextFontSize),
-        element.width * Math.max(0.05, fontScale),
-      ),
+      width: Math.max(minTextBoxWidth(nextFontSize), element.width * Math.max(0.05, fontScale)),
       autoWidth: false,
     };
   }
@@ -3801,12 +3642,13 @@ export function resizeElement(
       endX: end.x,
       endY: end.y,
       controls: element.controls.map(mapPoint),
-      style: strokeScale === 1
-        ? element.style
-        : {
-          ...element.style,
-          strokeWidth: Math.round(clamp(element.style.strokeWidth * strokeScale, 1, 80)),
-        },
+      style:
+        strokeScale === 1
+          ? element.style
+          : {
+              ...element.style,
+              strokeWidth: Math.round(clamp(element.style.strokeWidth * strokeScale, 1, 80)),
+            },
     };
   }
 
@@ -3855,8 +3697,7 @@ export function elementLocalBounds(element: ScreenshotElement): EditorRect {
   }
   const xs = element.points.map(({ x }) => x);
   const ys = element.points.map(({ y }) => y);
-  const padding = Math.max(4, element.style.strokeWidth)
-    + annotationDropShadowPad(element.style);
+  const padding = Math.max(4, element.style.strokeWidth) + annotationDropShadowPad(element.style);
   const left = Math.min(...xs);
   const top = Math.min(...ys);
   return {
@@ -3872,8 +3713,7 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
   const rotation = elementRotation(element);
   if (element.kind === "path" && element.points.length > 0 && rotation !== 0) {
     const origin = elementRotationOrigin(element);
-    const padding = Math.max(4, element.style.strokeWidth)
-      + annotationDropShadowPad(element.style);
+    const padding = Math.max(4, element.style.strokeWidth) + annotationDropShadowPad(element.style);
     return boundsFromPoints(
       element.points.map((point) => rotatePointAround(point, origin, rotation)),
       padding,
@@ -3897,10 +3737,7 @@ export function previewTransformForBounds(
 ): { scale: number; translateX: number; translateY: number } {
   const innerW = Math.max(1, previewWidth - padding * 2);
   const innerH = Math.max(1, previewHeight - padding * 2);
-  const scale = Math.min(
-    innerW / Math.max(1, bounds.width),
-    innerH / Math.max(1, bounds.height),
-  );
+  const scale = Math.min(innerW / Math.max(1, bounds.width), innerH / Math.max(1, bounds.height));
   const scaledW = bounds.width * scale;
   const scaledH = bounds.height * scale;
   return {
@@ -3921,10 +3758,10 @@ export function hitTestElement(
     const hitPoint = elementLocalPoint(element, point);
     const bounds = elementLocalBounds(element);
     if (
-      hitPoint.x >= bounds.x - tolerance
-      && hitPoint.x <= bounds.x + bounds.width + tolerance
-      && hitPoint.y >= bounds.y - tolerance
-      && hitPoint.y <= bounds.y + bounds.height + tolerance
+      hitPoint.x >= bounds.x - tolerance &&
+      hitPoint.x <= bounds.x + bounds.width + tolerance &&
+      hitPoint.y >= bounds.y - tolerance &&
+      hitPoint.y <= bounds.y + bounds.height + tolerance
     ) {
       return element;
     }
@@ -3940,7 +3777,7 @@ export function outputDimensions(
   const width = clamp(Math.round(requestedWidth), 1, 32_768);
   return {
     width,
-    height: clamp(Math.round(width * documentHeight / Math.max(1, documentWidth)), 1, 32_768),
+    height: clamp(Math.round((width * documentHeight) / Math.max(1, documentWidth)), 1, 32_768),
   };
 }
 
@@ -4038,19 +3875,18 @@ export async function estimateCanvasExportBytes(
   format: ScreenshotExportFormat,
   jpegQuality: number,
 ): Promise<number> {
-  const mimeType = format === "jpeg"
-    ? "image/jpeg"
-    : format === "webp"
-      ? "image/webp"
-      : "image/png";
-  const quality = format === "jpeg"
-    ? Math.min(1, Math.max(0.4, jpegQuality / 100))
-    : undefined;
+  const mimeType =
+    format === "jpeg" ? "image/jpeg" : format === "webp" ? "image/webp" : "image/png";
+  const quality = format === "jpeg" ? Math.min(1, Math.max(0.4, jpegQuality / 100)) : undefined;
   const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((result) => {
-      if (result) resolve(result);
-      else reject(new Error("The edited image could not be encoded for size estimation."));
-    }, mimeType, quality);
+    canvas.toBlob(
+      (result) => {
+        if (result) resolve(result);
+        else reject(new Error("The edited image could not be encoded for size estimation."));
+      },
+      mimeType,
+      quality,
+    );
   });
   return blob.size;
 }
@@ -4071,7 +3907,7 @@ export function imageSizeAtWidth(
   const natural = imageOrientedNaturalSize(element);
   return {
     width: nextWidth,
-    height: Math.max(1, Math.round(nextWidth * natural.height / natural.width)),
+    height: Math.max(1, Math.round((nextWidth * natural.height) / natural.width)),
   };
 }
 
@@ -4082,7 +3918,7 @@ export function imageSizeAtHeight(
   const nextHeight = Math.max(1, Math.round(height));
   const natural = imageOrientedNaturalSize(element);
   return {
-    width: Math.max(1, Math.round(nextHeight * natural.width / natural.height)),
+    width: Math.max(1, Math.round((nextHeight * natural.width) / natural.height)),
     height: nextHeight,
   };
 }

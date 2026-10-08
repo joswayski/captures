@@ -76,6 +76,32 @@ final class StartupNoticeTests: XCTestCase {
             try XCTUnwrap(Tokens.variants["dark-mustard"]).color("glass-strong-solid"))
     }
 
+    func testFallbackLeftAlignsAndGrowsBeforeThePanelIsCreated() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let layout = try XCTUnwrap(StartupNoticeLayout.resolve(monitor: monitor, workArea: workArea, tray: nil))
+        let normal = StartupNoticeView(layout: layout, keys: ["⌘", "⇧", "Space"], tokens: tokens)
+        XCTAssertEqual(normal.layout.card.height, 54)
+        XCTAssertEqual(normal.contentLayout().title.minX, layout.card.minX + 12)
+        XCTAssertEqual(normal.hintAttributes[.foregroundColor] as? NSColor, tokens.color("glass-text-muted"))
+        let panel = StartupNoticePanel(layout: layout, keys: ["Control", "Option", "Shift", "Command", "F12"],
+            tokens: tokens, primaryHeight: 900)
+        defer { panel.close() }
+        let view = panel.noticeView, card = view.layout.card, content = view.contentLayout()
+        XCTAssertGreaterThan(card.height, 54)
+        XCTAssertEqual(card.width, 296)
+        XCTAssertEqual(panel.frame, view.layout.appKitFrame(primaryHeight: 900))
+        XCTAssertGreaterThan(content.chips.last!.minY, content.hint.minY, "long keys wrap")
+        XCTAssertGreaterThanOrEqual(content.title.minY, card.minY + 8)
+        XCTAssertLessThanOrEqual(content.chips.last!.maxY, card.maxY - 8)
+        for rect in [content.hint] + content.chips {
+            XCTAssertLessThanOrEqual(rect.maxX, card.maxX - 40)
+            XCTAssertLessThan(rect.maxX, view.closeButton.frame.minX)
+        }
+        XCTAssertEqual(view.closeButton.frame.midY, card.midY)
+        XCTAssertNil(view.layout.caretTriangle, "no fabricated tray anchor")
+    }
+
     func testPanelIsNonactivatingFloatingAndDismissible() throws {
         _ = NSApplication.shared
         let controller = StartupNoticeController(tokens: try XCTUnwrap(Tokens.variants["dark-mustard"]))

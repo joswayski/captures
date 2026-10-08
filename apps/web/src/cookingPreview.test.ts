@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   COOKING_MAX_AGE_MS,
@@ -20,11 +20,7 @@ function change(sha: string, ageMs: number): CookingChange {
   };
 }
 
-function run(
-  sha: string,
-  status: string,
-  conclusion: string | null = null,
-): GitHubWorkflowRun {
+function run(sha: string, status: string, conclusion: string | null = null): GitHubWorkflowRun {
   return { head_sha: sha, status, conclusion };
 }
 
@@ -66,23 +62,21 @@ test("marks commits newer than the published Preview as cooking", () => {
 });
 
 test("does not cook the published commit or older history", () => {
-  const shas = cookingPreviewShas(
-    [change("published", HOUR), change("older", 2 * HOUR)],
-    { publishedCommit: "PUBLISHED", runs: [], now: NOW },
-  );
+  const shas = cookingPreviewShas([change("published", HOUR), change("older", 2 * HOUR)], {
+    publishedCommit: "PUBLISHED",
+    runs: [],
+    now: NOW,
+  });
 
   assert.deepEqual(shas, []);
 });
 
 test("hides finished failures even when they are newer than the published Preview", () => {
-  const shas = cookingPreviewShas(
-    [change("failed", 20 * 60 * 1_000), change("published", HOUR)],
-    {
-      publishedCommit: "published",
-      runs: [run("failed", "completed", "failure")],
-      now: NOW,
-    },
-  );
+  const shas = cookingPreviewShas([change("failed", 20 * 60 * 1_000), change("published", HOUR)], {
+    publishedCommit: "published",
+    runs: [run("failed", "completed", "failure")],
+    now: NOW,
+  });
 
   assert.deepEqual(shas, []);
 });
@@ -125,7 +119,11 @@ test("does not badge a building or unpublished merge older than the cooking wind
 
 test("without a published Preview, only recent in-progress runs cook", () => {
   const shas = cookingPreviewShas(
-    [change("one", HOUR), change("building", 30 * 60 * 1_000), change("two", COOKING_MAX_AGE_MS + 1)],
+    [
+      change("one", HOUR),
+      change("building", 30 * 60 * 1_000),
+      change("two", COOKING_MAX_AGE_MS + 1),
+    ],
     {
       publishedCommit: null,
       runs: [run("building", "in_progress")],
@@ -144,9 +142,22 @@ test("returns no cooking SHAs for an empty change list", () => {
 });
 
 test("superseded runs and failed earlier attempts cook as part of the next batch", () => {
-  const changes = [change("five", HOUR), change("four", HOUR), change("three", HOUR), change("published", 2 * HOUR)];
-  const runs = [run("five", "pending"), run("four", "completed", "cancelled"), run("three", "completed", "failure")];
-  assert.deepEqual(cookingPreviewShas(changes, { publishedCommit: "published", runs, now: NOW }), ["five", "four", "three"]);
+  const changes = [
+    change("five", HOUR),
+    change("four", HOUR),
+    change("three", HOUR),
+    change("published", 2 * HOUR),
+  ];
+  const runs = [
+    run("five", "pending"),
+    run("four", "completed", "cancelled"),
+    run("three", "completed", "failure"),
+  ];
+  assert.deepEqual(cookingPreviewShas(changes, { publishedCommit: "published", runs, now: NOW }), [
+    "five",
+    "four",
+    "three",
+  ]);
   // The published snapshot, not any stale workflow event SHA, ends cooking.
   assert.deepEqual(cookingPreviewShas(changes, { publishedCommit: "five", runs, now: NOW }), []);
 });

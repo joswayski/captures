@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "start": "node .output/server/index.mjs",
     "typecheck": "tsc --noEmit --pretty false && tsc --noEmit -p tsconfig.node.json --pretty false",
-    "test": "node --experimental-strip-types --test src/detectPreviewDownload.test.ts src/cookingPreview.test.ts src/dependencyUpdates.test.ts src/productShots.test.ts src/productLightboxModel.test.ts src/server/*.test.ts"
+    "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.29",
@@ -23,9 +23,10 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "@vitejs/plugin-react": "^5.1.0",
+    "@vitejs/plugin-react": "6.1.2",
     "tailwindcss": "^4.1.0",
-    "typescript": "^5.9.0",
-    "vite": "^7.2.0"
+    "typescript": "7.0.2",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
   }
 }

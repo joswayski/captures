@@ -725,6 +725,44 @@ draws the same track and thumb on its NSSliders and keeps the editable volume
 percent fields. The maximum file size field stays a plain text field on both hosts.
 Physical focus-visibility and scroller checks on macOS and Windows remain open.
 
+Custom selects now expose their popup state and options through each host's
+accessibility API. wgpu publishes expanded/collapsed comboboxes, their controlled
+listbox and active descendant, and selected/disabled listbox options with their
+descriptions instead of toggle buttons. Assistive option focus updates the same
+active index as keys; Click chooses through the existing path. Pointer opening and
+accepted choices focus the trigger, and canvas keys wait until the canvas regains
+focus. AppKit retains one AX row per option, exposing selection, enabled state,
+description, screen frame and active focus; Press calls the existing chooser.
+The popup links its custom list and announces active/value/layout changes.
+Disabling it closes the list; retained closed/replaced rows cannot act.
+
+| Platform | Custom-select accessibility implementation / verification |
+| --- | --- |
+| AppKit/macOS | AX rows and popup relationships implemented; XCTest covers all three styles, stable identity, active versus selected state, disabled/stale actions and focus retention; macOS execution and VoiceOver acceptance pending |
+| Windows | Same wgpu AccessKit implementation; all-style tree/action and editor regressions pass in the Linux orb; Narrator and physical input unverified |
+| X11 | All-style AccessKit tree/action and editor regressions pass; real input/render regression recorded in the slice PR; physical Orca acceptance open |
+| Wayland | Same wgpu AccessKit implementation; tree/action tests do not establish AT-SPI/compositor acceptance |
+
+No screen-reader or platform parity gate closes from these synthetic action tests.
+
+The wgpu capture menu confirms Return after its toolbar and selects have handled
+the frame's input. A target release batched with Return therefore captures the
+new target, not the old one; Return choosing a display option does not also start
+capture. An explicit Window click clears a retained desktop selection without
+discarding real window selections. Escape still closes an open select and cancels
+the capture on the same press. Directed unit tests and seven private-X11
+capture-controls cases verify exact region/window pixels and metadata, countdown,
+live/frozen backgrounds, occlusion, automatic selection and cancellation.
+The smoke waits for the target pill's painted state before sending surface input;
+XSync alone does not establish that the new surface is ready.
+
+| Platform | Capture-menu confirmation follow-up |
+| --- | --- |
+| AppKit/macOS | Existing event-based confirmation unchanged; no macOS runtime verification in this follow-up |
+| Windows | Shared wgpu input-ordering fix and unit coverage; physical runtime verification open |
+| X11 | All seven disposable capture-controls cases pass, with independent artifact-size and pixel checks |
+| Wayland | Shared wgpu toolbar path; compositor/runtime verification of this change open |
+
 Direct region and window overlays (shortcut, tray and screenshot-during-recording)
 now follow the shipping `CaptureOverlay`: no toolbar, a completed region drag
 commits on release, a window/desktop click commits that window or the display,
@@ -989,8 +1027,8 @@ edges. Unsupported text layout returns an explicit error; no approximate font
 metrics or silent selection through unsupported content. A press inside the fitted
 edited image picks once at eight view points of tolerance. A click selects or clears
 without changing the document or encoded output. A drag of at least three view points
-shows a translated shared outline and submits one `LayerEdit::Translate` on release;
-pixels update only after the worker succeeds. Failed moves preserve prior selection.
+shows a translated shared outline and live pixels, then submits one `LayerEdit::DragMove`
+on release. Failed moves preserve prior selection.
 Escape, focus loss, close, leaving Layers, a pending command or preview resizing cancels
 transient input. AppKit picks from cached immutable document JSON, never a borrowed
 worker session; wgpu handles raw events once, in order, across egui layout passes.
@@ -1009,7 +1047,7 @@ render-before-publish, undo and draft ownership; clicks and cancellation do not 
 the document. Partial overflow remains clipped; fully outside rotated bounds expand
 the canvas. AppKit's C boundary is allocation-free, without per-event JSON or worker
 session access. TypeScript-oracle fixtures check angles, grip placement, gestures and
-document edits. Both hosts retain outline-only feedback until release.
+document edits. Both hosts show live pixels beneath the outline while held.
 Custom-increment tests distinguish 37-degree stops from the former hard-coded 15,
 including stationary Shift changes, release, cancellation and draft restore.
 X11 software-rendered checks and AppKit host fixtures are diagnostics, not physical
@@ -1021,7 +1059,7 @@ Shift locks corner aspect ratio while edge grips stay single-axis. Unrotated
 resizes snap to canvas and other visible-layer edges (including locked layers);
 rotated resizes skip axis snapping and preserve the opposite world anchor.
 Images retain D4 orientation; arrows scale controls and stroke, while paths retain
-their stroke width. Preview outlines and guides do not modify pixels or drafts.
+their stroke width. Preview pixels, outlines and guides do not publish edits or drafts.
 A release after three view points submits one worker transaction; cancellation,
 clicks and failures preserve the document, and fully outside content expands the
 canvas. Text layers use the text resize rules described with the text slices below.
@@ -1030,9 +1068,21 @@ bounds to canvas and visible-layer edges, including locked and zero-opacity laye
 but excluding hidden layers. Shared Rust matches Tauri's strict ten-view-point
 threshold, line/edge tie rules and up to four coincident-edge guides. Hosts keep
 clicks and movement below three view points unsnapped. A `drag_move` release
-commits once; numeric `translate` remains exact. Preview is outline-only, and
-fully outside moves expand the canvas. TypeScript oracle fixtures cover rotated
+commits once; numeric `translate` remains exact. Preview retains the original canvas;
+fully outside moves expand it only on commit. TypeScript oracle fixtures cover rotated
 geometry, threshold boundaries, ties, hidden/locked siblings and overflow.
+Move, rotate, resize and curve-dot previews share the existing drawing worker's
+one-in-flight/latest-pending queue and epoch cancellation. Shared Rust clones the
+document/assets and suppresses canvas growth while rendering; published pixels,
+undo/redo, output and saved draft bytes remain owned by the committed session.
+Inactive drawing cleanup cannot cancel a layer-owned frame. wgpu only requests
+changed geometry on the first layout pass, including stationary modifier changes.
+Linux X11 has dark/light private-desktop held-pixel, cancellation, undo/draft and
+minimum-window coverage. Windows shares the wgpu implementation but physical
+Windows input remains unverified. AppKit connects the same queue with fake-worker
+ownership and real-worker pixel fixtures; its current-source tests require macOS CI.
+Wayland uses the wgpu UI, but real-compositor gesture/latency, accessibility and
+mixed-DPI acceptance remain open. These fixtures do not close a platform parity gate.
 Both hosts now connect ephemeral viewport state through shared Rust geometry:
 Fit, 100%, 1.25× zoom steps, Recenter, anchored Cmd/Ctrl-wheel/native magnification
 and Cmd/Ctrl-primary or middle-button pan. Manual zoom uses Tauri's 5–800% bounds
@@ -2303,6 +2353,38 @@ This slice does not close distribution or Notices/updates acceptance. Installed-
 handoff/recovery, OS installers/signing, channel publication and installed-data
 backup/migration remain open. Tauri still ships; no release or cutover is activated.
 
+### Development restart Preferences intent, not installed restoration
+
+The native helper can carry explicit `--restore-preferences true|false` in a
+bounded private JSON sidecar next to its attempt-specific health file. AppKit and
+wgpu consume it once, after primary election and before window startup. With a
+completed isolated profile, true restores Preferences beside the unchanged ready
+notice; false/legacy empty intent stays tray-only. Absent intent preserves ordinary
+launch routing. Setup, pending permission capture and media-open priority remain.
+Forwarded secondaries do not consume the marker or acknowledge health.
+
+Intent consumption is not readiness. The helper still requires exact live health,
+packaged tools and the existing confirmation checks; an old peer that ignores the
+marker cannot confirm replacement and retains the backup for manual recovery.
+Malformed, oversized, occupied-health and linked-file inputs retain the marker.
+Shared transport/FFI tests verify true/false/legacy/one-shot behavior and backup
+recovery. The focused `x11_onboarding_smoke.py --update-restart-only` uses injected
+private markers and real windows, checking both appearances, notice expiry with
+Preferences retained, no repeated restore, setup priority and secondary exclusion.
+
+**Automatic installed restoration remains open.** The helper accepts an operator
+value, not a GUI snapshot; its fresh empty/imported profiles need setup, which wins
+over restoration. A future GUI updater must snapshot actual Preferences visibility
+at successful-update shutdown, not focus or update-click origin, matching shipping
+PR #1025. This slice enables neither GUI installation nor installed-profile writes.
+
+| Platform | Restart-intent implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared marker/FFI and primary launch routing implemented; Swift one-shot and launch-priority tests added, not executed in this Linux orb |
+| Windows | Shared marker and wgpu routing implemented; shared transport tests run on Linux, Windows execution/rendering unverified |
+| X11 | Real optimized native host passed all six focused private-X11 cases with injected markers and disposable profiles; dark/light Preferences plus notice inspected; not a signed install |
+| Wayland | Shared marker and wgpu routing implemented; live Wayland restart handoff/rendering unverified |
+
 ### Cooperative development-package busy guard
 
 Both packaged hosts now acquire shared package-root ownership before profile,
@@ -2864,6 +2946,23 @@ transitions remain follow-up work; this does not close the visual parity gate.
 Share/sign-in UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
+The Clear all presentation follow-up mirrors shipping [#1023](https://github.com/joswayski/captures/pull/1023):
+AppKit freezes the presented media and card layers; wgpu carries per-card filter,
+scale, arrival blur and pose snapshots into its exits. Neither forces idle cards
+into hover dimming, and both compose the streak relative to its first frame to
+avoid double-applying hover scale. Close/Delete keep their existing behavior.
+Directed tests distinguish idle, partial and full hover, independent scale,
+partial opacity/pose, top/bottom staggers and later captures. The private-X11
+stack smoke covers retained bytes and new captures in all four corners; its
+optional `--record-clear` records only that disposable desktop. AppKit tests
+require macOS execution. Windows and physical macOS/X11 animation acceptance,
+mixed-DPI and accessibility remain open; Wayland preview positioning is still
+unsupported. Recording-ready notices are separate, not video-stack coverage.
+Optimized llvmpipe recordings retain the base media treatment but skip exit
+frames (roughly 130–170 ms between major paint changes in the right-edge sample).
+They do not establish smooth-motion acceptance; CPU effect preparation remains
+a performance follow-up. The reduced-motion smoke also reacquires the restored
+X11 window after a failed Trash instead of sampling its destroyed predecessor.
 Reveal uses the current exported path, with file checks off the UI thread and
 guarded async completion. A missing export reports an error without another save
 or removal of the capture. Saves through History also update the preview action.
@@ -3165,6 +3264,21 @@ no StatusNotifier rect, so it uses the panel-edge fallback. Private-X11 onboardi
 smoke checks the setup-completion notice title, size, focus retention and Close
 dismissal. AppKit has XCTest layout/copy/dismiss coverage. The macOS, Windows,
 Wayland and quiet-login paths have not been verified on physical hosts.
+
+The unanchored launch notice now follows the compact fallback selected for
+shipping [#1026](https://github.com/joswayski/captures/pull/1026): a 296px-wide,
+54px-minimum-height, left-aligned dark card, 10px corners, glass border and the
+smaller shared drop shadow. Both hosts measure wrapped shortcut rows before
+creating the native window and reserve space for the unchanged 28px Close control.
+Actual anchors retain the centered pill/triangle, geometry and lifetime. No tray
+coordinates are fabricated. The existing X11 onboarding smoke also exercises
+long-shortcut quiet launches in both appearances and Close without activating
+the hidden root (`--notices-only` runs the focused default/long-shortcut checks).
+Broader onboarding runs did not complete consistently here around initial root
+hiding/recovery input; the focused checks do not close that gate.
+AppKit adds measured-layout XCTest coverage; it is source-only
+in this Linux orb. Windows, Wayland and physical/macOS renderer acceptance remain
+open; this presentation change is not updater/restart acceptance.
 
 Native region recordings now retain a passive display-local guide from countdown
 until finalization/discard/cancellation. AppKit and wgpu paint the fixed glass veil

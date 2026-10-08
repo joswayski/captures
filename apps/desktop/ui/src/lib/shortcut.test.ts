@@ -142,8 +142,20 @@ describe("shortcut recording", () => {
     expect(eventMatchesShortcut(controlShift4, "CommandOrControl+Shift+4", "linux")).toBe(true);
     expect(eventMatchesShortcut(controlShift4, "Ctrl+Shift+Digit4", "linux")).toBe(true);
     expect(eventMatchesShortcut(commandShift4, "Command+Shift+Digit4", "macos")).toBe(true);
-    expect(eventMatchesShortcut(keyEvent("KeyW", { metaKey: true, shiftKey: true }), "CommandOrControl+Shift+W", "macos")).toBe(true);
-    expect(eventMatchesShortcut(keyEvent("Digit4", { metaKey: true }), "CommandOrControl+Shift+4", "macos")).toBe(false);
+    expect(
+      eventMatchesShortcut(
+        keyEvent("KeyW", { metaKey: true, shiftKey: true }),
+        "CommandOrControl+Shift+W",
+        "macos",
+      ),
+    ).toBe(true);
+    expect(
+      eventMatchesShortcut(
+        keyEvent("Digit4", { metaKey: true }),
+        "CommandOrControl+Shift+4",
+        "macos",
+      ),
+    ).toBe(false);
   });
 
   it("describes native screenshot defaults for each platform", () => {

@@ -32,6 +32,19 @@ final class AppWindowsTests: XCTestCase {
         XCTAssertFalse(AppWindowLayout.short(height: 720))
     }
 
+    func testPostUpdateRestoresPreferencesBesideTheNoticeWithoutChangingPriorities() {
+        XCTAssertEqual(interactiveLaunch(onboardingComplete: true, launchedQuietly: true,
+            openingFiles: false, restorePreferences: true), .startupNoticeAndPreferences)
+        XCTAssertEqual(interactiveLaunch(onboardingComplete: true, launchedQuietly: true,
+            openingFiles: false, restorePreferences: false), .startupNotice)
+        XCTAssertEqual(interactiveLaunch(onboardingComplete: false, launchedQuietly: true,
+            openingFiles: false, restorePreferences: true), .setup)
+        for complete in [true, false] {
+            XCTAssertNil(interactiveLaunch(onboardingComplete: complete, launchedQuietly: true,
+                openingFiles: true, restorePreferences: true), "explicit media keeps priority")
+        }
+    }
+
     func testShowCreatesOnceThenFocusesTheOpenWindow() throws {
         _ = NSApplication.shared
         let windows = AppWindows()
