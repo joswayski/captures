@@ -24,7 +24,10 @@ test("website product shots cover the README stills with unique files", () => {
   const readmeFiles = [...readme.matchAll(/docs\/images\/([a-z0-9-]+\.jpg)/gu)].map(
     (match) => match[1],
   );
-  assert.deepEqual(readmeFiles, PRODUCT_SHOTS.map((shot) => shot.file));
+  assert.deepEqual(
+    readmeFiles,
+    PRODUCT_SHOTS.map((shot) => shot.file),
+  );
   assert.equal(PRODUCT_SHOTS.length, 5);
   const files = new Set(PRODUCT_SHOTS.map((shot) => shot.file));
   const ids = new Set(PRODUCT_SHOTS.map((shot) => shot.id));
@@ -53,11 +56,7 @@ test("each product shot file exists and matches the declared JPEG size", () => {
     const path = join(imagesDir, shot.file);
     const bytes = readFileSync(path);
     const size = jpegSize(bytes);
-    assert.deepEqual(
-      size,
-      { width: shot.width, height: shot.height },
-      `${shot.file} dimensions`,
-    );
+    assert.deepEqual(size, { width: shot.width, height: shot.height }, `${shot.file} dimensions`);
   }
 });
 
@@ -91,9 +90,9 @@ function jpegSize(bytes: Buffer) {
 
 function isStartOfFrame(marker: number) {
   return (
-    (marker >= 0xc0 && marker <= 0xc3)
-    || (marker >= 0xc5 && marker <= 0xc7)
-    || (marker >= 0xc9 && marker <= 0xcb)
-    || (marker >= 0xcd && marker <= 0xcf)
+    (marker >= 0xc0 && marker <= 0xc3) ||
+    (marker >= 0xc5 && marker <= 0xc7) ||
+    (marker >= 0xc9 && marker <= 0xcb) ||
+    (marker >= 0xcd && marker <= 0xcf)
   );
 }

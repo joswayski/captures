@@ -118,8 +118,7 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Builds are available after every merge and may contain bugs or incomplete
-                  features. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,
-                  on{" "}
+                  features. {linuxInstallCopy(detectedDownload)} Please give feedback in the app, on{" "}
                   <a
                     href={X_URL}
                     target="_blank"
@@ -129,14 +128,16 @@ export default function Home({
                   >
                     <XIcon className="h-3 w-3" />
                   </a>
-                  , or{" "}
-                  <CopyEmailButton email={CONTACT_EMAIL} />.
+                  , or <CopyEmailButton email={CONTACT_EMAIL} />.
                 </p>
 
                 <div className="mt-8">
                   <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
                     <a href={detectedDownload.href} className="download-button">
-                      <OsIcon family={detectedDownload.family} className="h-[1.15rem] w-[1.15rem]" />
+                      <OsIcon
+                        family={detectedDownload.family}
+                        className="h-[1.15rem] w-[1.15rem]"
+                      />
                       {detectedDownload.label}
                       <span className="sr-only"> {detectedDownload.fileName}</span>
                     </a>
@@ -183,7 +184,10 @@ export default function Home({
 
         <ProductGallery />
 
-        <section aria-labelledby="latest-changes-heading" className="mt-14 border-t border-border pt-10">
+        <section
+          aria-labelledby="latest-changes-heading"
+          className="mt-14 border-t border-border pt-10"
+        >
           <h2
             id="latest-changes-heading"
             className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
@@ -194,8 +198,7 @@ export default function Home({
           <ol className="mt-6 space-y-5">
             {latestChanges.map((change) => {
               const cooking =
-                cookingShas.includes(change.sha) &&
-                isWithinCookingWindow(change.committedAt, now);
+                cookingShas.includes(change.sha) && isWithinCookingWindow(change.committedAt, now);
               const cookingTipId = `cooking-tip-${change.sha.slice(0, 12)}`;
               return (
                 <li key={change.sha}>
@@ -208,7 +211,9 @@ export default function Home({
                     {change.title}
                   </a>
                   <p className="mt-1.5 text-xs text-ink-soft">
-                    <time dateTime={change.committedAt}>{formatRelativeTime(change.committedAt, now)}</time>
+                    <time dateTime={change.committedAt}>
+                      {formatRelativeTime(change.committedAt, now)}
+                    </time>
                     {cooking ? (
                       <>
                         <span aria-hidden="true"> · </span>
@@ -244,7 +249,9 @@ function previewDownloadById(id: PreviewDownloadId | null) {
 
 function linuxAlternativeDownload(download: PreviewDownload) {
   if (download.family !== "linux") return null;
-  return PREVIEW_DOWNLOADS.find((item) => item.family === "linux" && item.id !== download.id) ?? null;
+  return (
+    PREVIEW_DOWNLOADS.find((item) => item.family === "linux" && item.id !== download.id) ?? null
+  );
 }
 
 function linuxAlternativeLabel(download: PreviewDownload) {

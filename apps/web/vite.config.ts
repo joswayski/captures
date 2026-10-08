@@ -42,9 +42,7 @@ type LatestChange = {
 
 function pullRequestNumber(title: string) {
   return (
-    title.match(/\(#(\d+)\)$/u)?.[1] ??
-    title.match(/^Merge pull request #(\d+)/u)?.[1] ??
-    null
+    title.match(/\(#(\d+)\)$/u)?.[1] ?? title.match(/^Merge pull request #(\d+)/u)?.[1] ?? null
   );
 }
 
@@ -76,9 +74,7 @@ function toLatestChange(entry: GitHubCommit): LatestChange {
   return {
     sha: entry.sha,
     title: prNumber ? title.replace(/\s+\(#\d+\)$/u, "") : title,
-    url: prNumber
-      ? `https://github.com/${REPOSITORY}/pull/${prNumber}`
-      : entry.html_url,
+    url: prNumber ? `https://github.com/${REPOSITORY}/pull/${prNumber}` : entry.html_url,
     committedAt,
     pullRequest: prNumber ? Number(prNumber) : null,
   };

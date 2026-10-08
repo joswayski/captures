@@ -12,10 +12,7 @@ const thumbnailStyles = readFileSync(
   resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
   "utf8",
 );
-const designTokens = readFileSync(
-  resolve(process.cwd(), "../../shared/design.css"),
-  "utf8",
-);
+const designTokens = readFileSync(resolve(process.cwd(), "../../shared/design.css"), "utf8");
 
 describe("mini-preview file-drop landing", () => {
   it("treats a drop on the preview stack as a rejected self-drop", () => {
@@ -51,9 +48,7 @@ describe("mini-preview file-drop landing", () => {
     expect(thumbnailStyles).toMatch(
       /translate:\s*calc\(-1 \* var\(--thumbnail-drop-reject-x-1\)\) 0/,
     );
-    expect(thumbnailStyles).toMatch(
-      /translate:\s*var\(--thumbnail-drop-reject-x-1\) 0/,
-    );
+    expect(thumbnailStyles).toMatch(/translate:\s*var\(--thumbnail-drop-reject-x-1\) 0/);
     expect(thumbnailStyles).not.toMatch(/translate:\s*-9px 0/);
   });
 
@@ -66,4 +61,3 @@ describe("mini-preview file-drop landing", () => {
     );
   });
 });
-

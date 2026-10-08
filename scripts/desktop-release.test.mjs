@@ -94,7 +94,8 @@ test("ignores API-only lock changes but releases desktop and shared changes", ()
 test("release notes omit skipped website commits from the next desktop update", () => {
   const directory = mkdtempSync(join(tmpdir(), "captures-desktop-release-notes-"));
   const originalDirectory = process.cwd();
-  const runGit = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
+  const runGit = (...args) =>
+    execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
   runGit("init");
   runGit("config", "user.name", "Captures Test");
   runGit("config", "user.email", "captures@example.com");
@@ -116,17 +117,29 @@ test("release notes omit skipped website commits from the next desktop update", 
 
   writeFileSync(join(directory, "apps/desktop/ui/src/App.tsx"), "export const App = 'updated';\n");
   runGit("add", "apps/desktop/ui/src/App.tsx");
-  runGit("commit", "--author", "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>", "-m", "Bump vitest from 4.1.10 to 4.1.11 (#12)");
+  runGit(
+    "commit",
+    "--author",
+    "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+    "-m",
+    "Bump vitest from 4.1.10 to 4.1.11 (#12)",
+  );
   const dependencyHead = runGit("rev-parse", "HEAD");
 
   try {
     process.chdir(directory);
     const fallback = releaseNotesBetween(base, webHead, "joswayski/captures");
-    assert.match(fallback, new RegExp(`Rebuilt desktop installers from commit \\[${webHead.slice(0, 7)}\\]`, "u"));
+    assert.match(
+      fallback,
+      new RegExp(`Rebuilt desktop installers from commit \\[${webHead.slice(0, 7)}\\]`, "u"),
+    );
 
     const notes = releaseNotesBetween(base, dependencyHead, "joswayski/captures");
     assert.doesNotMatch(notes, /hosted API/u);
-    assert.match(notes, /Fix desktop capture \(\[#11\]\(https:\/\/github\.com\/joswayski\/captures\/pull\/11\)\)/u);
+    assert.match(
+      notes,
+      /Fix desktop capture \(\[#11\]\(https:\/\/github\.com\/joswayski\/captures\/pull\/11\)\)/u,
+    );
     assert.doesNotMatch(notes, /Bump vitest|#12/u);
 
     rmSync(join(directory, "apps/desktop/ui/src/App.tsx"));
@@ -156,7 +169,10 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
     /name: Load the current desktop release helper[\s\S]*?ref: \$\{\{ github\.sha \}\}[\s\S]*?sparse-checkout: scripts\/desktop-release\.mjs/u,
   );
   assert.doesNotMatch(workflow, /generate_release_notes=true/u);
-  assert.match(workflow, /concurrency:\n  group: captures-preview-main\n  cancel-in-progress: false\n\n/u);
+  assert.match(
+    workflow,
+    /concurrency:\n  group: captures-preview-main\n  cancel-in-progress: false\n\n/u,
+  );
   assert.doesNotMatch(workflow, /wait-preview-queue|github\.event\.before/u);
   assert.match(workflow, /release_sha="\$\{REQUESTED_SHA:-origin\/main\}"/u);
   assert.match(workflow, /BEFORE_SHA: \$\{\{ steps\.baseline\.outputs\.previous_tag \}\}/u);
@@ -166,7 +182,12 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
 test("batches unpublished desktop changes, fixes, and notes across docs-only pushes", () => {
   const directory = mkdtempSync(join(tmpdir(), "captures-preview-batch-"));
   const originalDirectory = process.cwd();
-  const runGit = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const runGit = (...args) =>
+    execFileSync("git", args, {
+      cwd: directory,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   const commit = (path, text) => {
     writeFileSync(join(directory, path), text);
     runGit("add", path);
@@ -191,8 +212,16 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     process.chdir(directory);
     assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.1");
     assert.equal(releaseImpactBetween(first, batch).shouldRelease, true);
-    assert.equal(releaseImpactBetween("", batch).shouldRelease, true, "bootstrap includes older desktop files");
-    const notes = releaseNotesBetween(previousPreviewTag(batch, releases), batch, "joswayski/captures");
+    assert.equal(
+      releaseImpactBetween("", batch).shouldRelease,
+      true,
+      "bootstrap includes older desktop files",
+    );
+    const notes = releaseNotesBetween(
+      previousPreviewTag(batch, releases),
+      batch,
+      "joswayski/captures",
+    );
     assert.match(notes, /Change 2/u);
     assert.match(notes, /Fix 3/u);
     assert.doesNotMatch(notes, /Change 1|Docs 4/u);
@@ -204,7 +233,11 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     releases.push(published("v2026.09.05.4"));
     assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.4");
     assert.equal(releaseImpactBetween("v2026.09.05.4", batch).shouldRelease, false);
-    const nextNotes = releaseNotesBetween(previousPreviewTag(next, releases), next, "joswayski/captures");
+    const nextNotes = releaseNotesBetween(
+      previousPreviewTag(next, releases),
+      next,
+      "joswayski/captures",
+    );
     assert.match(nextNotes, /Change 5/u);
     assert.doesNotMatch(nextNotes, /Change 2|Fix 3/u);
     // Historical builds must not use a later published version as their base.
@@ -213,7 +246,10 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     runGit("tag", "v2026.09.05.5", next);
     releases.push(published("v2026.09.05.5"));
     const docs = commit("README.md", "Docs only (#6)");
-    assert.equal(releaseImpactBetween(previousPreviewTag(docs, releases), docs).shouldRelease, false);
+    assert.equal(
+      releaseImpactBetween(previousPreviewTag(docs, releases), docs).shouldRelease,
+      false,
+    );
   } finally {
     process.chdir(originalDirectory);
     rmSync(directory, { recursive: true, force: true });

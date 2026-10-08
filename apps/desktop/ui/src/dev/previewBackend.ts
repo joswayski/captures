@@ -171,10 +171,7 @@ function previewShortcutSettings(
   platform: "macos" | "windows" | "linux" = previewPlatform(),
 ): Pick<
   AppSettings,
-  | "new_capture_shortcut"
-  | "region_shortcut"
-  | "window_shortcut"
-  | "display_shortcut"
+  "new_capture_shortcut" | "region_shortcut" | "window_shortcut" | "display_shortcut"
 > & { recording: AppSettings["recording"] } {
   const recording = {
     video_fps: 60 as const,
@@ -434,7 +431,11 @@ const HISTORY: ArtifactSummary[] = [
     dropped_frames: 0,
     has_system_audio: false,
     has_microphone_audio: false,
-    target: { type: "region", display_id: "display-1", rect: { x: 0, y: 0, width: 800, height: 500 } },
+    target: {
+      type: "region",
+      display_id: "display-1",
+      rect: { x: 0, y: 0, width: 800, height: 500 },
+    },
     missing: false,
     created_at: "2026-08-26T11:22:09Z",
   },
@@ -505,8 +506,7 @@ function updateStatus(): UpdateStatus {
     return {
       ...base,
       state: "error",
-      message:
-        "Could not install the update: Download request failed with status: 403 Forbidden",
+      message: "Could not install the update: Download request failed with status: 403 Forbidden",
       retry_install: true,
     };
   }
@@ -526,7 +526,8 @@ function updateStatus(): UpdateStatus {
       {
         version: "2026.8.2704",
         display_version: "2026.08.27.4",
-        notes: "* Bump @vitest/mocker and vitest ([#511](https://github.com/joswayski/captures/pull/511))",
+        notes:
+          "* Bump @vitest/mocker and vitest ([#511](https://github.com/joswayski/captures/pull/511))",
       },
       {
         version: "2026.8.2703",
@@ -542,13 +543,14 @@ function updateStatus(): UpdateStatus {
 }
 
 function recordingSnapshot(): RecordingSessionSnapshot {
-  const target = query().get("target") === "region"
-    ? {
-        type: "region" as const,
-        display_id: "display-1",
-        rect: { x: 260, y: 180, width: 1_000, height: 640 },
-      }
-    : { type: "display" as const, display_id: "display-1" };
+  const target =
+    query().get("target") === "region"
+      ? {
+          type: "region" as const,
+          display_id: "display-1",
+          rect: { x: 260, y: 180, width: 1_000, height: 640 },
+        }
+      : { type: "display" as const, display_id: "display-1" };
   return {
     id: "session-1",
     state: (query().get("state") as RecordingSessionSnapshot["state"]) ?? "recording",
@@ -659,20 +661,32 @@ const CLIPBOARD: ClipboardState = { revision: 4, artifact_id: "artifact-1" };
 
 const DRAFTS: RecordingDraftManifest[] = flag("drafts")
   ? [
-    {
-      session_id: "draft-1",
-      created_at_ms: Date.parse("2026-08-27T08:12:00Z"),
-      updated_at_ms: Date.parse("2026-08-27T08:13:20Z"),
-      state: "failed",
-      options: recordingSnapshot().options,
-      segments: [
-        { index: 0, duration_ms: 42_000, size_bytes: 8_200_000, dropped_frames: 0, complete: true },
-        { index: 1, duration_ms: 6_000, size_bytes: 1_100_000, dropped_frames: 3, complete: false },
-      ],
-      final_path: null,
-      last_error: "Recording failed: the display went to sleep.",
-    },
-  ]
+      {
+        session_id: "draft-1",
+        created_at_ms: Date.parse("2026-08-27T08:12:00Z"),
+        updated_at_ms: Date.parse("2026-08-27T08:13:20Z"),
+        state: "failed",
+        options: recordingSnapshot().options,
+        segments: [
+          {
+            index: 0,
+            duration_ms: 42_000,
+            size_bytes: 8_200_000,
+            dropped_frames: 0,
+            complete: true,
+          },
+          {
+            index: 1,
+            duration_ms: 6_000,
+            size_bytes: 1_100_000,
+            dropped_frames: 3,
+            complete: false,
+          },
+        ],
+        final_path: null,
+        last_error: "Recording failed: the display went to sleep.",
+      },
+    ]
   : [];
 
 const RESPONSES: Record<string, unknown> = {
@@ -712,20 +726,24 @@ const RESPONSES: Record<string, unknown> = {
 };
 
 function mockScreenshotExportBytes(payload: unknown): number {
-  const request = payload as {
-    imagePng?: number[];
-    pngMaxColors?: number;
-    jpegQuality?: number;
-    maxSizeBytes?: number | null;
-    qualityMode?: string;
-  } | undefined;
-  const preserveBytes = Array.isArray(request?.imagePng) && request.imagePng.length > 0
-    ? request.imagePng.length
-    : 1_200_000;
+  const request = payload as
+    | {
+        imagePng?: number[];
+        pngMaxColors?: number;
+        jpegQuality?: number;
+        maxSizeBytes?: number | null;
+        qualityMode?: string;
+      }
+    | undefined;
+  const preserveBytes =
+    Array.isArray(request?.imagePng) && request.imagePng.length > 0
+      ? request.imagePng.length
+      : 1_200_000;
   const colors = Number(request?.pngMaxColors);
-  const qualityEncoded = Number.isFinite(colors) && colors > 0
-    ? Math.round(140_000 + colors * 630)
-    : Math.round(120_000 + Math.max(20, Number(request?.jpegQuality ?? 98)) * 2_000);
+  const qualityEncoded =
+    Number.isFinite(colors) && colors > 0
+      ? Math.round(140_000 + colors * 630)
+      : Math.round(120_000 + Math.max(20, Number(request?.jpegQuality ?? 98)) * 2_000);
   const maximum = Number(request?.maxSizeBytes);
   if (request?.qualityMode === "maximum" && Number.isFinite(maximum) && maximum > 0) {
     if (preserveBytes <= maximum) return preserveBytes;
@@ -806,110 +824,118 @@ export function installPreviewBackend(): void {
   trackThumbnailPointerForHarness();
   selection = createSelection();
   previewArtifacts = mockArtifacts();
-  mockIPC(async (command, payload) => {
-    if (command === "get_recording_selection") return selection;
-    if (command === "get_artifacts") return previewArtifacts;
-    if (command === "dismiss_all_artifacts") {
-      const requested = new Set(
-        Array.isArray((payload as { artifactIds?: string[] } | undefined)?.artifactIds)
-          ? (payload as { artifactIds: string[] }).artifactIds
-          : [],
-      );
-      const removed: string[] = [];
-      previewArtifacts = previewArtifacts.filter((artifact) => {
-        if (!requested.has(artifact.id)) return true;
-        removed.push(artifact.id);
-        return false;
-      });
-      return removed;
-    }
-    if (command === "dismiss_artifact" || command === "trash_artifact") {
-      const artifactId = (payload as { artifactId?: string } | undefined)?.artifactId;
-      previewArtifacts = previewArtifacts.filter((artifact) => artifact.id !== artifactId);
-      return undefined;
-    }
-    if (command === "update_settings") {
-      const next = (payload as { settings?: AppSettings } | undefined)?.settings;
-      if (!next) return SETTINGS;
-      Object.assign(SETTINGS, next);
-      return SETTINGS;
-    }
-    if (command === "open_update_changelog_url") {
-      const url = payloadString(payload, "url");
-      if (url) window.open(url, "_blank", "noopener,noreferrer");
-      return undefined;
-    }
-    if (command === "select_capture_display") return selectCaptureDisplay(payload);
-    if (command === "get_thumbnail_pointer_position" || command === "get_capture_pointer_position") {
-      return thumbnailPointer.inside
-        ? thumbnailPointer
-        : { x: 360, y: 280, inside: true };
-    }
-    if (command === "estimate_screenshot_export") {
-      return mockScreenshotExportBytes(payload);
-    }
-    if (command === "preview_screenshot_export") {
-      await new Promise((resolve) => window.setTimeout(resolve, 650));
-      const request = payload as {
-        imagePng?: number[];
-        jpegQuality?: number;
-        format?: string;
-      } | undefined;
-      // Use the flattened editor canvas so text blobs keep the same glyphs as
-      // the live before view. Falling back to the sample still would overlay a
-      // different image and look like the typeface changed at the split.
-      const imagePng = request?.imagePng;
-      const sizeBytes = mockScreenshotExportBytes(payload);
-      if (imagePng && imagePng.length > 0) {
+  mockIPC(
+    async (command, payload) => {
+      if (command === "get_recording_selection") return selection;
+      if (command === "get_artifacts") return previewArtifacts;
+      if (command === "dismiss_all_artifacts") {
+        const requested = new Set(
+          Array.isArray((payload as { artifactIds?: string[] } | undefined)?.artifactIds)
+            ? (payload as { artifactIds: string[] }).artifactIds
+            : [],
+        );
+        const removed: string[] = [];
+        previewArtifacts = previewArtifacts.filter((artifact) => {
+          if (!requested.has(artifact.id)) return true;
+          removed.push(artifact.id);
+          return false;
+        });
+        return removed;
+      }
+      if (command === "dismiss_artifact" || command === "trash_artifact") {
+        const artifactId = (payload as { artifactId?: string } | undefined)?.artifactId;
+        previewArtifacts = previewArtifacts.filter((artifact) => artifact.id !== artifactId);
+        return undefined;
+      }
+      if (command === "update_settings") {
+        const next = (payload as { settings?: AppSettings } | undefined)?.settings;
+        if (!next) return SETTINGS;
+        Object.assign(SETTINGS, next);
+        return SETTINGS;
+      }
+      if (command === "open_update_changelog_url") {
+        const url = payloadString(payload, "url");
+        if (url) window.open(url, "_blank", "noopener,noreferrer");
+        return undefined;
+      }
+      if (command === "select_capture_display") return selectCaptureDisplay(payload);
+      if (
+        command === "get_thumbnail_pointer_position" ||
+        command === "get_capture_pointer_position"
+      ) {
+        return thumbnailPointer.inside ? thumbnailPointer : { x: 360, y: 280, inside: true };
+      }
+      if (command === "estimate_screenshot_export") {
+        return mockScreenshotExportBytes(payload);
+      }
+      if (command === "preview_screenshot_export") {
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+        const request = payload as
+          | {
+              imagePng?: number[];
+              jpegQuality?: number;
+              format?: string;
+            }
+          | undefined;
+        // Use the flattened editor canvas so text blobs keep the same glyphs as
+        // the live before view. Falling back to the sample still would overlay a
+        // different image and look like the typeface changed at the split.
+        const imagePng = request?.imagePng;
+        const sizeBytes = mockScreenshotExportBytes(payload);
+        if (imagePng && imagePng.length > 0) {
+          return {
+            bytes: imagePng,
+            sizeBytes,
+            format: request?.format ?? "png",
+          };
+        }
+        const quality = Number(request?.jpegQuality ?? 70);
+        const bytes = await samplePreviewPng(Math.max(0.2, quality / 100));
         return {
-          bytes: imagePng,
-          sizeBytes,
+          bytes,
+          sizeBytes: mockScreenshotExportBytes(payload),
           format: request?.format ?? "png",
         };
       }
-      const quality = Number(request?.jpegQuality ?? 70);
-      const bytes = await samplePreviewPng(Math.max(0.2, quality / 100));
-      return {
-        bytes,
-        sizeBytes: mockScreenshotExportBytes(payload),
-        format: request?.format ?? "png",
-      };
-    }
-    if (command === "preview_recording_export") {
-      const [beforePng, afterPng] = await Promise.all([
-        samplePreviewPng(0.95),
-        samplePreviewPng(0.45),
-      ]);
-      return { beforePng, afterPng };
-    }
-    if (command === "estimate_recording_export") {
-      const request = payload as {
-        edit?: { output_width?: number | null; output_height?: number | null };
-        export?: { quality?: string };
-      } | undefined;
-      const original = RECORDING.size_bytes;
-      if (request?.export?.quality && request.export.quality !== "preserve") {
-        const factors: Record<string, number> = {
-          tiny: 0.18,
-          small: 0.28,
-          standard: 0.38,
-          high: 0.49,
-          highest: 0.65,
-        };
-        const factor = factors[request.export.quality] ?? 0.49;
-        return { sizeBytes: Math.round(original * factor), exact: false };
+      if (command === "preview_recording_export") {
+        const [beforePng, afterPng] = await Promise.all([
+          samplePreviewPng(0.95),
+          samplePreviewPng(0.45),
+        ]);
+        return { beforePng, afterPng };
       }
-      const outHeight = request?.edit?.output_height;
-      const outWidth = request?.edit?.output_width;
-      if (typeof outHeight === "number" && outHeight < RECORDING.height) {
-        const width = typeof outWidth === "number" ? outWidth : RECORDING.width;
-        const scale = (width * outHeight) / (RECORDING.width * RECORDING.height);
-        return { sizeBytes: Math.round(original * Math.max(0.18, scale)), exact: false };
+      if (command === "estimate_recording_export") {
+        const request = payload as
+          | {
+              edit?: { output_width?: number | null; output_height?: number | null };
+              export?: { quality?: string };
+            }
+          | undefined;
+        const original = RECORDING.size_bytes;
+        if (request?.export?.quality && request.export.quality !== "preserve") {
+          const factors: Record<string, number> = {
+            tiny: 0.18,
+            small: 0.28,
+            standard: 0.38,
+            high: 0.49,
+            highest: 0.65,
+          };
+          const factor = factors[request.export.quality] ?? 0.49;
+          return { sizeBytes: Math.round(original * factor), exact: false };
+        }
+        const outHeight = request?.edit?.output_height;
+        const outWidth = request?.edit?.output_width;
+        if (typeof outHeight === "number" && outHeight < RECORDING.height) {
+          const width = typeof outWidth === "number" ? outWidth : RECORDING.width;
+          const scale = (width * outHeight) / (RECORDING.width * RECORDING.height);
+          return { sizeBytes: Math.round(original * Math.max(0.18, scale)), exact: false };
+        }
+        return { sizeBytes: original, exact: true };
       }
-      return { sizeBytes: original, exact: true };
-    }
-    if (command in RESPONSES) return RESPONSES[command];
-    // Everything else is a side effect (show window, copy, save…) with no payload.
-    return undefined;
-  }, { shouldMockEvents: true });
+      if (command in RESPONSES) return RESPONSES[command];
+      // Everything else is a side effect (show window, copy, save…) with no payload.
+      return undefined;
+    },
+    { shouldMockEvents: true },
+  );
 }

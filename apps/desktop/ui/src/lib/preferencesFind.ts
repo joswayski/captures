@@ -23,10 +23,7 @@ export function preferenceTextMatches(text: string, query: string): boolean {
   return text.replace(/\s+/g, " ").toLowerCase().includes(needle);
 }
 
-export function matchPreferenceFindTargets(
-  targets: HTMLElement[],
-  query: string,
-): HTMLElement[] {
+export function matchPreferenceFindTargets(targets: HTMLElement[], query: string): HTMLElement[] {
   return targets.filter((target) => preferenceTextMatches(target.textContent ?? "", query));
 }
 
@@ -35,11 +32,7 @@ export function wrapFindIndex(count: number, current: number, delta: 1 | -1): nu
   return (current + delta + count) % count;
 }
 
-export function preferenceFindCountLabel(
-  query: string,
-  count: number,
-  index: number,
-): string {
+export function preferenceFindCountLabel(query: string, count: number, index: number): string {
   if (!query.trim()) return "";
   if (count === 0) return "No results";
   return `${index + 1} of ${count}`;
@@ -68,8 +61,7 @@ function shortcutEvent(event: PreferencesFindKeyEvent) {
 }
 
 function isFindInput(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement
-    && target.classList.contains("preferences-find-input");
+  return target instanceof HTMLInputElement && target.classList.contains("preferences-find-input");
 }
 
 /** Map a key event to the in-window find command, using each OS’s find chord. */
@@ -87,16 +79,16 @@ export function preferencesFindCommand(
   }
   const inFindInput = isFindInput(event.target);
   if (
-    eventMatchesShortcut(keys, "CommandOrControl+KeyG", platform)
-    || (event.key === "F3" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey)
-    || (inFindInput && event.key === "Enter" && !event.shiftKey)
+    eventMatchesShortcut(keys, "CommandOrControl+KeyG", platform) ||
+    (event.key === "F3" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+    (inFindInput && event.key === "Enter" && !event.shiftKey)
   ) {
     return "next";
   }
   if (
-    eventMatchesShortcut(keys, "CommandOrControl+Shift+KeyG", platform)
-    || (event.key === "F3" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey)
-    || (inFindInput && event.key === "Enter" && event.shiftKey)
+    eventMatchesShortcut(keys, "CommandOrControl+Shift+KeyG", platform) ||
+    (event.key === "F3" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+    (inFindInput && event.key === "Enter" && event.shiftKey)
   ) {
     return "previous";
   }

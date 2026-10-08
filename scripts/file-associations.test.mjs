@@ -28,14 +28,8 @@ test("installed copies register Open With for editor-compatible media, not as th
     assert.equal(typeof association.mimeType, "string", association.name);
   }
 
-  assert.equal(
-    config.bundle.linux.deb.desktopTemplate,
-    "./linux/captures.desktop",
-  );
-  assert.equal(
-    config.bundle.linux.rpm.desktopTemplate,
-    "./linux/captures.desktop",
-  );
+  assert.equal(config.bundle.linux.deb.desktopTemplate, "./linux/captures.desktop");
+  assert.equal(config.bundle.linux.rpm.desktopTemplate, "./linux/captures.desktop");
 
   const desktop = read("apps/desktop/src-tauri/linux/captures.desktop");
   assert.match(desktop, /^Exec=\{\{exec\}\} %U$/mu);

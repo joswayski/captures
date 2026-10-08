@@ -86,14 +86,9 @@ const thumbnailStyles = readFileSync(
   resolve(process.cwd(), "ui/src/styles/mini-preview.css"),
   "utf8",
 );
-const designTokens = readFileSync(
-  resolve(process.cwd(), "../../shared/design.css"),
-  "utf8",
-);
+const designTokens = readFileSync(resolve(process.cwd(), "../../shared/design.css"), "utf8");
 
-function card(
-  partial: Partial<ThumbnailStackCardMotionState>,
-): ThumbnailStackCardMotionState {
+function card(partial: Partial<ThumbnailStackCardMotionState>): ThumbnailStackCardMotionState {
   return {
     exiting: false,
     holdsLayoutSlot: false,
@@ -114,11 +109,15 @@ describe("thumbnail stack layout", () => {
     expect(rule(`${collapsing} .thumbnail-media`)).toContain("filter: blur(0px);");
     expect(rule(running)).toContain("transform 0.52s var(--ease-standard)");
     expect(rule(`${running}::before`)).toContain("transition: opacity 0.52s var(--ease-standard);");
-    expect(rule(`${running} .thumbnail-media`)).toContain("transition: filter 0.52s var(--ease-standard);");
-    expect(rule(`${running}::before`)?.match(/opacity: ([^;]+);/)?.[1])
-      .toBe(rule(`${compact}::before`)?.match(/opacity: ([^;]+);/)?.[1]);
-    expect(rule(`${running} .thumbnail-media`)?.match(/filter: ([^;]+);/)?.[1])
-      .toBe(rule(`${resting} .thumbnail-media`)?.match(/filter: ([^;]+);/)?.[1]);
+    expect(rule(`${running} .thumbnail-media`)).toContain(
+      "transition: filter 0.52s var(--ease-standard);",
+    );
+    expect(rule(`${running}::before`)?.match(/opacity: ([^;]+);/)?.[1]).toBe(
+      rule(`${compact}::before`)?.match(/opacity: ([^;]+);/)?.[1],
+    );
+    expect(rule(`${running} .thumbnail-media`)?.match(/filter: ([^;]+);/)?.[1]).toBe(
+      rule(`${resting} .thumbnail-media`)?.match(/filter: ([^;]+);/)?.[1],
+    );
   });
 
   it("does not ease compact-card transforms until collapse hover is armed", () => {
@@ -174,9 +173,7 @@ describe("thumbnail stack layout", () => {
     expect(pressing?.[1]).toMatch(
       /transform\s+var\(--stack-fan-dur\) calc\(var\(--thumbnail-stack-pile-depth, 0\) \* var\(--stack-fan-stagger\)\)/,
     );
-    expect(pressing?.[1]).toMatch(
-      /transform:\s*var\(--thumbnail-stack-hover-transform\)/,
-    );
+    expect(pressing?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-hover-transform\)/);
     expect(pressing?.[1]).toMatch(/theme-accent-rgb/);
     expect(minimizingCard?.[1]).toMatch(/var\(--thumbnail-stack-expanded-transform\)/);
     expect(minimizeRun?.[1]).toMatch(/transform:\s*var\(--thumbnail-stack-rest-transform\)/);
@@ -194,15 +191,11 @@ describe("thumbnail stack layout", () => {
       /transform:\s*var\(--thumbnail-stack-expand-from, var\(--thumbnail-stack-rest-transform\)\)/,
     );
     expect(thumbnailStyles).not.toMatch(/@keyframes thumbnail-card-expand-from-hover/);
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-scrollport\s*\{[^}]*height:\s*100%/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-scrollport\s*\{[^}]*height:\s*100%/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-compact\.thumbnail-stack-expanding\s*\{[^}]*overflow:\s*hidden/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack\s*\{[^}]*scroll-behavior:\s*auto/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack\s*\{[^}]*scroll-behavior:\s*auto/);
   });
 
   it("captures live transforms, blur, and dimming so expand starts from the visible pose", () => {
@@ -215,33 +208,42 @@ describe("thumbnail stack layout", () => {
     card.append(media);
     stack.append(card);
     const computed = { transform: "matrix(0.97, 0.12, -0.12, 0.97, 10, -24)" };
-    const spy = vi.spyOn(window, "getComputedStyle").mockImplementation(
-      (element, pseudo) => (pseudo ? { opacity: "0.23" }
-        : element === media ? { filter: "blur(1.4px)" } : computed) as CSSStyleDeclaration,
-    );
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation(
+        (element, pseudo) =>
+          (pseudo
+            ? { opacity: "0.23" }
+            : element === media
+              ? { filter: "blur(1.4px)" }
+              : computed) as CSSStyleDeclaration,
+      );
 
     expect(captureThumbnailCardPoses(stack).get("capture-1")).toEqual({
       transform: computed.transform,
       blur: "blur(1.4px)",
       dim: "0.23",
     });
-    expect(captureThumbnailCardPoses(stack, { x: -12, y: 84 }).get("capture-1"))
-      .toEqual({
-        transform: `translate3d(-12px, 84px, 0) ${computed.transform}`,
-        blur: "blur(1.4px)",
-        dim: "0.23",
-      });
+    expect(captureThumbnailCardPoses(stack, { x: -12, y: 84 }).get("capture-1")).toEqual({
+      transform: `translate3d(-12px, 84px, 0) ${computed.transform}`,
+      blur: "blur(1.4px)",
+      dim: "0.23",
+    });
     expect(captureThumbnailCardPoses(stack).has("missing")).toBe(false);
     expect(thumbnailStyles).toContain("opacity: var(--thumbnail-stack-expand-dim-from, 0)");
     expect(thumbnailStyles).toContain("filter: var(--thumbnail-stack-expand-blur-from, blur(0px))");
     expect(thumbnailStyles).toContain("thumbnail-card-expand-blur 0.52s var(--ease-standard) both");
     // Must tie the arrived-card animation guard, then win by source order.
-    const expansion = ".thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)";
-    expect(thumbnailStyles.split(`${expansion} {`)[1]?.split("}")[0])
-      .toContain("animation: thumbnail-card-expand 0.52s var(--ease-standard) both");
-    expect(thumbnailStyles.indexOf(expansion)).toBeGreaterThan(thumbnailStyles.indexOf(
-      ".thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)",
-    ));
+    const expansion =
+      ".thumbnail-stack-expanding > .thumbnail-card.thumbnail-ready:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)";
+    expect(thumbnailStyles.split(`${expansion} {`)[1]?.split("}")[0]).toContain(
+      "animation: thumbnail-card-expand 0.52s var(--ease-standard) both",
+    );
+    expect(thumbnailStyles.indexOf(expansion)).toBeGreaterThan(
+      thumbnailStyles.indexOf(
+        ".thumbnail-card.thumbnail-ready.thumbnail-arrived:not(.thumbnail-exiting):not(.thumbnail-drop-rejected)",
+      ),
+    );
 
     spy.mockImplementation(() => ({ transform: "none" }) as CSSStyleDeclaration);
     expect(captureThumbnailCardPoses(stack).size).toBe(0);
@@ -254,12 +256,8 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).not.toMatch(/--thumbnail-stack-fan-shift/);
     expect(thumbnailStyles).not.toMatch(/--thumbnail-collapsed-skew-pad/);
     expect(thumbnailStackFanCollapseMs(1)).toBe(200);
-    expect(thumbnailStackFanCollapseMs(4)).toBeCloseTo(
-      200 + thumbnailStackPoseDepth(3) * 16,
-    );
-    expect(thumbnailStackFanCollapseMs(12)).toBeCloseTo(
-      200 + thumbnailStackPoseDepth(11) * 16,
-    );
+    expect(thumbnailStackFanCollapseMs(4)).toBeCloseTo(200 + thumbnailStackPoseDepth(3) * 16);
+    expect(thumbnailStackFanCollapseMs(12)).toBeCloseTo(200 + thumbnailStackPoseDepth(11) * 16);
   });
 
   it("tucks structured peek at mid-screen and inverts it at the top", () => {
@@ -284,9 +282,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-anchor-top\.thumbnail-stack-expanding > \.thumbnail-card\s*\{[^}]*top:\s*52px/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar-anchor-top\s*\{[^}]*top:\s*16px/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-toolbar-anchor-top\s*\{[^}]*top:\s*16px/);
 
     expect(thumbnailStackAnchorFromGravity(-0.5, "bottom")).toBe("top");
     expect(thumbnailStackAnchorFromGravity(-0.1, "bottom")).toBe("bottom");
@@ -308,25 +304,31 @@ describe("thumbnail stack layout", () => {
     expect(THUMBNAIL_STACK_SIDE_RIGHT_BIAS).toBeGreaterThan(0);
     expect(THUMBNAIL_STACK_SIDE_LEFT_BIAS).toBeLessThan(0);
 
-    expect(thumbnailStackGravityFromWorkArea({
-      pileBottom: 1_040,
-      workTop: 0,
-      workHeight: 1_040,
-      contentHeight: 240,
-    })).toBeCloseTo(1);
-    expect(thumbnailStackGravityFromWorkArea({
-      pileBottom: 264,
-      workTop: 0,
-      workHeight: 1_040,
-      contentHeight: 264,
-    })).toBeCloseTo(-1);
+    expect(
+      thumbnailStackGravityFromWorkArea({
+        pileBottom: 1_040,
+        workTop: 0,
+        workHeight: 1_040,
+        contentHeight: 240,
+      }),
+    ).toBeCloseTo(1);
+    expect(
+      thumbnailStackGravityFromWorkArea({
+        pileBottom: 264,
+        workTop: 0,
+        workHeight: 1_040,
+        contentHeight: 264,
+      }),
+    ).toBeCloseTo(-1);
 
-    expect(thumbnailStackGravityFromWorkArea({
-      pileBottom: 652,
-      workTop: 0,
-      workHeight: 1_040,
-      contentHeight: 264,
-    })).toBeCloseTo(0);
+    expect(
+      thumbnailStackGravityFromWorkArea({
+        pileBottom: 652,
+        workTop: 0,
+        workHeight: 1_040,
+        contentHeight: 264,
+      }),
+    ).toBeCloseTo(0);
 
     const stack = document.createElement("main");
     applyThumbnailStackGravity(stack, -0.42);
@@ -350,22 +352,19 @@ describe("thumbnail stack layout", () => {
         const contentHeight = THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT_PX;
         const frontCardTop = frameHeight - padding - THUMBNAIL_CARD_HEIGHT_PX;
 
-        expect(padding).toBe(Math.max(
-          THUMBNAIL_STACK_CONTROL_GUTTER_PX,
-          thumbnailCollapsedPeekPx(count, true) + THUMBNAIL_STACK_PADDING_PX,
-        ));
-        expect(frontCardTop).toBe(frameHeight - padding - 160);
-        expect(frameHeight).toBeGreaterThanOrEqual(
-          THUMBNAIL_CARD_HEIGHT_PX + 2 * padding,
+        expect(padding).toBe(
+          Math.max(
+            THUMBNAIL_STACK_CONTROL_GUTTER_PX,
+            thumbnailCollapsedPeekPx(count, true) + THUMBNAIL_STACK_PADDING_PX,
+          ),
         );
+        expect(frontCardTop).toBe(frameHeight - padding - 160);
+        expect(frameHeight).toBeGreaterThanOrEqual(THUMBNAIL_CARD_HEIGHT_PX + 2 * padding);
 
         const offsets = [
           { offsetY: padding - THUMBNAIL_STACK_CONTROL_GUTTER_PX, gravity: 1 },
           {
-            offsetY: padding
-              - THUMBNAIL_STACK_CONTROL_GUTTER_PX
-              + contentHeight
-              - frameHeight,
+            offsetY: padding - THUMBNAIL_STACK_CONTROL_GUTTER_PX + contentHeight - frameHeight,
             gravity: -1,
           },
         ];
@@ -387,12 +386,14 @@ describe("thumbnail stack layout", () => {
           expect(pileBottom).toBeCloseTo(
             offsetY + frameHeight - padding + THUMBNAIL_STACK_CONTROL_GUTTER_PX,
           );
-          expect(thumbnailStackGravityFromWorkArea({
-            pileBottom,
-            workTop: 0,
-            workHeight: frameHeight,
-            contentHeight,
-          })).toBeCloseTo(beforeAnchorChange);
+          expect(
+            thumbnailStackGravityFromWorkArea({
+              pileBottom,
+              workTop: 0,
+              workHeight: frameHeight,
+              contentHeight,
+            }),
+          ).toBeCloseTo(beforeAnchorChange);
         }
       }
     },
@@ -422,12 +423,8 @@ describe("thumbnail stack layout", () => {
     expect(dragging?.[1]).toMatch(/--thumbnail-stack-pile-depth/);
     expect(dragging?.[1]).toMatch(/\* 0\.7/);
     expect(dragging?.[1]).toMatch(/\* 0\.2/);
-    expect(dragging?.[1]).toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -16px/,
-    );
-    expect(dragging?.[1]).not.toMatch(
-      /var\(--thumbnail-stack-pile-depth, 0\) \* -13px/,
-    );
+    expect(dragging?.[1]).toMatch(/var\(--thumbnail-stack-pile-depth, 0\) \* -16px/);
+    expect(dragging?.[1]).not.toMatch(/var\(--thumbnail-stack-pile-depth, 0\) \* -13px/);
     expect(dragging?.[1]).not.toMatch(/\(var\(--thumbnail-stack-pile-depth, 0\) \+ 1\)/);
     expect(dragging?.[1]).not.toMatch(/--thumbnail-stack-skew-/);
     expect(dragging?.[1]).toMatch(/rotateZ\(/);
@@ -503,9 +500,7 @@ describe("thumbnail stack layout", () => {
     const bottomBar = thumbnailStyles.match(
       /\.thumbnail-exit-delete \.thumbnail-bottom-bar\s*\{([^}]*)\}/,
     );
-    const dustChip = thumbnailStyles.match(
-      /\.thumbnail-dust\s*\{([^}]*)\}/,
-    );
+    const dustChip = thumbnailStyles.match(/\.thumbnail-dust\s*\{([^}]*)\}/);
 
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-card\.thumbnail-exiting:not\(\.thumbnail-exit-delete\) \.icon-button::after/,
@@ -546,9 +541,7 @@ describe("thumbnail stack layout", () => {
   });
 
   it("uses a pointer cursor on the collapsed stack so expand is obvious", () => {
-    const hitTarget = thumbnailStyles.match(
-      /\.thumbnail-collapsed-hit-target\s*\{([\s\S]*?)\n\}/,
-    );
+    const hitTarget = thumbnailStyles.match(/\.thumbnail-collapsed-hit-target\s*\{([\s\S]*?)\n\}/);
 
     expect(hitTarget?.[1]).toMatch(/cursor:\s*pointer/);
     expect(hitTarget?.[1]).toMatch(/--thumbnail-collapsed-hover-peek/);
@@ -566,9 +559,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /html\.thumbnail-native-tracking \.thumbnail-stack-minimized \.thumbnail-card img/,
     );
-    expect(thumbnailStyles).toMatch(
-      /html:has\(\.thumbnail-card:hover\):not\(:has\(/,
-    );
+    expect(thumbnailStyles).toMatch(/html:has\(\.thumbnail-card:hover\):not\(:has\(/);
     expect(thumbnailStyles).toMatch(
       /html:has\(\.thumbnail-card:hover\):not\(:has\([\s\S]*?cursor:\s*var\(--thumbnail-grab-cursor, grab\)/,
     );
@@ -596,9 +587,15 @@ describe("thumbnail stack layout", () => {
   });
 
   it("supplies Chromium hand images only for the Windows WebView", () => {
-    const windows = thumbnailStyles.match(/html\[data-thumbnail-platform="windows"\]\s*\{([^}]*)\}/);
-    expect(windows?.[1]).toMatch(/--thumbnail-grab-cursor:\s*url\([^)]*hand-grab\.png[^)]*\) 13 13, grab/);
-    expect(windows?.[1]).toMatch(/--thumbnail-grabbing-cursor:\s*url\([^)]*hand-grabbing\.png[^)]*\) 13 13, grabbing/);
+    const windows = thumbnailStyles.match(
+      /html\[data-thumbnail-platform="windows"\]\s*\{([^}]*)\}/,
+    );
+    expect(windows?.[1]).toMatch(
+      /--thumbnail-grab-cursor:\s*url\([^)]*hand-grab\.png[^)]*\) 13 13, grab/,
+    );
+    expect(windows?.[1]).toMatch(
+      /--thumbnail-grabbing-cursor:\s*url\([^)]*hand-grabbing\.png[^)]*\) 13 13, grabbing/,
+    );
   });
 
   it("keeps rear mini-preview cards at their normal brightness while dragging", () => {
@@ -611,7 +608,8 @@ describe("thumbnail stack layout", () => {
   });
 
   it("fades the Show less control in linearly, delays hiding it on last delete, and clears it with the Close streak", () => {
-    const enter = thumbnailStyles.split("@keyframes thumbnail-stack-toolbar-in")[1]
+    const enter = thumbnailStyles
+      .split("@keyframes thumbnail-stack-toolbar-in")[1]
       ?.split("@keyframes")[0];
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-entering\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-in 0\.52s linear/,
@@ -624,9 +622,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-clearing\s*\{[^}]*animation:\s*thumbnail-stack-toolbar-clear 0\.45s/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-control\s*\{[\s\S]*?cursor:\s*pointer/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-control \*,\s*\n\.thumbnail-stack-minimize,\s*\n\.thumbnail-stack-minimize \*\s*\{[\s\S]*?cursor:\s*pointer/,
     );
@@ -638,9 +634,7 @@ describe("thumbnail stack layout", () => {
     expect(THUMBNAIL_STACK_EXPAND_COLLAPSE_MS).toBe(520);
     expect(THUMBNAIL_MINIMIZE_MORPH_MS).toBe(240);
     expect(THUMBNAIL_MINIMIZE_SWAP_MS).toBe(180);
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?position:\s*fixed/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-toolbar\s*\{[\s\S]*?position:\s*fixed/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar\s*\{[\s\S]*?--thumbnail-minimize-slide:\s*1/,
     );
@@ -650,9 +644,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:focus-visible \{[\s\S]*?cursor:\s*pointer/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar\s*\{[\s\S]*?cursor:\s*pointer/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-toolbar\s*\{[\s\S]*?cursor:\s*pointer/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar:not\(\.thumbnail-stack-toolbar-leaving\):not\(\.thumbnail-stack-toolbar-exiting\):not\(\.thumbnail-stack-toolbar-clearing\):not\(\.thumbnail-stack-toolbar-entering\) \.thumbnail-stack-minimize:active/,
     );
@@ -662,7 +654,8 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-leaving \.thumbnail-stack-minimize-label\s*\{[^}]*opacity:\s*1/,
     );
-    const leave = thumbnailStyles.split("@keyframes thumbnail-stack-toolbar-out")[1]
+    const leave = thumbnailStyles
+      .split("@keyframes thumbnail-stack-toolbar-out")[1]
       ?.split("@keyframes")[0];
     expect(designTokens).toMatch(/--blur-dissolve:\s*8px;/);
     expect(leave).toMatch(/filter:\s*blur\(var\(--blur-dissolve\)\)/);
@@ -688,24 +681,18 @@ describe("thumbnail stack layout", () => {
   });
 
   it("reserves the Show less gutter above expanded cards at the top of the screen", () => {
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack\s*\{[\s\S]*?padding:\s*28px 28px 52px/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack\s*\{[\s\S]*?padding:\s*28px 28px 52px/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-anchor-top:not\(\.thumbnail-stack-compact\)\s*\{[\s\S]*?padding:\s*52px 28px 28px/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-stack-toolbar-anchor-top\s*\{[\s\S]*?top:\s*16px/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-stack-toolbar-anchor-top\s*\{[\s\S]*?top:\s*16px/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-anchor-right\s*\{[\s\S]*?right:\s*28px/,
     );
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-toolbar-anchor-right\s*\{[\s\S]*?--thumbnail-minimize-slide:\s*-1/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.thumbnail-top-actions\s*\{[\s\S]*?top:\s*8px/,
-    );
+    expect(thumbnailStyles).toMatch(/\.thumbnail-top-actions\s*\{[\s\S]*?top:\s*8px/);
     expect(thumbnailStyles).toMatch(
       /\.thumbnail-stack-anchor-top\.thumbnail-stack-expanding > \.thumbnail-card\s*\{[^}]*top:\s*52px/,
     );
@@ -792,9 +779,8 @@ describe("thumbnail stack layout", () => {
     expect(Math.abs(thumbnailStackPeekJitterPx(1))).toBeLessThanOrEqual(
       THUMBNAIL_STACK_PEEK_JITTER_PX,
     );
-    const envelope = (depth: number) => (
-      THUMBNAIL_STACK_PEEK_JITTER_PX * THUMBNAIL_STACK_PEEK_JITTER_DECAY ** (depth - 1)
-    );
+    const envelope = (depth: number) =>
+      THUMBNAIL_STACK_PEEK_JITTER_PX * THUMBNAIL_STACK_PEEK_JITTER_DECAY ** (depth - 1);
     expect(envelope(6)).toBeLessThan(envelope(2));
     expect(Math.abs(thumbnailStackPeekJitterPx(6))).toBeLessThanOrEqual(envelope(6) + 1e-12);
     expect(thumbnailStyles).toMatch(
@@ -836,9 +822,7 @@ describe("thumbnail stack layout", () => {
 
   it("pins newest-scroll to layout height instead of paint overflow", () => {
     expect(thumbnailStackNewestScrollTop(1, 400)).toBe(0);
-    expect(thumbnailStackNewestScrollTop(8, 400)).toBe(
-      thumbnailStackContentHeight(8) - 400,
-    );
+    expect(thumbnailStackNewestScrollTop(8, 400)).toBe(thumbnailStackContentHeight(8) - 400);
     expect(thumbnailStackNewestScrollTop(8, 400, true)).toBe(0);
   });
 
@@ -850,7 +834,7 @@ describe("thumbnail stack layout", () => {
 
   it("pins newest-scroll in the same pass when the stack is still content-sized", () => {
     const stack = document.createElement("main");
-    stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
+    stack.innerHTML = '<article class="thumbnail-card"></article>'.repeat(8);
     Object.defineProperty(stack, "clientHeight", {
       configurable: true,
       value: thumbnailStackContentHeight(8),
@@ -873,7 +857,7 @@ describe("thumbnail stack layout", () => {
 
   it("retries newest-scroll after the window grows", () => {
     const stack = document.createElement("main");
-    stack.innerHTML = "<article class=\"thumbnail-card\"></article>".repeat(8);
+    stack.innerHTML = '<article class="thumbnail-card"></article>'.repeat(8);
     Object.defineProperty(stack, "clientHeight", {
       configurable: true,
       writable: true,
@@ -915,9 +899,7 @@ describe("thumbnail stack layout", () => {
     const overlay = thumbnailStyles.match(
       /\.thumbnail-stack-compact > \.thumbnail-card::before\s*\{([^}]*)\}/,
     );
-    expect(overlay?.[1]).toMatch(
-      /opacity:\s*calc\(min\(0\.72, var\(--thumbnail-stack-pile-depth/,
-    );
+    expect(overlay?.[1]).toMatch(/opacity:\s*calc\(min\(0\.72, var\(--thumbnail-stack-pile-depth/);
     expect(overlay?.[1]).toMatch(/background:\s*var\(--glass-strong-solid\)/);
     expect(overlay?.[1]).not.toMatch(/background:\s*#000/);
     expect(thumbnailStyles).toMatch(
@@ -942,9 +924,7 @@ describe("thumbnail stack layout", () => {
     expect(thumbnailStyles).toMatch(
       /html:not\(\.thumbnail-native-tracking\) \.icon-button\.delete:hover/,
     );
-    expect(thumbnailStyles).toMatch(
-      /\.icon-button\.delete\[data-native-pointer-hover="true"\]/,
-    );
+    expect(thumbnailStyles).toMatch(/\.icon-button\.delete\[data-native-pointer-hover="true"\]/);
     expect(thumbnailStyles).not.toMatch(/(?:^|\n)\.icon-button\.delete:hover/m);
   });
 
@@ -970,15 +950,13 @@ describe("thumbnail stack layout", () => {
   it("computes stack content height from card layout, not paint overflow", () => {
     expect(thumbnailStackContentHeight(0)).toBe(0);
     expect(thumbnailStackContentHeight(1)).toBe(
-      THUMBNAIL_STACK_PADDING_PX
-        + THUMBNAIL_STACK_CONTROL_GUTTER_PX
-        + THUMBNAIL_CARD_HEIGHT_PX,
+      THUMBNAIL_STACK_PADDING_PX + THUMBNAIL_STACK_CONTROL_GUTTER_PX + THUMBNAIL_CARD_HEIGHT_PX,
     );
     expect(thumbnailStackContentHeight(4)).toBe(
-      THUMBNAIL_STACK_PADDING_PX
-        + THUMBNAIL_STACK_CONTROL_GUTTER_PX
-        + 4 * THUMBNAIL_CARD_HEIGHT_PX
-        + 3 * THUMBNAIL_STACK_GAP_PX,
+      THUMBNAIL_STACK_PADDING_PX +
+        THUMBNAIL_STACK_CONTROL_GUTTER_PX +
+        4 * THUMBNAIL_CARD_HEIGHT_PX +
+        3 * THUMBNAIL_STACK_GAP_PX,
     );
   });
 
@@ -1072,12 +1050,7 @@ describe("thumbnail stack layout", () => {
       card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
       card({}),
     ];
-    expect(computeThumbnailStackShifts(cards)).toEqual([
-      thumbnailStackShiftPx(2),
-      0,
-      0,
-      0,
-    ]);
+    expect(computeThumbnailStackShifts(cards)).toEqual([thumbnailStackShiftPx(2), 0, 0, 0]);
     expect(thumbnailStackShiftPx(2)).toBe(THUMBNAIL_CARD_SLOT_PX * 2);
   });
 
@@ -1115,30 +1088,30 @@ describe("thumbnail stack layout", () => {
       card({ exiting: true, holdsLayoutSlot: true, motionReady: false }),
       card({}),
     ];
-    expect(computeThumbnailStackShifts(cards)).toEqual([
-      thumbnailStackShiftPx(1),
-      0,
-      0,
-      0,
-    ]);
+    expect(computeThumbnailStackShifts(cards)).toEqual([thumbnailStackShiftPx(1), 0, 0, 0]);
   });
 
   it("animates toward the anchor, including across a reflow compensation", () => {
     expect(shouldAnimateThumbnailStackShift(0, THUMBNAIL_CARD_SLOT_PX)).toBe(true);
-    expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX * 2))
-      .toBe(true);
+    expect(
+      shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX * 2),
+    ).toBe(true);
     // Slot removal reflows layout; transform must snap to cancel the jump.
-    expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX * 2, THUMBNAIL_CARD_SLOT_PX))
-      .toBe(false);
+    expect(
+      shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX * 2, THUMBNAIL_CARD_SLOT_PX),
+    ).toBe(false);
     expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, 0)).toBe(false);
-    expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX))
-      .toBe(false);
+    expect(shouldAnimateThumbnailStackShift(THUMBNAIL_CARD_SLOT_PX, THUMBNAIL_CARD_SLOT_PX)).toBe(
+      false,
+    );
     const top = { fromTop: true };
     expect(shouldAnimateThumbnailStackShift(0, -THUMBNAIL_CARD_SLOT_PX, top)).toBe(true);
-    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, -THUMBNAIL_CARD_SLOT_PX * 2, top))
-      .toBe(true);
-    expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX * 2, -THUMBNAIL_CARD_SLOT_PX, top))
-      .toBe(false);
+    expect(
+      shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, -THUMBNAIL_CARD_SLOT_PX * 2, top),
+    ).toBe(true);
+    expect(
+      shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX * 2, -THUMBNAIL_CARD_SLOT_PX, top),
+    ).toBe(false);
     expect(shouldAnimateThumbnailStackShift(-THUMBNAIL_CARD_SLOT_PX, 0, top)).toBe(false);
     expect(shouldAnimateThumbnailStackShift(-123, 0)).toBe(true);
     expect(shouldAnimateThumbnailStackShift(-123, THUMBNAIL_CARD_SLOT_PX)).toBe(true);
@@ -1147,12 +1120,14 @@ describe("thumbnail stack layout", () => {
   });
 
   it("clamps exiting cards to their current shift so they cannot jump up or chase new holes", () => {
-    expect(resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), thumbnailStackShiftPx(1), true))
-      .toBe(thumbnailStackShiftPx(1));
+    expect(
+      resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), thumbnailStackShiftPx(1), true),
+    ).toBe(thumbnailStackShiftPx(1));
     expect(resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), 0, true)).toBe(0);
     expect(resolveThumbnailStackShiftPx(0, thumbnailStackShiftPx(1), true)).toBe(0);
-    expect(resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), 0, false))
-      .toBe(thumbnailStackShiftPx(1));
+    expect(resolveThumbnailStackShiftPx(thumbnailStackShiftPx(1), 0, false)).toBe(
+      thumbnailStackShiftPx(1),
+    );
   });
 
   it("keeps an exiting card's existing shift until holes below it close", () => {
@@ -1160,10 +1135,7 @@ describe("thumbnail stack layout", () => {
       card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }),
       card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
     ];
-    expect(computeThumbnailStackShifts(cards)).toEqual([
-      thumbnailStackShiftPx(1),
-      0,
-    ]);
+    expect(computeThumbnailStackShifts(cards)).toEqual([thumbnailStackShiftPx(1), 0]);
   });
 
   it("does not pull an already-exiting card into a hole that opens later", () => {
@@ -1244,11 +1216,7 @@ describe("thumbnail stack layout", () => {
       card({ exiting: true, holdsLayoutSlot: true, motionReady: true }),
       card({}),
     ];
-    expect(computeThumbnailStackShifts(cards)).toEqual([
-      thumbnailStackShiftPx(1),
-      0,
-      0,
-    ]);
+    expect(computeThumbnailStackShifts(cards)).toEqual([thumbnailStackShiftPx(1), 0, 0]);
   });
 
   it("slides later cards up into a top-anchored hole instead of earlier cards down", () => {
@@ -1313,10 +1281,7 @@ describe("thumbnail stack layout", () => {
   });
 
   it("snaps an exiting card's shift down when a hole below is removed", () => {
-    const cards = [
-      card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }),
-      card({}),
-    ];
+    const cards = [card({ exiting: true, currentShiftPx: thumbnailStackShiftPx(1) }), card({})];
     expect(computeThumbnailStackShifts(cards)).toEqual([0, 0]);
   });
 
@@ -1346,7 +1311,8 @@ describe("thumbnail stack layout", () => {
     vi.useFakeTimers();
     try {
       const stack = document.createElement("main");
-      stack.innerHTML = '<article class="thumbnail-card"></article><article class="thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust"></article>';
+      stack.innerHTML =
+        '<article class="thumbnail-card"></article><article class="thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust"></article>';
       const dispose = createThumbnailStackShiftController(stack);
       dispose();
       await vi.advanceTimersByTimeAsync(0);
@@ -1361,7 +1327,8 @@ describe("thumbnail stack layout", () => {
   it("ignores mutations inside cards but observes card exits and stack changes", async () => {
     vi.useFakeTimers();
     const stack = document.createElement("main");
-    stack.innerHTML = '<article class="thumbnail-card"><button>Edit</button></article><article class="thumbnail-card"></article>';
+    stack.innerHTML =
+      '<article class="thumbnail-card"><button>Edit</button></article><article class="thumbnail-card"></article>';
     const survivor = stack.children[0] as HTMLElement;
     const exiting = stack.children[1] as HTMLElement;
     const dispose = createThumbnailStackShiftController(stack);
@@ -1406,7 +1373,9 @@ describe("thumbnail stack layout", () => {
 
       observe() {}
       disconnect() {}
-      takeRecords(): MutationRecord[] { return []; }
+      takeRecords(): MutationRecord[] {
+        return [];
+      }
     }
     globalThis.MutationObserver = ControlledMutationObserver as unknown as typeof MutationObserver;
 
@@ -1414,7 +1383,8 @@ describe("thumbnail stack layout", () => {
     const survivor = document.createElement("article");
     survivor.className = "thumbnail-card";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     stack.append(survivor, exiting);
     const dispose = createThumbnailStackShiftController(stack);
 
@@ -1447,7 +1417,8 @@ describe("thumbnail stack layout", () => {
     const survivor = document.createElement("article");
     survivor.className = "thumbnail-card";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     stack.append(survivor, exiting);
     document.body.append(stack);
     const dispose = createThumbnailStackShiftController(stack);
@@ -1463,7 +1434,8 @@ describe("thumbnail stack layout", () => {
 
       // React className rewrites drop controller tokens unless the card copies
       // them back. Simulate the wipe, then the exit classes landing.
-      survivor.className = "thumbnail-card thumbnail-exit-delete thumbnail-exit-dust thumbnail-exiting";
+      survivor.className =
+        "thumbnail-card thumbnail-exit-delete thumbnail-exit-dust thumbnail-exiting";
       await Promise.resolve();
       await Promise.resolve();
 
@@ -1532,135 +1504,161 @@ describe("thumbnail stack layout", () => {
     }
   });
 
-  it.each([false, true])("preserves a mid-settle convoy when a held slot unmounts (fromTop=%s)", async (fromTop) => {
-    vi.useFakeTimers();
-    const stack = document.createElement("main");
-    if (fromTop) stack.className = "thumbnail-stack-anchor-top";
-    const [survivor, secondExit, firstExit, anchored] = Array.from({ length: 4 }, () => {
-      const card = document.createElement("article");
-      card.className = "thumbnail-card";
-      return card;
-    });
-    const cards = [survivor, secondExit, firstExit, anchored];
-    stack.append(...(fromTop ? cards.reverse() : cards));
-    document.body.append(stack);
-    const direction = fromTop ? -1 : 1;
-    const dispose = createThumbnailStackShiftController(stack);
+  it.each([false, true])(
+    "preserves a mid-settle convoy when a held slot unmounts (fromTop=%s)",
+    async (fromTop) => {
+      vi.useFakeTimers();
+      const stack = document.createElement("main");
+      if (fromTop) stack.className = "thumbnail-stack-anchor-top";
+      const [survivor, secondExit, firstExit, anchored] = Array.from({ length: 4 }, () => {
+        const card = document.createElement("article");
+        card.className = "thumbnail-card";
+        return card;
+      });
+      const cards = [survivor, secondExit, firstExit, anchored];
+      stack.append(...(fromTop ? cards.reverse() : cards));
+      document.body.append(stack);
+      const direction = fromTop ? -1 : 1;
+      const dispose = createThumbnailStackShiftController(stack);
 
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      firstExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(secondExit.style.translate).toBe(`0 ${direction * 184}px`);
-
-      // The browser is only 61px into the 184px target when Delete freezes it.
-      const computed = vi.spyOn(window, "getComputedStyle").mockReturnValue({
-        translate: `0px ${direction * 61}px`,
-        transform: "none",
-      } as CSSStyleDeclaration);
       try {
-        secondExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
         await vi.advanceTimersByTimeAsync(0);
+        firstExit.classList.add(
+          "thumbnail-exiting",
+          "thumbnail-exit-delete",
+          "thumbnail-exit-dust",
+        );
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(secondExit.style.translate).toBe(`0 ${direction * 184}px`);
+
+        // The browser is only 61px into the 184px target when Delete freezes it.
+        const computed = vi.spyOn(window, "getComputedStyle").mockReturnValue({
+          translate: `0px ${direction * 61}px`,
+          transform: "none",
+        } as CSSStyleDeclaration);
+        try {
+          secondExit.classList.add(
+            "thumbnail-exiting",
+            "thumbnail-exit-delete",
+            "thumbnail-exit-dust",
+          );
+          await vi.advanceTimersByTimeAsync(0);
+        } finally {
+          computed.mockRestore();
+        }
+        expect(survivor.style.translate).toBe(`0 ${direction * 61}px`);
+        expect(secondExit.style.translate).toBe(`0 ${direction * 61}px`);
+
+        await vi.advanceTimersByTimeAsync(900);
+        firstExit.remove();
+        await vi.advanceTimersByTimeAsync(0);
+        // Layout moved a whole 184px slot. Its opposite compensation keeps both
+        // cards at the same screen position, not at the old transition target.
+        expect(survivor.style.translate).toBe(`0 ${direction * -123}px`);
+        expect(secondExit.style.translate).toBe(`0 ${direction * -123}px`);
+        expect(
+          direction * 184 +
+            Number.parseFloat(survivor.style.getPropertyValue("--thumbnail-stack-shift")),
+        ).toBe(direction * 61);
+        expect(anchored.style.translate).toBe("");
+
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16 - 900);
+        expect(survivor.style.translate).toBe(`0 ${direction * 184}px`);
+        expect(survivor).toHaveClass("thumbnail-stack-shifting");
+        expect(survivor).not.toHaveClass("thumbnail-stack-shift-instant");
+        expect(secondExit.style.translate).toBe(`0 ${direction * -123}px`);
+
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_MOTION_DURATION_MS);
+        secondExit.remove();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(survivor.style.translate).toBe("");
+        expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
+        expect(anchored.style.translate).toBe("");
       } finally {
-        computed.mockRestore();
+        dispose();
+        stack.remove();
+        vi.useRealTimers();
       }
-      expect(survivor.style.translate).toBe(`0 ${direction * 61}px`);
-      expect(secondExit.style.translate).toBe(`0 ${direction * 61}px`);
-
-      await vi.advanceTimersByTimeAsync(900);
-      firstExit.remove();
-      await vi.advanceTimersByTimeAsync(0);
-      // Layout moved a whole 184px slot. Its opposite compensation keeps both
-      // cards at the same screen position, not at the old transition target.
-      expect(survivor.style.translate).toBe(`0 ${direction * -123}px`);
-      expect(secondExit.style.translate).toBe(`0 ${direction * -123}px`);
-      expect(direction * 184 + Number.parseFloat(survivor.style.getPropertyValue("--thumbnail-stack-shift")))
-        .toBe(direction * 61);
-      expect(anchored.style.translate).toBe("");
-
-      await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16 - 900);
-      expect(survivor.style.translate).toBe(`0 ${direction * 184}px`);
-      expect(survivor).toHaveClass("thumbnail-stack-shifting");
-      expect(survivor).not.toHaveClass("thumbnail-stack-shift-instant");
-      expect(secondExit.style.translate).toBe(`0 ${direction * -123}px`);
-
-      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_MOTION_DURATION_MS);
-      secondExit.remove();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(survivor.style.translate).toBe("");
-      expect(survivor).not.toHaveClass("thumbnail-stack-shifting");
-      expect(anchored.style.translate).toBe("");
-    } finally {
-      dispose();
-      stack.remove();
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it.each([
     { fromTop: false, offsetMs: -200 },
     { fromTop: true, offsetMs: -200 },
     { fromTop: false, offsetMs: 16 },
     { fromTop: true, offsetMs: 16 },
-  ])("freezes a second delete before the first painted settle (fromTop=$fromTop, offset=$offsetMs)", async ({ fromTop, offsetMs }) => {
-    vi.useFakeTimers();
-    const stack = document.createElement("main");
-    if (fromTop) stack.className = "thumbnail-stack-anchor-top";
-    const [survivor, secondExit, firstExit] = Array.from({ length: 3 }, () => {
-      const card = document.createElement("article");
-      card.className = "thumbnail-card";
-      return card;
-    });
-    const cards = [survivor, secondExit, firstExit];
-    stack.append(...(fromTop ? cards.reverse() : cards));
-    document.body.append(stack);
-    const direction = fromTop ? -1 : 1;
-    const dispose = createThumbnailStackShiftController(stack);
+  ])(
+    "freezes a second delete before the first painted settle (fromTop=$fromTop, offset=$offsetMs)",
+    async ({ fromTop, offsetMs }) => {
+      vi.useFakeTimers();
+      const stack = document.createElement("main");
+      if (fromTop) stack.className = "thumbnail-stack-anchor-top";
+      const [survivor, secondExit, firstExit] = Array.from({ length: 3 }, () => {
+        const card = document.createElement("article");
+        card.className = "thumbnail-card";
+        return card;
+      });
+      const cards = [survivor, secondExit, firstExit];
+      stack.append(...(fromTop ? cards.reverse() : cards));
+      document.body.append(stack);
+      const direction = fromTop ? -1 : 1;
+      const dispose = createThumbnailStackShiftController(stack);
 
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      firstExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
-      const secondDeleteAt = THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + offsetMs;
-      await vi.advanceTimersByTimeAsync(secondDeleteAt);
-      expect(secondExit.style.translate).toBe(offsetMs < 0 ? "" : `0 ${direction * 184}px`);
-
-      // The target is one slot away, but the browser has not painted any of
-      // that slide yet. Zero is a real presentation position, not missing data.
-      const computed = vi.spyOn(window, "getComputedStyle").mockReturnValue({
-        translate: "0px",
-        transform: "none",
-      } as CSSStyleDeclaration);
       try {
-        secondExit.classList.add("thumbnail-exiting", "thumbnail-exit-delete", "thumbnail-exit-dust");
         await vi.advanceTimersByTimeAsync(0);
+        firstExit.classList.add(
+          "thumbnail-exiting",
+          "thumbnail-exit-delete",
+          "thumbnail-exit-dust",
+        );
+        const secondDeleteAt = THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + offsetMs;
+        await vi.advanceTimersByTimeAsync(secondDeleteAt);
+        expect(secondExit.style.translate).toBe(offsetMs < 0 ? "" : `0 ${direction * 184}px`);
+
+        // The target is one slot away, but the browser has not painted any of
+        // that slide yet. Zero is a real presentation position, not missing data.
+        const computed = vi.spyOn(window, "getComputedStyle").mockReturnValue({
+          translate: "0px",
+          transform: "none",
+        } as CSSStyleDeclaration);
+        try {
+          secondExit.classList.add(
+            "thumbnail-exiting",
+            "thumbnail-exit-delete",
+            "thumbnail-exit-dust",
+          );
+          await vi.advanceTimersByTimeAsync(0);
+        } finally {
+          computed.mockRestore();
+        }
+        expect(secondExit.style.translate).toBe("");
+        expect(survivor.style.translate).toBe("");
+
+        const untilFirstRemoval = 2_900 - secondDeleteAt;
+        await vi.advanceTimersByTimeAsync(untilFirstRemoval);
+        firstExit.remove();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(secondExit.style.translate).toBe(`0 ${direction * -184}px`);
+        expect(survivor.style.translate).toBe(`0 ${direction * -184}px`);
+
+        await vi.advanceTimersByTimeAsync(
+          THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16 - untilFirstRemoval,
+        );
+        expect(survivor.style.translate).toBe(`0 ${direction * 184}px`);
+        expect(survivor).not.toHaveClass("thumbnail-stack-shift-instant");
+        expect(secondExit.style.translate).toBe(`0 ${direction * -184}px`);
+
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_MOTION_DURATION_MS);
+        secondExit.remove();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(survivor.style.translate).toBe("");
       } finally {
-        computed.mockRestore();
+        dispose();
+        stack.remove();
+        vi.useRealTimers();
       }
-      expect(secondExit.style.translate).toBe("");
-      expect(survivor.style.translate).toBe("");
-
-      const untilFirstRemoval = 2_900 - secondDeleteAt;
-      await vi.advanceTimersByTimeAsync(untilFirstRemoval);
-      firstExit.remove();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(secondExit.style.translate).toBe(`0 ${direction * -184}px`);
-      expect(survivor.style.translate).toBe(`0 ${direction * -184}px`);
-
-      await vi.advanceTimersByTimeAsync(THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + 16 - untilFirstRemoval);
-      expect(survivor.style.translate).toBe(`0 ${direction * 184}px`);
-      expect(survivor).not.toHaveClass("thumbnail-stack-shift-instant");
-      expect(secondExit.style.translate).toBe(`0 ${direction * -184}px`);
-
-      await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_MOTION_DURATION_MS);
-      secondExit.remove();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(survivor.style.translate).toBe("");
-    } finally {
-      dispose();
-      stack.remove();
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("reads the rendered slot translate independently of the card's transform", () => {
     const card = document.createElement("article");
@@ -1730,7 +1728,8 @@ describe("thumbnail stack layout", () => {
     const stack = document.createElement("main");
     stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     const survivor = document.createElement("article");
     survivor.className = "thumbnail-card";
     stack.append(exiting, survivor);
@@ -1761,7 +1760,8 @@ describe("thumbnail stack layout", () => {
     const stack = document.createElement("main");
     stack.className = "thumbnail-stack thumbnail-stack-anchor-top";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     const survivor = document.createElement("article");
     survivor.className = "thumbnail-card";
     stack.append(exiting, survivor);
@@ -1836,7 +1836,8 @@ describe("thumbnail stack layout", () => {
     const first = document.createElement("article");
     first.className = "thumbnail-card";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     const third = document.createElement("article");
     third.className = "thumbnail-card";
     stack.append(first, exiting, third);
@@ -1891,7 +1892,8 @@ describe("thumbnail stack layout", () => {
     const survivor = document.createElement("article");
     survivor.className = "thumbnail-card";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     stack.append(survivor, exiting);
     const dispose = createThumbnailStackShiftController(stack);
 
@@ -1933,7 +1935,8 @@ describe("thumbnail stack layout", () => {
     const survivor = document.createElement("article");
     survivor.className = "thumbnail-card";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     stack.append(survivor, exiting);
     const dispose = createThumbnailStackShiftController(stack);
 
@@ -1954,7 +1957,8 @@ describe("thumbnail stack layout", () => {
     const survivor = document.createElement("article");
     survivor.className = "thumbnail-card";
     const exiting = document.createElement("article");
-    exiting.className = "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+    exiting.className =
+      "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
     stack.append(survivor, exiting);
     const dispose = createThumbnailStackShiftController(stack);
 

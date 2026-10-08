@@ -22,8 +22,9 @@
 }
 
 @theme {
-  --font-sans: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
+  --font-sans:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   --color-canvas: var(--theme-web-canvas);
   --color-surface: var(--theme-web-surface);
   --color-border: var(--theme-web-border);
@@ -45,12 +46,11 @@
 
   body {
     @apply m-0 min-h-dvh bg-canvas font-sans text-ink antialiased;
-    background-image:
-      radial-gradient(
-        ellipse 80% 45% at 50% -18%,
-        rgba(var(--theme-accent-rgb), .07),
-        transparent 60%
-      );
+    background-image: radial-gradient(
+      ellipse 80% 45% at 50% -18%,
+      rgba(var(--theme-accent-rgb), 0.07),
+      transparent 60%
+    );
   }
 
   ::selection {

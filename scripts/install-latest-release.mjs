@@ -35,7 +35,9 @@ function log(message) {
 
 function commandError(command, result) {
   const detail = result.error?.message || result.stderr?.trim();
-  return new Error(detail ? `${command} failed: ${detail}` : `${command} failed with status ${result.status}`);
+  return new Error(
+    detail ? `${command} failed: ${detail}` : `${command} failed with status ${result.status}`,
+  );
 }
 
 function run(command, args, options = {}) {
@@ -119,7 +121,9 @@ export function platformSpec(platform, architecture, preferDebian = false) {
   }
 
   const supported = "macOS Apple Silicon, Windows x64, and Linux x64";
-  throw new Error(`no official Captures installer is built for ${platform}/${architecture}; supported systems: ${supported}`);
+  throw new Error(
+    `no official Captures installer is built for ${platform}/${architecture}; supported systems: ${supported}`,
+  );
 }
 
 export function releaseReadiness(release, spec) {
@@ -230,7 +234,9 @@ async function waitForCompleteRelease(release, spec, waitMs) {
     try {
       current = githubJson(`repos/${REPOSITORY}/releases/${current.id}`);
     } catch (error) {
-      throw new Error(`${current.name} disappeared while it was building. Its release workflow likely failed: ${error.message}`);
+      throw new Error(
+        `${current.name} disappeared while it was building. Its release workflow likely failed: ${error.message}`,
+      );
     }
   }
 }
@@ -285,7 +291,8 @@ function quitMacCaptures() {
     if (processIsRunning(name)) run("/usr/bin/killall", ["-9", name]);
   }
   const remaining = processNames.filter(processIsRunning);
-  if (remaining.length > 0) throw new Error(`could not stop Captures process: ${remaining.join(", ")}`);
+  if (remaining.length > 0)
+    throw new Error(`could not stop Captures process: ${remaining.join(", ")}`);
 }
 
 function installMacDmg(assetPath, directory, launch) {
@@ -296,7 +303,15 @@ function installMacDmg(assetPath, directory, launch) {
   log("Validating the notarized macOS installer…");
   runChecked(
     "/usr/sbin/spctl",
-    ["--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", assetPath],
+    [
+      "--assess",
+      "--type",
+      "open",
+      "--context",
+      "context:primary-signature",
+      "--verbose=2",
+      assetPath,
+    ],
     { stdio: "inherit" },
   );
 
@@ -323,12 +338,20 @@ function installMacDmg(assetPath, directory, launch) {
     if (!existsSync(applicationsApp)) {
       throw new Error(`${APP_NAME}.app was not installed in /Applications`);
     }
-    runChecked("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", applicationsApp], {
-      stdio: "inherit",
-    });
-    runChecked("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", applicationsApp], {
-      stdio: "inherit",
-    });
+    runChecked(
+      "/usr/bin/codesign",
+      ["--verify", "--deep", "--strict", "--verbose=2", applicationsApp],
+      {
+        stdio: "inherit",
+      },
+    );
+    runChecked(
+      "/usr/sbin/spctl",
+      ["--assess", "--type", "execute", "--verbose=2", applicationsApp],
+      {
+        stdio: "inherit",
+      },
+    );
   } finally {
     if (mounted) {
       const detached = run("/usr/bin/hdiutil", ["detach", mountPoint], { stdio: "inherit" });
@@ -443,18 +466,14 @@ if ($env:CAPTURES_LAUNCH_AFTER_INSTALL -eq "1") {
 }
 `;
 
-  runChecked(
-    powershellPath(),
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    {
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        CAPTURES_INSTALLER: assetPath,
-        CAPTURES_LAUNCH_AFTER_INSTALL: launch ? "1" : "0",
-      },
+  runChecked(powershellPath(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      CAPTURES_INSTALLER: assetPath,
+      CAPTURES_LAUNCH_AFTER_INSTALL: launch ? "1" : "0",
     },
-  );
+  });
   log(`Installed ${APP_NAME} from ${basename(assetPath)}.`);
 }
 
@@ -470,7 +489,9 @@ function launchDetached(command) {
     stdio: "ignore",
   });
   child.once("error", (error) => {
-    console.warn(`${APP_NAME} installed, but it could not be launched automatically: ${error.message}`);
+    console.warn(
+      `${APP_NAME} installed, but it could not be launched automatically: ${error.message}`,
+    );
   });
   child.unref();
 }
@@ -491,7 +512,11 @@ function installDebianPackage(assetPath, launch) {
   }
   log(`Installing ${basename(assetPath)}…`);
   runChecked("sudo", ["apt-get", "install", "--yes", assetPath], { stdio: "inherit" });
-  const verified = runChecked("dpkg-query", ["--show", "--showformat=${db:Status-Abbrev}", packageName]);
+  const verified = runChecked("dpkg-query", [
+    "--show",
+    "--showformat=${db:Status-Abbrev}",
+    packageName,
+  ]);
   if (!verified.stdout.startsWith("ii")) {
     throw new Error(`${packageName} was not registered as an installed Debian package`);
   }
@@ -536,9 +561,10 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   confirmGitHubAccess();
-  const preferDebian = process.platform === "linux"
-    && commandExists("dpkg-deb")
-    && commandExists("apt-get", ["--version"]);
+  const preferDebian =
+    process.platform === "linux" &&
+    commandExists("dpkg-deb") &&
+    commandExists("apt-get", ["--version"]);
   const spec = platformSpec(process.platform, process.arch, preferDebian);
   const release = fetchLatestRelease();
   log(`Newest Preview: ${release.name} (${release.tag_name}).`);

@@ -51,7 +51,10 @@ export function editorCropAfterDrag(
   let width = Math.max(2, right - left);
   let height = Math.max(2, bottom - top);
   if ((west || east) && (north || south)) {
-    if (Math.abs(width - initial.width) / initial.width >= Math.abs(height - initial.height) / initial.height) {
+    if (
+      Math.abs(width - initial.width) / initial.width >=
+      Math.abs(height - initial.height) / initial.height
+    ) {
       height = width / ratio;
     } else {
       width = height * ratio;
@@ -64,8 +67,16 @@ export function editorCropAfterDrag(
 
   const anchorX = west ? initial.x + initial.width : east ? initial.x : centerX;
   const anchorY = north ? initial.y + initial.height : south ? initial.y : centerY;
-  const maxWidth = west ? anchorX : east ? bounds.width - anchorX : 2 * Math.min(anchorX, bounds.width - anchorX);
-  const maxHeight = north ? anchorY : south ? bounds.height - anchorY : 2 * Math.min(anchorY, bounds.height - anchorY);
+  const maxWidth = west
+    ? anchorX
+    : east
+      ? bounds.width - anchorX
+      : 2 * Math.min(anchorX, bounds.width - anchorX);
+  const maxHeight = north
+    ? anchorY
+    : south
+      ? bounds.height - anchorY
+      : 2 * Math.min(anchorY, bounds.height - anchorY);
   const fit = Math.min(1, maxWidth / width, maxHeight / height);
   width = Math.max(2, width * fit);
   height = Math.max(2, height * fit);
@@ -94,20 +105,19 @@ export function recordingParentDirectory(path: string): string {
 /** True for private Capture History recovery media (`media.mp4` / `media.gif`). */
 export function isHistoryRecoveryMediaPath(path: string): boolean {
   const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? "";
-  return filename === "media.mp4"
-    || filename === "media.gif"
-    || filename === "media.webm"
-    || /^media\./.test(filename);
+  return (
+    filename === "media.mp4" ||
+    filename === "media.gif" ||
+    filename === "media.webm" ||
+    /^media\./.test(filename)
+  );
 }
 
 /**
  * Match the desktop capture naming convention:
  * `Captures_YYYY-MM-DD_HH-MM-SS_mmm` in local time.
  */
-export function capturesTimestampStem(
-  createdAt: string,
-  now: Date = new Date(),
-): string {
+export function capturesTimestampStem(createdAt: string, now: Date = new Date()): string {
   const parsed = new Date(createdAt);
   const value = Number.isNaN(parsed.getTime()) ? now : parsed;
   const pad = (part: number, width = 2) => String(part).padStart(width, "0");
@@ -187,7 +197,8 @@ export function recordingSourceFormat(artifact: {
   const mime = artifact.mime_type?.split(";")[0]?.trim().toLowerCase() ?? "";
   if (mime === "image/gif") return "gif";
   if (mime === "video/webm" || mime === "audio/webm") return "webm";
-  const extension = recordingPathExtension(artifact.saved_path) || recordingPathExtension(artifact.path);
+  const extension =
+    recordingPathExtension(artifact.saved_path) || recordingPathExtension(artifact.path);
   if (extension === "gif") return "gif";
   if (extension === "webm") return "webm";
   return "mp4";
@@ -208,17 +219,17 @@ export function recordingFilenameError(fileStem: string): string {
   const trimmed = fileStem.trim();
   const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
   const forbidden = '<>:"/\\|?*';
-  const hasForbiddenCharacter = Array.from(trimmed).some((character) => (
-    character.charCodeAt(0) < 32 || forbidden.includes(character)
-  ));
+  const hasForbiddenCharacter = Array.from(trimmed).some(
+    (character) => character.charCodeAt(0) < 32 || forbidden.includes(character),
+  );
   if (
-    !trimmed
-    || trimmed !== fileStem
-    || trimmed === "."
-    || trimmed === ".."
-    || hasForbiddenCharacter
-    || /[. ]$/.test(trimmed)
-    || reserved.test(trimmed)
+    !trimmed ||
+    trimmed !== fileStem ||
+    trimmed === "." ||
+    trimmed === ".." ||
+    hasForbiddenCharacter ||
+    /[. ]$/.test(trimmed) ||
+    reserved.test(trimmed)
   ) {
     return "Enter a filename without folders or reserved characters.";
   }

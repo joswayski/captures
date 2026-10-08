@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import {
-  configuredReleaseDate,
-  nextReleaseVersion,
-  releaseDate,
-} from "./release-version.mjs";
+import { configuredReleaseDate, nextReleaseVersion, releaseDate } from "./release-version.mjs";
 
 test("uses the New York calendar date across UTC midnight", () => {
   assert.equal(releaseDate(new Date("2026-07-20T01:30:00Z")), "2026-07-19");

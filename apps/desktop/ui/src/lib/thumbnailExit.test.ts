@@ -193,8 +193,10 @@ describe("thumbnail exit effects", () => {
     expect(near.length).toBeGreaterThan(1);
     expect(far.length).toBeGreaterThan(1);
 
-    const nearSpread = Math.max(...near.map((p) => p.delayMs)) - Math.min(...near.map((p) => p.delayMs));
-    const farSpread = Math.max(...far.map((p) => p.delayMs)) - Math.min(...far.map((p) => p.delayMs));
+    const nearSpread =
+      Math.max(...near.map((p) => p.delayMs)) - Math.min(...near.map((p) => p.delayMs));
+    const farSpread =
+      Math.max(...far.map((p) => p.delayMs)) - Math.min(...far.map((p) => p.delayMs));
     expect(nearSpread).toBeLessThan(farSpread);
     expect(nearSpread).toBeLessThan(90);
   });
@@ -209,13 +211,25 @@ describe("thumbnail exit effects", () => {
     const cardY = (p: { top: number; height: number }) => p.top + p.height / 2 - pad;
 
     const nearest = particles.reduce((best, p) => {
-      const dist = Math.hypot(cardX(p) - THUMBNAIL_DELETE_ORIGIN_X, cardY(p) - THUMBNAIL_DELETE_ORIGIN_Y);
-      const bestDist = Math.hypot(cardX(best) - THUMBNAIL_DELETE_ORIGIN_X, cardY(best) - THUMBNAIL_DELETE_ORIGIN_Y);
+      const dist = Math.hypot(
+        cardX(p) - THUMBNAIL_DELETE_ORIGIN_X,
+        cardY(p) - THUMBNAIL_DELETE_ORIGIN_Y,
+      );
+      const bestDist = Math.hypot(
+        cardX(best) - THUMBNAIL_DELETE_ORIGIN_X,
+        cardY(best) - THUMBNAIL_DELETE_ORIGIN_Y,
+      );
       return dist < bestDist ? p : best;
     });
     const farthest = particles.reduce((best, p) => {
-      const dist = Math.hypot(cardX(p) - THUMBNAIL_DELETE_ORIGIN_X, cardY(p) - THUMBNAIL_DELETE_ORIGIN_Y);
-      const bestDist = Math.hypot(cardX(best) - THUMBNAIL_DELETE_ORIGIN_X, cardY(best) - THUMBNAIL_DELETE_ORIGIN_Y);
+      const dist = Math.hypot(
+        cardX(p) - THUMBNAIL_DELETE_ORIGIN_X,
+        cardY(p) - THUMBNAIL_DELETE_ORIGIN_Y,
+      );
+      const bestDist = Math.hypot(
+        cardX(best) - THUMBNAIL_DELETE_ORIGIN_X,
+        cardY(best) - THUMBNAIL_DELETE_ORIGIN_Y,
+      );
       return dist > bestDist ? p : best;
     });
     // Nearest chip to the trash control dissolves first.
@@ -276,7 +290,10 @@ describe("thumbnail exit effects", () => {
     const animateCalls: Array<{ keyframes: Keyframe[]; options: KeyframeAnimationOptions }> = [];
     const chips = particles.map((particle) => {
       const el = document.createElement("span");
-      el.animate = ((keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) => {
+      el.animate = ((
+        keyframes: Keyframe[] | PropertyIndexedKeyframes | null,
+        options?: number | KeyframeAnimationOptions,
+      ) => {
         animateCalls.push({
           keyframes: Array.isArray(keyframes) ? keyframes : [],
           options: typeof options === "object" && options ? options : {},
@@ -296,8 +313,9 @@ describe("thumbnail exit effects", () => {
     // A paint-triggering property here multiplies work by ~200 chips/frame.
     for (const call of animateCalls) {
       for (const frame of call.keyframes) {
-        expect(Object.keys(frame).every((key) => ["opacity", "transform", "offset"].includes(key)))
-          .toBe(true);
+        expect(
+          Object.keys(frame).every((key) => ["opacity", "transform", "offset"].includes(key)),
+        ).toBe(true);
       }
     }
 
@@ -348,19 +366,13 @@ describe("thumbnail exit effects", () => {
     expect(rest.dy).toBe(0);
     expect(rest.scale).toBe(1);
 
-    const mid = thumbnailDustVisualAt(
-      particle,
-      particle.delayMs + particle.durationMs * 0.25,
-    );
+    const mid = thumbnailDustVisualAt(particle, particle.delayMs + particle.durationMs * 0.25);
     expect(mid.opacity).toBeGreaterThan(0);
     expect(mid.opacity).toBeLessThan(1);
     expect(mid.dy).toBeLessThan(0);
     expect(mid.scale).toBeLessThan(1);
 
-    const done = thumbnailDustVisualAt(
-      particle,
-      particle.delayMs + particle.durationMs,
-    );
+    const done = thumbnailDustVisualAt(particle, particle.delayMs + particle.durationMs);
     expect(done.opacity).toBe(0);
     expect(done.dx).toBeCloseTo(particle.dx);
     expect(done.dy).toBeCloseTo(particle.dy);
@@ -388,19 +400,44 @@ describe("canvas dust rendering", () => {
   // Deliberately asymmetric crop, chip size, delay, and flight. Expectations
   // below are independent of the random particle generator.
   const particle: ThumbnailDustParticle = {
-    id: 0, left: 143, top: 127, width: 12.5, height: 8.5,
-    cardWidth: 90, cardHeight: 50, sourceLeft: 23, sourceTop: 7,
-    surfaceWidth: 200, surfaceHeight: 100, surfaceOffsetX: -55, surfaceOffsetY: -25,
-    dx: 40, dy: -72, rotate: 30, delayMs: 60, durationMs: 1000,
+    id: 0,
+    left: 143,
+    top: 127,
+    width: 12.5,
+    height: 8.5,
+    cardWidth: 90,
+    cardHeight: 50,
+    sourceLeft: 23,
+    sourceTop: 7,
+    surfaceWidth: 200,
+    surfaceHeight: 100,
+    surfaceOffsetX: -55,
+    surfaceOffsetY: -25,
+    dx: 40,
+    dy: -72,
+    rotate: 30,
+    delayMs: 60,
+    durationMs: 1000,
   };
 
   function context() {
     return {
-      filter: "none", fillStyle: "", globalAlpha: 1,
-      fillRect: vi.fn(), getImageData: vi.fn(), drawImage: vi.fn(),
-      setTransform: vi.fn(), beginPath: vi.fn(), roundRect: vi.fn(), clip: vi.fn(),
-      save: vi.fn(), restore: vi.fn(), clearRect: vi.fn(),
-      translate: vi.fn(), rotate: vi.fn(), scale: vi.fn(),
+      filter: "none",
+      fillStyle: "",
+      globalAlpha: 1,
+      fillRect: vi.fn(),
+      getImageData: vi.fn(),
+      drawImage: vi.fn(),
+      setTransform: vi.fn(),
+      beginPath: vi.fn(),
+      roundRect: vi.fn(),
+      clip: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      clearRect: vi.fn(),
+      translate: vi.fn(),
+      rotate: vi.fn(),
+      scale: vi.fn(),
     };
   }
 
@@ -411,11 +448,14 @@ describe("canvas dust rendering", () => {
       .mockReturnValueOnce({ data: [127, 127, 127, 220] })
       .mockReturnValueOnce({ data: [127, 127, 127, 60] });
     let index = 0;
-    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
       .mockImplementation(() => contexts[index++] as unknown as CanvasRenderingContext2D);
     const image = document.createElement("img");
     Object.defineProperties(image, {
-      complete: { value: true }, naturalWidth: { value: 400 }, naturalHeight: { value: 200 },
+      complete: { value: true },
+      naturalWidth: { value: 400 },
+      naturalHeight: { value: 200 },
     });
     const canvas = document.createElement("canvas");
     const frame = vi.fn<(callback: FrameRequestCallback) => number>(() => 7);
@@ -424,18 +464,21 @@ describe("canvas dust rendering", () => {
   }
 
   it.each(["missing filter", "ignored filter", "missing blur", "missing rounded clip"])(
-    "falls back when basic canvas works but has %s", (failure) => {
+    "falls back when basic canvas works but has %s",
+    (failure) => {
       const { contexts, canvas, image, frame } = installCanvas();
       const probe = contexts[0];
       if (failure === "missing filter") Reflect.deleteProperty(probe, "filter");
       if (failure === "missing rounded clip") Reflect.deleteProperty(probe, "roundRect");
       if (failure === "ignored filter") {
-        probe.getImageData.mockReset()
+        probe.getImageData
+          .mockReset()
           .mockReturnValueOnce({ data: [255, 255, 255, 255] })
           .mockReturnValueOnce({ data: [0, 0, 0, 0] });
       }
       if (failure === "missing blur") {
-        probe.getImageData.mockReset()
+        probe.getImageData
+          .mockReset()
           .mockReturnValueOnce({ data: [127, 127, 127, 255] })
           .mockReturnValueOnce({ data: [0, 0, 0, 0] });
       }
@@ -457,7 +500,11 @@ describe("canvas dust rendering", () => {
   it.each([1, 2])("bakes clipped, padded chips once and draws immediately at DPR %s", (dpr) => {
     vi.spyOn(window, "devicePixelRatio", "get").mockReturnValue(dpr);
     const { contexts, canvas, image, frame, cancelFrame } = installCanvas();
-    const stop = playThumbnailDustCanvas(canvas, image, [particle], { now: () => 100, frame, cancelFrame });
+    const stop = playThumbnailDustCanvas(canvas, image, [particle], {
+      now: () => 100,
+      frame,
+      cancelFrame,
+    });
     expect(stop).not.toBeNull();
     const [, output, source, tiles, atlas] = contexts;
     expect(canvas.width).toBe(330 * dpr);
@@ -467,14 +514,30 @@ describe("canvas dust rendering", () => {
     expect(source.filter).toBe("none");
     expect(tiles.filter).toBe("none");
     expect(atlas.filter).toBe(`blur(${2 * dpr}px) brightness(0.5)`);
-    expect(tiles.drawImage).toHaveBeenCalledWith(expect.any(HTMLCanvasElement),
-      23 * dpr, 7 * dpr, 12.5 * dpr, 8.5 * dpr,
-      8 * dpr, 8 * dpr, 12.5 * dpr, 8.5 * dpr);
+    expect(tiles.drawImage).toHaveBeenCalledWith(
+      expect.any(HTMLCanvasElement),
+      23 * dpr,
+      7 * dpr,
+      12.5 * dpr,
+      8.5 * dpr,
+      8 * dpr,
+      8 * dpr,
+      12.5 * dpr,
+      8.5 * dpr,
+    );
     expect(atlas.drawImage).toHaveBeenCalledWith(expect.any(HTMLCanvasElement), 0, 0);
     expect(output.translate).toHaveBeenCalledWith(149.25, 131.25);
-    expect(output.drawImage).toHaveBeenCalledWith(expect.any(HTMLCanvasElement),
-      0, 0, Math.ceil(28.5 * dpr), Math.ceil(24.5 * dpr),
-      -14.25, -12.25, Math.ceil(28.5 * dpr) / dpr, Math.ceil(24.5 * dpr) / dpr);
+    expect(output.drawImage).toHaveBeenCalledWith(
+      expect.any(HTMLCanvasElement),
+      0,
+      0,
+      Math.ceil(28.5 * dpr),
+      Math.ceil(24.5 * dpr),
+      -14.25,
+      -12.25,
+      Math.ceil(28.5 * dpr) / dpr,
+      Math.ceil(24.5 * dpr) / dpr,
+    );
 
     // elapsed 335 - delay 60 = 275ms: eased progress 0.5, opacity 0.72.
     frame.mock.calls[0][0](435);
@@ -486,7 +549,8 @@ describe("canvas dust rendering", () => {
     expect(source.drawImage).toHaveBeenCalledOnce();
     expect(tiles.drawImage).toHaveBeenCalledOnce();
     expect(atlas.drawImage).toHaveBeenCalledOnce();
-    for (const ctx of [output, source, tiles, atlas]) expect(ctx.getImageData).not.toHaveBeenCalled();
+    for (const ctx of [output, source, tiles, atlas])
+      expect(ctx.getImageData).not.toHaveBeenCalled();
     stop!();
     expect(cancelFrame).toHaveBeenCalledWith(7);
     const draws = output.drawImage.mock.calls.length;
@@ -497,21 +561,49 @@ describe("canvas dust rendering", () => {
   it("keeps later atlas rows separate from earlier chips", () => {
     vi.spyOn(window, "devicePixelRatio", "get").mockReturnValue(2);
     const { contexts, canvas, image, frame } = installCanvas();
-    const particles = [particle, { ...particle, id: 1 }, { ...particle, id: 2, sourceLeft: 3, sourceTop: 30 }];
+    const particles = [
+      particle,
+      { ...particle, id: 1 },
+      { ...particle, id: 2, sourceLeft: 3, sourceTop: 30 },
+    ];
     const stop = playThumbnailDustCanvas(canvas, image, particles, { frame });
-    expect(contexts[3].drawImage).toHaveBeenNthCalledWith(3, expect.any(HTMLCanvasElement),
-      6, 60, 25, 17, 16, 65, 25, 17);
+    expect(contexts[3].drawImage).toHaveBeenNthCalledWith(
+      3,
+      expect.any(HTMLCanvasElement),
+      6,
+      60,
+      25,
+      17,
+      16,
+      65,
+      25,
+      17,
+    );
     // The expensive filter operation runs once, not once per particle.
     expect(contexts[3].filter).toBe("none");
     expect(contexts[4].drawImage).toHaveBeenCalledOnce();
-    expect(contexts[1].drawImage).toHaveBeenNthCalledWith(3, expect.any(HTMLCanvasElement),
-      0, 49, 57, 49, -14.25, -12.25, 28.5, 24.5);
+    expect(contexts[1].drawImage).toHaveBeenNthCalledWith(
+      3,
+      expect.any(HTMLCanvasElement),
+      0,
+      49,
+      57,
+      49,
+      -14.25,
+      -12.25,
+      28.5,
+      24.5,
+    );
     stop!();
   });
 
   it("clears the last frame and stops as soon as all chips are transparent", () => {
     const { contexts, canvas, image, frame, cancelFrame } = installCanvas();
-    const stop = playThumbnailDustCanvas(canvas, image, [particle], { now: () => 0, frame, cancelFrame });
+    const stop = playThumbnailDustCanvas(canvas, image, [particle], {
+      now: () => 0,
+      frame,
+      cancelFrame,
+    });
     frame.mock.calls[0][0](900); // opacity is already zero, duration has not ended.
     expect(contexts[1].clearRect).toHaveBeenCalledTimes(2);
     expect(contexts[1].drawImage).toHaveBeenCalledOnce();
@@ -522,7 +614,9 @@ describe("canvas dust rendering", () => {
 
   it.each([1, 2, 3, 4])("falls back if drawing context %s fails to draw", (index) => {
     const { contexts, canvas, image, frame } = installCanvas();
-    contexts[index].drawImage.mockImplementation(() => { throw new Error("draw unavailable"); });
+    contexts[index].drawImage.mockImplementation(() => {
+      throw new Error("draw unavailable");
+    });
     expect(playThumbnailDustCanvas(canvas, image, [particle], { frame })).toBeNull();
     expect(frame).not.toHaveBeenCalled();
   });

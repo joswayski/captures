@@ -27,65 +27,79 @@ describe("releaseNoteItems", () => {
       },
       { text: "Fix the region selector", pullRequest: null },
     ]);
-    expect(releaseNoteItems(
-      "* Fix Linux startup crash by @devin-ai-integration[bot] in https://github.com/joswayski/captures/pull/297\n* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/297",
-    )).toEqual([{
-      text: "Fix Linux startup crash",
-      pullRequest: {
-        number: 297,
-        url: "https://github.com/joswayski/captures/pull/297",
+    expect(
+      releaseNoteItems(
+        "* Fix Linux startup crash by @devin-ai-integration[bot] in https://github.com/joswayski/captures/pull/297\n* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/297",
+      ),
+    ).toEqual([
+      {
+        text: "Fix Linux startup crash",
+        pullRequest: {
+          number: 297,
+          url: "https://github.com/joswayski/captures/pull/297",
+        },
       },
-    }]);
+    ]);
   });
 
   it("links squash-merge titles that only include a PR number", () => {
-    expect(releaseNoteItems("* Keep the update notice capturable (#452)")).toEqual([{
-      text: "Keep the update notice capturable",
-      pullRequest: {
-        number: 452,
-        url: "https://github.com/joswayski/captures/pull/452",
+    expect(releaseNoteItems("* Keep the update notice capturable (#452)")).toEqual([
+      {
+        text: "Keep the update notice capturable",
+        pullRequest: {
+          number: 452,
+          url: "https://github.com/joswayski/captures/pull/452",
+        },
       },
-    }]);
+    ]);
   });
 
   it("omits dependency updates from product-facing release notes", () => {
-    expect(releaseNoteItems([
-      "* Fix false crash reports during Windows updates ([#520](https://github.com/joswayski/captures/pull/520))",
-      "* Bump @vitest/mocker and vitest ([#511](https://github.com/joswayski/captures/pull/511))",
-      "* Bump js-yaml from 4.3.1 to 4.3.2 ([#513](https://github.com/joswayski/captures/pull/513))",
-    ].join("\n"))).toEqual([{
-      text: "Fix false crash reports during Windows updates",
-      pullRequest: {
-        number: 520,
-        url: "https://github.com/joswayski/captures/pull/520",
+    expect(
+      releaseNoteItems(
+        [
+          "* Fix false crash reports during Windows updates ([#520](https://github.com/joswayski/captures/pull/520))",
+          "* Bump @vitest/mocker and vitest ([#511](https://github.com/joswayski/captures/pull/511))",
+          "* Bump js-yaml from 4.3.1 to 4.3.2 ([#513](https://github.com/joswayski/captures/pull/513))",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        text: "Fix false crash reports during Windows updates",
+        pullRequest: {
+          number: 520,
+          url: "https://github.com/joswayski/captures/pull/520",
+        },
       },
-    }]);
+    ]);
   });
 });
 
 describe("stackedReleaseNotes", () => {
   it("keeps each skipped Preview's notes and falls back to the latest body", () => {
-    expect(stackedReleaseNotes(
-      [
-        {
-          version: "2026.8.2705",
-          display_version: "2026.08.27.5",
-          notes: "* Fix the update notice",
-        },
-        {
-          version: "2026.8.2704",
-          display_version: "2026.08.27.4",
-          notes: "* Bump vitest from 4.1.10 to 4.1.11 (#511)",
-        },
-        {
-          version: "2026.8.2703",
-          display_version: "2026.08.27.3",
-          notes: "* Fix capture menu switching",
-        },
-      ],
-      "* Only the latest notes",
-      "2026.08.27.5",
-    )).toEqual([
+    expect(
+      stackedReleaseNotes(
+        [
+          {
+            version: "2026.8.2705",
+            display_version: "2026.08.27.5",
+            notes: "* Fix the update notice",
+          },
+          {
+            version: "2026.8.2704",
+            display_version: "2026.08.27.4",
+            notes: "* Bump vitest from 4.1.10 to 4.1.11 (#511)",
+          },
+          {
+            version: "2026.8.2703",
+            display_version: "2026.08.27.3",
+            notes: "* Fix capture menu switching",
+          },
+        ],
+        "* Only the latest notes",
+        "2026.08.27.5",
+      ),
+    ).toEqual([
       {
         version: "2026.8.2705",
         displayVersion: "2026.08.27.5",
@@ -98,25 +112,25 @@ describe("stackedReleaseNotes", () => {
       },
     ]);
 
-    expect(stackedReleaseNotes([], sampleNotes, "2026.08.27.5")).toEqual([{
-      version: "",
-      displayVersion: "2026.08.27.5",
-      items: [
-        {
-          text: "Improve capture parity",
-          pullRequest: {
-            number: 249,
-            url: "https://github.com/joswayski/captures/pull/249",
+    expect(stackedReleaseNotes([], sampleNotes, "2026.08.27.5")).toEqual([
+      {
+        version: "",
+        displayVersion: "2026.08.27.5",
+        items: [
+          {
+            text: "Improve capture parity",
+            pullRequest: {
+              number: 249,
+              url: "https://github.com/joswayski/captures/pull/249",
+            },
           },
-        },
-        { text: "Fix the region selector", pullRequest: null },
-      ],
-    }]);
+          { text: "Fix the region selector", pullRequest: null },
+        ],
+      },
+    ]);
 
-    expect(stackedReleaseNotes(
-      [],
-      "* Bump js-yaml from 4.3.1 to 4.3.2 (#513)",
-      "2026.09.14.1",
-    )).toEqual([]);
+    expect(
+      stackedReleaseNotes([], "* Bump js-yaml from 4.3.1 to 4.3.2 (#513)", "2026.09.14.1"),
+    ).toEqual([]);
   });
 });

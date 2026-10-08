@@ -152,14 +152,14 @@ function tickThumbnailStackDragSwayState(
       -max,
       max,
     );
-    const driveRate = pointerStep === 0
-      ? THUMBNAIL_STACK_DRAG_SWAY_DRIVE_OUT_RATE
-      : THUMBNAIL_STACK_DRAG_SWAY_DRIVE_IN_RATE;
+    const driveRate =
+      pointerStep === 0
+        ? THUMBNAIL_STACK_DRAG_SWAY_DRIVE_OUT_RATE
+        : THUMBNAIL_STACK_DRAG_SWAY_DRIVE_IN_RATE;
     const nextDrive = drive + (desiredDrive - drive) * (1 - Math.exp(-driveRate * dt));
-    const nextVelocity = (
-      velocity * Math.exp(-THUMBNAIL_STACK_DRAG_SWAY_WOBBLE_DAMPING * dt)
-      + (nextDrive - position) * THUMBNAIL_STACK_DRAG_SWAY_WOBBLE_SPRING * dt
-    );
+    const nextVelocity =
+      velocity * Math.exp(-THUMBNAIL_STACK_DRAG_SWAY_WOBBLE_DAMPING * dt) +
+      (nextDrive - position) * THUMBNAIL_STACK_DRAG_SWAY_WOBBLE_SPRING * dt;
     const nextPosition = clamp(position + nextVelocity * dt, -max, max);
     // A clamp is a physical boundary, not stored momentum waiting to kick the
     // pile back into motion on the next frame.
@@ -200,11 +200,18 @@ export function clampThumbnailStackFrame(
 ): ThumbnailStackPoint {
   if (padding !== undefined) {
     const frontY = y + frameHeight - padding - THUMBNAIL_CARD_HEIGHT_PX;
-    const virtualY = anchor === "top"
-      ? frontY - THUMBNAIL_STACK_CONTROL_GUTTER_PX
-      : frontY + THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_CONTROL_GUTTER_PX - frameHeight;
+    const virtualY =
+      anchor === "top"
+        ? frontY - THUMBNAIL_STACK_CONTROL_GUTTER_PX
+        : frontY + THUMBNAIL_CARD_HEIGHT_PX + THUMBNAIL_STACK_CONTROL_GUTTER_PX - frameHeight;
     const next = clampThumbnailStackFrame(
-      x, virtualY, frameWidth, frameHeight, work, contentHeight, anchor,
+      x,
+      virtualY,
+      frameWidth,
+      frameHeight,
+      work,
+      contentHeight,
+      anchor,
     );
     return { x: next.x, y: y + next.y - virtualY };
   }
@@ -272,17 +279,23 @@ export function writeHarnessStackOffset(
   const contentHeight = options.contentHeight ?? HARNESS_COLLAPSED_HEIGHT_PX;
   const anchor = options.anchor ?? "bottom";
   const minY = anchor === "top" ? 0 : Math.min(0, contentHeight - viewport.height);
-  const maxY = anchor === "top"
-    ? Math.max(0, viewport.height - contentHeight)
-    : 0;
-  const clamped = options.padding === undefined ? {
-    x: clamp(x, 0, Math.max(0, viewport.width - HARNESS_FRAME_WIDTH_PX)),
-    y: clamp(y, minY, maxY),
-  } : clampThumbnailStackFrame(
-    x, y, HARNESS_FRAME_WIDTH_PX, viewport.height,
-    { x: 0, y: 0, width: viewport.width, height: viewport.height, bottomGap: 0 },
-    contentHeight, anchor, options.padding,
-  );
+  const maxY = anchor === "top" ? Math.max(0, viewport.height - contentHeight) : 0;
+  const clamped =
+    options.padding === undefined
+      ? {
+          x: clamp(x, 0, Math.max(0, viewport.width - HARNESS_FRAME_WIDTH_PX)),
+          y: clamp(y, minY, maxY),
+        }
+      : clampThumbnailStackFrame(
+          x,
+          y,
+          HARNESS_FRAME_WIDTH_PX,
+          viewport.height,
+          { x: 0, y: 0, width: viewport.width, height: viewport.height, bottomGap: 0 },
+          contentHeight,
+          anchor,
+          options.padding,
+        );
   root.style.setProperty(THUMBNAIL_HARNESS_DRAG_X_VAR, `${clamped.x}px`);
   root.style.setProperty(THUMBNAIL_HARNESS_DRAG_Y_VAR, `${clamped.y}px`);
   return clamped;
@@ -294,22 +307,21 @@ export function thumbnailWorkAreaContains(
   work: Pick<ThumbnailStackWorkArea, "x" | "y" | "width" | "height">,
   margin = 0,
 ): boolean {
-  return x >= work.x - margin
-    && x <= work.x + work.width + margin
-    && y >= work.y - margin
-    && y <= work.y + work.height + margin;
+  return (
+    x >= work.x - margin &&
+    x <= work.x + work.width + margin &&
+    y >= work.y - margin &&
+    y <= work.y + work.height + margin
+  );
 }
 
-export function applyThumbnailStackDragSway(
-  stack: HTMLElement | null,
-  sway: ThumbnailStackPoint,
-) {
+export function applyThumbnailStackDragSway(stack: HTMLElement | null, sway: ThumbnailStackPoint) {
   if (!stack) return;
   const x = String(sway.x);
   const y = String(sway.y);
   if (
-    stack.style.getPropertyValue(THUMBNAIL_DRAG_SWAY_X_VAR) === x
-    && stack.style.getPropertyValue(THUMBNAIL_DRAG_SWAY_Y_VAR) === y
+    stack.style.getPropertyValue(THUMBNAIL_DRAG_SWAY_X_VAR) === x &&
+    stack.style.getPropertyValue(THUMBNAIL_DRAG_SWAY_Y_VAR) === y
   ) {
     return;
   }
@@ -334,10 +346,7 @@ export function setThumbnailStackPressing(stack: HTMLElement | null, pressing: b
   stack?.classList.toggle(THUMBNAIL_STACK_PRESSING_CLASS, pressing);
 }
 
-export function setThumbnailStackDragSwayReady(
-  stack: HTMLElement | null,
-  ready: boolean,
-) {
+export function setThumbnailStackDragSwayReady(stack: HTMLElement | null, ready: boolean) {
   stack?.classList.toggle(THUMBNAIL_STACK_DRAG_SWAY_CLASS, ready);
 }
 
@@ -412,11 +421,7 @@ export class CollapsedThumbnailStackDrag {
     const crossed = !this.dragging;
     this.dragging = true;
     if (crossed) this.host.onDraggingChange?.(true);
-    this.tickSway(
-      this.now(),
-      crossed ? dx : stepX,
-      crossed ? dy : stepY,
-    );
+    this.tickSway(this.now(), crossed ? dx : stepX, crossed ? dy : stepY);
     this.pointerSampled = true;
     this.startSwayLoop();
     this.host.onSway?.(this.sway);
@@ -445,13 +450,14 @@ export class CollapsedThumbnailStackDrag {
         sway: this.sway,
       };
     });
-    this.moveTail = result.then(() => undefined, () => undefined);
+    this.moveTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
-  async pointerUp(
-    event: Pick<PointerEvent, "pointerId">,
-  ): Promise<"expand" | "drop" | "ignored"> {
+  async pointerUp(event: Pick<PointerEvent, "pointerId">): Promise<"expand" | "drop" | "ignored"> {
     if (this.pointerId !== event.pointerId || this.releasing) return "ignored";
     const session = this.session;
     this.releasing = true;
@@ -485,10 +491,12 @@ export class CollapsedThumbnailStackDrag {
     this.lastTickMs = 0;
     this.pointerSampled = false;
     this.stopSwayLoop();
-    this.ready = Promise.resolve().then(() => this.host.getFrame()).then((frame) => {
-      if (session !== this.session) return;
-      this.startFrame = frame;
-    });
+    this.ready = Promise.resolve()
+      .then(() => this.host.getFrame())
+      .then((frame) => {
+        if (session !== this.session) return;
+        this.startFrame = frame;
+      });
     // Observe failures even before the first move/up awaits the frame. Keep
     // the rejected promise so pointerUp can release the session without expanding.
     void this.ready.catch(() => undefined);
@@ -533,9 +541,8 @@ export class CollapsedThumbnailStackDrag {
   }
 
   private tickSway(now: number, dx: number, dy: number) {
-    const dtMs = this.lastTickMs === 0
-      ? THUMBNAIL_STACK_DRAG_SWAY_DEFAULT_DT_MS
-      : now - this.lastTickMs;
+    const dtMs =
+      this.lastTickMs === 0 ? THUMBNAIL_STACK_DRAG_SWAY_DEFAULT_DT_MS : now - this.lastTickMs;
     this.lastTickMs = now;
     const next = tickThumbnailStackDragSwayState(
       { position: this.sway, velocity: this.swayVelocity, drive: this.swayDrive },
@@ -575,12 +582,14 @@ export class CollapsedThumbnailStackDrag {
   }
 
   private swayIsSettled(): boolean {
-    return Math.abs(this.sway.x) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
-      && Math.abs(this.sway.y) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
-      && Math.abs(this.swayDrive.x) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
-      && Math.abs(this.swayDrive.y) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX
-      && Math.abs(this.swayVelocity.x) <= THUMBNAIL_STACK_DRAG_SWAY_VELOCITY_EPSILON_PX_PER_SECOND
-      && Math.abs(this.swayVelocity.y) <= THUMBNAIL_STACK_DRAG_SWAY_VELOCITY_EPSILON_PX_PER_SECOND;
+    return (
+      Math.abs(this.sway.x) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX &&
+      Math.abs(this.sway.y) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX &&
+      Math.abs(this.swayDrive.x) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX &&
+      Math.abs(this.swayDrive.y) <= THUMBNAIL_STACK_DRAG_SWAY_POSITION_EPSILON_PX &&
+      Math.abs(this.swayVelocity.x) <= THUMBNAIL_STACK_DRAG_SWAY_VELOCITY_EPSILON_PX_PER_SECOND &&
+      Math.abs(this.swayVelocity.y) <= THUMBNAIL_STACK_DRAG_SWAY_VELOCITY_EPSILON_PX_PER_SECOND
+    );
   }
 
   private stopSwayLoop() {

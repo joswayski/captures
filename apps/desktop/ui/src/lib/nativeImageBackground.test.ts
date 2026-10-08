@@ -23,8 +23,15 @@ describe("native image-background vectors agree with the shipping editor", () =>
     } as ImageData;
     const expected = [...cases.pixels.rgba];
     for (const index of entry.cleared) expected.fill(0, index * 4, index * 4 + 4);
-    expect(removeColorToTransparent(image, entry.seed[0], entry.seed[1], entry.tolerance,
-      entry.contiguous)).toBe(entry.cleared.length);
+    expect(
+      removeColorToTransparent(
+        image,
+        entry.seed[0],
+        entry.seed[1],
+        entry.tolerance,
+        entry.contiguous,
+      ),
+    ).toBe(entry.cleared.length);
     expect([...image.data]).toEqual(expected);
   });
 
@@ -34,19 +41,37 @@ describe("native image-background vectors agree with the shipping editor", () =>
       height: entry.height,
       data: new Uint8ClampedArray(entry.working),
     } as ImageData;
-    const original = entry.original ? {
-      width: entry.width,
-      height: entry.height,
-      data: new Uint8ClampedArray(entry.original),
-    } as ImageData : null;
+    const original = entry.original
+      ? ({
+          width: entry.width,
+          height: entry.height,
+          data: new Uint8ClampedArray(entry.original),
+        } as ImageData)
+      : null;
     const [first, ...remaining] = entry.points;
     const mode = entry.mode as "erase" | "restore";
-    let changed = stampRemoveBackgroundBrush(image, first[0], first[1], entry.radius,
-      mode, original, entry.hardness);
+    let changed = stampRemoveBackgroundBrush(
+      image,
+      first[0],
+      first[1],
+      entry.radius,
+      mode,
+      original,
+      entry.hardness,
+    );
     let previous = first;
     for (const point of remaining) {
-      changed += strokeRemoveBackgroundBrush(image, previous[0], previous[1], point[0],
-        point[1], entry.radius, mode, original, entry.hardness);
+      changed += strokeRemoveBackgroundBrush(
+        image,
+        previous[0],
+        previous[1],
+        point[0],
+        point[1],
+        entry.radius,
+        mode,
+        original,
+        entry.hardness,
+      );
       previous = point;
     }
     expect(changed).toBe(entry.changed);

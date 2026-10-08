@@ -9,5 +9,8 @@ test("recognizes grouped and versioned dependency bumps", () => {
 });
 
 test("keeps product changes that happen to mention updates", () => {
-  assert.equal(isDependencyUpdateTitle("Fix false crash reports during Windows updates (#520)"), false);
+  assert.equal(
+    isDependencyUpdateTitle("Fix false crash reports during Windows updates (#520)"),
+    false,
+  );
 });

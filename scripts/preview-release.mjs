@@ -30,19 +30,22 @@ export function encodedPreviewVersion(tag) {
 }
 
 export function latestPreviewRelease(releases) {
-  return releases
-    .flatMap((release) => {
-      if (release.draft || !release.prerelease) return [];
-      const version = previewVersion(release.tag_name);
-      return version ? [{ release, version }] : [];
-    })
-    .sort((left, right) => {
-      const versionOrder = comparePreviewVersions(right.version, left.version);
-      if (versionOrder !== 0) return versionOrder;
-      const dateOrder = Date.parse(right.release.published_at ?? right.release.created_at)
-        - Date.parse(left.release.published_at ?? left.release.created_at);
-      return dateOrder || right.release.id - left.release.id;
-    })[0]?.release ?? null;
+  return (
+    releases
+      .flatMap((release) => {
+        if (release.draft || !release.prerelease) return [];
+        const version = previewVersion(release.tag_name);
+        return version ? [{ release, version }] : [];
+      })
+      .sort((left, right) => {
+        const versionOrder = comparePreviewVersions(right.version, left.version);
+        if (versionOrder !== 0) return versionOrder;
+        const dateOrder =
+          Date.parse(right.release.published_at ?? right.release.created_at) -
+          Date.parse(left.release.published_at ?? left.release.created_at);
+        return dateOrder || right.release.id - left.release.id;
+      })[0]?.release ?? null
+  );
 }
 
 function main() {

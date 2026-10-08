@@ -40,8 +40,7 @@ const THUMBNAIL_NATIVE_ACTIVE_SELECTOR = `[${THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE}=
  * frame and flash the AppKit arrow / hover chrome.
  */
 export const THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE = "data-native-pointer-hover";
-const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR =
-  `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
+const THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR = `[${THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE}="true"]`;
 const THUMBNAIL_STACK_HOVER_LATCHED_SELECTOR = ".thumbnail-stack-hover-latched";
 const THUMBNAIL_STACK_CONTROL_SELECTOR = [
   ".thumbnail-overflow-cue",
@@ -55,8 +54,7 @@ const THUMBNAIL_STACK_TOOLBAR_SELECTOR = ".thumbnail-stack-toolbar";
  * hover immediately plays blur + action fade on top of the expand motion.
  */
 export const THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE = "data-thumbnail-suppress-card-hover";
-const THUMBNAIL_SUPPRESS_CARD_HOVER_SELECTOR =
-  `.thumbnail-stack[${THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE}="true"]`;
+const THUMBNAIL_SUPPRESS_CARD_HOVER_SELECTOR = `.thumbnail-stack[${THUMBNAIL_SUPPRESS_CARD_HOVER_ATTRIBUTE}="true"]`;
 /**
  * Marker on the collapsed pile while CSS `:hover` is stale. Pointer capture
  * (and a click-through window after drop) can leave `:hover` true after the
@@ -84,8 +82,7 @@ export type ThumbnailCardHoverLockKind = "motion" | "appear";
  * redundant “Show in editor” action label.
  */
 export const THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE = "data-editor-just-opened";
-const THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR =
-  `[${THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE}="true"]`;
+const THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR = `[${THUMBNAIL_EDITOR_JUST_OPENED_ATTRIBUTE}="true"]`;
 
 /** Cursor kind for the always-on-top capture previews. */
 export type ThumbnailCursorKind = "default" | "pointer" | "grab";
@@ -100,11 +97,14 @@ export function withThumbnailPointerTimeout<T>(
 ): Promise<T | null> {
   return new Promise((resolve) => {
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve(null);
-    }, Math.max(0, timeoutMs));
+    const timer = setTimeout(
+      () => {
+        if (settled) return;
+        settled = true;
+        resolve(null);
+      },
+      Math.max(0, timeoutMs),
+    );
     promise.then(
       (value) => {
         if (settled) return;
@@ -158,10 +158,7 @@ export function thumbnailCursorSyncAction(
   // reasserting any interactive cursor (pointer on buttons, grab on the drag
   // source image) on every poll. Callers also pass `force` on pointer/focus
   // events so the hand is restored immediately around native handoffs.
-  if (
-    next !== "default"
-    && (options.force || elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS)
-  ) {
+  if (next !== "default" && (options.force || elapsedMs >= THUMBNAIL_CURSOR_REASSERT_INTERVAL_MS)) {
     return "reassert";
   }
   return null;
@@ -198,9 +195,7 @@ export function applyThumbnailCssCursor(
   }
 }
 
-export function clearThumbnailCssCursor(
-  root: HTMLElement = document.documentElement,
-) {
+export function clearThumbnailCssCursor(root: HTMLElement = document.documentElement) {
   root.style.cursor = "";
   root.removeAttribute(THUMBNAIL_CURSOR_KIND_ATTRIBUTE);
 }
@@ -218,9 +213,11 @@ export function clearThumbnailCssCursor(
  */
 /** True while cards are still in the collapsed pile pose or its motion. */
 export function thumbnailStackHoldsCollapsedPose(root: Document = document): boolean {
-  return Boolean(root.querySelector(
-    ".thumbnail-stack-compact, .thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-minimized",
-  ));
+  return Boolean(
+    root.querySelector(
+      ".thumbnail-stack-compact, .thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-minimized",
+    ),
+  );
 }
 
 /** True while the collapsed pile is being dragged across the desktop. */
@@ -234,14 +231,13 @@ export function thumbnailStackIsDragging(root: ParentNode = document): boolean {
  * until the pointer actually moves.
  */
 export function thumbnailStackSuppressesCardHover(root: Document = document): boolean {
-  return thumbnailStackHoldsCollapsedPose(root)
-    || Boolean(root.querySelector(THUMBNAIL_SUPPRESS_CARD_HOVER_SELECTOR));
+  return (
+    thumbnailStackHoldsCollapsedPose(root) ||
+    Boolean(root.querySelector(THUMBNAIL_SUPPRESS_CARD_HOVER_SELECTOR))
+  );
 }
 
-export function setThumbnailCardHoverSuppressed(
-  suppressed: boolean,
-  root: ParentNode = document,
-) {
+export function setThumbnailCardHoverSuppressed(suppressed: boolean, root: ParentNode = document) {
   const stack = root.querySelector(".thumbnail-stack");
   if (!stack) return;
   if (suppressed) {
@@ -314,15 +310,19 @@ export function thumbnailAppearHoverLockShouldResampleOrigin(
 
 export function thumbnailStackHasLiveHitTarget(root: Document = document): boolean {
   if (thumbnailStackIsDragging(root)) return true;
-  if (root.querySelector(
-    ".thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-clearing",
-  )) {
+  if (
+    root.querySelector(
+      ".thumbnail-stack-minimizing, .thumbnail-stack-expanding, .thumbnail-stack-clearing",
+    )
+  ) {
     return false;
   }
   if (root.querySelector(".thumbnail-stack-minimized")) {
-    return Boolean(root.querySelector(
-      ".thumbnail-collapsed-hit-target:not(:disabled), .thumbnail-stack-control:not(:disabled)",
-    ));
+    return Boolean(
+      root.querySelector(
+        ".thumbnail-collapsed-hit-target:not(:disabled), .thumbnail-stack-control:not(:disabled)",
+      ),
+    );
   }
   const cards = root.querySelectorAll(".thumbnail-card");
   for (const card of cards) {
@@ -377,19 +377,17 @@ export function thumbnailUnknownPointerShouldIgnoreCursorEvents(
 }
 
 export function clearThumbnailNativeHover(root: ParentNode = document) {
-  root.querySelectorAll(
-    `${THUMBNAIL_NATIVE_ACTIVE_SELECTOR}, ${THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR}`,
-  )
+  root
+    .querySelectorAll(
+      `${THUMBNAIL_NATIVE_ACTIVE_SELECTOR}, ${THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR}`,
+    )
     .forEach((element) => {
       element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE);
       element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
     });
 }
 
-export function setThumbnailCollapsedHoverStale(
-  element: HTMLElement | null,
-  stale: boolean,
-) {
+export function setThumbnailCollapsedHoverStale(element: HTMLElement | null, stale: boolean) {
   if (!element) return;
   if (stale) {
     element.setAttribute(THUMBNAIL_HOVER_STALE_ATTRIBUTE, "true");
@@ -403,7 +401,8 @@ export function armThumbnailCollapsedHover(element: HTMLElement | null) {
 }
 
 function staleCollapsedHitTargets(root: ParentNode, stale: boolean) {
-  root.querySelectorAll<HTMLElement>(".thumbnail-collapsed-hit-target")
+  root
+    .querySelectorAll<HTMLElement>(".thumbnail-collapsed-hit-target")
     .forEach((target) => setThumbnailCollapsedHoverStale(target, stale));
 }
 
@@ -419,15 +418,9 @@ export function forceClearThumbnailCssHover(element: HTMLElement) {
   element.style.pointerEvents = previous;
 }
 
-export function releaseThumbnailPointerCapture(
-  element: HTMLElement,
-  pointerId: number,
-) {
+export function releaseThumbnailPointerCapture(element: HTMLElement, pointerId: number) {
   try {
-    if (
-      typeof element.hasPointerCapture === "function"
-      && element.hasPointerCapture(pointerId)
-    ) {
+    if (typeof element.hasPointerCapture === "function" && element.hasPointerCapture(pointerId)) {
       element.releasePointerCapture(pointerId);
     }
   } catch {
@@ -440,21 +433,14 @@ export function releaseThumbnailPointerCapture(
  * fires `lostpointercapture` even though the button is still down. Without a
  * recapture, later moves never reach the pile, so it can only be dragged once.
  */
-export function retainThumbnailPointerCapture(
-  element: HTMLElement,
-  pointerId: number,
-): boolean {
+export function retainThumbnailPointerCapture(element: HTMLElement, pointerId: number): boolean {
   try {
     if (typeof element.setPointerCapture !== "function") return false;
-    if (
-      typeof element.hasPointerCapture === "function"
-      && element.hasPointerCapture(pointerId)
-    ) {
+    if (typeof element.hasPointerCapture === "function" && element.hasPointerCapture(pointerId)) {
       return true;
     }
     element.setPointerCapture(pointerId);
-    return typeof element.hasPointerCapture !== "function"
-      || element.hasPointerCapture(pointerId);
+    return typeof element.hasPointerCapture !== "function" || element.hasPointerCapture(pointerId);
   } catch {
     return false;
   }
@@ -493,16 +479,12 @@ export function releaseThumbnailCapturedHover(
  * Viewer activation rerenders the card and would otherwise overwrite an
  * imperatively-added class for one frame before the next pointer poll.
  */
-export function setThumbnailNativeActiveCard(
-  card: Element,
-  root: ParentNode = document,
-) {
-  root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
-    .forEach((element) => {
-      if (element !== card) {
-        element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE);
-      }
-    });
+export function setThumbnailNativeActiveCard(card: Element, root: ParentNode = document) {
+  root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR).forEach((element) => {
+    if (element !== card) {
+      element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE);
+    }
+  });
   card.setAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE, "true");
 }
 
@@ -531,11 +513,7 @@ export function rearmThumbnailEditorControlHover(
   }
 }
 
-function thumbnailElementFromPoint(
-  x: number,
-  y: number,
-  root: Document,
-): Element | null {
+function thumbnailElementFromPoint(x: number, y: number, root: Document): Element | null {
   if (typeof root.elementFromPoint !== "function") return null;
   return root.elementFromPoint(x, y);
 }
@@ -605,9 +583,7 @@ function thumbnailStackMinimizeControlAtPoint(
   // all must not steal that hit — only the morphing Show less pill owns the
   // leftover toolbar chrome around it.
   if (!containsPoint(toolbar, x, y)) return null;
-  const minimize = toolbar.querySelector<HTMLElement>(
-    ".thumbnail-stack-minimize:not(:disabled)",
-  );
+  const minimize = toolbar.querySelector<HTMLElement>(".thumbnail-stack-minimize:not(:disabled)");
   if (minimize && controls.includes(minimize)) return minimize;
   return null;
 }
@@ -663,7 +639,8 @@ export function applyThumbnailNativeHover(
   root: Document = document,
 ): ThumbnailCursorKind {
   if (!position.inside) {
-    root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
+    root
+      .querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
       .forEach((control) => rearmThumbnailEditorControlHover(control, { fromLeave: true }));
     staleCollapsedHitTargets(root, true);
     clearThumbnailNativeHover(root);
@@ -673,36 +650,28 @@ export function applyThumbnailNativeHover(
   // React pointerleave covers Windows/Linux and an active WebView. The native
   // poll owns this re-arm path for a non-key macOS preview, where WebKit may not
   // dispatch hover transitions while another application stays active.
-  root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR)
-    .forEach((control) => {
-      if (!containsPoint(control, position.x, position.y)) {
-        rearmThumbnailEditorControlHover(control, { fromLeave: true });
-      }
-    });
+  root.querySelectorAll<HTMLElement>(THUMBNAIL_EDITOR_JUST_OPENED_SELECTOR).forEach((control) => {
+    if (!containsPoint(control, position.x, position.y)) {
+      rearmThumbnailEditorControlHover(control, { fromLeave: true });
+    }
+  });
 
-  const currentButton = root.querySelector<HTMLElement>(
-    THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR,
-  );
+  const currentButton = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR);
   const currentCard = root.querySelector<HTMLElement>(THUMBNAIL_NATIVE_ACTIVE_SELECTOR);
   const directTarget = thumbnailElementFromPoint(position.x, position.y, root);
-  const stackControl = thumbnailStackControlAtPoint(
-    position.x,
-    position.y,
-    directTarget,
-    root,
-  );
+  const stackControl = thumbnailStackControlAtPoint(position.x, position.y, directTarget, root);
   if (stackControl) {
-    const ignoreCollapsedHover = stackControl.classList.contains(
-      "thumbnail-collapsed-hit-target",
-    ) && Boolean(root.querySelector(THUMBNAIL_STACK_HOVER_LATCHED_SELECTOR));
-    root.querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
+    const ignoreCollapsedHover =
+      stackControl.classList.contains("thumbnail-collapsed-hit-target") &&
+      Boolean(root.querySelector(THUMBNAIL_STACK_HOVER_LATCHED_SELECTOR));
+    root
+      .querySelectorAll(THUMBNAIL_NATIVE_ACTIVE_SELECTOR)
       .forEach((element) => element.removeAttribute(THUMBNAIL_NATIVE_ACTIVE_ATTRIBUTE));
-    root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR)
-      .forEach((element) => {
-        if (ignoreCollapsedHover || element !== stackControl) {
-          element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
-        }
-      });
+    root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR).forEach((element) => {
+      if (ignoreCollapsedHover || element !== stackControl) {
+        element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+      }
+    });
     if (!ignoreCollapsedHover) {
       armThumbnailCollapsedHover(stackControl);
       stackControl.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
@@ -714,12 +683,9 @@ export function applyThumbnailNativeHover(
     clearThumbnailNativeHover(root);
     return "default";
   }
-  const card = directTarget?.closest(".thumbnail-card")
-    ?? (
-      currentCard && containsPoint(currentCard, position.x, position.y)
-        ? currentCard
-        : null
-    );
+  const card =
+    directTarget?.closest(".thumbnail-card") ??
+    (currentCard && containsPoint(currentCard, position.x, position.y) ? currentCard : null);
   if (!card || card.classList.contains("thumbnail-exiting")) {
     clearThumbnailNativeHover(root);
     return "default";
@@ -729,28 +695,25 @@ export function applyThumbnailNativeHover(
   // Activate the card first, then hit-test again so buttons can be detected
   // while the preview window is not the active macOS window.
   setThumbnailNativeActiveCard(card, root);
-  const target = thumbnailElementFromPoint(position.x, position.y, root)
-    ?.closest("button");
+  const target = thumbnailElementFromPoint(position.x, position.y, root)?.closest("button");
   const directButton = target && card.contains(target) ? target : null;
   // A focus handoff or :active scale can make WebKit report the preview image
   // for one poll even though the pointer has not left the button. Keep the last
   // button while the native coordinates remain within it so the cursor does not
   // flash to the default arrow.
-  const button = directButton
-    ?? (
-      currentButton
-      && card.contains(currentButton)
-      && containsPoint(currentButton, position.x, position.y)
-        ? currentButton
-        : null
-    );
+  const button =
+    directButton ??
+    (currentButton &&
+    card.contains(currentButton) &&
+    containsPoint(currentButton, position.x, position.y)
+      ? currentButton
+      : null);
 
-  root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR)
-    .forEach((element) => {
-      if (element !== button) {
-        element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
-      }
-    });
+  root.querySelectorAll(THUMBNAIL_NATIVE_POINTER_HOVER_SELECTOR).forEach((element) => {
+    if (element !== button) {
+      element.removeAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE);
+    }
+  });
   if (button) {
     button.setAttribute(THUMBNAIL_NATIVE_POINTER_HOVER_ATTRIBUTE, "true");
   }

@@ -26,7 +26,11 @@ export function detectPreviewDownloadId(hints: NavigatorHints): PreviewDownloadI
   if (/^win/i.test(ch) || /win/i.test(platform) || /windows/i.test(ua)) {
     return "windows";
   }
-  if (/^linux/i.test(ch) || /linux/i.test(platform) || (/linux/i.test(ua) && !/android/i.test(ua))) {
+  if (
+    /^linux/i.test(ch) ||
+    /linux/i.test(platform) ||
+    (/linux/i.test(ua) && !/android/i.test(ua))
+  ) {
     return /ubuntu|debian|linux mint|pop!_os|elementary/i.test(ua) ? "linux-deb" : "linux-appimage";
   }
   return null;

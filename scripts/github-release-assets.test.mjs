@@ -9,7 +9,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const helperPath = fileURLToPath(new URL("./github-release-assets.mjs", import.meta.url));
 const workflowPath = fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url));
 const RELATIVE_IMPORT = /from\s+["'](\.\/[^"']+)["']/gu;
-const SPARSE_CHECKOUT = /name: Load the current release asset helper[\s\S]*?sparse-checkout:\s*\|\n((?:[ \t]+scripts\/.+\n)+)/u;
+const SPARSE_CHECKOUT =
+  /name: Load the current release asset helper[\s\S]*?sparse-checkout:\s*\|\n((?:[ \t]+scripts\/.+\n)+)/u;
 
 function macosHelperSparseCheckout() {
   const workflow = readFileSync(workflowPath, "utf8");

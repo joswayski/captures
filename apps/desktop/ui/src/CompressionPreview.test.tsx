@@ -14,20 +14,23 @@ describe("CompressionPreview", () => {
       />,
     );
 
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
     expect(screen.getByAltText("Before compression")).toHaveAttribute("src", "blob:before");
     expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:after");
-    expect(screen.getByText((_, node) => node?.textContent === "Before · 1.0 MB")).toBeInTheDocument();
-    expect(screen.getByText((_, node) => (
-      node?.textContent === "After · 250 KB · 75% smaller"
-    ))).toBeInTheDocument();
-    expect(screen.getByText((_, node) => (
-      node?.classList.contains("compression-preview-savings") === true
-      && node.textContent === " · 75% smaller"
-    ))).toBeInTheDocument();
-    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-      .toHaveValue("50");
+    expect(
+      screen.getByText((_, node) => node?.textContent === "Before · 1.0 MB"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText((_, node) => node?.textContent === "After · 250 KB · 75% smaller"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, node) =>
+          node?.classList.contains("compression-preview-savings") === true &&
+          node.textContent === " · 75% smaller",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Before and after comparison" })).toHaveValue("50");
   });
 
   it("shows the original left of the divider and keeps the handle inside the badges", () => {
@@ -67,8 +70,7 @@ describe("CompressionPreview", () => {
     const after = screen.getByRole("img", { name: "After compression" });
     expect(after.tagName).toBe("CANVAS");
     expect(after.parentElement).toHaveClass("compression-preview-after-clip");
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toHaveClass("is-live");
+    expect(screen.getByRole("group", { name: "Compression comparison" })).toHaveClass("is-live");
   });
 
   it("sizes the live after canvas to the editor frame so text is not stretched", () => {
@@ -126,8 +128,9 @@ describe("CompressionPreview", () => {
     );
 
     expect(screen.getByText("After · Processing…")).toBeInTheDocument();
-    expect(screen.queryByRole("slider", { name: "Before and after comparison" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("slider", { name: "Before and after comparison" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not cover the editor while the before/after images are empty", () => {
@@ -175,8 +178,7 @@ describe("CompressionPreview", () => {
       />,
     );
 
-    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-      .toHaveValue("72");
+    expect(screen.getByRole("slider", { name: "Before and after comparison" })).toHaveValue("72");
     expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:after-2");
   });
 
@@ -199,8 +201,9 @@ describe("CompressionPreview", () => {
     expect(screen.getByAltText("Before compression")).toBeInTheDocument();
     expect(screen.getByAltText("After compression")).toBeInTheDocument();
     expect(screen.getByText("After · Processing…")).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "Compression processing" }))
-      .toHaveTextContent("Processing");
+    expect(screen.getByRole("status", { name: "Compression processing" })).toHaveTextContent(
+      "Processing",
+    );
     const split = screen.getByRole("slider", { name: "Before and after comparison" });
     expect(split).toBeDisabled();
     expect(screen.getByRole("button", { name: "Drag to compare before and after" })).toBeDisabled();
@@ -307,8 +310,9 @@ describe("CompressionPreview", () => {
       />,
     );
 
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toHaveClass("is-suppressed");
+    expect(screen.getByRole("group", { name: "Compression comparison" })).toHaveClass(
+      "is-suppressed",
+    );
   });
 
   it("restores a saved split and keeps the circular handle draggable while drawing", () => {
@@ -348,10 +352,8 @@ describe("CompressionPreview", () => {
         splitDragEnabled={false}
       />,
     );
-    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-      .toHaveValue("72");
-    expect(screen.getByRole("button", { name: "Drag to compare before and after" }))
-      .toBeEnabled();
+    expect(screen.getByRole("slider", { name: "Before and after comparison" })).toHaveValue("72");
+    expect(screen.getByRole("button", { name: "Drag to compare before and after" })).toBeEnabled();
   });
 
   it("drags the circular handle even when drawing is allowed through the overlay", () => {
@@ -394,8 +396,7 @@ describe("CompressionPreview", () => {
     });
     expect(handle.setPointerCapture).toHaveBeenCalledWith(11);
     expect(onSplitChange).toHaveBeenCalledWith(40);
-    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-      .toHaveValue("40");
+    expect(screen.getByRole("slider", { name: "Before and after comparison" })).toHaveValue("40");
 
     fireEvent.pointerMove(handle, {
       pointerId: 11,
@@ -403,7 +404,6 @@ describe("CompressionPreview", () => {
       clientY: 50,
     });
     expect(onSplitChange).toHaveBeenCalledWith(70);
-    expect(screen.getByRole("slider", { name: "Before and after comparison" }))
-      .toHaveValue("70");
+    expect(screen.getByRole("slider", { name: "Before and after comparison" })).toHaveValue("70");
   });
 });

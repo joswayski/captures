@@ -276,8 +276,7 @@ function capturableOverlayWindows<T extends { width: number; height: number }>(
 }
 
 function requestCapturePointerPosition(): Promise<ThumbnailPointerPosition | null> {
-  return invoke<ThumbnailPointerPosition | null>("get_capture_pointer_position")
-    .catch(() => null);
+  return invoke<ThumbnailPointerPosition | null>("get_capture_pointer_position").catch(() => null);
 }
 // Slightly past dismiss hold (450ms fade + 580ms shared settle) so animationend
 // remains the primary completion path; fallback only covers missed events.
@@ -319,7 +318,7 @@ function afterNextPaint(callback: () => void) {
 
 /** Frozen overlays wait for the snapshot image; live selectors use a synthetic key. */
 function freezeFrameRevealKey(session: { frozen?: boolean; snapshot_url: string }): string {
-  return session.frozen === false ? (session.snapshot_url || "live") : session.snapshot_url;
+  return session.frozen === false ? session.snapshot_url || "live" : session.snapshot_url;
 }
 
 function sessionShowsFreezeFrame(session: { frozen?: boolean } | null | undefined): boolean {
@@ -372,10 +371,12 @@ function useAppearanceSync() {
 
     void listen<AppSettings>("settings-changed", ({ payload }) => {
       if (active) applySettings(payload);
-    }).then((dispose) => {
-      if (active) unlisten = dispose;
-      else dispose();
-    }).catch(() => undefined);
+    })
+      .then((dispose) => {
+        if (active) unlisten = dispose;
+        else dispose();
+      })
+      .catch(() => undefined);
 
     return () => {
       active = false;
@@ -447,9 +448,11 @@ function useTrayNoticeCaret() {
       } else if (active && payload.edge === "none") {
         setCaret(null);
       }
-    }).then((unlisten) => {
-      cleanup.add(unlisten);
-    }).catch(() => undefined);
+    })
+      .then((unlisten) => {
+        cleanup.add(unlisten);
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
       cleanup.dispose();
@@ -459,17 +462,9 @@ function useTrayNoticeCaret() {
   return caret;
 }
 
-function TrayNoticeShell({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+function TrayNoticeShell({ children, className }: { children: ReactNode; className?: string }) {
   const caret = useTrayNoticeCaret();
-  const caretStyle = caret
-    ? ({ "--tray-caret-x": `${caret.x}px` } as CSSProperties)
-    : undefined;
+  const caretStyle = caret ? ({ "--tray-caret-x": `${caret.x}px` } as CSSProperties) : undefined;
 
   return (
     <div
@@ -504,17 +499,13 @@ export function StartupNotice() {
   return (
     <TrayNoticeShell className="startup-notice">
       <div className="startup-notice-card" role="status">
-        <button
-          className="startup-notice-dismiss"
-          type="button"
-          aria-label="Close"
-          onClick={close}
-        >
+        <button className="startup-notice-dismiss" type="button" aria-label="Close" onClick={close}>
           <CloseIcon />
         </button>
         <strong>Captures is ready to use</strong>
         <p>
-          Open New Capture with {keys.map((key, index) => (
+          Open New Capture with{" "}
+          {keys.map((key, index) => (
             <kbd key={`${key}-${index}`}>{key}</kbd>
           ))}
         </p>
@@ -545,9 +536,11 @@ export function RecordingSavedNotice() {
         setError("");
         setPermanentlySaved(false);
       },
-    ).then((unlisten) => {
-      cleanup.add(unlisten);
-    }).catch(() => undefined);
+    )
+      .then((unlisten) => {
+        cleanup.add(unlisten);
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
       cleanup.dispose();
@@ -602,12 +595,14 @@ export function RecordingSavedNotice() {
 
   return (
     <main key={notice.generation} className="recording-saved-notice">
-      <span className="recording-saved-icon" aria-hidden="true"><CheckIcon /></span>
+      <span className="recording-saved-icon" aria-hidden="true">
+        <CheckIcon />
+      </span>
       <div className="recording-saved-copy">
         <strong>{permanentlySaved ? "Recording saved" : "Recording ready"}</strong>
         <p>
-          {error
-            || (permanentlySaved
+          {error ||
+            (permanentlySaved
               ? "Saved to your Captures folder."
               : "Kept in Capture History for 30 days. Save a copy anytime.")}
         </p>
@@ -618,21 +613,29 @@ export function RecordingSavedNotice() {
           className="recording-saved-reveal"
           disabled={busy || !artifactId}
           onClick={() => void reveal()}
-        ><FolderIcon />{busy ? "Opening…" : "Show in Folder"}</button>
+        >
+          <FolderIcon />
+          {busy ? "Opening…" : "Show in Folder"}
+        </button>
       ) : (
         <button
           type="button"
           className="recording-saved-reveal"
           disabled={busy || !artifactId}
           onClick={() => void save()}
-        ><SaveIcon />{busy ? "Saving…" : "Save file"}</button>
+        >
+          <SaveIcon />
+          {busy ? "Saving…" : "Save file"}
+        </button>
       )}
       <button
         type="button"
         className="recording-saved-dismiss"
         aria-label="Dismiss"
         onClick={dismiss}
-      >×</button>
+      >
+        ×
+      </button>
     </main>
   );
 }
@@ -655,15 +658,17 @@ export function RecordingControlsHiddenNotice() {
 
   return (
     <main className="recording-controls-hidden-notice" role="status">
-      <span className="recording-controls-hidden-icon" aria-hidden="true"><CaptureIcon /></span>
+      <span className="recording-controls-hidden-icon" aria-hidden="true">
+        <CaptureIcon />
+      </span>
       <div>
         <strong>Recording controls hidden</strong>
         <p>
           Open Captures from the {trayLabel}, or press{" "}
           {keys.map((key, index) => (
             <kbd key={`${key}-${index}`}>{key}</kbd>
-          ))}
-          {" "}to bring them back.
+          ))}{" "}
+          to bring them back.
         </p>
       </div>
     </main>
@@ -683,10 +688,12 @@ function useUpdateStatus() {
       .catch(() => undefined);
     void listen<UpdateStatus>("update-status-changed", ({ payload }) => {
       if (active) setStatus(payload);
-    }).then((dispose) => {
-      if (active) unlisten = dispose;
-      else dispose();
-    }).catch(() => undefined);
+    })
+      .then((dispose) => {
+        if (active) unlisten = dispose;
+        else dispose();
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
       unlisten?.();
@@ -696,8 +703,7 @@ function useUpdateStatus() {
   return status;
 }
 
-const OPEN_CAPTURES_UPDATE_WARNING =
-  "Open captures will close. Unsaved edits are kept as drafts.";
+const OPEN_CAPTURES_UPDATE_WARNING = "Open captures will close. Unsaved edits are kept as drafts.";
 
 function UpdateDownloadFallback({ source }: { source: "notice" | "preferences" }) {
   const download = (
@@ -715,14 +721,14 @@ function UpdateDownloadFallback({ source }: { source: "notice" | "preferences" }
       {source === "preferences" ? (
         linuxRecovery ? (
           <>
-            If this copy cannot update itself, {download}. Debian packages replace this
-            app; AppImage users should replace ~/.local/bin/Captures.AppImage. Settings
-            and captures stay.
+            If this copy cannot update itself, {download}. Debian packages replace this app;
+            AppImage users should replace ~/.local/bin/Captures.AppImage. Settings and captures
+            stay.
           </>
         ) : (
           <>
-            If this copy cannot update itself, {download} and install over it. Settings and
-            captures stay.
+            If this copy cannot update itself, {download} and install over it. Settings and captures
+            stay.
           </>
         )
       ) : (
@@ -748,9 +754,11 @@ export function UpdateNotice() {
       .catch(() => undefined);
     void listen<AppSettings>("settings-changed", ({ payload }) => {
       if (active) setShowChangelog(payload.show_update_changelog !== false);
-    }).then((unlisten) => {
-      cleanup.add(unlisten);
-    }).catch(() => undefined);
+    })
+      .then((unlisten) => {
+        cleanup.add(unlisten);
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
       cleanup.dispose();
@@ -760,9 +768,11 @@ export function UpdateNotice() {
   const persistShowChangelog = (next: boolean) => {
     setShowChangelog(next);
     void invoke<AppSettings>("get_settings")
-      .then((current) => invoke("update_settings", {
-        settings: { ...current, show_update_changelog: next },
-      }))
+      .then((current) =>
+        invoke("update_settings", {
+          settings: { ...current, show_update_changelog: next },
+        }),
+      )
       .catch(() => undefined);
   };
 
@@ -847,211 +857,241 @@ export function UpdateNotice() {
           `update-notice-${visualState}`,
           "tray-notice-card",
           notesVisible ? "" : "update-notice-compact",
-        ].filter(Boolean).join(" ")}
+        ]
+          .filter(Boolean)
+          .join(" ")}
         role="dialog"
         tabIndex={-1}
         aria-labelledby="update-notice-title"
         aria-describedby="update-notice-description"
       >
-      <header className="update-notice-header">
-        <div className="update-app-icon" aria-hidden="true">
-          {visualState === "restarting" ? (
-            <CheckIcon />
-          ) : visualState === "error" ? (
-            <WarningIcon />
-          ) : visualState === "downloading" || visualState === "checking" || visualState === "loading" ? (
-            <span className="update-spinner" />
-          ) : (
-            <CaptureIcon />
+        <header className="update-notice-header">
+          <div className="update-app-icon" aria-hidden="true">
+            {visualState === "restarting" ? (
+              <CheckIcon />
+            ) : visualState === "error" ? (
+              <WarningIcon />
+            ) : visualState === "downloading" ||
+              visualState === "checking" ||
+              visualState === "loading" ? (
+              <span className="update-spinner" />
+            ) : (
+              <CaptureIcon />
+            )}
+          </div>
+          <div className="update-notice-copy">
+            <h1 id="update-notice-title">{title}</h1>
+            <p id="update-notice-description">{description}</p>
+          </div>
+          {available && !error && !notesVisible && (
+            <button
+              type="button"
+              className="update-notes-reveal"
+              onClick={() => persistShowChangelog(true)}
+            >
+              What’s new
+            </button>
           )}
-        </div>
-        <div className="update-notice-copy">
-          <h1 id="update-notice-title">{title}</h1>
-          <p id="update-notice-description">{description}</p>
-        </div>
-        {available && !error && !notesVisible && (
-          <button
-            type="button"
-            className="update-notes-reveal"
-            onClick={() => persistShowChangelog(true)}
-          >
-            What’s new
-          </button>
-        )}
-      </header>
+        </header>
 
-      <div className={`update-notice-body${notesVisible ? "" : " update-notice-body-status"}`}>
-        {notesVisible && (
-          <section className={`update-notes${stacked ? " update-notes-stacked" : ""}`} aria-label="What's new">
-            <div className="update-notes-heading">
-              <h2>What’s new</h2>
-              <button
-                type="button"
-                className="update-notes-toggle"
-                onClick={() => persistShowChangelog(false)}
+        <div className={`update-notice-body${notesVisible ? "" : " update-notice-body-status"}`}>
+          {notesVisible && (
+            <section
+              className={`update-notes${stacked ? " update-notes-stacked" : ""}`}
+              aria-label="What's new"
+            >
+              <div className="update-notes-heading">
+                <h2>What’s new</h2>
+                <button
+                  type="button"
+                  className="update-notes-toggle"
+                  onClick={() => persistShowChangelog(false)}
+                >
+                  Hide
+                </button>
+              </div>
+              {stacked && (
+                <p className="update-notes-intro">
+                  This update includes all of the following changes:
+                </p>
+              )}
+              {groups.length > 0 ? (
+                <div className="update-notes-scroll">
+                  {groups.map((group) => {
+                    const headingId = `update-notes-${group.version || group.displayVersion}`;
+                    return (
+                      <section
+                        key={group.version || group.displayVersion}
+                        className="update-notes-group"
+                        aria-labelledby={stacked ? headingId : undefined}
+                      >
+                        {stacked && <h3 id={headingId}>{group.displayVersion}</h3>}
+                        {group.items.length > 0 ? (
+                          <ul className="update-notes-list">
+                            {group.items.map((note, index) => {
+                              const pullRequest = note.pullRequest;
+                              return (
+                                <li key={`${group.version}-${index}-${note.text}`}>
+                                  {note.text}
+                                  {pullRequest ? (
+                                    <>
+                                      {" "}
+                                      <button
+                                        type="button"
+                                        className="update-notes-pr"
+                                        aria-label={`Open pull request ${pullRequest.number}`}
+                                        onClick={() =>
+                                          void invoke("open_update_changelog_url", {
+                                            url: pullRequest.url,
+                                          })
+                                        }
+                                      >
+                                        #{pullRequest.number}
+                                      </button>
+                                    </>
+                                  ) : null}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        ) : (
+                          <p className="update-notes-empty">
+                            Release notes aren’t available for this Preview.
+                          </p>
+                        )}
+                      </section>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="update-notes-empty">
+                  Release notes aren’t available for this update.
+                </p>
+              )}
+            </section>
+          )}
+
+          {downloading && (
+            <section className="update-download" aria-label="Update installation progress">
+              <div className="update-progress-label">
+                <span>
+                  Downloading <small>{downloadProgress}</small>
+                </span>
+                {progress !== null && <strong>{progress}%</strong>}
+              </div>
+              <div
+                className={`update-progress${progress === null ? " update-progress-indeterminate" : ""}`}
+                role="progressbar"
+                aria-label="Downloading update"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progress ?? undefined}
+                aria-valuetext={
+                  progress === null
+                    ? downloadProgress
+                    : `${downloadProgress}, ${progress}% downloaded`
+                }
               >
-                Hide
-              </button>
-            </div>
-            {stacked && (
-              <p className="update-notes-intro">
-                This update includes all of the following changes:
+                <span style={{ width: `${progress ?? 34}%` }} />
+              </div>
+            </section>
+          )}
+
+          {restarting && (
+            <section className="update-restart" role="status">
+              <p className="update-status-message update-restarting">
+                Reopening in {restarting.seconds_remaining} seconds…
+              </p>
+              <div className="update-restart-progress" aria-hidden="true">
+                <span />
+              </div>
+            </section>
+          )}
+
+          {error && (
+            <>
+              <p className="update-error" role="alert">
+                {error}
+              </p>
+              <UpdateDownloadFallback source="notice" />
+            </>
+          )}
+
+          {!available &&
+            !downloading &&
+            !restarting &&
+            !error &&
+            status?.state === "up_to_date" && (
+              <p className="update-status-message" role="status">
+                No updates are available.
               </p>
             )}
-            {groups.length > 0 ? (
-              <div className="update-notes-scroll">
-                {groups.map((group) => {
-                  const headingId = `update-notes-${group.version || group.displayVersion}`;
-                  return (
-                    <section
-                      key={group.version || group.displayVersion}
-                      className="update-notes-group"
-                      aria-labelledby={stacked ? headingId : undefined}
-                    >
-                      {stacked && <h3 id={headingId}>{group.displayVersion}</h3>}
-                      {group.items.length > 0 ? (
-                        <ul className="update-notes-list">
-                          {group.items.map((note, index) => {
-                            const pullRequest = note.pullRequest;
-                            return (
-                              <li key={`${group.version}-${index}-${note.text}`}>
-                                {note.text}
-                                {pullRequest ? (
-                                  <>
-                                    {" "}
-                                    <button
-                                      type="button"
-                                      className="update-notes-pr"
-                                      aria-label={`Open pull request ${pullRequest.number}`}
-                                      onClick={() => void invoke("open_update_changelog_url", {
-                                        url: pullRequest.url,
-                                      })}
-                                    >
-                                      #{pullRequest.number}
-                                    </button>
-                                  </>
-                                ) : null}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      ) : (
-                        <p className="update-notes-empty">
-                          Release notes aren’t available for this Preview.
-                        </p>
-                      )}
-                    </section>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="update-notes-empty">Release notes aren’t available for this update.</p>
+
+          {!available &&
+            !downloading &&
+            !restarting &&
+            !error &&
+            status?.state !== "up_to_date" && (
+              <p className="update-status-message update-checking" role="status">
+                Checking…
+              </p>
             )}
-          </section>
-        )}
+        </div>
 
-        {downloading && (
-          <section className="update-download" aria-label="Update installation progress">
-            <div className="update-progress-label">
-              <span>Downloading <small>{downloadProgress}</small></span>
-              {progress !== null && <strong>{progress}%</strong>}
-            </div>
-            <div
-              className={`update-progress${progress === null ? " update-progress-indeterminate" : ""}`}
-              role="progressbar"
-              aria-label="Downloading update"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={progress ?? undefined}
-              aria-valuetext={progress === null ? downloadProgress : `${downloadProgress}, ${progress}% downloaded`}
-            >
-              <span style={{ width: `${progress ?? 34}%` }} />
-            </div>
-          </section>
-        )}
-
-        {restarting && (
-          <section className="update-restart" role="status">
-            <p className="update-status-message update-restarting">
-              Reopening in {restarting.seconds_remaining} seconds…
-            </p>
-            <div
-              className="update-restart-progress"
-              aria-hidden="true"
-            >
-              <span />
-            </div>
-          </section>
-        )}
-
-        {error && (
-          <>
-            <p className="update-error" role="alert">{error}</p>
-            <UpdateDownloadFallback source="notice" />
-          </>
-        )}
-
-        {!available && !downloading && !restarting && !error && status?.state === "up_to_date" && (
-          <p className="update-status-message" role="status">No updates are available.</p>
-        )}
-
-        {!available && !downloading && !restarting && !error && status?.state !== "up_to_date" && (
-          <p className="update-status-message update-checking" role="status">
-            Checking…
+        {available && !error && available.will_close_open_captures && (
+          <p className="update-close-warning" role="status">
+            <span className="update-close-warning-icon" aria-hidden="true">
+              <WarningIcon />
+            </span>
+            {OPEN_CAPTURES_UPDATE_WARNING}
           </p>
         )}
-      </div>
 
-      {available && !error && available.will_close_open_captures && (
-        <p className="update-close-warning" role="status">
-          <span className="update-close-warning-icon" aria-hidden="true"><WarningIcon /></span>
-          {OPEN_CAPTURES_UPDATE_WARNING}
-        </p>
-      )}
-
-      {!downloading && !restarting && (
-        <footer className="update-notice-footer">
-          <button
-            className="update-dismiss"
-            type="button"
-            disabled={installing}
-            onClick={close}
-          >
-            {available ? "Later" : "Close"}
-          </button>
-          {available && !error && (
-            <button
-              className="primary"
-              type="button"
-              disabled={installing}
-              onClick={() => void run("install_update")}
-            >
-              {available.installable ? "Update now" : "View release"}
+        {!downloading && !restarting && (
+          <footer className="update-notice-footer">
+            <button className="update-dismiss" type="button" disabled={installing} onClick={close}>
+              {available ? "Later" : "Close"}
             </button>
-          )}
-          {error && (
-            <button
-              className="primary"
-              type="button"
-              disabled={installing}
-              onClick={() =>
-                void run(
-                  available || (status?.state === "error" && status.retry_install)
-                    ? "install_update"
-                    : "check_for_updates",
-                )
-              }
-            >
-              Try again
-            </button>
-          )}
-          {!available && !error && status?.state !== "checking" && status?.state !== "up_to_date" && (
-            <button className="primary" type="button" onClick={() => void run("check_for_updates")}>
-              Check again
-            </button>
-          )}
-        </footer>
-      )}
+            {available && !error && (
+              <button
+                className="primary"
+                type="button"
+                disabled={installing}
+                onClick={() => void run("install_update")}
+              >
+                {available.installable ? "Update now" : "View release"}
+              </button>
+            )}
+            {error && (
+              <button
+                className="primary"
+                type="button"
+                disabled={installing}
+                onClick={() =>
+                  void run(
+                    available || (status?.state === "error" && status.retry_install)
+                      ? "install_update"
+                      : "check_for_updates",
+                  )
+                }
+              >
+                Try again
+              </button>
+            )}
+            {!available &&
+              !error &&
+              status?.state !== "checking" &&
+              status?.state !== "up_to_date" && (
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => void run("check_for_updates")}
+                >
+                  Check again
+                </button>
+              )}
+          </footer>
+        )}
       </div>
     </TrayNoticeShell>
   );
@@ -1091,7 +1131,9 @@ function UpdatePreferences({
             ? "Up to date"
             : "";
   const detail = downloading
-    ? progress === null ? downloadProgress : `${downloadProgress} · ${progress}%`
+    ? progress === null
+      ? downloadProgress
+      : `${downloadProgress} · ${progress}%`
     : restarting
       ? "Reopening Captures…"
       : available && installableDownloadSize
@@ -1108,12 +1150,15 @@ function UpdatePreferences({
   };
 
   return (
-    <section className="settings-card update-settings" id="updates" aria-labelledby="updates-heading">
+    <section
+      className="settings-card update-settings"
+      id="updates"
+      aria-labelledby="updates-heading"
+    >
       <header className="settings-card-header">
         <h2 id="updates-heading">Updates</h2>
         <p>
-          Preview builds check for a new version automatically. Update now installs it in
-          place.
+          Preview builds check for a new version automatically. Update now installs it in place.
         </p>
       </header>
       <div className="settings-utility-row update-settings-row">
@@ -1139,8 +1184,12 @@ function UpdatePreferences({
               : downloading
                 ? "Installing…"
                 : available
-                  ? available.installable ? "Update now" : "View release"
-                  : status?.state === "checking" ? "Checking now…" : "Check Now"}
+                  ? available.installable
+                    ? "Update now"
+                    : "View release"
+                  : status?.state === "checking"
+                    ? "Checking now…"
+                    : "Check Now"}
           </button>
           <div
             className={`update-settings-status${status?.state === "up_to_date" ? " update-settings-status-current" : ""}`}
@@ -1167,9 +1216,15 @@ function UpdatePreferences({
         <p className="update-settings-warning">{OPEN_CAPTURES_UPDATE_WARNING}</p>
       )}
       {status?.state === "error" && !actionError && (
-        <p className="update-settings-error" role="alert">{status.message}</p>
+        <p className="update-settings-error" role="alert">
+          {status.message}
+        </p>
       )}
-      {actionError && <p className="update-settings-error" role="alert">{actionError}</p>}
+      {actionError && (
+        <p className="update-settings-error" role="alert">
+          {actionError}
+        </p>
+      )}
       <UpdateDownloadFallback source="preferences" />
       <label className="check-row switch-row">
         <input
@@ -1180,8 +1235,8 @@ function UpdatePreferences({
         <span>
           Show what’s new on update notices
           <small>
-            Lists every Preview since the version you have. Turn this off for a
-            compact Update now prompt.
+            Lists every Preview since the version you have. Turn this off for a compact Update now
+            prompt.
           </small>
         </span>
       </label>
@@ -1253,7 +1308,9 @@ function ArtifactViewer() {
       <header className="viewer-toolbar">
         <div>
           <strong>Captures Preview</strong>
-          <span>{artifact.width} × {artifact.height}</span>
+          <span>
+            {artifact.width} × {artifact.height}
+          </span>
         </div>
         <div className="viewer-toolbar-actions">
           <button
@@ -1267,14 +1324,19 @@ function ArtifactViewer() {
                 .finally(() => setOpeningEditor(false));
             }}
           >
-            <EditIcon />{openingEditor ? "Opening…" : "Edit"}
+            <EditIcon />
+            {openingEditor ? "Opening…" : "Edit"}
           </button>
           <button type="button" onClick={() => setFit((current) => !current)}>
             {fit ? "Actual size" : "Fit to window"}
           </button>
         </div>
       </header>
-      {editorError && <p className="viewer-error" role="alert">{editorError}</p>}
+      {editorError && (
+        <p className="viewer-error" role="alert">
+          {editorError}
+        </p>
+      )}
       <div className="viewer-canvas" onDoubleClick={() => setFit((current) => !current)}>
         <img
           key={artifact.id}
@@ -1376,9 +1438,7 @@ export function CaptureHistory() {
     video: entries.filter((entry) => entry.kind === "video").length,
     gif: entries.filter((entry) => entry.kind === "gif").length,
   };
-  const filtered = filter === "all"
-    ? entries
-    : entries.filter((entry) => entry.kind === filter);
+  const filtered = filter === "all" ? entries : entries.filter((entry) => entry.kind === filter);
 
   return (
     <main className="capture-history">
@@ -1387,7 +1447,10 @@ export function CaptureHistory() {
           <div className="history-heading">
             <p className="eyebrow">On this device</p>
             <h1>Capture History</h1>
-            <p>Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.</p>
+            <p>
+              Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here
+              for 30 days.
+            </p>
           </div>
           {!loading && entries.length > 0 && (
             <div className="history-header-actions">
@@ -1407,12 +1470,14 @@ export function CaptureHistory() {
               )}
               <button
                 type="button"
-                className={confirmingClearAll
-                  ? "history-clear-all history-clear-all-confirm"
-                  : "history-clear-all"}
-                aria-label={confirmingClearAll
-                  ? "Confirm delete all captures"
-                  : "Delete all captures"}
+                className={
+                  confirmingClearAll
+                    ? "history-clear-all history-clear-all-confirm"
+                    : "history-clear-all"
+                }
+                aria-label={
+                  confirmingClearAll ? "Confirm delete all captures" : "Delete all captures"
+                }
                 disabled={clearingAll}
                 onClick={() => void clearAllHistory()}
               >
@@ -1447,16 +1512,24 @@ export function CaptureHistory() {
           </div>
         )}
 
-        {error && <p className="history-error" role="alert">{error}</p>}
+        {error && (
+          <p className="history-error" role="alert">
+            {error}
+          </p>
+        )}
         <RecordingRecovery drafts={drafts} onChanged={refresh} />
         {loading ? (
           <section className="history-empty" aria-live="polite">
-            <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
+            <span className="history-empty-icon" aria-hidden="true">
+              <HistoryIcon />
+            </span>
             <h2>Loading history…</h2>
           </section>
         ) : entries.length === 0 && drafts.length === 0 ? (
           <section className="history-empty">
-            <span className="history-empty-icon" aria-hidden="true"><HistoryIcon /></span>
+            <span className="history-empty-icon" aria-hidden="true">
+              <HistoryIcon />
+            </span>
             <h2>No captures yet</h2>
             <p>New screenshots, videos, and GIFs appear here automatically.</p>
           </section>
@@ -1485,7 +1558,9 @@ export function HistoryCard({
   entry: ArtifactSummary;
   onDeleted: (artifactId: string) => void;
 }) {
-  const [busy, setBusy] = useState<"dragging" | "restoring" | "editing" | "opening" | "revealing" | "saving" | "deleting" | null>(null);
+  const [busy, setBusy] = useState<
+    "dragging" | "restoring" | "editing" | "opening" | "revealing" | "saving" | "deleting" | null
+  >(null);
   const [restored, setRestored] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -1495,9 +1570,8 @@ export function HistoryCard({
   const active = useRef(true);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recordingPermanentlySaved = entry.kind !== "screenshot"
-    && Boolean(entry.saved_path)
-    && !entry.missing;
+  const recordingPermanentlySaved =
+    entry.kind !== "screenshot" && Boolean(entry.saved_path) && !entry.missing;
 
   useEffect(() => {
     active.current = true;
@@ -1661,18 +1735,23 @@ export function HistoryCard({
   };
 
   const previewDisabled = busy !== null || (entry.kind !== "screenshot" && entry.missing);
-  const previewLabel = entry.kind === "screenshot"
-    ? "Open screenshot in editor"
-    : entry.missing
-      ? undefined
-      : `Open ${entry.kind === "gif" ? "GIF" : "video"} in editor`;
+  const previewLabel =
+    entry.kind === "screenshot"
+      ? "Open screenshot in editor"
+      : entry.missing
+        ? undefined
+        : `Open ${entry.kind === "gif" ? "GIF" : "video"} in editor`;
 
   return (
     <article className="history-card">
-      <div className={[
-        "history-image-wrap",
-        entry.kind !== "screenshot" && entry.missing ? "history-image-missing" : "",
-      ].filter(Boolean).join(" ")}>
+      <div
+        className={[
+          "history-image-wrap",
+          entry.kind !== "screenshot" && entry.missing ? "history-image-missing" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
         <button
           type="button"
           className="history-image-open"
@@ -1680,7 +1759,9 @@ export function HistoryCard({
           aria-label={previewLabel}
           title={previewDisabled ? undefined : "Drag this capture into an editor or another app"}
           draggable={!previewDisabled}
-          onPointerDown={() => { suppressDragClick.current = false; }}
+          onPointerDown={() => {
+            suppressDragClick.current = false;
+          }}
           onDragStart={(event) => void beginFileDrag(event)}
           onClick={(event) => {
             // Cancelling the browser drag in favor of the OS can still deliver
@@ -1691,25 +1772,35 @@ export function HistoryCard({
         >
           <img
             src={entry.kind === "screenshot" ? entry.preview_url : entry.poster_url}
-            alt={entry.kind === "screenshot" ? "Screenshot from capture history" : `${entry.kind === "gif" ? "GIF" : "Video"} recording poster`}
+            alt={
+              entry.kind === "screenshot"
+                ? "Screenshot from capture history"
+                : `${entry.kind === "gif" ? "GIF" : "Video"} recording poster`
+            }
             loading="lazy"
             draggable={false}
           />
         </button>
-        {entry.kind !== "screenshot" && entry.missing && <span className="history-missing-label">File missing</span>}
+        {entry.kind !== "screenshot" && entry.missing && (
+          <span className="history-missing-label">File missing</span>
+        )}
         <button
           type="button"
           className={confirmingDelete ? "history-delete history-delete-confirm" : "history-delete"}
-          aria-label={entry.kind !== "screenshot" && entry.missing
-            ? "Remove missing entry"
-            : confirmingDelete
-              ? "Confirm permanent deletion"
-              : "Delete from History"}
-          title={entry.kind !== "screenshot" && entry.missing
-            ? "Remove missing entry"
-            : confirmingDelete
-              ? "Delete forever"
-              : "Delete from History"}
+          aria-label={
+            entry.kind !== "screenshot" && entry.missing
+              ? "Remove missing entry"
+              : confirmingDelete
+                ? "Confirm permanent deletion"
+                : "Delete from History"
+          }
+          title={
+            entry.kind !== "screenshot" && entry.missing
+              ? "Remove missing entry"
+              : confirmingDelete
+                ? "Delete forever"
+                : "Delete from History"
+          }
           disabled={busy !== null}
           onClick={() => void deleteFromHistory()}
         >
@@ -1722,11 +1813,22 @@ export function HistoryCard({
           {entry.width} × {entry.height} · {formatFileSize(entry.size_bytes)}
           {entry.kind !== "screenshot" && <> · {formatRecordingTime(entry.duration_ms)}</>}
         </p>
-        {entry.kind !== "screenshot" && entry.dropped_frames > 0 && <p className="history-recording-warning">{entry.dropped_frames.toLocaleString()} frame{entry.dropped_frames === 1 ? "" : "s"} dropped while recording</p>}
-        <div className={[
-          "history-actions",
-          entry.kind === "screenshot" ? "history-screenshot-actions" : "history-recording-actions",
-        ].filter(Boolean).join(" ")}>
+        {entry.kind !== "screenshot" && entry.dropped_frames > 0 && (
+          <p className="history-recording-warning">
+            {entry.dropped_frames.toLocaleString()} frame{entry.dropped_frames === 1 ? "" : "s"}{" "}
+            dropped while recording
+          </p>
+        )}
+        <div
+          className={[
+            "history-actions",
+            entry.kind === "screenshot"
+              ? "history-screenshot-actions"
+              : "history-recording-actions",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
           {entry.kind === "screenshot" ? (
             <>
               <button
@@ -1735,7 +1837,8 @@ export function HistoryCard({
                 disabled={busy !== null}
                 onClick={() => void editScreenshot()}
               >
-                <EditIcon />{busy === "editing" ? "Opening…" : "Edit"}
+                <EditIcon />
+                {busy === "editing" ? "Opening…" : "Edit"}
               </button>
               <button
                 type="button"
@@ -1744,7 +1847,17 @@ export function HistoryCard({
                 disabled={busy !== null}
                 onClick={() => void restore()}
               >
-                {restored ? <><CheckIcon />Restored</> : <><RestoreIcon />{busy === "restoring" ? "Restoring…" : "Restore"}</>}
+                {restored ? (
+                  <>
+                    <CheckIcon />
+                    Restored
+                  </>
+                ) : (
+                  <>
+                    <RestoreIcon />
+                    {busy === "restoring" ? "Restoring…" : "Restore"}
+                  </>
+                )}
               </button>
             </>
           ) : !entry.missing ? (
@@ -1755,7 +1868,8 @@ export function HistoryCard({
                 disabled={busy !== null}
                 onClick={() => void openRecording()}
               >
-                <EditIcon />{busy === "opening" ? "Opening…" : "Edit"}
+                <EditIcon />
+                {busy === "opening" ? "Opening…" : "Edit"}
               </button>
               {recordingPermanentlySaved || saved ? (
                 <button
@@ -1774,13 +1888,24 @@ export function HistoryCard({
                   disabled={busy !== null}
                   onClick={() => void saveRecording()}
                 >
-                  {busy === "saving" ? "Saving…" : <><SaveIcon />Save file</>}
+                  {busy === "saving" ? (
+                    "Saving…"
+                  ) : (
+                    <>
+                      <SaveIcon />
+                      Save file
+                    </>
+                  )}
                 </button>
               )}
             </>
           ) : null}
         </div>
-        {error && <p className="history-card-error" role="alert">{error}</p>}
+        {error && (
+          <p className="history-card-error" role="alert">
+            {error}
+          </p>
+        )}
       </div>
     </article>
   );
@@ -1796,35 +1921,63 @@ function formatHistoryDate(value: string): string {
 }
 
 function HistoryIcon() {
-  return <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5M12 7v5l3 2" />
+    </svg>
+  );
 }
 
 function RestoreIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" /><path d="M4 4v4h4" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" />
+      <path d="M4 4v4h4" />
+    </svg>
+  );
 }
 
 function PauseResumeIcon({ paused }: { paused: boolean }) {
-  return paused
-    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z" /></svg>
-    : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" /></svg>;
+  return paused ? (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m8 5 11 7-11 7Z" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 5v14M16 5v14" />
+    </svg>
+  );
 }
 
 function RestartRecordingIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2 5.3" /><path d="M4 5v6h6" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 11a8 8 0 1 1 2 5.3" />
+      <path d="M4 5v6h6" />
+    </svg>
+  );
 }
 
 function WarningIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M10.29 4.86 1.82 19a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 4.86a2 2 0 0 0-3.42 0Z" />
-    <path d="M12 9.5v5.2M12 17.6h.01" />
-  </svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.29 4.86 1.82 19a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 4.86a2 2 0 0 0-3.42 0Z" />
+      <path d="M12 9.5v5.2M12 17.6h.01" />
+    </svg>
+  );
 }
 
 function CaptureIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
-    <path className="capture-icon-spark" d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z" />
-  </svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
+      <path
+        className="capture-icon-spark"
+        d="M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z"
+      />
+    </svg>
+  );
 }
 
 function SegmentedControlIndicator({ value }: { value: string }) {
@@ -1854,16 +2007,24 @@ function SegmentedControlIndicator({ value }: { value: string }) {
 }
 
 function MicrophoneIcon({ muted }: { muted: boolean }) {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 11.4 2.6M12 18v3M9 21h6" />{muted && <path d="m4 4 16 16" />}</svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M6 11a6 6 0 0 0 11.4 2.6M12 18v3M9 21h6" />
+      {muted && <path d="m4 4 16 16" />}
+    </svg>
+  );
 }
 
 function HideControlsIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="m2 2 20 20" />
-    <path d="M6.7 6.7C4.9 8 3.7 9.7 3 12c1.7 4.1 5 7 9 7 1.8 0 3.5-.6 4.9-1.6" />
-    <path d="M10.7 5.1A10.9 10.9 0 0 1 12 5c4 0 7.3 2.9 9 7-.3.8-.7 1.5-1.2 2.2" />
-    <path d="M14.1 14.1a3 3 0 0 1-4.2-4.2" />
-  </svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m2 2 20 20" />
+      <path d="M6.7 6.7C4.9 8 3.7 9.7 3 12c1.7 4.1 5 7 9 7 1.8 0 3.5-.6 4.9-1.6" />
+      <path d="M10.7 5.1A10.9 10.9 0 0 1 12 5c4 0 7.3 2.9 9 7-.3.8-.7 1.5-1.2 2.2" />
+      <path d="M14.1 14.1a3 3 0 0 1-4.2-4.2" />
+    </svg>
+  );
 }
 
 function HudTooltip({ label, children }: { label: string; children: React.ReactNode }) {
@@ -1900,16 +2061,15 @@ export function CaptureGuidance({
   // Mount at opacity 0, then flip data-ready so entrance is the same opacity
   // transition used for hover ducking (no keyframe fill-mode fighting fade-out).
   const [ready, setReady] = useState(false);
-  const title = mode === "display"
-    ? "Click to capture this display"
-    : mode === "window"
-      ? "Select a window to continue"
-      : feedback
-        ? "Click and drag to select a region"
-        : "Drag to select a region";
-  const hint = mode === "region"
-    ? "Shift for square · Esc to cancel"
-    : "Esc to cancel";
+  const title =
+    mode === "display"
+      ? "Click to capture this display"
+      : mode === "window"
+        ? "Select a window to continue"
+        : feedback
+          ? "Click and drag to select a region"
+          : "Drag to select a region";
+  const hint = mode === "region" ? "Shift for square · Esc to cancel" : "Esc to cancel";
   const faded = hidden || cursorOver;
 
   useEffect(() => {
@@ -1931,12 +2091,7 @@ export function CaptureGuidance({
       if (!el) return;
       const bounds = el.getBoundingClientRect();
       setCursorOver((current) => {
-        const over = isPointerOverCaptureGuidance(
-          event.clientX,
-          event.clientY,
-          bounds,
-          current,
-        );
+        const over = isPointerOverCaptureGuidance(event.clientX, event.clientY, bounds, current);
         return current === over ? current : over;
       });
     };
@@ -1980,21 +2135,23 @@ export function ScreenshotCountdown() {
     let unlisten: (() => void) | undefined;
     const applyRemaining = (next: number) => {
       if (!active) return;
-      setRemaining((current) => current === null ? next : Math.min(current, next));
+      setRemaining((current) => (current === null ? next : Math.min(current, next)));
     };
     void listen<{ remaining_seconds: number }>("screenshot-countdown", ({ payload }) => {
       applyRemaining(payload.remaining_seconds);
-    }).then(async (dispose) => {
-      if (!active) {
-        dispose();
-        return;
-      }
-      unlisten = dispose;
-      const current = await invoke<{ remaining_seconds: number } | null>(
-        "get_screenshot_countdown",
-      );
-      if (current) applyRemaining(current.remaining_seconds);
-    }).catch(() => undefined);
+    })
+      .then(async (dispose) => {
+        if (!active) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+        const current = await invoke<{ remaining_seconds: number } | null>(
+          "get_screenshot_countdown",
+        );
+        if (current) applyRemaining(current.remaining_seconds);
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
       unlisten?.();
@@ -2017,15 +2174,16 @@ export function ScreenshotCountdown() {
     }
   }, []);
 
-  useEffect(() => onCaptureEscape(() => {
-    void cancel();
-  }), [cancel]);
+  useEffect(
+    () =>
+      onCaptureEscape(() => {
+        void cancel();
+      }),
+    [cancel],
+  );
 
   return (
-    <main
-      className={`recording-countdown${exiting ? " exiting" : ""}`}
-      aria-live="assertive"
-    >
+    <main className={`recording-countdown${exiting ? " exiting" : ""}`} aria-live="assertive">
       <div className="recording-countdown-content">
         <span>Screenshot in</span>
         <strong>{remaining ?? "…"}</strong>
@@ -2053,14 +2211,19 @@ export function RecordingCountdown() {
           setExiting(true);
         }
       }),
-      listen<{ session_id: string; remaining_seconds: number }>("recording-countdown", ({ payload }) => {
-        if (!active) return;
-        setRemaining(payload.remaining_seconds);
-      }),
-    ]).then((listeners) => {
-      if (active) dispose.push(...listeners);
-      else listeners.forEach((unlisten) => unlisten());
-    }).catch(() => undefined);
+      listen<{ session_id: string; remaining_seconds: number }>(
+        "recording-countdown",
+        ({ payload }) => {
+          if (!active) return;
+          setRemaining(payload.remaining_seconds);
+        },
+      ),
+    ])
+      .then((listeners) => {
+        if (active) dispose.push(...listeners);
+        else listeners.forEach((unlisten) => unlisten());
+      })
+      .catch(() => undefined);
     void invoke<RecordingSessionSnapshot | null>("get_recording_snapshot").then((current) => {
       if (active && current) {
         setSnapshot(current);
@@ -2089,18 +2252,20 @@ export function RecordingCountdown() {
     }
   }, [snapshot]);
 
-  useEffect(() => onCaptureEscape(() => {
-    void cancel();
-  }), [cancel]);
+  useEffect(
+    () =>
+      onCaptureEscape(() => {
+        void cancel();
+      }),
+    [cancel],
+  );
 
-  const count = snapshot?.state === "countdown"
-    ? remaining ?? snapshot.countdown_remaining_seconds ?? snapshot.options.countdown_seconds
-    : remaining ?? 1;
+  const count =
+    snapshot?.state === "countdown"
+      ? (remaining ?? snapshot.countdown_remaining_seconds ?? snapshot.options.countdown_seconds)
+      : (remaining ?? 1);
   return (
-    <main
-      className={`recording-countdown${exiting ? " exiting" : ""}`}
-      aria-live="assertive"
-    >
+    <main className={`recording-countdown${exiting ? " exiting" : ""}`} aria-live="assertive">
       <div className="recording-countdown-content">
         <span>Recording starts in</span>
         <strong>{count}</strong>
@@ -2224,25 +2389,19 @@ export function RecordingSelector() {
     setRegionSelecting(false);
   }, []);
 
-  const applyRegionDrag = useCallback((
-    point: SelectionPoint,
-    forceSquare: boolean,
-    surface: { width: number; height: number },
-  ) => {
-    const drag = regionDragRef.current;
-    if (!drag) return;
-    setRegion(dragSelectionRect(
-      drag.mode,
-      drag.origin,
-      point,
-      drag.initial,
-      surface,
-      {
-        aspectRatio: parseAspectRatioPreset(regionAspectRef.current),
-        forceSquare,
-      },
-    ));
-  }, []);
+  const applyRegionDrag = useCallback(
+    (point: SelectionPoint, forceSquare: boolean, surface: { width: number; height: number }) => {
+      const drag = regionDragRef.current;
+      if (!drag) return;
+      setRegion(
+        dragSelectionRect(drag.mode, drag.origin, point, drag.initial, surface, {
+          aspectRatio: parseAspectRatioPreset(regionAspectRef.current),
+          forceSquare,
+        }),
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
     regionAspectRef.current = regionAspect;
@@ -2257,23 +2416,26 @@ export function RecordingSelector() {
   }, []);
 
   /** Apply a new aspect preset: snap any settled region immediately, and re-run an in-progress drag. */
-  const changeRegionAspect = useCallback((next: RegionAspectPreset) => {
-    setRegionAspect(next);
-    // Keep the ref current before any synchronous re-drag so pointer math uses the new ratio.
-    regionAspectRef.current = next;
-    const surface = surfaceBounds();
-    const point = pendingRegionPointRef.current;
-    if (regionDragRef.current && point) {
-      applyRegionDrag(point, pendingRegionForceSquareRef.current, surface);
-      return;
-    }
-    const aspect = parseAspectRatioPreset(next);
-    if (aspect === null) return;
-    setRegion((current) => {
-      if (!current || !isCapturableSelection(current)) return current;
-      return constrainSelectionToAspect(current, aspect, surface);
-    });
-  }, [applyRegionDrag, surfaceBounds]);
+  const changeRegionAspect = useCallback(
+    (next: RegionAspectPreset) => {
+      setRegionAspect(next);
+      // Keep the ref current before any synchronous re-drag so pointer math uses the new ratio.
+      regionAspectRef.current = next;
+      const surface = surfaceBounds();
+      const point = pendingRegionPointRef.current;
+      if (regionDragRef.current && point) {
+        applyRegionDrag(point, pendingRegionForceSquareRef.current, surface);
+        return;
+      }
+      const aspect = parseAspectRatioPreset(next);
+      if (aspect === null) return;
+      setRegion((current) => {
+        if (!current || !isCapturableSelection(current)) return current;
+        return constrainSelectionToAspect(current, aspect, surface);
+      });
+    },
+    [applyRegionDrag, surfaceBounds],
+  );
 
   // Re-apply the active region drag when Shift is pressed or released mid-gesture
   // so the marquee snaps between free/selected aspect and a square without waiting
@@ -2296,11 +2458,8 @@ export function RecordingSelector() {
   }, [applyRegionDrag, surfaceBounds]);
 
   const loadAudioDevices = useCallback(() => {
-    if (
-      devicesLoading
-      || devicesLoaded
-      || !sessionRef.current?.recording_capabilities.microphone
-    ) return;
+    if (devicesLoading || devicesLoaded || !sessionRef.current?.recording_capabilities.microphone)
+      return;
     const requestId = audioDevicesRequestIdRef.current + 1;
     audioDevicesRequestIdRef.current = requestId;
     setDevicesLoading(true);
@@ -2324,80 +2483,80 @@ export function RecordingSelector() {
   const revealSelector = useCallback((selectionId: string, snapshotUrl: string) => {
     if (activeSessionIdRef.current !== selectionId) return;
     const revealKey = `${selectionId}:${snapshotUrl}`;
-    if (
-      revealingSessionIdRef.current === revealKey
-      || visibleSnapshotRef.current === revealKey
-    ) return;
+    if (revealingSessionIdRef.current === revealKey || visibleSnapshotRef.current === revealKey)
+      return;
     revealingSessionIdRef.current = revealKey;
-    void invoke("show_recording_selector", { selectionId }).then(() => {
-      let revealStarted = false;
-      const finishReveal = () => {
-        if (revealStarted || activeSessionIdRef.current !== selectionId) return;
-        revealStarted = true;
-        window.clearTimeout(fallbackTimer);
-        void invoke("reveal_recording_selector", { selectionId })
-          .then(() => {
-            if (activeSessionIdRef.current === selectionId) {
-              visibleSnapshotRef.current = revealKey;
+    void invoke("show_recording_selector", { selectionId })
+      .then(() => {
+        let revealStarted = false;
+        const finishReveal = () => {
+          if (revealStarted || activeSessionIdRef.current !== selectionId) return;
+          revealStarted = true;
+          window.clearTimeout(fallbackTimer);
+          void invoke("reveal_recording_selector", { selectionId })
+            .then(() => {
+              if (activeSessionIdRef.current === selectionId) {
+                visibleSnapshotRef.current = revealKey;
+                if (revealingSessionIdRef.current === revealKey) {
+                  revealingSessionIdRef.current = null;
+                }
+                setFocusVisibleSessionId(selectionId);
+              }
+            })
+            .catch((error) => {
               if (revealingSessionIdRef.current === revealKey) {
                 revealingSessionIdRef.current = null;
+                setError(String(error));
               }
-              setFocusVisibleSessionId(selectionId);
-            }
-          })
-          .catch((error) => {
-            if (revealingSessionIdRef.current === revealKey) {
-              revealingSessionIdRef.current = null;
-              setError(String(error));
-            }
-          });
-      };
-      afterNextPaint(finishReveal);
-      // WebKit can suspend requestAnimationFrame while this preloaded window
-      // is at near-zero opacity. Always reveal after a short deadline so the
-      // backend cannot retain an invisible "capture in progress" selection.
-      const fallbackTimer = window.setTimeout(
-        finishReveal,
-        RECORDING_SELECTOR_REVEAL_FALLBACK_MS,
-      );
-    }).catch((error) => {
-      if (revealingSessionIdRef.current === revealKey) {
-        revealingSessionIdRef.current = null;
-        setError(String(error));
-      }
-    });
+            });
+        };
+        afterNextPaint(finishReveal);
+        // WebKit can suspend requestAnimationFrame while this preloaded window
+        // is at near-zero opacity. Always reveal after a short deadline so the
+        // backend cannot retain an invisible "capture in progress" selection.
+        const fallbackTimer = window.setTimeout(
+          finishReveal,
+          RECORDING_SELECTOR_REVEAL_FALLBACK_MS,
+        );
+      })
+      .catch((error) => {
+        if (revealingSessionIdRef.current === revealKey) {
+          revealingSessionIdRef.current = null;
+          setError(String(error));
+        }
+      });
   }, []);
 
-  const cancelSelection = useCallback((
-    selection: RecordingSelectionSession,
-    onCancelled?: () => void,
-  ) => {
-    if (activeSessionIdRef.current !== selection.id) return;
-    activeSessionIdRef.current = null;
-    sessionRef.current = null;
-    revealingSessionIdRef.current = null;
-    visibleSnapshotRef.current = null;
-    setFocusVisibleSessionId(null);
-    setSession(null);
-    clearRegionDrag();
-    panelDragRef.current = null;
-    setPanelDragging(false);
-    setStarting(false);
-    setSwitchingDisplay(false);
-    setError("");
-    void invoke("cancel_recording_selection", { selectionId: selection.id })
-      .then(() => onCancelled?.())
-      .catch((error) => {
-        // A new selector may already be active by the time a stale cancellation
-        // fails. Never replace that newer session with the one being dismissed.
-        if (activeSessionIdRef.current !== null) return;
-        activeSessionIdRef.current = selection.id;
-        sessionRef.current = selection;
-        setSession(selection);
-        setError(String(error));
-        revealSelector(selection.id, freezeFrameRevealKey(selection));
-      });
-  }, [clearRegionDrag, revealSelector]);
+  const cancelSelection = useCallback(
+    (selection: RecordingSelectionSession, onCancelled?: () => void) => {
+      if (activeSessionIdRef.current !== selection.id) return;
+      activeSessionIdRef.current = null;
+      sessionRef.current = null;
+      revealingSessionIdRef.current = null;
+      visibleSnapshotRef.current = null;
+      setFocusVisibleSessionId(null);
+      setSession(null);
+      clearRegionDrag();
+      panelDragRef.current = null;
+      setPanelDragging(false);
+      setStarting(false);
+      setSwitchingDisplay(false);
+      setError("");
+      void invoke("cancel_recording_selection", { selectionId: selection.id })
+        .then(() => onCancelled?.())
+        .catch((error) => {
+          // A new selector may already be active by the time a stale cancellation
+          // fails. Never replace that newer session with the one being dismissed.
+          if (activeSessionIdRef.current !== null) return;
+          activeSessionIdRef.current = selection.id;
+          sessionRef.current = selection;
+          setSession(selection);
+          setError(String(error));
+          revealSelector(selection.id, freezeFrameRevealKey(selection));
+        });
+    },
+    [clearRegionDrag, revealSelector],
+  );
 
   useEffect(() => {
     let active = true;
@@ -2406,14 +2565,11 @@ export function RecordingSelector() {
       // A newly-created selector asks for the pending session while also
       // subscribing to the ready event. Both can resolve with the same
       // selection; re-applying it would clear the fade after reveal.
-      if (
-        activeSessionIdRef.current === selection.id
-        && sessionRef.current?.id === selection.id
-      ) {
+      if (activeSessionIdRef.current === selection.id && sessionRef.current?.id === selection.id) {
         const previous = sessionRef.current;
         const next = keepReadyWindowTargets(previous, selection);
-        const snapshotChanged = previous.snapshot_url !== next.snapshot_url
-          || previous.frozen !== next.frozen;
+        const snapshotChanged =
+          previous.snapshot_url !== next.snapshot_url || previous.frozen !== next.frozen;
         const revealKey = `${next.id}:${freezeFrameRevealKey(next)}`;
         sessionRef.current = next;
         setSession(next);
@@ -2428,8 +2584,9 @@ export function RecordingSelector() {
             setSelectedWindow(null);
           }
         }
-        const modeChanged = previous.initial_mode !== next.initial_mode
-          || previous.initial_target !== next.initial_target;
+        const modeChanged =
+          previous.initial_mode !== next.initial_mode ||
+          previous.initial_target !== next.initial_target;
         if (snapshotChanged) {
           visibleSnapshotRef.current = null;
           revealingSessionIdRef.current = null;
@@ -2455,9 +2612,7 @@ export function RecordingSelector() {
       setFps(currentSettings.recording.video_fps);
       setMaxResolution(currentSettings.recording.video_max_resolution);
       const capabilities = selection.recording_capabilities;
-      setShowCursor(
-        capabilities.cursor_control ? currentSettings.recording.show_cursor : false,
-      );
+      setShowCursor(capabilities.cursor_control ? currentSettings.recording.show_cursor : false);
       setShowClicks(
         capabilities.click_highlights ? currentSettings.recording.highlight_clicks : false,
       );
@@ -2490,22 +2645,26 @@ export function RecordingSelector() {
       const cached = settingsRef.current;
       if (cached) {
         applySelection(payload, cached);
-        void invoke<AppSettings>("get_settings").then((latestSettings) => {
+        void invoke<AppSettings>("get_settings")
+          .then((latestSettings) => {
+            if (!active) return;
+            settingsRef.current = latestSettings;
+            setSettings(latestSettings);
+          })
+          .catch(() => undefined);
+        return;
+      }
+      void invoke<AppSettings>("get_settings")
+        .then((latestSettings) => {
           if (!active) return;
           settingsRef.current = latestSettings;
           setSettings(latestSettings);
-        }).catch(() => undefined);
-        return;
-      }
-      void invoke<AppSettings>("get_settings").then((latestSettings) => {
-        if (!active) return;
-        settingsRef.current = latestSettings;
-        setSettings(latestSettings);
-        applySelection(payload, latestSettings);
-      }).catch(() => {
-        if (!active) return;
-        void invoke("cancel_recording_selection", { selectionId: payload.id });
-      });
+          applySelection(payload, latestSettings);
+        })
+        .catch(() => {
+          if (!active) return;
+          void invoke("cancel_recording_selection", { selectionId: payload.id });
+        });
     };
 
     // Register for future selections, but do not wait for the Tauri event
@@ -2554,13 +2713,15 @@ export function RecordingSelector() {
         .catch(() => {
           if (active) setControlsExcluded(false);
         });
-    }).then((unlisten) => {
-      if (active) {
-        disposers.push(unlisten);
-      } else {
-        unlisten();
-      }
-    }).catch(() => undefined);
+    })
+      .then((unlisten) => {
+        if (active) {
+          disposers.push(unlisten);
+        } else {
+          unlisten();
+        }
+      })
+      .catch(() => undefined);
 
     return () => {
       active = false;
@@ -2587,8 +2748,8 @@ export function RecordingSelector() {
         return;
       }
       const target = event.target;
-      const typingInField = target instanceof Element
-        && target.closest("input, textarea, select, [contenteditable]");
+      const typingInField =
+        target instanceof Element && target.closest("input, textarea, select, [contenteditable]");
       const settings = settingsRef.current;
       if (settings && !typingInField) {
         const shortcutEvent = {
@@ -2652,18 +2813,20 @@ export function RecordingSelector() {
         }
       }
       if (
-        event.key !== "Enter"
-        || event.defaultPrevented
-        || event.altKey
-        || event.ctrlKey
-        || event.metaKey
-        || event.shiftKey
+        event.key !== "Enter" ||
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
       ) {
         return;
       }
       if (
-        target instanceof Element
-        && target.closest("input, textarea, select, [contenteditable], [role=\"combobox\"], [role=\"listbox\"]")
+        target instanceof Element &&
+        target.closest(
+          'input, textarea, select, [contenteditable], [role="combobox"], [role="listbox"]',
+        )
       ) {
         return;
       }
@@ -2672,9 +2835,9 @@ export function RecordingSelector() {
       if (target instanceof Element) {
         const focusedButton = target.closest("button");
         if (
-          focusedButton
-          && !focusedButton.classList.contains("capture-selector-primary")
-          && !focusedButton.closest(".capture-action-switch, .recording-target-switch")
+          focusedButton &&
+          !focusedButton.classList.contains("capture-selector-primary") &&
+          !focusedButton.closest(".capture-action-switch, .recording-target-switch")
         ) {
           return;
         }
@@ -2699,7 +2862,7 @@ export function RecordingSelector() {
   const selectorFrozen = session?.frozen;
   useEffect(() => {
     if (!selectionId) return;
-    const snapshotKey = selectorFrozen === false ? (snapshotUrl || "live") : (snapshotUrl ?? "");
+    const snapshotKey = selectorFrozen === false ? snapshotUrl || "live" : (snapshotUrl ?? "");
     if (selectorFrozen === false) {
       revealSelector(selectionId, snapshotKey);
       return;
@@ -2769,19 +2932,11 @@ export function RecordingSelector() {
   }, [focusVisibleSessionId, session?.id, targetMode]);
 
   useEffect(() => {
-    if (
-      !session?.id
-      || actionMode !== "recording"
-      || !session.recording_capabilities.microphone
-    ) return;
+    if (!session?.id || actionMode !== "recording" || !session.recording_capabilities.microphone)
+      return;
     const timer = window.setTimeout(loadAudioDevices, 0);
     return () => window.clearTimeout(timer);
-  }, [
-    actionMode,
-    loadAudioDevices,
-    session?.id,
-    session?.recording_capabilities.microphone,
-  ]);
+  }, [actionMode, loadAudioDevices, session?.id, session?.recording_capabilities.microphone]);
 
   useLayoutEffect(() => {
     const from = panelResizeFromRef.current;
@@ -2795,21 +2950,24 @@ export function RecordingSelector() {
 
     const to = panel.getBoundingClientRect();
     if (
-      prefersReducedMotion()
-      || typeof panel.animate !== "function"
-      || (Math.abs(from.width - to.width) < 0.5 && Math.abs(from.height - to.height) < 0.5)
+      prefersReducedMotion() ||
+      typeof panel.animate !== "function" ||
+      (Math.abs(from.width - to.width) < 0.5 && Math.abs(from.height - to.height) < 0.5)
     ) {
       return;
     }
 
     panel.dataset.resizing = "true";
-    const animation = panel.animate([
-      { width: `${from.width}px`, height: `${from.height}px` },
-      { width: `${to.width}px`, height: `${to.height}px` },
-    ], {
-      duration: 280,
-      easing: "cubic-bezier(.2,.8,.2,1)",
-    });
+    const animation = panel.animate(
+      [
+        { width: `${from.width}px`, height: `${from.height}px` },
+        { width: `${to.width}px`, height: `${to.height}px` },
+      ],
+      {
+        duration: 280,
+        easing: "cubic-bezier(.2,.8,.2,1)",
+      },
+    );
     panelResizeAnimationRef.current = animation;
 
     const settle = () => {
@@ -2821,9 +2979,12 @@ export function RecordingSelector() {
     animation.addEventListener("cancel", settle, { once: true });
   }, [actionMode]);
 
-  useEffect(() => () => {
-    panelResizeAnimationRef.current?.cancel();
-  }, []);
+  useEffect(
+    () => () => {
+      panelResizeAnimationRef.current?.cancel();
+    },
+    [],
+  );
 
   // Keep hooks above the idle early-return so session load never changes hook order.
   const overlaySize = session
@@ -2831,11 +2992,12 @@ export function RecordingSelector() {
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, overlaySize);
 
-  const canStartSelection = Boolean(session) && !switchingDisplay && (
-    targetMode === "display"
-    || (targetMode === "window" && Boolean(selectedWindow))
-    || (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2))
-  );
+  const canStartSelection =
+    Boolean(session) &&
+    !switchingDisplay &&
+    (targetMode === "display" ||
+      (targetMode === "window" && Boolean(selectedWindow)) ||
+      (targetMode === "region" && Boolean(region && region.width >= 2 && region.height >= 2)));
 
   const selectedTarget = useCallback((): RecordingTarget | null => {
     const current = sessionRef.current;
@@ -2859,13 +3021,8 @@ export function RecordingSelector() {
   const start = useCallback(async () => {
     const currentSession = sessionRef.current;
     const currentSettings = settingsRef.current;
-    if (
-      !currentSession
-      || !currentSettings
-      || !canStartSelection
-      || starting
-      || switchingDisplay
-    ) return;
+    if (!currentSession || !currentSettings || !canStartSelection || starting || switchingDisplay)
+      return;
     const target = selectedTarget();
     if (!target) return;
     setStarting(true);
@@ -2986,13 +3143,14 @@ export function RecordingSelector() {
       y: Math.max(0, Math.min(bounds?.height ?? 0, event.clientY - (bounds?.top ?? 0))),
     };
   };
-  const windowAtPointer = (event: React.PointerEvent) => frontmostCaptureTargetAtPoint(
-    session.windows,
-    session.shell_chrome ?? [],
-    point(event),
-    session.display,
-    Math.max(session.window_coordinate_scale || 1, 1),
-  );
+  const windowAtPointer = (event: React.PointerEvent) =>
+    frontmostCaptureTargetAtPoint(
+      session.windows,
+      session.shell_chrome ?? [],
+      point(event),
+      session.display,
+      Math.max(session.window_coordinate_scale || 1, 1),
+    );
   const onPointerDown = (event: React.PointerEvent) => {
     if (starting || switchingDisplay || event.button !== 0) return;
     if ((event.target as Element).closest(".recording-selector-panel")) return;
@@ -3030,9 +3188,10 @@ export function RecordingSelector() {
     event.preventDefault();
     const origin = point(event);
     const target = event.target as Element;
-    const handle = target.closest<HTMLElement>("[data-selection-handle]")?.dataset.selectionHandle as SelectionDragMode | undefined;
-    const mode: SelectionDragMode = handle
-      ?? (target.closest(".recording-selection-frame") ? "move" : "create");
+    const handle = target.closest<HTMLElement>("[data-selection-handle]")?.dataset
+      .selectionHandle as SelectionDragMode | undefined;
+    const mode: SelectionDragMode =
+      handle ?? (target.closest(".recording-selection-frame") ? "move" : "create");
     if (mode !== "create" && !region) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     clearRegionDrag();
@@ -3072,32 +3231,25 @@ export function RecordingSelector() {
     const forceSquare = event.shiftKey || pendingRegionForceSquareRef.current;
     let finishedCreate: ReturnType<typeof dragSelectionRect> | null = null;
     if (drag && current) {
-      const next = dragSelectionRect(
-        drag.mode,
-        drag.origin,
-        current,
-        drag.initial,
-        surfaceSize,
-        {
-          aspectRatio: parseAspectRatioPreset(regionAspectRef.current),
-          forceSquare,
-        },
-      );
+      const next = dragSelectionRect(drag.mode, drag.origin, current, drag.initial, surfaceSize, {
+        aspectRatio: parseAspectRatioPreset(regionAspectRef.current),
+        forceSquare,
+      });
       setRegion(next);
       if (drag.mode === "create") finishedCreate = next;
     }
     if (
-      typeof event.currentTarget.hasPointerCapture === "function"
-      && event.currentTarget.hasPointerCapture(event.pointerId)
+      typeof event.currentTarget.hasPointerCapture === "function" &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
     ) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     clearRegionDrag();
     // Auto-start only after a create drag finishes — move/resize stay adjust-only.
     if (
-      finishedCreate
-      && settingsRef.current?.auto_start_on_selection
-      && isCapturableSelection(finishedCreate)
+      finishedCreate &&
+      settingsRef.current?.auto_start_on_selection &&
+      isCapturableSelection(finishedCreate)
     ) {
       autoStartAfterSelectionRef.current = true;
     }
@@ -3105,8 +3257,8 @@ export function RecordingSelector() {
   const onPointerCancel = (event: React.PointerEvent) => {
     const drag = regionDragRef.current;
     if (
-      typeof event.currentTarget.hasPointerCapture === "function"
-      && event.currentTarget.hasPointerCapture(event.pointerId)
+      typeof event.currentTarget.hasPointerCapture === "function" &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
     ) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -3131,22 +3283,26 @@ export function RecordingSelector() {
   });
   const activeWindow = hoveredWindow ?? selectedWindow;
   const activeWindowLayout = windowLayouts.find(({ window }) => window.id === activeWindow);
-  const displayOptions = (session.displays.length > 0 ? session.displays : [session.display])
-    .map((display, index) => ({
+  const displayOptions = (session.displays.length > 0 ? session.displays : [session.display]).map(
+    (display, index) => ({
       value: display.id,
       label: display.name.trim() || `Display ${index + 1}`,
       description: `${display.width} × ${display.height}${display.is_primary ? " · Primary" : ""}`,
-    }));
-  const selectedRect = targetMode === "display"
-    ? { x: 0, y: 0, width: surfaceSize.width, height: surfaceSize.height }
-    : targetMode === "window"
-      ? activeWindowLayout ? {
-          x: activeWindowLayout.left,
-          y: activeWindowLayout.top,
-          width: activeWindowLayout.width,
-          height: activeWindowLayout.height,
-        } : null
-      : region;
+    }),
+  );
+  const selectedRect =
+    targetMode === "display"
+      ? { x: 0, y: 0, width: surfaceSize.width, height: surfaceSize.height }
+      : targetMode === "window"
+        ? activeWindowLayout
+          ? {
+              x: activeWindowLayout.left,
+              y: activeWindowLayout.top,
+              width: activeWindowLayout.width,
+              height: activeWindowLayout.height,
+            }
+          : null
+        : region;
   const activeWindowCornerRadius = activeWindowLayout?.cornerRadius ?? session.window_corner_radius;
   const displayCornerRadius = Math.max(0, session.display_corner_radius ?? 0);
   const canStart = canStartSelection;
@@ -3219,8 +3375,8 @@ export function RecordingSelector() {
     panelDragRef.current = null;
     setPanelDragging(false);
     if (
-      typeof event.currentTarget.hasPointerCapture === "function"
-      && event.currentTarget.hasPointerCapture(event.pointerId)
+      typeof event.currentTarget.hasPointerCapture === "function" &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
     ) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -3243,13 +3399,25 @@ export function RecordingSelector() {
   };
   const retryingAutoStart = settings.auto_start_on_selection && Boolean(error);
   const primaryActionLabel = starting
-    ? actionMode === "screenshot" ? "Capturing…" : "Starting…"
-    : switchingDisplay ? "Switching…"
-    : retryingAutoStart ? actionMode === "screenshot" ? "Retry capture" : "Retry recording"
-    : actionMode === "screenshot" ? "Capture" : "Start recording";
+    ? actionMode === "screenshot"
+      ? "Capturing…"
+      : "Starting…"
+    : switchingDisplay
+      ? "Switching…"
+      : retryingAutoStart
+        ? actionMode === "screenshot"
+          ? "Retry capture"
+          : "Retry recording"
+        : actionMode === "screenshot"
+          ? "Capture"
+          : "Start recording";
   const primaryActionAriaLabel = retryingAutoStart
-    ? actionMode === "screenshot" ? "Retry capture" : "Retry recording"
-    : actionMode === "screenshot" ? "Take screenshot" : "Start recording";
+    ? actionMode === "screenshot"
+      ? "Retry capture"
+      : "Retry recording"
+    : actionMode === "screenshot"
+      ? "Take screenshot"
+      : "Start recording";
 
   return (
     <main
@@ -3274,7 +3442,9 @@ export function RecordingSelector() {
           draggable={false}
           onLoad={() => revealSelector(session.id, freezeFrameRevealKey(session))}
           onError={() => {
-            setError("The frozen preview could not load. You can still select from the live desktop.");
+            setError(
+              "The frozen preview could not load. You can still select from the live desktop.",
+            );
             revealSelector(session.id, freezeFrameRevealKey(session));
           }}
         />
@@ -3286,55 +3456,60 @@ export function RecordingSelector() {
         dimWithoutHole={targetMode === "window" && !hoveredDisplay}
         windowCornerRadius={activeWindowCornerRadius}
       />
-      {(targetMode === "display" || hoveredDisplay) && <>
-        <div
-          className="recording-display-outline"
-          aria-hidden="true"
-          style={displayCornerRadius > 0 ? { borderRadius: displayCornerRadius } : undefined}
-        />
-        {targetMode === "display" && (
-        <div className="recording-display-identity" aria-live="polite">
-          <span className="recording-display-icon" aria-hidden="true">
-            <CaptureTargetIcon mode="display" />
-          </span>
-          <strong>{session.display.name || "Display"}</strong>
-          <span>
-            {session.display.width} × {session.display.height}
-            {actionMode === "recording" ? ` · ${fps} FPS` : ""}
-          </span>
-        </div>
-        )}
-      </>}
-      {targetMode === "region" && (
-        <CaptureGuidance mode="region" hidden={regionSelecting} />
+      {(targetMode === "display" || hoveredDisplay) && (
+        <>
+          <div
+            className="recording-display-outline"
+            aria-hidden="true"
+            style={displayCornerRadius > 0 ? { borderRadius: displayCornerRadius } : undefined}
+          />
+          {targetMode === "display" && (
+            <div className="recording-display-identity" aria-live="polite">
+              <span className="recording-display-icon" aria-hidden="true">
+                <CaptureTargetIcon mode="display" />
+              </span>
+              <strong>{session.display.name || "Display"}</strong>
+              <span>
+                {session.display.width} × {session.display.height}
+                {actionMode === "recording" ? ` · ${fps} FPS` : ""}
+              </span>
+            </div>
+          )}
+        </>
       )}
+      {targetMode === "region" && <CaptureGuidance mode="region" hidden={regionSelecting} />}
       {targetMode === "window" && !selectedWindow && (
         <CaptureGuidance mode={hoveredDisplay ? "display" : "window"} />
       )}
-      {targetMode === "region" && selectedRect && selectedRect.width > 0 && selectedRect.height > 0 && (
-        <div
-          className={`recording-selection-frame recording-selection-${targetMode}${targetMode === "region" ? " movable" : ""}`}
-          style={{
-            left: selectedRect.x,
-            top: selectedRect.y,
-            width: selectedRect.width,
-            height: selectedRect.height,
-          }}
-        >
-          <span
-            className="selection-dimensions"
-            data-screen-edge={selectedRect.y < 30 ? "top" : undefined}
+      {targetMode === "region" &&
+        selectedRect &&
+        selectedRect.width > 0 &&
+        selectedRect.height > 0 && (
+          <div
+            className={`recording-selection-frame recording-selection-${targetMode}${targetMode === "region" ? " movable" : ""}`}
+            style={{
+              left: selectedRect.x,
+              top: selectedRect.y,
+              width: selectedRect.width,
+              height: selectedRect.height,
+            }}
           >
-            {Math.round(selectedRect.width)} × {Math.round(selectedRect.height)}
-          </span>
-          {targetMode === "region" && <>
-            <i className="handle nw" data-selection-handle="nw" />
-            <i className="handle ne" data-selection-handle="ne" />
-            <i className="handle sw" data-selection-handle="sw" />
-            <i className="handle se" data-selection-handle="se" />
-          </>}
-        </div>
-      )}
+            <span
+              className="selection-dimensions"
+              data-screen-edge={selectedRect.y < 30 ? "top" : undefined}
+            >
+              {Math.round(selectedRect.width)} × {Math.round(selectedRect.height)}
+            </span>
+            {targetMode === "region" && (
+              <>
+                <i className="handle nw" data-selection-handle="nw" />
+                <i className="handle ne" data-selection-handle="ne" />
+                <i className="handle sw" data-selection-handle="sw" />
+                <i className="handle se" data-selection-handle="se" />
+              </>
+            )}
+          </div>
+        )}
       {targetMode === "window" && (
         <div className="recording-window-targets">
           {windowLayouts.map(({ window, left, top, width, height, cornerRadius, zIndex }) => (
@@ -3361,12 +3536,16 @@ export function RecordingSelector() {
       <section
         ref={panelRef}
         className={`recording-selector-panel on-media${panelDragging ? " dragging" : ""}`}
-        style={panelPosition ? {
-          left: panelPosition.left,
-          top: panelPosition.top,
-          bottom: "auto",
-          transform: "none",
-        } : undefined}
+        style={
+          panelPosition
+            ? {
+                left: panelPosition.left,
+                top: panelPosition.top,
+                bottom: "auto",
+                transform: "none",
+              }
+            : undefined
+        }
         onPointerDown={beginPanelDrag}
         onPointerMove={movePanel}
         onPointerUp={endPanelDrag}
@@ -3378,7 +3557,9 @@ export function RecordingSelector() {
             type="button"
             aria-label="Close capture controls"
             onClick={() => cancelSelection(session)}
-          ><CloseIcon /></button>
+          >
+            <CloseIcon />
+          </button>
           <div
             className="capture-action-switch"
             role="group"
@@ -3391,15 +3572,25 @@ export function RecordingSelector() {
               className={actionMode === "screenshot" ? "active" : ""}
               aria-pressed={actionMode === "screenshot"}
               onClick={() => switchActionMode("screenshot")}
-            ><CaptureIcon />Screenshot</button>
+            >
+              <CaptureIcon />
+              Screenshot
+            </button>
             <button
               type="button"
               className={actionMode === "recording" ? "active" : ""}
               aria-pressed={actionMode === "recording"}
               disabled={!session.recording_available}
-              title={session.recording_available ? undefined : "Screen recording is not available on this platform"}
+              title={
+                session.recording_available
+                  ? undefined
+                  : "Screen recording is not available on this platform"
+              }
               onClick={() => switchActionMode("recording")}
-            ><span className="capture-record-dot" aria-hidden="true" />Record</button>
+            >
+              <span className="capture-record-dot" aria-hidden="true" />
+              Record
+            </button>
           </div>
           <span className="capture-selector-divider" aria-hidden="true" />
           <div
@@ -3415,10 +3606,16 @@ export function RecordingSelector() {
                 type="button"
                 className={targetMode === mode ? "active" : ""}
                 aria-pressed={targetMode === mode}
-                disabled={mode === "window" && windowLayouts.length === 0 && windowListingIsReady(session.windows_ready)}
-                title={mode === "window" && windowLayouts.length === 0
-                  ? "Window capture is not available in this desktop session"
-                  : undefined}
+                disabled={
+                  mode === "window" &&
+                  windowLayouts.length === 0 &&
+                  windowListingIsReady(session.windows_ready)
+                }
+                title={
+                  mode === "window" && windowLayouts.length === 0
+                    ? "Window capture is not available in this desktop session"
+                    : undefined
+                }
                 onClick={() => {
                   setTargetMode(mode);
                   setHoveredWindow(null);
@@ -3438,7 +3635,9 @@ export function RecordingSelector() {
                 }}
               >
                 <CaptureTargetIcon mode={mode} />
-                <span>{mode === "display" ? "Full screen" : mode[0].toUpperCase() + mode.slice(1)}</span>
+                <span>
+                  {mode === "display" ? "Full screen" : mode[0].toUpperCase() + mode.slice(1)}
+                </span>
               </button>
             ))}
           </div>
@@ -3477,23 +3676,30 @@ export function RecordingSelector() {
             hidden={settings.auto_start_on_selection && !starting && !error}
             onClick={() => void start()}
           >
-            {actionMode === "screenshot"
-              ? <CaptureIcon />
-              : <span className="capture-record-dot" aria-hidden="true" />}
+            {actionMode === "screenshot" ? (
+              <CaptureIcon />
+            ) : (
+              <span className="capture-record-dot" aria-hidden="true" />
+            )}
             {primaryActionLabel}
           </button>
         </div>
         {actionMode === "recording" && (
           <div className="recording-options-row">
-            <div className="recording-field"><span>FPS</span>
+            <div className="recording-field">
+              <span>FPS</span>
               <CustomSelect
                 value={String(fps)}
                 ariaLabel="Frames per second"
-                options={[60, 30, 15].map((value) => ({ value: String(value), label: String(value) }))}
+                options={[60, 30, 15].map((value) => ({
+                  value: String(value),
+                  label: String(value),
+                }))}
                 onChange={(value) => setFps(Number(value))}
               />
             </div>
-            <div className="recording-field"><span>Max resolution</span>
+            <div className="recording-field">
+              <span>Max resolution</span>
               <CustomSelect
                 value={maxResolution}
                 ariaLabel="Maximum resolution"
@@ -3505,12 +3711,15 @@ export function RecordingSelector() {
                 onChange={(value) => setMaxResolution(value as MaxResolution)}
               />
             </div>
-            <div className="recording-field"><span>Show cursor</span>
+            <div className="recording-field">
+              <span>Show cursor</span>
               <label
                 className="recording-toggle"
-                title={session.recording_capabilities.cursor_control
-                  ? undefined
-                  : "Cursor capture is unavailable in this desktop session"}
+                title={
+                  session.recording_capabilities.cursor_control
+                    ? undefined
+                    : "Cursor capture is unavailable in this desktop session"
+                }
               >
                 <input
                   aria-label="Show cursor"
@@ -3523,17 +3732,24 @@ export function RecordingSelector() {
                   }}
                 />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>{session.recording_capabilities.cursor_control
-                  ? showCursor ? "On" : "Off"
-                  : "Unavailable"}</span>
+                <span>
+                  {session.recording_capabilities.cursor_control
+                    ? showCursor
+                      ? "On"
+                      : "Off"
+                    : "Unavailable"}
+                </span>
               </label>
             </div>
-            <div className="recording-field"><span>Show clicks</span>
+            <div className="recording-field">
+              <span>Show clicks</span>
               <label
                 className="recording-toggle"
-                title={session.recording_capabilities.click_highlights
-                  ? undefined
-                  : "Click highlights are unavailable in this desktop session"}
+                title={
+                  session.recording_capabilities.click_highlights
+                    ? undefined
+                    : "Click highlights are unavailable in this desktop session"
+                }
               >
                 <input
                   aria-label="Show clicks"
@@ -3546,17 +3762,24 @@ export function RecordingSelector() {
                   }}
                 />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>{session.recording_capabilities.click_highlights
-                  ? showClicks ? "On" : "Off"
-                  : "Unavailable"}</span>
+                <span>
+                  {session.recording_capabilities.click_highlights
+                    ? showClicks
+                      ? "On"
+                      : "Off"
+                    : "Unavailable"}
+                </span>
               </label>
             </div>
-            <div className="recording-field"><span>Desktop audio</span>
+            <div className="recording-field">
+              <span>Desktop audio</span>
               <label
                 className="recording-toggle"
-                title={session.recording_capabilities.system_audio
-                  ? undefined
-                  : "Desktop audio recording is unavailable in this desktop session"}
+                title={
+                  session.recording_capabilities.system_audio
+                    ? undefined
+                    : "Desktop audio recording is unavailable in this desktop session"
+                }
               >
                 <input
                   aria-label="Record desktop audio"
@@ -3566,12 +3789,17 @@ export function RecordingSelector() {
                   onChange={(event) => setSystemAudio(event.target.checked)}
                 />
                 <span className="recording-switch" aria-hidden="true" />
-                <span>{session.recording_capabilities.system_audio
-                  ? systemAudio ? "On" : "Off"
-                  : "Unavailable"}</span>
+                <span>
+                  {session.recording_capabilities.system_audio
+                    ? systemAudio
+                      ? "On"
+                      : "Off"
+                    : "Unavailable"}
+                </span>
               </label>
             </div>
-            <div className="recording-field recording-microphone-field"><span>Microphone</span>
+            <div className="recording-field recording-microphone-field">
+              <span>Microphone</span>
               <CustomSelect
                 value={microphoneId ?? "off"}
                 disabled={!session.recording_capabilities.microphone || devicesLoading}
@@ -3582,9 +3810,16 @@ export function RecordingSelector() {
                     value: "off",
                     label: session.recording_capabilities.microphone ? "Off" : "Unavailable",
                   },
-                  ...(devicesLoading ? [{ value: "__loading", label: "Loading microphones…", disabled: true }] : []),
+                  ...(devicesLoading
+                    ? [{ value: "__loading", label: "Loading microphones…", disabled: true }]
+                    : []),
                   ...(microphoneId && !devices.some((device) => device.id === microphoneId)
-                    ? [{ value: microphoneId, label: devicesLoading ? "Loading microphone…" : "Selected microphone" }]
+                    ? [
+                        {
+                          value: microphoneId,
+                          label: devicesLoading ? "Loading microphone…" : "Selected microphone",
+                        },
+                      ]
                     : []),
                   ...devices.map((device) => ({ value: device.id, label: device.name })),
                 ]}
@@ -3596,14 +3831,12 @@ export function RecordingSelector() {
         <p className="capture-selector-note">
           <CaptureSelectorVisibilityNote
             canExcludeControls={session.recording_capabilities.can_exclude_controls}
-            controlsExcluded={
-              controlsExcluded ?? session.recording_capabilities.controls_excluded
-            }
+            controlsExcluded={controlsExcluded ?? session.recording_capabilities.controls_excluded}
             actionMode={actionMode}
             onOpenPreference={() => openCapturePreference(RECORDING_CONTROLS_PREFERENCE_TARGET)}
           />
-          {settings.auto_start_on_selection
-            ? <>
+          {settings.auto_start_on_selection ? (
+            <>
               <span aria-hidden="true">·</span>
               <CapturePreferenceLink
                 onClick={() => openCapturePreference(AUTO_START_PREFERENCE_TARGET)}
@@ -3611,12 +3844,18 @@ export function RecordingSelector() {
                 Auto-capture is on. Selecting a target starts immediately.
               </CapturePreferenceLink>
             </>
-            : <>
+          ) : (
+            <>
               <span aria-hidden="true">·</span>
               Press <kbd>Enter</kbd> to confirm
-            </>}
+            </>
+          )}
         </p>
-        {error && <p className="recording-selector-error" role="alert">{error}</p>}
+        {error && (
+          <p className="recording-selector-error" role="alert">
+            {error}
+          </p>
+        )}
       </section>
     </main>
   );
@@ -3624,12 +3863,27 @@ export function RecordingSelector() {
 
 function CaptureTargetIcon({ mode }: { mode: RecordingTargetMode }) {
   if (mode === "region") {
-    return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9V6a1 1 0 0 1 1-1h3M15 5h3a1 1 0 0 1 1 1v3M19 15v3a1 1 0 0 1-1 1h-3M9 19H6a1 1 0 0 1-1-1v-3" /><rect x="9" y="9" width="6" height="6" rx="1" /></svg>;
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 9V6a1 1 0 0 1 1-1h3M15 5h3a1 1 0 0 1 1 1v3M19 15v3a1 1 0 0 1-1 1h-3M9 19H6a1 1 0 0 1-1-1v-3" />
+        <rect x="9" y="9" width="6" height="6" rx="1" />
+      </svg>
+    );
   }
   if (mode === "window") {
-    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2.5" /><path d="M4 10h16M7 8h.01M10 8h.01" /></svg>;
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="6" width="16" height="13" rx="2.5" />
+        <path d="M4 10h16M7 8h.01M10 8h.01" />
+      </svg>
+    );
   }
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2.5" /><path d="M9 21h6M12 18v3" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="14" rx="2.5" />
+      <path d="M9 21h6M12 18v3" />
+    </svg>
+  );
 }
 
 /**
@@ -3650,7 +3904,11 @@ function displayOverlaySize(
   };
 }
 
-function roundRecordingRect(rect: RecordingRect, maxWidth: number, maxHeight: number): RecordingRect {
+function roundRecordingRect(
+  rect: RecordingRect,
+  maxWidth: number,
+  maxHeight: number,
+): RecordingRect {
   const x = Math.max(0, Math.round(rect.x));
   const y = Math.max(0, Math.round(rect.y));
   return {
@@ -3674,12 +3932,22 @@ function recordingControlsVisibilityText(
 ): ReactNode {
   const output = captureOutputLabel(context);
   if (controlsExcluded === true) {
-    return <>These controls <strong>won’t</strong> show in {output}</>;
+    return (
+      <>
+        These controls <strong>won’t</strong> show in {output}
+      </>
+    );
   }
   if (controlsExcluded === false) {
-    return showHideHint
-      ? <>These controls <strong>will</strong> show in {output} · Use Hide controls to keep them out</>
-      : <>These controls <strong>will</strong> show in {output}</>;
+    return showHideHint ? (
+      <>
+        These controls <strong>will</strong> show in {output} · Use Hide controls to keep them out
+      </>
+    ) : (
+      <>
+        These controls <strong>will</strong> show in {output}
+      </>
+    );
   }
   return "Checking whether these controls will show…";
 }
@@ -3701,11 +3969,7 @@ function CaptureSelectorVisibilityNote({
     !canExcludeControls && actionMode === "recording",
   );
   if (!canExcludeControls) return copy;
-  return (
-    <CapturePreferenceLink onClick={onOpenPreference}>
-      {copy}
-    </CapturePreferenceLink>
-  );
+  return <CapturePreferenceLink onClick={onOpenPreference}>{copy}</CapturePreferenceLink>;
 }
 
 function CapturePreferenceLink({
@@ -3716,11 +3980,7 @@ function CapturePreferenceLink({
   children: ReactNode;
 }) {
   return (
-    <button
-      className="capture-selector-preferences-link"
-      type="button"
-      onClick={onClick}
-    >
+    <button className="capture-selector-preferences-link" type="button" onClick={onClick}>
       {children}
       <ExternalPreferenceIcon />
     </button>
@@ -3775,18 +4035,23 @@ export function RecordingHud() {
             setError(recordingErrorMessage(payload.message));
           }
         }),
-        listen<{ session_id: string; microphone_peak: number }>("recording-audio-level", ({ payload }) => {
-          if (active && payload.session_id === sessionIdRef.current) {
-            setMicrophonePeak(Math.max(0, Math.min(1, payload.microphone_peak)));
-          }
-        }),
+        listen<{ session_id: string; microphone_peak: number }>(
+          "recording-audio-level",
+          ({ payload }) => {
+            if (active && payload.session_id === sessionIdRef.current) {
+              setMicrophonePeak(Math.max(0, Math.min(1, payload.microphone_peak)));
+            }
+          },
+        ),
         // Update the privacy menu text as soon as the include preference changes.
         listen<AppSettings>("settings-changed", () => {
           refreshControlsExcluded();
         }),
       ]);
       void listeners.then((results) => {
-        const unlisteners = results.flatMap((listener) => listener.status === "fulfilled" ? [listener.value] : []);
+        const unlisteners = results.flatMap((listener) =>
+          listener.status === "fulfilled" ? [listener.value] : [],
+        );
         if (active) {
           dispose.push(...unlisteners);
         } else {
@@ -3856,7 +4121,8 @@ export function RecordingHud() {
   };
   const startHudDrag = (event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || !currentWindow) return;
-    if ((event.target as Element).closest("button, input, a, [role='button'], [role='slider']")) return;
+    if ((event.target as Element).closest("button, input, a, [role='button'], [role='slider']"))
+      return;
     event.preventDefault();
     void currentWindow.startDragging().catch((error) => setError(String(error)));
   };
@@ -3866,14 +4132,11 @@ export function RecordingHud() {
   const deleteRecording = async () => {
     if (busy) return;
     try {
-      const choice = await message(
-        "This recording will be deleted permanently.",
-        {
-          title: "Delete recording?",
-          kind: "warning",
-          buttons: { ok: "Delete", cancel: "Cancel" },
-        },
-      );
+      const choice = await message("This recording will be deleted permanently.", {
+        title: "Delete recording?",
+        kind: "warning",
+        buttons: { ok: "Delete", cancel: "Cancel" },
+      });
       if (choice === "Delete") {
         await invokeAction("discard_recording");
       }
@@ -3920,7 +4183,15 @@ export function RecordingHud() {
         </div>
         <div className="recording-hud-actions">
           <HudTooltip label="Stop and save">
-            <button type="button" className="recording-stop" disabled={!canControl || busy} aria-label="Stop recording" onClick={() => void invokeAction("stop_recording")}><span /></button>
+            <button
+              type="button"
+              className="recording-stop"
+              disabled={!canControl || busy}
+              aria-label="Stop recording"
+              onClick={() => void invokeAction("stop_recording")}
+            >
+              <span />
+            </button>
           </HudTooltip>
           <HudTooltip label={snapshot.state === "paused" ? "Resume recording" : "Pause recording"}>
             <button
@@ -3928,28 +4199,65 @@ export function RecordingHud() {
               className="recording-icon-button"
               disabled={!canControl || busy}
               aria-label={snapshot.state === "paused" ? "Resume recording" : "Pause recording"}
-              onClick={() => void invokeAction(snapshot.state === "paused" ? "resume_recording" : "pause_recording")}
-            ><PauseResumeIcon paused={snapshot.state === "paused"} /></button>
+              onClick={() =>
+                void invokeAction(
+                  snapshot.state === "paused" ? "resume_recording" : "pause_recording",
+                )
+              }
+            >
+              <PauseResumeIcon paused={snapshot.state === "paused"} />
+            </button>
           </HudTooltip>
           <HudTooltip label={snapshot.state === "failed" ? "Retry recording" : "Restart recording"}>
-            <button type="button" className="recording-icon-button" disabled={!canRestart || busy} aria-label={snapshot.state === "failed" ? "Retry recording" : "Restart recording"} onClick={() => void restartRecording()}><RestartRecordingIcon /></button>
+            <button
+              type="button"
+              className="recording-icon-button"
+              disabled={!canRestart || busy}
+              aria-label={snapshot.state === "failed" ? "Retry recording" : "Restart recording"}
+              onClick={() => void restartRecording()}
+            >
+              <RestartRecordingIcon />
+            </button>
           </HudTooltip>
           <HudTooltip label="Take a region screenshot">
-            <button type="button" className="recording-icon-button" disabled={!canControl || busy} aria-label="Take a region screenshot" onClick={() => void takeScreenshot()}><CaptureIcon /></button>
+            <button
+              type="button"
+              className="recording-icon-button"
+              disabled={!canControl || busy}
+              aria-label="Take a region screenshot"
+              onClick={() => void takeScreenshot()}
+            >
+              <CaptureIcon />
+            </button>
           </HudTooltip>
           {hasMicrophone && (
-            <span className="recording-microphone-level" aria-label={`Microphone level ${Math.round(microphonePeak * 100)}%`}>
+            <span
+              className="recording-microphone-level"
+              aria-label={`Microphone level ${Math.round(microphonePeak * 100)}%`}
+            >
               <i style={{ width: `${Math.round(microphonePeak * 100)}%` }} />
             </span>
           )}
-          <HudTooltip label={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}>
+          <HudTooltip
+            label={
+              snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"
+            }
+          >
             <button
               type="button"
               disabled={!hasMicrophone || !canControl || busy}
               className={`recording-icon-button${snapshot.options.audio.microphone_muted ? " active" : ""}`}
-              aria-label={snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"}
-              onClick={() => void invokeAction("set_recording_microphone_muted", { muted: !snapshot.options.audio.microphone_muted })}
-            ><MicrophoneIcon muted={snapshot.options.audio.microphone_muted} /></button>
+              aria-label={
+                snapshot.options.audio.microphone_muted ? "Unmute microphone" : "Mute microphone"
+              }
+              onClick={() =>
+                void invokeAction("set_recording_microphone_muted", {
+                  muted: !snapshot.options.audio.microphone_muted,
+                })
+              }
+            >
+              <MicrophoneIcon muted={snapshot.options.audio.microphone_muted} />
+            </button>
           </HudTooltip>
           <HudTooltip label="Delete recording">
             <button
@@ -3958,7 +4266,9 @@ export function RecordingHud() {
               disabled={busy || snapshot.state === "finalizing"}
               aria-label="Delete recording"
               onClick={() => void deleteRecording()}
-            ><TrashIcon /></button>
+            >
+              <TrashIcon />
+            </button>
           </HudTooltip>
           <HudTooltip label="Hide controls">
             <button
@@ -3967,7 +4277,9 @@ export function RecordingHud() {
               disabled={busy}
               aria-label="Hide recording controls"
               onClick={() => void hideControls()}
-            ><HideControlsIcon /></button>
+            >
+              <HideControlsIcon />
+            </button>
           </HudTooltip>
         </div>
       </div>
@@ -4179,36 +4491,55 @@ export function RecordingEditor() {
     const cleanup = createCleanupRegistry();
     void (async () => {
       const listeners = await Promise.all([
-        listen<{ export_id: string; progress: ExportProgress }>("recording-export-progress", ({ payload }) => {
-          if (active && payload.export_id === exportIdRef.current) setProgress(payload.progress);
-        }),
-        listen<{ export_id: string; artifact: RecordingArtifact; reveal_error: string | null }>("recording-export-complete", ({ payload }) => {
-          if (!active || payload.export_id !== exportIdRef.current) return;
-          if (payload.artifact.id === artifactId) {
-            setArtifact(payload.artifact);
-          }
-          setExported(payload.artifact);
-          setSavedFingerprint(pendingExportFingerprintRef.current);
-          setToast(
-            `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.${
-              payload.reveal_error ? " Its folder could not be opened." : ""
-            }`,
-          );
-          setProgress({ stage: "complete", completed_per_mille: 1000, attempt: 1, message: null });
-          setExportId(null);
-          exportIdRef.current = null;
-        }),
-        listen<{ export_id: string; message: string; cancelled: boolean }>("recording-export-failed", ({ payload }) => {
-          if (!active || payload.export_id !== exportIdRef.current) return;
-          if (payload.cancelled) {
-            setToast("Save cancelled.");
-            setProgress({ stage: "cancelled", completed_per_mille: 0, attempt: 0, message: null });
-          } else {
-            setError(recordingErrorMessage(payload.message));
-          }
-          setExportId(null);
-          exportIdRef.current = null;
-        }),
+        listen<{ export_id: string; progress: ExportProgress }>(
+          "recording-export-progress",
+          ({ payload }) => {
+            if (active && payload.export_id === exportIdRef.current) setProgress(payload.progress);
+          },
+        ),
+        listen<{ export_id: string; artifact: RecordingArtifact; reveal_error: string | null }>(
+          "recording-export-complete",
+          ({ payload }) => {
+            if (!active || payload.export_id !== exportIdRef.current) return;
+            if (payload.artifact.id === artifactId) {
+              setArtifact(payload.artifact);
+            }
+            setExported(payload.artifact);
+            setSavedFingerprint(pendingExportFingerprintRef.current);
+            setToast(
+              `${payload.artifact.kind === "gif" ? "GIF" : "Video"} saved — ${formatFileSize(payload.artifact.size_bytes)}.${
+                payload.reveal_error ? " Its folder could not be opened." : ""
+              }`,
+            );
+            setProgress({
+              stage: "complete",
+              completed_per_mille: 1000,
+              attempt: 1,
+              message: null,
+            });
+            setExportId(null);
+            exportIdRef.current = null;
+          },
+        ),
+        listen<{ export_id: string; message: string; cancelled: boolean }>(
+          "recording-export-failed",
+          ({ payload }) => {
+            if (!active || payload.export_id !== exportIdRef.current) return;
+            if (payload.cancelled) {
+              setToast("Save cancelled.");
+              setProgress({
+                stage: "cancelled",
+                completed_per_mille: 0,
+                attempt: 0,
+                message: null,
+              });
+            } else {
+              setError(recordingErrorMessage(payload.message));
+            }
+            setExportId(null);
+            exportIdRef.current = null;
+          },
+        ),
       ]);
       if (!cleanup.add(...listeners)) return;
       if (!artifactId) return;
@@ -4229,10 +4560,7 @@ export function RecordingEditor() {
       const initialDestinationDirectory = initialSave.directory;
       const preferredVideoFormat = loadedSettings?.recording.video_format ?? "mp4";
       const sourceFormat = recordingSourceFormat(loaded);
-      const initialOutputFormat = recordingInitialOutputFormat(
-        sourceFormat,
-        preferredVideoFormat,
-      );
+      const initialOutputFormat = recordingInitialOutputFormat(sourceFormat, preferredVideoFormat);
       const initialSizeMode = initialOutputFormat === "gif" ? "compress" : "preserve";
       const initialGifFps = loadedSettings?.recording.gif_fps ?? 15;
       const initialGifMaxWidth = loadedSettings?.recording.gif_max_width ?? 800;
@@ -4265,11 +4593,13 @@ export function RecordingEditor() {
       setSavedFingerprint(null);
       void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
         artifactId: loaded.id,
-      }).then((preview) => {
-        if (active) setTimeline(preview);
-      }).catch(() => {
-        if (active) setTimeline(null);
-      });
+      })
+        .then((preview) => {
+          if (active) setTimeline(preview);
+        })
+        .catch(() => {
+          if (active) setTimeline(null);
+        });
     })().catch((error) => {
       if (active) setError(recordingErrorMessage(error));
     });
@@ -4284,10 +4614,12 @@ export function RecordingEditor() {
     if (!artifactId || !artifact) return;
     const editorId = `recording-editor-${artifactId}`;
     const publish = (artifactIds: string[]) => {
-      void Promise.resolve(emit<EditorLayerPresence>("editor-layers-changed", {
-        editor_id: editorId,
-        artifact_ids: artifactIds,
-      })).catch(() => undefined);
+      void Promise.resolve(
+        emit<EditorLayerPresence>("editor-layers-changed", {
+          editor_id: editorId,
+          artifact_ids: artifactIds,
+        }),
+      ).catch(() => undefined);
     };
     publish([artifactId]);
     return () => {
@@ -4350,9 +4682,10 @@ export function RecordingEditor() {
     maximumBytes: number | null;
   } | null => {
     if (!artifact) return null;
-    const maximumBytes = sizeMode === "maximum"
-      ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
-      : null;
+    const maximumBytes =
+      sizeMode === "maximum"
+        ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
+        : null;
     const baseOutput = editorOutputDimensions(
       cropEnabled ? crop.width : artifact.width,
       cropEnabled ? crop.height : artifact.height,
@@ -4360,9 +4693,10 @@ export function RecordingEditor() {
       customWidth,
       customHeight,
     );
-    const output = outputFormat === "gif"
-      ? dimensionsAtMaximumWidth(baseOutput.width, baseOutput.height, gifMaxWidth)
-      : baseOutput;
+    const output =
+      outputFormat === "gif"
+        ? dimensionsAtMaximumWidth(baseOutput.width, baseOutput.height, gifMaxWidth)
+        : baseOutput;
     const edit: EditSpec = {
       trim_start_ms: Math.round(trimStart),
       trim_end_ms: Math.round(trimEnd) >= artifact.duration_ms ? null : Math.round(trimEnd),
@@ -4381,7 +4715,8 @@ export function RecordingEditor() {
     };
     const exportSpec: ExportSpec = {
       format: outputFormat,
-      quality: sizeMode === "preserve" ? "preserve" : sizeMode === "compress" ? quality : "preserve",
+      quality:
+        sizeMode === "preserve" ? "preserve" : sizeMode === "compress" ? quality : "preserve",
       max_size_bytes: maximumBytes,
       frames_per_second: outputFormat === "gif" ? gifFps : null,
       gif_max_colors: outputFormat === "gif" ? gifMaxColorsForQuality(quality) : null,
@@ -4457,11 +4792,14 @@ export function RecordingEditor() {
   }, []);
 
   // Revoke any cached preview object URLs when the editor unmounts.
-  useEffect(() => () => {
-    const { before, after } = compressPreviewUrlsRef.current;
-    if (before) URL.revokeObjectURL(before);
-    if (after) URL.revokeObjectURL(after);
-  }, []);
+  useEffect(
+    () => () => {
+      const { before, after } = compressPreviewUrlsRef.current;
+      if (before) URL.revokeObjectURL(before);
+      if (after) URL.revokeObjectURL(after);
+    },
+    [],
+  );
 
   const loadCompressPreview = useCallback(async () => {
     if (!artifact) return;
@@ -4510,11 +4848,9 @@ export function RecordingEditor() {
     }
   }, [artifact, buildExportRequestSpecs, revokeCompressPreviewUrls]);
 
-  const canPreviewCompression = (sizeMode === "compress" || sizeMode === "maximum")
-    && outputFormat !== "webm";
-  const showCompressCompare = canPreviewCompression
-    && !previewPlaying
-    && !compressCompareDismissed;
+  const canPreviewCompression =
+    (sizeMode === "compress" || sizeMode === "maximum") && outputFormat !== "webm";
+  const showCompressCompare = canPreviewCompression && !previewPlaying && !compressCompareDismissed;
 
   const clearCompressPreview = useCallback(() => {
     compressPreviewRequestRef.current += 1;
@@ -4533,33 +4869,39 @@ export function RecordingEditor() {
     return () => window.clearTimeout(timer);
   }, [canPreviewCompression, loadCompressPreview, playheadMs, previewPlaying]);
 
-  const exportFingerprint = artifact ? recordingEditorFingerprint({
-    artifact: artifact.id,
-    makeCopy,
-    filenameStem,
-    destinationDirectory,
-    trimStart: Math.round(trimStart),
-    trimEnd: Math.round(trimEnd),
-    crop: cropEnabled ? boundedCrop(crop, artifact.width, artifact.height) : null,
-    resolution,
-    customWidth,
-    customHeight,
-    outputFormat,
-    gifFps,
-    gifMaxWidth,
-    quality,
-    sizeMode,
-    maximumSize,
-    maximumUnit,
-    systemVolume,
-    microphoneVolume,
-    muteSystem,
-    muteMicrophone,
-    mono,
-  }) : null;
+  const exportFingerprint = artifact
+    ? recordingEditorFingerprint({
+        artifact: artifact.id,
+        makeCopy,
+        filenameStem,
+        destinationDirectory,
+        trimStart: Math.round(trimStart),
+        trimEnd: Math.round(trimEnd),
+        crop: cropEnabled ? boundedCrop(crop, artifact.width, artifact.height) : null,
+        resolution,
+        customWidth,
+        customHeight,
+        outputFormat,
+        gifFps,
+        gifMaxWidth,
+        quality,
+        sizeMode,
+        maximumSize,
+        maximumUnit,
+        systemVolume,
+        microphoneVolume,
+        muteSystem,
+        muteMicrophone,
+        mono,
+      })
+    : null;
 
   if (!artifact || !exportFingerprint) {
-    return <main className="recording-editor recording-editor-loading">{error || "Loading recording…"}</main>;
+    return (
+      <main className="recording-editor recording-editor-loading">
+        {error || "Loading recording…"}
+      </main>
+    );
   }
 
   const duration = Math.max(1, artifact.duration_ms);
@@ -4585,27 +4927,32 @@ export function RecordingEditor() {
   const sourceFormat = recordingSourceFormat(artifact);
   const formatRequiresCopy = outputFormat !== sourceFormat;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
-  const maximumBytes = sizeMode === "maximum"
-    ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
-    : null;
-  const maximumBytesValid = maximumBytes !== null
-    && Number.isFinite(maximumBytes)
-    && maximumBytes >= 100_000;
-  const estimatedSizeLabel = sizeMode === "maximum"
-    ? maximumBytesValid && maximumBytes !== null ? `≤ ${formatFileSize(maximumBytes)}` : "—"
-    : outputFormat === "webm"
-      ? "—"
-      : estimatePending && estimatedBytes === null
-        ? "Estimating…"
-        : estimatedBytes === null
-          ? "—"
-          : `${estimateExact ? "" : "≈ "}${formatFileSize(estimatedBytes)}`;
-  const estimatedDelta = sizeMode === "maximum" || outputFormat === "webm" || estimatePending
-    ? null
-    : formatFileSizeDelta(estimatedBytes, artifact.size_bytes);
-  const saveStatus = error
-    || toast
-    || (exportId ? progress?.message || exportStageLabel(progress?.stage || "preparing") : "");
+  const maximumBytes =
+    sizeMode === "maximum"
+      ? Math.floor(Number(maximumSize) * FILE_SIZE_UNIT_BYTES[maximumUnit])
+      : null;
+  const maximumBytesValid =
+    maximumBytes !== null && Number.isFinite(maximumBytes) && maximumBytes >= 100_000;
+  const estimatedSizeLabel =
+    sizeMode === "maximum"
+      ? maximumBytesValid && maximumBytes !== null
+        ? `≤ ${formatFileSize(maximumBytes)}`
+        : "—"
+      : outputFormat === "webm"
+        ? "—"
+        : estimatePending && estimatedBytes === null
+          ? "Estimating…"
+          : estimatedBytes === null
+            ? "—"
+            : `${estimateExact ? "" : "≈ "}${formatFileSize(estimatedBytes)}`;
+  const estimatedDelta =
+    sizeMode === "maximum" || outputFormat === "webm" || estimatePending
+      ? null
+      : formatFileSizeDelta(estimatedBytes, artifact.size_bytes);
+  const saveStatus =
+    error ||
+    toast ||
+    (exportId ? progress?.message || exportStageLabel(progress?.stage || "preparing") : "");
   const updateMakeCopy = (enabled: boolean) => {
     if (!enabled && formatRequiresCopy) return;
     setMakeCopy(enabled);
@@ -4661,18 +5008,10 @@ export function RecordingEditor() {
   const updateCropOrigin = (key: "x" | "y", value: number) => {
     setCrop((current) => {
       if (key === "x") {
-        const x = clampNumber(
-          Math.round(value),
-          0,
-          Math.max(0, artifact.width - current.width),
-        );
+        const x = clampNumber(Math.round(value), 0, Math.max(0, artifact.width - current.width));
         return { ...current, x };
       }
-      const y = clampNumber(
-        Math.round(value),
-        0,
-        Math.max(0, artifact.height - current.height),
-      );
+      const y = clampNumber(Math.round(value), 0, Math.max(0, artifact.height - current.height));
       return { ...current, y };
     });
   };
@@ -4776,13 +5115,15 @@ export function RecordingEditor() {
       x: ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * artifact.width,
       y: ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * artifact.height,
     };
-    setCrop(editorCropAfterDrag(
-      drag.initial,
-      drag.handle,
-      { x: current.x - drag.start.x, y: current.y - drag.start.y },
-      { width: artifact.width, height: artifact.height },
-      aspectLocked,
-    ));
+    setCrop(
+      editorCropAfterDrag(
+        drag.initial,
+        drag.handle,
+        { x: current.x - drag.start.x, y: current.y - drag.start.y },
+        { width: artifact.width, height: artifact.height },
+        aspectLocked,
+      ),
+    );
   };
 
   const togglePreviewPlayback = async () => {
@@ -4794,9 +5135,9 @@ export function RecordingEditor() {
         const selectedStart = trimStart / 1_000;
         const selectedEnd = trimEnd / 1_000;
         if (
-          video.ended
-          || video.currentTime < selectedStart - 0.01
-          || video.currentTime >= selectedEnd - 0.01
+          video.ended ||
+          video.currentTime < selectedStart - 0.01 ||
+          video.currentTime >= selectedEnd - 0.01
         ) {
           video.currentTime = selectedStart;
           setPlayheadMs(trimStart);
@@ -4880,8 +5221,8 @@ export function RecordingEditor() {
     if (!specs) return;
     const { edit, export: exportSpec, maximumBytes } = specs;
     if (
-      sizeMode === "maximum"
-      && (maximumBytes === null || !Number.isFinite(maximumBytes) || maximumBytes < 100_000)
+      sizeMode === "maximum" &&
+      (maximumBytes === null || !Number.isFinite(maximumBytes) || maximumBytes < 100_000)
     ) {
       setError("Enter a maximum file size of at least 100 KB.");
       return;
@@ -4913,9 +5254,17 @@ export function RecordingEditor() {
   return (
     <main className="recording-editor">
       <header className="recording-editor-header">
-        <div><h1>{artifact.kind === "gif" ? "Edit GIF" : "Edit recording"}</h1></div>
+        <div>
+          <h1>{artifact.kind === "gif" ? "Edit GIF" : "Edit recording"}</h1>
+        </div>
       </header>
-      {artifact.dropped_frames > 0 && <p className="recording-editor-warning" role="status">This source dropped {artifact.dropped_frames.toLocaleString()} frame{artifact.dropped_frames === 1 ? "" : "s"} during capture. The original timing is preserved.</p>}
+      {artifact.dropped_frames > 0 && (
+        <p className="recording-editor-warning" role="status">
+          This source dropped {artifact.dropped_frames.toLocaleString()} frame
+          {artifact.dropped_frames === 1 ? "" : "s"} during capture. The original timing is
+          preserved.
+        </p>
+      )}
 
       <section className="recording-editor-preview">
         <div className="recording-preview-toolbar">
@@ -4927,7 +5276,9 @@ export function RecordingEditor() {
                 className={`recording-preview-loop${previewLoop ? " active" : ""}`}
                 aria-pressed={previewLoop}
                 onClick={() => setPreviewLoop((current) => !current)}
-              ><span aria-hidden="true">↻</span>Loop preview</button>
+              >
+                <span aria-hidden="true">↻</span>Loop preview
+              </button>
             )}
             <div
               className="editor-segmented preview-size-segmented"
@@ -4941,13 +5292,17 @@ export function RecordingEditor() {
                 className={previewMode === "fit" ? "active" : ""}
                 aria-pressed={previewMode === "fit"}
                 onClick={() => setPreviewMode("fit")}
-              >Fit</button>
+              >
+                Fit
+              </button>
               <button
                 type="button"
                 className={previewMode === "actual" ? "active" : ""}
                 aria-pressed={previewMode === "actual"}
                 onClick={() => setPreviewMode("actual")}
-              >100%</button>
+              >
+                100%
+              </button>
             </div>
           </div>
         </div>
@@ -4955,12 +5310,14 @@ export function RecordingEditor() {
           <div
             ref={previewMediaRef}
             className="recording-preview-media"
-            style={previewMode === "actual"
-              ? { width: artifact.width, height: artifact.height }
-              : {
-                  width: `min(100%, ${(52 * artifact.width / Math.max(1, artifact.height)).toFixed(2)}vh)`,
-                  aspectRatio: `${artifact.width} / ${artifact.height}`,
-                }}
+            style={
+              previewMode === "actual"
+                ? { width: artifact.width, height: artifact.height }
+                : {
+                    width: `min(100%, ${((52 * artifact.width) / Math.max(1, artifact.height)).toFixed(2)}vh)`,
+                    aspectRatio: `${artifact.width} / ${artifact.height}`,
+                  }
+            }
             onPointerMove={updateCropFromPointer}
             onPointerUp={() => {
               cropDragRef.current = null;
@@ -4994,9 +5351,13 @@ export function RecordingEditor() {
                 beforeUrl={compressPreviewBeforeUrl}
                 afterUrl={compressPreviewAfterUrl}
                 beforeBytes={artifact.size_bytes}
-                afterBytes={sizeMode === "maximum"
-                  ? maximumBytesValid ? maximumBytes : null
-                  : estimatedBytes}
+                afterBytes={
+                  sizeMode === "maximum"
+                    ? maximumBytesValid
+                      ? maximumBytes
+                      : null
+                    : estimatedBytes
+                }
                 pending={compressPreviewPending}
                 error={compressPreviewError}
                 initialSplit={compressSplit}
@@ -5016,21 +5377,43 @@ export function RecordingEditor() {
             )}
             {cropEnabled && (
               <div className="editor-crop-layer" aria-label="Crop recording">
-                <i className="crop-dim crop-dim-top" style={{ height: `${crop.y / artifact.height * 100}%` }} />
-                <i className="crop-dim crop-dim-left" style={{ top: `${crop.y / artifact.height * 100}%`, width: `${crop.x / artifact.width * 100}%`, height: `${crop.height / artifact.height * 100}%` }} />
-                <i className="crop-dim crop-dim-right" style={{ top: `${crop.y / artifact.height * 100}%`, left: `${(crop.x + crop.width) / artifact.width * 100}%`, height: `${crop.height / artifact.height * 100}%` }} />
-                <i className="crop-dim crop-dim-bottom" style={{ top: `${(crop.y + crop.height) / artifact.height * 100}%` }} />
+                <i
+                  className="crop-dim crop-dim-top"
+                  style={{ height: `${(crop.y / artifact.height) * 100}%` }}
+                />
+                <i
+                  className="crop-dim crop-dim-left"
+                  style={{
+                    top: `${(crop.y / artifact.height) * 100}%`,
+                    width: `${(crop.x / artifact.width) * 100}%`,
+                    height: `${(crop.height / artifact.height) * 100}%`,
+                  }}
+                />
+                <i
+                  className="crop-dim crop-dim-right"
+                  style={{
+                    top: `${(crop.y / artifact.height) * 100}%`,
+                    left: `${((crop.x + crop.width) / artifact.width) * 100}%`,
+                    height: `${(crop.height / artifact.height) * 100}%`,
+                  }}
+                />
+                <i
+                  className="crop-dim crop-dim-bottom"
+                  style={{ top: `${((crop.y + crop.height) / artifact.height) * 100}%` }}
+                />
                 <div
                   className="editor-crop-box"
                   style={{
-                    left: `${crop.x / artifact.width * 100}%`,
-                    top: `${crop.y / artifact.height * 100}%`,
-                    width: `${crop.width / artifact.width * 100}%`,
-                    height: `${crop.height / artifact.height * 100}%`,
+                    left: `${(crop.x / artifact.width) * 100}%`,
+                    top: `${(crop.y / artifact.height) * 100}%`,
+                    width: `${(crop.width / artifact.width) * 100}%`,
+                    height: `${(crop.height / artifact.height) * 100}%`,
                   }}
                   onPointerDown={(event) => startCropDrag(event, "move")}
                 >
-                  <span>{Math.round(crop.width)} × {Math.round(crop.height)}</span>
+                  <span>
+                    {Math.round(crop.width)} × {Math.round(crop.height)}
+                  </span>
                   {(["n", "ne", "e", "se", "s", "sw", "w", "nw"] as const).map((handle) => (
                     <button
                       key={handle}
@@ -5048,7 +5431,12 @@ export function RecordingEditor() {
       </section>
 
       <section className="recording-timeline">
-        <div className="timeline-summary"><strong>{formatEditorTime(trimStart, duration)} – {formatEditorTime(trimEnd, duration)}</strong><span>{formatEditorTime(trimmedDuration, duration)} selected</span></div>
+        <div className="timeline-summary">
+          <strong>
+            {formatEditorTime(trimStart, duration)} – {formatEditorTime(trimEnd, duration)}
+          </strong>
+          <span>{formatEditorTime(trimmedDuration, duration)} selected</span>
+        </div>
         <div
           ref={timelineRef}
           className="timeline-track"
@@ -5077,16 +5465,26 @@ export function RecordingEditor() {
             {Array.from({ length: timeline?.frame_count ?? 12 }, (_, index) => (
               <i
                 key={index}
-                style={timeline ? {
-                  backgroundImage: `url("${timeline.url}")`,
-                  backgroundSize: `${timeline.frame_count * 100}% 100%`,
-                  backgroundPosition: `${timeline.frame_count <= 1 ? 0 : index / (timeline.frame_count - 1) * 100}% 0`,
-                } : undefined}
+                style={
+                  timeline
+                    ? {
+                        backgroundImage: `url("${timeline.url}")`,
+                        backgroundSize: `${timeline.frame_count * 100}% 100%`,
+                        backgroundPosition: `${timeline.frame_count <= 1 ? 0 : (index / (timeline.frame_count - 1)) * 100}% 0`,
+                      }
+                    : undefined
+                }
               />
             ))}
           </div>
-          <div className="timeline-excluded timeline-excluded-start" style={{ width: `${trimStart / duration * 100}%` }} />
-          <div className="timeline-excluded timeline-excluded-end" style={{ left: `${trimEnd / duration * 100}%` }} />
+          <div
+            className="timeline-excluded timeline-excluded-start"
+            style={{ width: `${(trimStart / duration) * 100}%` }}
+          />
+          <div
+            className="timeline-excluded timeline-excluded-end"
+            style={{ left: `${(trimEnd / duration) * 100}%` }}
+          />
           <button
             type="button"
             role="slider"
@@ -5109,7 +5507,9 @@ export function RecordingEditor() {
               setTrimStart(next);
               seekTo(next);
             }}
-          ><span>{formatEditorTime(trimStart, duration)}</span></button>
+          >
+            <span>{formatEditorTime(trimStart, duration)}</span>
+          </button>
           <button
             type="button"
             role="slider"
@@ -5132,8 +5532,12 @@ export function RecordingEditor() {
               setTrimEnd(next);
               seekTo(next);
             }}
-          ><span>{formatEditorTime(trimEnd, duration)}</span></button>
-          <div className="timeline-playhead" style={{ left: `${playheadMs / duration * 100}%` }}><i /></div>
+          >
+            <span>{formatEditorTime(trimEnd, duration)}</span>
+          </button>
+          <div className="timeline-playhead" style={{ left: `${(playheadMs / duration) * 100}%` }}>
+            <i />
+          </div>
         </div>
       </section>
 
@@ -5142,19 +5546,27 @@ export function RecordingEditor() {
           <section className="editor-card editor-output-card">
             <h2>GIF settings</h2>
             <div className="editor-number-grid dimensions">
-              <div className="editor-field"><span>Frame rate</span>
+              <div className="editor-field">
+                <span>Frame rate</span>
                 <CustomSelect
                   value={String(gifFps)}
                   ariaLabel="GIF frame rate"
-                  options={[8, 10, 12, 15, 20, 24, 30].map((value) => ({ value: String(value), label: `${value} FPS` }))}
+                  options={[8, 10, 12, 15, 20, 24, 30].map((value) => ({
+                    value: String(value),
+                    label: `${value} FPS`,
+                  }))}
                   onChange={(value) => setGifFps(Number(value))}
                 />
               </div>
-              <div className="editor-field"><span>Maximum width</span>
+              <div className="editor-field">
+                <span>Maximum width</span>
                 <CustomSelect
                   value={String(gifMaxWidth)}
                   ariaLabel="GIF maximum width"
-                  options={[320, 480, 640, 800, 1200].map((value) => ({ value: String(value), label: `${value} px` }))}
+                  options={[320, 480, 640, 800, 1200].map((value) => ({
+                    value: String(value),
+                    label: `${value} px`,
+                  }))}
                   onChange={(value) => setGifMaxWidth(Number(value))}
                 />
               </div>
@@ -5164,9 +5576,17 @@ export function RecordingEditor() {
 
         <section className="editor-card">
           <h2>Crop & size</h2>
-          <label className="check-row"><input type="checkbox" checked={cropEnabled} onChange={(event) => setCropEnabled(event.target.checked)} /><span>Crop recording</span></label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={cropEnabled}
+              onChange={(event) => setCropEnabled(event.target.checked)}
+            />
+            <span>Crop recording</span>
+          </label>
           <div className="editor-number-grid">
-            <label>X
+            <label>
+              X
               <NumberInput
                 min={0}
                 max={Math.max(0, artifact.width - crop.width)}
@@ -5175,7 +5595,8 @@ export function RecordingEditor() {
                 onChange={(value) => updateCropOrigin("x", value)}
               />
             </label>
-            <label>Y
+            <label>
+              Y
               <NumberInput
                 min={0}
                 max={Math.max(0, artifact.height - crop.height)}
@@ -5184,7 +5605,8 @@ export function RecordingEditor() {
                 onChange={(value) => updateCropOrigin("y", value)}
               />
             </label>
-            <label>Width
+            <label>
+              Width
               <NumberInput
                 min={2}
                 max={Math.max(2, artifact.width - crop.x)}
@@ -5193,7 +5615,8 @@ export function RecordingEditor() {
                 onChange={(value) => updateCropDimension("width", value)}
               />
             </label>
-            <label>Height
+            <label>
+              Height
               <NumberInput
                 min={2}
                 max={Math.max(2, artifact.height - crop.y)}
@@ -5203,8 +5626,16 @@ export function RecordingEditor() {
               />
             </label>
           </div>
-          <label className="check-row compact editor-aspect-lock"><input type="checkbox" checked={aspectLocked} onChange={(event) => setAspectLocked(event.target.checked)} /><span>Lock aspect ratio</span></label>
-          <div className="editor-field editor-resolution-field"><span>Output resolution</span>
+          <label className="check-row compact editor-aspect-lock">
+            <input
+              type="checkbox"
+              checked={aspectLocked}
+              onChange={(event) => setAspectLocked(event.target.checked)}
+            />
+            <span>Lock aspect ratio</span>
+          </label>
+          <div className="editor-field editor-resolution-field">
+            <span>Output resolution</span>
             <CustomSelect
               value={resolution}
               ariaLabel="Output resolution"
@@ -5235,10 +5666,12 @@ export function RecordingEditor() {
           </div>
           {resolution === "custom" && (
             <div className="editor-number-grid dimensions">
-              <label>Width
+              <label>
+                Width
                 <NumberInput min={2} value={customWidth} onChange={setCustomWidth} />
               </label>
-              <label>Height
+              <label>
+                Height
                 <NumberInput min={2} value={customHeight} onChange={setCustomHeight} />
               </label>
             </div>
@@ -5247,16 +5680,22 @@ export function RecordingEditor() {
 
         <section className="editor-card editor-quality-card">
           <h2>Save quality</h2>
-          <div className="editor-field editor-quality-mode-field"><span>Quality mode</span>
+          <div className="editor-field editor-quality-mode-field">
+            <span>Quality mode</span>
             <CustomSelect
               value={sizeMode}
               ariaLabel="Save quality"
               options={[
-                ...(outputFormat === "mp4" ? [{
-                  value: "preserve",
-                  label: "Preserve quality",
-                  description: "Original quality with no extra compression unless an edit requires it.",
-                }] : []),
+                ...(outputFormat === "mp4"
+                  ? [
+                      {
+                        value: "preserve",
+                        label: "Preserve quality",
+                        description:
+                          "Original quality with no extra compression unless an edit requires it.",
+                      },
+                    ]
+                  : []),
                 {
                   value: "compress",
                   label: "Compress",
@@ -5306,16 +5745,14 @@ export function RecordingEditor() {
           {canPreviewCompression && compressCompareDismissed && (
             <div className="editor-field">
               <span>Comparison</span>
-              <button
-                type="button"
-                onClick={() => setCompressCompareDismissed(false)}
-              >
+              <button type="button" onClick={() => setCompressCompareDismissed(false)}>
                 Show before / after
               </button>
             </div>
           )}
           {sizeMode === "maximum" && (
-            <div className="editor-field"><span>Maximum file size</span>
+            <div className="editor-field">
+              <span>Maximum file size</span>
               <div className="editor-size-limit">
                 <NumberInput
                   min={maximumUnit === "kb" ? 100 : maximumUnit === "mb" ? 0.1 : 0.0001}
@@ -5348,7 +5785,11 @@ export function RecordingEditor() {
             <span>Est. size</span>
             <strong
               className="recording-output-estimate"
-              data-pending={sizeMode !== "maximum" && outputFormat !== "webm" && estimatePending ? "true" : undefined}
+              data-pending={
+                sizeMode !== "maximum" && outputFormat !== "webm" && estimatePending
+                  ? "true"
+                  : undefined
+              }
               title="Estimated saved file size for the current edits and settings"
             >
               {estimatedSizeLabel}
@@ -5364,72 +5805,91 @@ export function RecordingEditor() {
           </div>
         </section>
 
-        {artifact.kind === "video" && outputFormat === "mp4" && hasRecordedAudio && <section className="editor-card editor-audio-card">
-          <h2>Audio</h2>
-          {artifact.has_system_audio && (
-            <div className="editor-volume">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={!muteSystem}
-                  onChange={(event) => setMuteSystem(!event.target.checked)}
+        {artifact.kind === "video" && outputFormat === "mp4" && hasRecordedAudio && (
+          <section className="editor-card editor-audio-card">
+            <h2>Audio</h2>
+            {artifact.has_system_audio && (
+              <div className="editor-volume">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!muteSystem}
+                    onChange={(event) => setMuteSystem(!event.target.checked)}
+                  />
+                  System audio
+                </label>
+                <RangeSlider
+                  ariaLabel="System audio volume"
+                  min={0}
+                  max={200}
+                  value={systemVolume}
+                  valueText={`${systemVolume}%`}
+                  disabled={muteSystem}
+                  onChange={setSystemVolume}
                 />
-                System audio
-              </label>
-              <RangeSlider
-                ariaLabel="System audio volume"
-                min={0}
-                max={200}
-                value={systemVolume}
-                valueText={`${systemVolume}%`}
-                disabled={muteSystem}
-                onChange={setSystemVolume}
-              />
-            </div>
-          )}
-          {artifact.has_microphone_audio && (
-            <div className="editor-volume">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={!muteMicrophone}
-                  onChange={(event) => setMuteMicrophone(!event.target.checked)}
+              </div>
+            )}
+            {artifact.has_microphone_audio && (
+              <div className="editor-volume">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!muteMicrophone}
+                    onChange={(event) => setMuteMicrophone(!event.target.checked)}
+                  />
+                  Microphone
+                </label>
+                <RangeSlider
+                  ariaLabel="Microphone volume"
+                  min={0}
+                  max={200}
+                  value={microphoneVolume}
+                  valueText={`${microphoneVolume}%`}
+                  disabled={muteMicrophone}
+                  onChange={setMicrophoneVolume}
                 />
-                Microphone
-              </label>
-              <RangeSlider
-                ariaLabel="Microphone volume"
-                min={0}
-                max={200}
-                value={microphoneVolume}
-                valueText={`${microphoneVolume}%`}
-                disabled={muteMicrophone}
-                onChange={setMicrophoneVolume}
+              </div>
+            )}
+            <label className="check-row compact">
+              <input
+                type="checkbox"
+                checked={mono}
+                onChange={(event) => setMono(event.target.checked)}
               />
-            </div>
-          )}
-          <label className="check-row compact"><input type="checkbox" checked={mono} onChange={(event) => setMono(event.target.checked)} /><span>Convert to mono</span></label>
-        </section>}
-        {artifact.kind === "video" && outputFormat === "gif" && hasRecordedAudio && <section className="editor-card editor-audio-warning" role="status">
-          <h2>Audio</h2>
-          <p>GIFs do not include recorded audio.</p>
-        </section>}
+              <span>Convert to mono</span>
+            </label>
+          </section>
+        )}
+        {artifact.kind === "video" && outputFormat === "gif" && hasRecordedAudio && (
+          <section className="editor-card editor-audio-warning" role="status">
+            <h2>Audio</h2>
+            <p>GIFs do not include recorded audio.</p>
+          </section>
+        )}
       </div>
 
       <footer className={`recording-save-footer${error ? " has-error" : ""}`}>
-        {progress && exportId && <div className="recording-export-progress"><span style={{ width: `${progress.completed_per_mille / 10}%` }} /></div>}
+        {progress && exportId && (
+          <div className="recording-export-progress">
+            <span style={{ width: `${progress.completed_per_mille / 10}%` }} />
+          </div>
+        )}
         <div className="recording-filename">
           <div className="recording-filename-heading">
             <label htmlFor="recording-save-filename">Filename</label>
             <div className="recording-destination">
               <span>Saving to</span>
-              <output aria-label="Save location" title={destinationDirectory}>{destinationDirectory}</output>
+              <output aria-label="Save location" title={destinationDirectory}>
+                {destinationDirectory}
+              </output>
               <button
                 type="button"
                 aria-label="Change save location"
                 disabled={Boolean(exportId)}
                 onClick={() => void chooseDestinationDirectory()}
-              >Change…</button>
+              >
+                Change…
+              </button>
             </div>
           </div>
           <span className="recording-filename-input">
@@ -5462,9 +5922,11 @@ export function RecordingEditor() {
         </div>
         <label
           className="recording-toggle recording-make-copy"
-          title={formatRequiresCopy
-            ? "Changing formats always creates a new file"
-            : "Save as a new file and leave the original untouched"}
+          title={
+            formatRequiresCopy
+              ? "Changing formats always creates a new file"
+              : "Save as a new file and leave the original untouched"
+          }
         >
           <input
             aria-label="Save as new file"
@@ -5481,11 +5943,13 @@ export function RecordingEditor() {
             className={`recording-save-toast${error ? " error" : toast ? " success" : ""}${saveStatus ? "" : " empty"}`}
             aria-live={error ? "assertive" : "polite"}
           >
-            {error
-              ? <p role="alert">{error}</p>
-              : saveStatus
-                ? <p role={toast ? "status" : undefined}>{saveStatus}</p>
-                : <span aria-hidden="true" />}
+            {error ? (
+              <p role="alert">{error}</p>
+            ) : saveStatus ? (
+              <p role={toast ? "status" : undefined}>{saveStatus}</p>
+            ) : (
+              <span aria-hidden="true" />
+            )}
           </div>
           <div className="recording-save-actions">
             <button
@@ -5497,7 +5961,9 @@ export function RecordingEditor() {
               onClick={() => {
                 if (exportId) void invoke("cancel_recording_export", { exportId });
               }}
-            >Cancel</button>
+            >
+              Cancel
+            </button>
             <button
               className={`recording-show-in-folder${exported && !exportId ? "" : " is-placeholder"}`}
               type="button"
@@ -5505,14 +5971,20 @@ export function RecordingEditor() {
               aria-hidden={!exported || Boolean(exportId)}
               tabIndex={exported && !exportId ? 0 : -1}
               onClick={() => void revealSavedRecording()}
-            ><FolderIcon />Show in Folder</button>
+            >
+              <FolderIcon />
+              Show in Folder
+            </button>
             <button
               className="primary"
               type="button"
               aria-busy={Boolean(exportId)}
               disabled={Boolean(exportId) || alreadySaved}
               onClick={() => void startExport()}
-            ><SaveIcon />Save</button>
+            >
+              <SaveIcon />
+              Save
+            </button>
           </div>
         </div>
       </footer>
@@ -5527,7 +5999,8 @@ function editorOutputDimensions(
   customWidth: number,
   customHeight: number,
 ): { width: number; height: number } {
-  if (preset === "custom") return { width: evenDimension(customWidth), height: evenDimension(customHeight) };
+  if (preset === "custom")
+    return { width: evenDimension(customWidth), height: evenDimension(customHeight) };
   const maximum = preset === "1080" ? 1080 : preset === "720" ? 720 : height;
   const scale = height > maximum ? maximum / height : 1;
   return { width: evenDimension(width * scale), height: evenDimension(height * scale) };
@@ -5624,9 +6097,9 @@ function CaptureOverlay() {
           return;
         }
         activeSessionIdRef.current = payload.id;
-          revealingSessionIdRef.current = null;
-          captureCancelledRef.current = false;
-          setVisibleSessionId(null);
+        revealingSessionIdRef.current = null;
+        captureCancelledRef.current = false;
+        setVisibleSessionId(null);
         setPrimingSessionId(null);
         setSession(payload);
         setStart(null);
@@ -5646,7 +6119,9 @@ function CaptureOverlay() {
       });
       if (!cleanup.add(unlisten)) return;
       const initialSession = query("session_id")
-        ? await invoke<ActiveSession | null>("get_active_session", { sessionId: query("session_id") })
+        ? await invoke<ActiveSession | null>("get_active_session", {
+            sessionId: query("session_id"),
+          })
         : await invoke<ActiveSession | null>("get_pending_session");
       if (active && initialSession) {
         activeSessionIdRef.current = initialSession.id;
@@ -5665,25 +6140,32 @@ function CaptureOverlay() {
     };
   }, []);
 
-  useEffect(() => () => {
-    if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (selectionFeedbackTimerRef.current) clearTimeout(selectionFeedbackTimerRef.current);
+    },
+    [],
+  );
 
-  useEffect(() => onCaptureEscape(() => {
-    // Match the region commit fast path: hide the native surface before the
-    // async command crosses into Rust. The backend repeats the hide while it
-    // restores the previous app and capture UI, so this remains best-effort.
-    captureCancelledRef.current = true;
-    activeSessionIdRef.current = null;
-    revealingSessionIdRef.current = null;
-    overlayWakeRef.current = null;
-    dismissCaptureOverlayWindow();
-    if (sessionId) {
-      void invoke("cancel_capture", { sessionId });
-    } else {
-      void invoke("cancel_active_capture");
-    }
-  }), [sessionId]);
+  useEffect(
+    () =>
+      onCaptureEscape(() => {
+        // Match the region commit fast path: hide the native surface before the
+        // async command crosses into Rust. The backend repeats the hide while it
+        // restores the previous app and capture UI, so this remains best-effort.
+        captureCancelledRef.current = true;
+        activeSessionIdRef.current = null;
+        revealingSessionIdRef.current = null;
+        overlayWakeRef.current = null;
+        dismissCaptureOverlayWindow();
+        if (sessionId) {
+          void invoke("cancel_capture", { sessionId });
+        } else {
+          void invoke("cancel_active_capture");
+        }
+      }),
+    [sessionId],
+  );
 
   useEffect(() => {
     const onShift = (event: KeyboardEvent) => {
@@ -5728,16 +6210,15 @@ function CaptureOverlay() {
     // Native z-order is front-to-back; index 0 is topmost (highest z-index).
     return frontToBackWindows(
       session.windows.filter((window) => window.width >= 48 && window.height >= 48),
-    )
-      .map((window, index, list) => ({
-        window,
-        left: (window.x - session.display.x) / scale,
-        top: (window.y - session.display.y) / scale,
-        width: window.width / scale,
-        height: window.height / scale,
-        cornerRadius: window.corner_radius ?? session.window_corner_radius,
-        zIndex: list.length - index,
-      }));
+    ).map((window, index, list) => ({
+      window,
+      left: (window.x - session.display.x) / scale,
+      top: (window.y - session.display.y) / scale,
+      width: window.width / scale,
+      height: window.height / scale,
+      cornerRadius: window.corner_radius ?? session.window_corner_radius,
+      zIndex: list.length - index,
+    }));
   }, [mode, session]);
 
   const displayOverlay = session
@@ -5745,16 +6226,17 @@ function CaptureOverlay() {
     : { width: 0, height: 0 };
   const surfaceSize = useElementCssSize(surfaceRef, displayOverlay);
   const rect = useMemo(
-    () => (start && current
-      ? dragSelectionRect(
-          "create",
-          start,
-          current,
-          { x: start.x, y: start.y, width: 0, height: 0 },
-          surfaceSize,
-          { forceSquare: regionForceSquare },
-        )
-      : null),
+    () =>
+      start && current
+        ? dragSelectionRect(
+            "create",
+            start,
+            current,
+            { x: start.x, y: start.y, width: 0, height: 0 },
+            surfaceSize,
+            { forceSquare: regionForceSquare },
+          )
+        : null,
     [current, regionForceSquare, start, surfaceSize],
   );
 
@@ -5780,48 +6262,51 @@ function CaptureOverlay() {
     if (activeSessionIdRef.current !== sessionId) return;
     if (revealingSessionIdRef.current === sessionId) return;
     revealingSessionIdRef.current = sessionId;
-    const shouldPrimeRegionOverlay = overlayFrozen && mode === "region" && !regionOverlayWarmedRef.current;
-    void wakeOverlay().then(() => {
-      if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
-      if (shouldPrimeRegionOverlay) {
-        // Keep the shade at rest while the snapshot paints under native alpha.
-        // The snapshot itself is always CSS-opaque; only the dim fades in after
-        // reveal so live/frozen editor chrome never crossfades.
-        setPrimingSessionId(sessionId);
-      }
-      let revealed = false;
-      const finishReveal = () => {
-        if (revealed || captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
-        revealed = true;
-        window.clearTimeout(fallbackTimer);
-        // Native reveal makes the already-painted snapshot fully opaque, then
-        // focuses the overlay under cover of that frame (macOS). Fade only the
-        // shade / chrome after that so open editors cannot shimmer.
-        void invoke("reveal_capture_overlay", { sessionId }).then(() => {
-          if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
-          void invoke("sync_capture_cursor", { sessionId });
-          if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
-          requestAnimationFrame(() => {
-            if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
-            setPrimingSessionId(null);
-            setVisibleSessionId(sessionId);
-          });
-        }).catch(() => {
-          setPrimingSessionId(null);
-          setVisibleSessionId(null);
-          if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
-        });
-      };
-      afterNextPaint(finishReveal);
-      // WebKit can suspend requestAnimationFrame at near-zero opacity. Always
-      // reveal after a short deadline once the snapshot has asked to paint.
-      const fallbackTimer = window.setTimeout(
-        finishReveal,
-        CAPTURE_OVERLAY_REVEAL_FALLBACK_MS,
-      );
-    }).catch(() => {
-      if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
-    });
+    const shouldPrimeRegionOverlay =
+      overlayFrozen && mode === "region" && !regionOverlayWarmedRef.current;
+    void wakeOverlay()
+      .then(() => {
+        if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
+        if (shouldPrimeRegionOverlay) {
+          // Keep the shade at rest while the snapshot paints under native alpha.
+          // The snapshot itself is always CSS-opaque; only the dim fades in after
+          // reveal so live/frozen editor chrome never crossfades.
+          setPrimingSessionId(sessionId);
+        }
+        let revealed = false;
+        const finishReveal = () => {
+          if (revealed || captureCancelledRef.current || activeSessionIdRef.current !== sessionId)
+            return;
+          revealed = true;
+          window.clearTimeout(fallbackTimer);
+          // Native reveal makes the already-painted snapshot fully opaque, then
+          // focuses the overlay under cover of that frame (macOS). Fade only the
+          // shade / chrome after that so open editors cannot shimmer.
+          void invoke("reveal_capture_overlay", { sessionId })
+            .then(() => {
+              if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
+              void invoke("sync_capture_cursor", { sessionId });
+              if (shouldPrimeRegionOverlay) regionOverlayWarmedRef.current = true;
+              requestAnimationFrame(() => {
+                if (captureCancelledRef.current || activeSessionIdRef.current !== sessionId) return;
+                setPrimingSessionId(null);
+                setVisibleSessionId(sessionId);
+              });
+            })
+            .catch(() => {
+              setPrimingSessionId(null);
+              setVisibleSessionId(null);
+              if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+            });
+        };
+        afterNextPaint(finishReveal);
+        // WebKit can suspend requestAnimationFrame at near-zero opacity. Always
+        // reveal after a short deadline once the snapshot has asked to paint.
+        const fallbackTimer = window.setTimeout(finishReveal, CAPTURE_OVERLAY_REVEAL_FALLBACK_MS);
+      })
+      .catch(() => {
+        if (revealingSessionIdRef.current === sessionId) revealingSessionIdRef.current = null;
+      });
   }, [mode, overlayFrozen, sessionId, wakeOverlay]);
 
   // Wake the overlay as soon as a session exists so a hidden WKWebView will
@@ -5846,20 +6331,23 @@ function CaptureOverlay() {
     return () => window.clearTimeout(timer);
   }, [overlayFrozen, session?.id, revealOverlay]);
 
-  const applyWindowHoverAt = useCallback((point: SelectionPoint) => {
-    if (!session || session.mode !== "window") return;
-    lastWindowPointerRef.current = point;
-    const hover = windowPointerHoverAtPoint(
-      capturableOverlayWindows(session.windows),
-      session.shell_chrome ?? [],
-      point,
-      session.display,
-      Math.max(session.window_coordinate_scale || 1, 1),
-      session.windows_ready,
-    );
-    setHoveredWindow(hover.windowId);
-    setHoveredDisplay(hover.display);
-  }, [session]);
+  const applyWindowHoverAt = useCallback(
+    (point: SelectionPoint) => {
+      if (!session || session.mode !== "window") return;
+      lastWindowPointerRef.current = point;
+      const hover = windowPointerHoverAtPoint(
+        capturableOverlayWindows(session.windows),
+        session.shell_chrome ?? [],
+        point,
+        session.display,
+        Math.max(session.window_coordinate_scale || 1, 1),
+        session.windows_ready,
+      );
+      setHoveredWindow(hover.windowId);
+      setHoveredDisplay(hover.display);
+    },
+    [session],
+  );
 
   useEffect(() => {
     if (mode !== "window" || !session?.id) return;
@@ -5895,11 +6383,8 @@ function CaptureOverlay() {
     return <main className="capture-loading">Preparing capture…</main>;
   }
 
-  const pointFromEvent = (event: React.PointerEvent) => overlayPointFromClient(
-    surfaceRef.current,
-    event.clientX,
-    event.clientY,
-  );
+  const pointFromEvent = (event: React.PointerEvent) =>
+    overlayPointFromClient(surfaceRef.current, event.clientX, event.clientY);
 
   const commitRegion = (selection: SelectionRect | null): boolean => {
     if (!isCapturableSelection(selection)) return false;
@@ -5973,8 +6458,8 @@ function CaptureOverlay() {
     const drag = regionDragRef.current;
     regionDragRef.current = null;
     if (
-      typeof event.currentTarget.hasPointerCapture === "function"
-      && event.currentTarget.hasPointerCapture(event.pointerId)
+      typeof event.currentTarget.hasPointerCapture === "function" &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
     ) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -6024,11 +6509,12 @@ function CaptureOverlay() {
   };
 
   const hasSelection = Boolean(rect && rect.width > 0 && rect.height > 0);
-  const dimHole = mode === "region" && hasSelection && rect
-    ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-    : mode === "window" && !hoveredDisplay
-      ? hoveredWindowLayout
-      : null;
+  const dimHole =
+    mode === "region" && hasSelection && rect
+      ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      : mode === "window" && !hoveredDisplay
+        ? hoveredWindowLayout
+        : null;
   const displayCornerRadius = Math.max(0, session.display_corner_radius ?? 0);
 
   return (
@@ -6048,12 +6534,9 @@ function CaptureOverlay() {
       onTransitionEnd={(event) => {
         const target = event.target;
         const finishedSurfaceFade = target === event.currentTarget;
-        const finishedRegionShadeFade = target instanceof HTMLElement
-          && target.classList.contains("capture-shade-full");
-        if (
-          event.propertyName === "opacity"
-          && (finishedSurfaceFade || finishedRegionShadeFade)
-        ) {
+        const finishedRegionShadeFade =
+          target instanceof HTMLElement && target.classList.contains("capture-shade-full");
+        if (event.propertyName === "opacity" && (finishedSurfaceFade || finishedRegionShadeFade)) {
           reassertRegionCursor();
         }
       }}
@@ -6102,10 +6585,7 @@ function CaptureOverlay() {
             height: rect.height,
           }}
         >
-          <span
-            className="selection-dimensions"
-            data-screen-edge={rect.y < 30 ? "top" : undefined}
-          >
+          <span className="selection-dimensions" data-screen-edge={rect.y < 30 ? "top" : undefined}>
             {Math.round(rect.width)} × {Math.round(rect.height)}
           </span>
         </div>
@@ -6179,7 +6659,14 @@ function CaptureDim({
     return (
       <div
         className="capture-shade capture-shade-full"
-        style={{ clipPath: captureDimClipPath({ x: left, y: top, width: right - left, height: bottom - top }) }}
+        style={{
+          clipPath: captureDimClipPath({
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+          }),
+        }}
         aria-hidden="true"
       />
     );
@@ -6189,10 +6676,7 @@ function CaptureDim({
   const boxHeight = Math.max(bounds.height, bottom, 1);
   const path = [
     `M0 0H${boxWidth}V${boxHeight}H0Z`,
-    roundedRectPath(
-      { x: left, y: top, width: right - left, height: bottom - top },
-      radius,
-    ),
+    roundedRectPath({ x: left, y: top, width: right - left, height: bottom - top }, radius),
   ].join(" ");
   return (
     <svg
@@ -6221,11 +6705,11 @@ function useElementCssSize(
       const width = element.clientWidth;
       const height = element.clientHeight;
       if (width <= 0 || height <= 0) return;
-      setMeasured((current) => (
+      setMeasured((current) =>
         current && current.width === width && current.height === height
           ? current
-          : { width, height }
-      ));
+          : { width, height },
+      );
     };
 
     update();
@@ -6256,21 +6740,15 @@ export function Thumbnail() {
   const [expandFromPoses, setExpandFromPoses] = useState<Map<string, ThumbnailCardPose>>(
     () => new Map(),
   );
-  const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [clearingArtifactIds, setClearingArtifactIds] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [exitingArtifactIds, setExitingArtifactIds] = useState<Set<string>>(() => new Set());
+  const [clearingArtifactIds, setClearingArtifactIds] = useState<Set<string>>(() => new Set());
   const clearingArtifactIdsRef = useRef(clearingArtifactIds);
   const [clipboardState, setClipboardState] = useState<ClipboardState>({
     revision: -1,
     artifact_id: null,
   });
   const [activeViewerArtifactId, setActiveViewerArtifactId] = useState<string | null>(null);
-  const [editorPresence, setEditorPresence] = useState<Map<string, string[]>>(
-    () => new Map(),
-  );
+  const [editorPresence, setEditorPresence] = useState<Map<string, string[]>>(() => new Map());
   const editorActiveArtifactIds = useMemo(
     () => artifactIdsInEditors(editorPresence),
     [editorPresence],
@@ -6279,9 +6757,9 @@ export function Thumbnail() {
     hasOlder: false,
     hasNewer: false,
   });
-  const [stackViewportHeight, setStackViewportHeight] = useState(() => (
-    typeof window === "undefined" ? 0 : window.innerHeight
-  ));
+  const [stackViewportHeight, setStackViewportHeight] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerHeight,
+  );
   const stackRef = useRef<HTMLElement>(null);
   const stackDrag = useRef<CollapsedThumbnailStackDrag | null>(null);
   const collapsedContentYRef = useRef<number | null>(null);
@@ -6293,7 +6771,10 @@ export function Thumbnail() {
     workHeight: number;
   } | null>(null);
   // The browser harness emulates the native collapsed frame's fixed origin.
-  const harnessCollapsedLayout = useRef({ fixed: false, padding: THUMBNAIL_STACK_CONTROL_GUTTER_PX });
+  const harnessCollapsedLayout = useRef({
+    fixed: false,
+    padding: THUMBNAIL_STACK_CONTROL_GUTTER_PX,
+  });
   const collapsedStackPointerCleanup = useRef<(() => void) | null>(null);
   const skipCollapsedStackClick = useRef(false);
   const stackFanCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6332,11 +6813,9 @@ export function Thumbnail() {
       thumbnailStackContentHeight(cardCount),
       stack.clientHeight,
     );
-    setStackOverflow((current) => (
-      current.hasOlder === next.hasOlder && current.hasNewer === next.hasNewer
-        ? current
-        : next
-    ));
+    setStackOverflow((current) =>
+      current.hasOlder === next.hasOlder && current.hasNewer === next.hasNewer ? current : next,
+    );
   }, []);
 
   const commitStackAnchor = useCallback((nextAnchor: ThumbnailStackAnchor) => {
@@ -6355,9 +6834,10 @@ export function Thumbnail() {
 
   useEffect(() => {
     const applyNativeLayout = (event: Event) => {
-      const contentY = event instanceof CustomEvent
-        ? Number((event as CustomEvent<{ contentY?: number }>).detail?.contentY)
-        : Number.NaN;
+      const contentY =
+        event instanceof CustomEvent
+          ? Number((event as CustomEvent<{ contentY?: number }>).detail?.contentY)
+          : Number.NaN;
       applyCollapsedContentY(contentY);
     };
     window.addEventListener(THUMBNAIL_COLLAPSED_LAYOUT_EVENT, applyNativeLayout);
@@ -6369,8 +6849,14 @@ export function Thumbnail() {
   useLayoutEffect(() => {
     const dragging = stackDrag.current?.isDragging ?? false;
     setThumbnailStackDragging(stackRef.current, dragging);
-    setThumbnailStackPressing(stackRef.current, dragging && collapsedStackPointerCleanup.current !== null);
-    setThumbnailStackDragSwayReady(stackRef.current, dragging && stackFanCollapseTimer.current === null);
+    setThumbnailStackPressing(
+      stackRef.current,
+      dragging && collapsedStackPointerCleanup.current !== null,
+    );
+    setThumbnailStackDragSwayReady(
+      stackRef.current,
+      dragging && stackFanCollapseTimer.current === null,
+    );
   });
 
   useLayoutEffect(() => {
@@ -6381,9 +6867,10 @@ export function Thumbnail() {
     harnessCollapsedLayout.current = { fixed, padding };
     if (fixed === previous.fixed && (!fixed || padding === previous.padding)) return;
     const fixedTop = window.innerHeight - padding - THUMBNAIL_CARD_HEIGHT_PX;
-    const alignedTop = stackAnchorRef.current === "top"
-      ? THUMBNAIL_STACK_CONTROL_GUTTER_PX
-      : window.innerHeight - THUMBNAIL_STACK_CONTROL_GUTTER_PX - THUMBNAIL_CARD_HEIGHT_PX;
+    const alignedTop =
+      stackAnchorRef.current === "top"
+        ? THUMBNAIL_STACK_CONTROL_GUTTER_PX
+        : window.innerHeight - THUMBNAIL_STACK_CONTROL_GUTTER_PX - THUMBNAIL_CARD_HEIGHT_PX;
     const previousTop = previous.fixed
       ? window.innerHeight - previous.padding - THUMBNAIL_CARD_HEIGHT_PX
       : alignedTop;
@@ -6400,32 +6887,35 @@ export function Thumbnail() {
     setStackSide(nextSide);
   }, []);
 
-  const applyMiniPreviewHome = useCallback((placement: MiniPreviewPlacement) => {
-    placementRef.current = placement;
-    const nextAnchor = thumbnailStackAnchorFromPlacement(placement);
-    commitStackAnchor(nextAnchor);
-    commitStackSide(thumbnailStackSideFromPlacement(placement));
-    applyThumbnailStackGravity(
-      stackRef.current,
-      thumbnailStackGravityFromPlacement(placement),
-    );
-    if (isTauri()) return;
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    const home = harnessOffsetForPlacement(placement, viewport);
-    const count = stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1;
-    const padding = harnessCollapsedLayout.current.fixed ? thumbnailCollapsedPadding(count) : undefined;
-    if (padding !== undefined) {
-      home.y = padding - THUMBNAIL_STACK_CONTROL_GUTTER_PX;
-      if (home.anchor === "top") {
-        home.y += 2 * THUMBNAIL_STACK_CONTROL_GUTTER_PX + THUMBNAIL_CARD_HEIGHT_PX - viewport.height;
+  const applyMiniPreviewHome = useCallback(
+    (placement: MiniPreviewPlacement) => {
+      placementRef.current = placement;
+      const nextAnchor = thumbnailStackAnchorFromPlacement(placement);
+      commitStackAnchor(nextAnchor);
+      commitStackSide(thumbnailStackSideFromPlacement(placement));
+      applyThumbnailStackGravity(stackRef.current, thumbnailStackGravityFromPlacement(placement));
+      if (isTauri()) return;
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      const home = harnessOffsetForPlacement(placement, viewport);
+      const count = stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1;
+      const padding = harnessCollapsedLayout.current.fixed
+        ? thumbnailCollapsedPadding(count)
+        : undefined;
+      if (padding !== undefined) {
+        home.y = padding - THUMBNAIL_STACK_CONTROL_GUTTER_PX;
+        if (home.anchor === "top") {
+          home.y +=
+            2 * THUMBNAIL_STACK_CONTROL_GUTTER_PX + THUMBNAIL_CARD_HEIGHT_PX - viewport.height;
+        }
       }
-    }
-    writeHarnessStackOffset(home.x, home.y, document.documentElement, viewport, {
-      anchor: home.anchor,
-      contentHeight: THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT_PX,
-      padding,
-    });
-  }, [commitStackAnchor, commitStackSide]);
+      writeHarnessStackOffset(home.x, home.y, document.documentElement, viewport, {
+        anchor: home.anchor,
+        contentHeight: THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT_PX,
+        padding,
+      });
+    },
+    [commitStackAnchor, commitStackSide],
+  );
 
   useEffect(() => {
     let active = true;
@@ -6444,10 +6934,12 @@ export function Thumbnail() {
     void listen<AppSettings>("settings-changed", ({ payload }) => {
       settingsChanged = true;
       if (active) applySettings(payload, false);
-    }).then((dispose) => {
-      if (active) unlisten = dispose;
-      else dispose();
-    }).catch(() => undefined);
+    })
+      .then((dispose) => {
+        if (active) unlisten = dispose;
+        else dispose();
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
       unlisten?.();
@@ -6478,9 +6970,8 @@ export function Thumbnail() {
             });
           }
           setArtifacts((current) => {
-            const withoutCleared = clearing.size === 0
-              ? current
-              : current.filter(({ id }) => !clearing.has(id));
+            const withoutCleared =
+              clearing.size === 0 ? current : current.filter(({ id }) => !clearing.has(id));
             return withoutCleared.some(({ id }) => id === payload.id)
               ? withoutCleared
               : [...withoutCleared, payload];
@@ -6488,7 +6979,9 @@ export function Thumbnail() {
         }),
         listen<CaptureArtifact>("artifact-updated", ({ payload }) => {
           if (!active) return;
-          setArtifacts((current) => current.map((artifact) => artifact.id === payload.id ? payload : artifact));
+          setArtifacts((current) =>
+            current.map((artifact) => (artifact.id === payload.id ? payload : artifact)),
+          );
         }),
         listen<string>("artifact-removed", ({ payload }) => {
           if (!active) return;
@@ -6496,13 +6989,13 @@ export function Thumbnail() {
             // Clear all already took these off the backend stack. Keep the
             // cards mounted so the shared Close streak can finish; onRemoved
             // drops them after animationend.
-            setActiveViewerArtifactId((current) => current === payload ? null : current);
+            setActiveViewerArtifactId((current) => (current === payload ? null : current));
             return;
           }
           removedArtifactIds.add(payload);
           setArtifactExiting(payload, false);
           setArtifacts((current) => current.filter(({ id }) => id !== payload));
-          setActiveViewerArtifactId((current) => current === payload ? null : current);
+          setActiveViewerArtifactId((current) => (current === payload ? null : current));
         }),
         listen<ClipboardState>("clipboard-owner-changed", ({ payload }) => {
           if (!active) return;
@@ -6599,22 +7092,21 @@ export function Thumbnail() {
 
   useLayoutEffect(() => {
     const previousCount = previousArtifactCount.current;
-    const shouldReveal = shouldScrollThumbnailStackToEnd(
-      previousCount,
-      artifacts.length,
-    );
+    const shouldReveal = shouldScrollThumbnailStackToEnd(previousCount, artifacts.length);
     // The hover tracker lives in a later effect. Skip 0→N: that mount locks
     // appear itself, and this event would fire before the listener exists.
     // After sync_thumbnail_stack, `captures-thumbnail-layout-changed` discards
     // any origin sampled against the pre-resize window so a bottom-anchored
     // grow cannot look like the pointer moved.
     if (
-      previousCount > 0
-      && shouldLockThumbnailCardHoverOnNewCapture(previousCount, artifacts.length)
+      previousCount > 0 &&
+      shouldLockThumbnailCardHoverOnNewCapture(previousCount, artifacts.length)
     ) {
-      window.dispatchEvent(new CustomEvent(THUMBNAIL_HIT_TEST_CHANGED_EVENT, {
-        detail: { appear: true },
-      }));
+      window.dispatchEvent(
+        new CustomEvent(THUMBNAIL_HIT_TEST_CHANGED_EVENT, {
+          detail: { appear: true },
+        }),
+      );
     }
     previousArtifactCount.current = artifacts.length;
     const fromTop = stackAnchorRef.current === "top";
@@ -6764,17 +7256,14 @@ export function Thumbnail() {
       if (webviewOwnsCursor) return;
       reassertInteractiveCursor();
       clearCursorHandoffTimers();
-      cursorHandoffTimers = THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS.map((delay) => (
+      cursorHandoffTimers = THUMBNAIL_CURSOR_HANDOFF_REASSERT_DELAYS_MS.map((delay) =>
         setTimeout(() => {
           reassertInteractiveCursor();
-        }, delay)
-      ));
+        }, delay),
+      );
     };
 
-    const setThumbnailCursor = (
-      kind: ThumbnailCursorKind,
-      options: { force?: boolean } = {},
-    ) => {
+    const setThumbnailCursor = (kind: ThumbnailCursorKind, options: { force?: boolean } = {}) => {
       // Only touch CSS when the hit-tested kind changes. Rewriting style.cursor
       // every 40ms poll made WebKit re-evaluate cursor rectangles and flash the
       // default arrow between AppKit grab/pointer updates.
@@ -6789,12 +7278,7 @@ export function Thumbnail() {
         return;
       }
       const now = performance.now();
-      const action = thumbnailCursorSyncAction(
-        cursorKind,
-        kind,
-        now - lastCursorSyncAt,
-        options,
-      );
+      const action = thumbnailCursorSyncAction(cursorKind, kind, now - lastCursorSyncAt, options);
       if (!action) return;
       const becameInteractive = cursorKind === "default" && kind !== "default";
       cursorKind = kind;
@@ -6824,8 +7308,7 @@ export function Thumbnail() {
       // Serialize whole-window hit-test updates. A delayed `true` from an old
       // pointer sample must never land after deletion has re-armed survivors.
       ignoreCursorUpdate = ignoreCursorUpdate.then(async () => {
-        await invoke("set_thumbnail_ignore_cursor_events", { ignore })
-          .catch(() => undefined);
+        await invoke("set_thumbnail_ignore_cursor_events", { ignore }).catch(() => undefined);
       });
     };
 
@@ -6840,8 +7323,8 @@ export function Thumbnail() {
       // the pointer is on a card. An in-progress pile drag is the exception.
       const dragging = thumbnailStackIsDragging();
       setIgnoreCursorEvents(
-        thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging, pointerPollSupported)
-          || !thumbnailStackHasLiveHitTarget(),
+        thumbnailUnknownPointerShouldIgnoreCursorEvents(dragging, pointerPollSupported) ||
+          !thumbnailStackHasLiveHitTarget(),
         true,
       );
     };
@@ -6881,9 +7364,11 @@ export function Thumbnail() {
       // window became hit-testable. Drop that paint so Delete cannot stay pink
       // while native hover is suppressed.
       clearNativeClasses();
-      document.querySelectorAll<HTMLElement>(
-        ".thumbnail-card, .icon-button, .thumbnail-main-actions button, .thumbnail-editor-control",
-      ).forEach((element) => forceClearThumbnailCssHover(element));
+      document
+        .querySelectorAll<HTMLElement>(
+          ".thumbnail-card, .icon-button, .thumbnail-main-actions button, .thumbnail-editor-control",
+        )
+        .forEach((element) => forceClearThumbnailCssHover(element));
     };
 
     const unlockCardHover = () => {
@@ -7020,10 +7505,7 @@ export function Thumbnail() {
                 document.documentElement.classList.contains("thumbnail-native-tracking"),
                 pointerPollSupported,
               );
-              if (
-                needsRecovery
-                && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
-              ) {
+              if (needsRecovery && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)) {
                 recovered = true;
                 recoverInteractivity();
                 return;
@@ -7051,10 +7533,7 @@ export function Thumbnail() {
             document.documentElement.classList.contains("thumbnail-native-tracking"),
             pointerPollSupported,
           );
-          if (
-            needsRecovery
-            && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)
-          ) {
+          if (needsRecovery && shouldRecoverThumbnailAfterNullPolls(consecutiveNullPolls)) {
             recovered = true;
             recoverInteractivity();
             return;
@@ -7108,17 +7587,19 @@ export function Thumbnail() {
     };
 
     const updateThumbnailHitTest = (event: Event) => {
-      const detail = event instanceof CustomEvent
-        ? (event as CustomEvent<{
-          stackMotion?: string;
-          previousStackMotion?: string;
-          appear?: boolean;
-        }>).detail
-        : undefined;
-      if (shouldLockThumbnailCardHoverOnStackMotion(
-        detail?.stackMotion,
-        detail?.previousStackMotion,
-      )) {
+      const detail =
+        event instanceof CustomEvent
+          ? (
+              event as CustomEvent<{
+                stackMotion?: string;
+                previousStackMotion?: string;
+                appear?: boolean;
+              }>
+            ).detail
+          : undefined;
+      if (
+        shouldLockThumbnailCardHoverOnStackMotion(detail?.stackMotion, detail?.previousStackMotion)
+      ) {
         lockCardHover("motion");
       } else if (detail?.appear) {
         lockCardHover("appear");
@@ -7201,10 +7682,7 @@ export function Thumbnail() {
     document.addEventListener("resume", resumeFromSuspension as EventListener);
     window.addEventListener("captures-thumbnail-ready", pollImmediately);
     window.addEventListener("captures-thumbnail-layout-changed", onThumbnailLayoutChanged);
-    window.addEventListener(
-      THUMBNAIL_HIT_TEST_CHANGED_EVENT,
-      updateThumbnailHitTest,
-    );
+    window.addEventListener(THUMBNAIL_HIT_TEST_CHANGED_EVENT, updateThumbnailHitTest);
     void invoke<boolean>("thumbnail_pointer_poll_available")
       .then((available) => {
         if (cancelled) return;
@@ -7234,10 +7712,7 @@ export function Thumbnail() {
       document.removeEventListener("resume", resumeFromSuspension as EventListener);
       window.removeEventListener("captures-thumbnail-ready", pollImmediately);
       window.removeEventListener("captures-thumbnail-layout-changed", onThumbnailLayoutChanged);
-      window.removeEventListener(
-        THUMBNAIL_HIT_TEST_CHANGED_EVENT,
-        updateThumbnailHitTest,
-      );
+      window.removeEventListener(THUMBNAIL_HIT_TEST_CHANGED_EVENT, updateThumbnailHitTest);
       stopNativeTracking();
       unlockCardHover();
       delete document.documentElement.dataset.thumbnailPlatform;
@@ -7265,9 +7740,11 @@ export function Thumbnail() {
   useEffect(() => {
     const previous = previousStackMotion.current;
     previousStackMotion.current = stackMotion;
-    window.dispatchEvent(new CustomEvent(THUMBNAIL_HIT_TEST_CHANGED_EVENT, {
-      detail: { stackMotion, previousStackMotion: previous },
-    }));
+    window.dispatchEvent(
+      new CustomEvent(THUMBNAIL_HIT_TEST_CHANGED_EVENT, {
+        detail: { stackMotion, previousStackMotion: previous },
+      }),
+    );
   }, [stackMotion]);
 
   useEffect(() => {
@@ -7284,10 +7761,8 @@ export function Thumbnail() {
   const collapsed = stackMotion === "collapsed";
   const compact = stackMotion !== "expanded";
   const rejectQuery = query("reject");
-  const previewRejectShake = !compact
-    && rejectQuery !== null
-    && rejectQuery !== "0"
-    && rejectQuery !== "false";
+  const previewRejectShake =
+    !compact && rejectQuery !== null && rejectQuery !== "0" && rejectQuery !== "false";
   const stackAnimating = stackMotion === "collapsing" || stackMotion === "expanding";
   const exitingOnly = artifacts.every(({ id }) => exitingArtifactIds.has(id));
   const livePreviewCount = artifacts.reduce(
@@ -7300,8 +7775,9 @@ export function Thumbnail() {
   const showClearAll = !collapsed && livePreviewCount >= 2;
   const stackClearing = clearingArtifactIds.size > 0;
   const controlsDisabled = stackAnimating || exitingOnly || stackClearing;
-  const stackScrollport = (stackMotion === "expanding" || stackMotion === "expanded")
-    && thumbnailStackNeedsScrollport(artifacts.length, stackViewportHeight);
+  const stackScrollport =
+    (stackMotion === "expanding" || stackMotion === "expanded") &&
+    thumbnailStackNeedsScrollport(artifacts.length, stackViewportHeight);
   const showOverflowCues = stackMotion === "expanded" && !stackClearing;
 
   const clearAllPreviews = () => {
@@ -7313,8 +7789,9 @@ export function Thumbnail() {
       .map((artifact) => artifact.id);
     if (requested.length === 0) return;
     replaceClearingArtifactIds(new Set(requested));
-    void invoke<string[]>("dismiss_all_artifacts", { artifactIds: requested })
-      .catch(() => undefined);
+    void invoke<string[]>("dismiss_all_artifacts", { artifactIds: requested }).catch(
+      () => undefined,
+    );
   };
 
   const setStackCollapsed = (nextCollapsed: boolean) => {
@@ -7347,13 +7824,12 @@ export function Thumbnail() {
       setStackMotion(nextCollapsed ? "collapsed" : "expanded");
       if (nextCollapsed) armHoverReady();
       else cancelHoverReady();
-      void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed })
-        .catch(() => {
-          if (!nextCollapsed) pendingNewestReveal.current = false;
-          setStackMotion(nextCollapsed ? "expanded" : "collapsed");
-          if (nextCollapsed) cancelHoverReady();
-          else armHoverReady();
-        });
+      void invoke("set_mini_previews_collapsed", { collapsed: nextCollapsed }).catch(() => {
+        if (!nextCollapsed) pendingNewestReveal.current = false;
+        setStackMotion(nextCollapsed ? "expanded" : "collapsed");
+        if (nextCollapsed) cancelHoverReady();
+        else armHoverReady();
+      });
       return;
     }
     if (nextCollapsed) {
@@ -7374,9 +7850,7 @@ export function Thumbnail() {
             setStackMotion("collapsed");
             setStackHoverLatched(true);
             requestAnimationFrame(() => {
-              const target = stackRef.current?.querySelector(
-                ".thumbnail-collapsed-hit-target",
-              );
+              const target = stackRef.current?.querySelector(".thumbnail-collapsed-hit-target");
               target?.removeAttribute("data-native-pointer-hover");
               if (!target?.matches(":hover")) setStackHoverLatched(false);
             });
@@ -7406,13 +7880,15 @@ export function Thumbnail() {
     const collapsedFramePosition = { x: window.screenX, y: window.screenY };
     void invoke("set_mini_previews_collapsed", { collapsed: false })
       .then(() => {
-        setExpandFromPoses(captureThumbnailCardPoses(stackRef.current, {
-          // Native expansion can clamp the larger frame back into the work
-          // area. Offset the first animation frame by that window movement so
-          // the pile stays pinned on screen instead of teleporting first.
-          x: collapsedFramePosition.x - window.screenX,
-          y: collapsedFramePosition.y - window.screenY,
-        }));
+        setExpandFromPoses(
+          captureThumbnailCardPoses(stackRef.current, {
+            // Native expansion can clamp the larger frame back into the work
+            // area. Offset the first animation frame by that window movement so
+            // the pile stays pinned on screen instead of teleporting first.
+            x: collapsedFramePosition.x - window.screenX,
+            y: collapsedFramePosition.y - window.screenY,
+          }),
+        );
         cancelHoverReady();
         setStackMinimizeRun(false);
         setStackHoverLatched(false);
@@ -7435,10 +7911,7 @@ export function Thumbnail() {
     const stack = stackRef.current;
     if (!stack) return;
     const cardCount = stack.querySelectorAll(":scope > .thumbnail-card").length;
-    const maxScrollTop = Math.max(
-      0,
-      thumbnailStackContentHeight(cardCount) - stack.clientHeight,
-    );
+    const maxScrollTop = Math.max(0, thumbnailStackContentHeight(cardCount) - stack.clientHeight);
     const targetTop = Math.min(
       maxScrollTop,
       Math.max(0, stack.scrollTop + slots * THUMBNAIL_CARD_SLOT_PX),
@@ -7455,9 +7928,7 @@ export function Thumbnail() {
     const size = currentWindow ? await currentWindow.innerSize() : null;
     const monitor = await currentMonitor();
     const workTop = monitor ? monitor.workArea.position.y / scale : 0;
-    const workHeight = monitor
-      ? monitor.workArea.size.height / scale
-      : window.screen.availHeight;
+    const workHeight = monitor ? monitor.workArea.size.height / scale : window.screen.availHeight;
     return {
       contentHeight,
       frameHeight: thumbnailStackMeasuredFrameHeight(
@@ -7468,9 +7939,7 @@ export function Thumbnail() {
       work: {
         x: monitor ? monitor.workArea.position.x / scale : 0,
         y: workTop,
-        width: monitor
-          ? monitor.workArea.size.width / scale
-          : window.screen.availWidth,
+        width: monitor ? monitor.workArea.size.width / scale : window.screen.availWidth,
         height: workHeight,
         bottomGap: 12,
       },
@@ -7479,11 +7948,7 @@ export function Thumbnail() {
     };
   };
 
-  const placeCollapsedStackFrame = async (
-    x: number,
-    y: number,
-    anchor: ThumbnailStackAnchor,
-  ) => {
+  const placeCollapsedStackFrame = async (x: number, y: number, anchor: ThumbnailStackAnchor) => {
     const contentHeight = THUMBNAIL_COLLAPSED_TRAVEL_HEIGHT_PX;
     const padding = thumbnailCollapsedPadding(
       stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
@@ -7491,10 +7956,7 @@ export function Thumbnail() {
     if (isTauri()) {
       try {
         let geometry = collapsedDragGeometryRef.current;
-        if (
-          !geometry
-          || !thumbnailWorkAreaContains(x, y, geometry.work, 48)
-        ) {
+        if (!geometry || !thumbnailWorkAreaContains(x, y, geometry.work, 48)) {
           geometry = await collapsedNativeGeometry();
           collapsedDragGeometryRef.current = geometry;
         }
@@ -7514,10 +7976,12 @@ export function Thumbnail() {
             bottomGap: 12,
           }),
         );
-        commitStackSide(thumbnailStackSideFromBias(
-          thumbnailStackBiasFromFrameX(next.x, work.x, work.width),
-          stackSideRef.current,
-        ));
+        commitStackSide(
+          thumbnailStackSideFromBias(
+            thumbnailStackBiasFromFrameX(next.x, work.x, work.width),
+            stackSideRef.current,
+          ),
+        );
         return next;
       } catch {
         applyThumbnailStackGravity(
@@ -7533,13 +7997,11 @@ export function Thumbnail() {
       }
     }
     const viewport = { width: window.innerWidth, height: window.innerHeight };
-    const written = writeHarnessStackOffset(
-      x,
-      y,
-      document.documentElement,
-      viewport,
-      { anchor, contentHeight, padding },
-    );
+    const written = writeHarnessStackOffset(x, y, document.documentElement, viewport, {
+      anchor,
+      contentHeight,
+      padding,
+    });
     applyThumbnailStackGravity(
       stackRef.current,
       thumbnailStackGravityFromHarness({
@@ -7549,10 +8011,12 @@ export function Thumbnail() {
         padding,
       }),
     );
-    commitStackSide(thumbnailStackSideFromBias(
-      thumbnailStackBiasFromHarness(written.x, viewport.width),
-      stackSideRef.current,
-    ));
+    commitStackSide(
+      thumbnailStackSideFromBias(
+        thumbnailStackBiasFromHarness(written.x, viewport.width),
+        stackSideRef.current,
+      ),
+    );
     return written;
   };
 
@@ -7578,8 +8042,9 @@ export function Thumbnail() {
           const padding = thumbnailCollapsedPadding(
             stackRef.current?.querySelectorAll(":scope > .thumbnail-card").length ?? 1,
           );
-          const contentY = collapsedContentYRef.current
-            ?? geometry.frameHeight - padding - THUMBNAIL_CARD_HEIGHT_PX;
+          const contentY =
+            collapsedContentYRef.current ??
+            geometry.frameHeight - padding - THUMBNAIL_CARD_HEIGHT_PX;
           return { x: position.x / scale, y: position.y / scale + contentY };
         }
         return readHarnessStackOffset();
@@ -7665,7 +8130,9 @@ export function Thumbnail() {
         x: upEvent.clientX,
         y: upEvent.clientY,
       });
-      void drag.pointerUp({ pointerId: upEvent.pointerId }).catch(() => "ignored" as const)
+      void drag
+        .pointerUp({ pointerId: upEvent.pointerId })
+        .catch(() => "ignored" as const)
         .then((outcome) => {
           setThumbnailStackDragging(stackRef.current, false);
           collapsedDragGeometryRef.current = null;
@@ -7691,10 +8158,8 @@ export function Thumbnail() {
         finishPointer(lostEvent);
       }
     };
-    collapsedStackPointerCleanup.current = () => finishPointer(
-      { pointerId, clientX: -1, clientY: -1 },
-      { expand: false },
-    );
+    collapsedStackPointerCleanup.current = () =>
+      finishPointer({ pointerId, clientX: -1, clientY: -1 }, { expand: false });
     window.addEventListener("pointermove", onMove, { capture: true, passive: false });
     window.addEventListener("pointerup", onPointerUp, true);
     window.addEventListener("pointercancel", onPointerUp, true);
@@ -7706,7 +8171,11 @@ export function Thumbnail() {
     <>
       <main
         ref={stackRef}
-        style={{ "--thumbnail-collapsed-padding": `${thumbnailCollapsedPadding(artifacts.length)}px` } as CSSProperties}
+        style={
+          {
+            "--thumbnail-collapsed-padding": `${thumbnailCollapsedPadding(artifacts.length)}px`,
+          } as CSSProperties
+        }
         className={[
           "thumbnail-stack",
           compact ? "thumbnail-stack-compact" : "",
@@ -7720,7 +8189,9 @@ export function Thumbnail() {
           stackAnchor === "top" ? "thumbnail-stack-anchor-top" : "",
           stackSide === "right" ? "thumbnail-stack-anchor-right" : "",
           stackClearing ? "thumbnail-stack-clearing" : "",
-        ].filter(Boolean).join(" ")}
+        ]
+          .filter(Boolean)
+          .join(" ")}
         onScroll={refreshStackOverflow}
         onDragStartCapture={(event) => {
           if (compact) preventThumbnailHtml5Drag(event.nativeEvent);
@@ -7729,13 +8200,34 @@ export function Thumbnail() {
         {/* Horizontal-only Gaussian blur for dismiss motion streak (stdDeviation x 0). */}
         <svg className="thumbnail-svg-defs" aria-hidden="true" focusable="false">
           <defs>
-            <filter id="thumbnail-motion-blur-a" x="-50%" y="-20%" width="200%" height="140%" colorInterpolationFilters="sRGB">
+            <filter
+              id="thumbnail-motion-blur-a"
+              x="-50%"
+              y="-20%"
+              width="200%"
+              height="140%"
+              colorInterpolationFilters="sRGB"
+            >
               <feGaussianBlur stdDeviation="3.5 0" />
             </filter>
-            <filter id="thumbnail-motion-blur-b" x="-60%" y="-20%" width="220%" height="140%" colorInterpolationFilters="sRGB">
+            <filter
+              id="thumbnail-motion-blur-b"
+              x="-60%"
+              y="-20%"
+              width="220%"
+              height="140%"
+              colorInterpolationFilters="sRGB"
+            >
               <feGaussianBlur stdDeviation="8 0" />
             </filter>
-            <filter id="thumbnail-motion-blur-c" x="-70%" y="-20%" width="240%" height="140%" colorInterpolationFilters="sRGB">
+            <filter
+              id="thumbnail-motion-blur-c"
+              x="-70%"
+              y="-20%"
+              width="240%"
+              height="140%"
+              colorInterpolationFilters="sRGB"
+            >
               <feGaussianBlur stdDeviation="14 0" />
             </filter>
           </defs>
@@ -7749,41 +8241,41 @@ export function Thumbnail() {
             .map((item) => item.id)
             .filter((id) => clearingArtifactIds.has(id));
           const clearingIndex = clearingOrder.indexOf(artifact.id);
-          const clearDelayMs = isStackClearTarget && !prefersReducedMotion()
-            ? Math.min(
-              (clearingOrder.length - 1 - clearingIndex) * THUMBNAIL_CLEAR_STAGGER_MS,
-              THUMBNAIL_CLEAR_STAGGER_MAX_MS,
-            )
-            : 0;
+          const clearDelayMs =
+            isStackClearTarget && !prefersReducedMotion()
+              ? Math.min(
+                  (clearingOrder.length - 1 - clearingIndex) * THUMBNAIL_CLEAR_STAGGER_MS,
+                  THUMBNAIL_CLEAR_STAGGER_MAX_MS,
+                )
+              : 0;
           return (
-          <ThumbnailCard
-            key={artifact.id}
-            artifact={artifact}
-            clipboardCurrent={clipboardState.artifact_id === artifact.id}
-            viewerActive={activeViewerArtifactId === artifact.id}
-            editorActive={editorActiveArtifactIds.has(artifact.id)}
-            stackCollapsed={compact}
-            stackSide={stackSide}
-            stackDepth={artifacts.length - artifacts.indexOf(artifact) - 1}
-            expandFromPose={expandFromPoses.get(artifact.id)}
-            stackDismissing={isStackClearTarget}
-            clearDelayMs={clearDelayMs}
-            previewDropReject={
-              previewRejectShake
-              && artifacts.length - artifacts.indexOf(artifact) - 1 === 0
-            }
-            onRemoved={(artifactId) => {
-              setArtifactExiting(artifactId, false);
-              const current = clearingArtifactIdsRef.current;
-              if (current.has(artifactId)) {
-                const next = new Set(current);
-                next.delete(artifactId);
-                replaceClearingArtifactIds(next);
+            <ThumbnailCard
+              key={artifact.id}
+              artifact={artifact}
+              clipboardCurrent={clipboardState.artifact_id === artifact.id}
+              viewerActive={activeViewerArtifactId === artifact.id}
+              editorActive={editorActiveArtifactIds.has(artifact.id)}
+              stackCollapsed={compact}
+              stackSide={stackSide}
+              stackDepth={artifacts.length - artifacts.indexOf(artifact) - 1}
+              expandFromPose={expandFromPoses.get(artifact.id)}
+              stackDismissing={isStackClearTarget}
+              clearDelayMs={clearDelayMs}
+              previewDropReject={
+                previewRejectShake && artifacts.length - artifacts.indexOf(artifact) - 1 === 0
               }
-              setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
-            }}
-            onExitChange={setArtifactExiting}
-          />
+              onRemoved={(artifactId) => {
+                setArtifactExiting(artifactId, false);
+                const current = clearingArtifactIdsRef.current;
+                if (current.has(artifactId)) {
+                  const next = new Set(current);
+                  next.delete(artifactId);
+                  replaceClearingArtifactIds(next);
+                }
+                setArtifacts((current) => current.filter(({ id }) => id !== artifactId));
+              }}
+              onExitChange={setArtifactExiting}
+            />
           );
         })}
         {collapsed && (
@@ -7793,10 +8285,12 @@ export function Thumbnail() {
             aria-label={`Expand ${artifacts.length === 1 ? "preview" : `${artifacts.length} previews`}`}
             draggable={false}
             disabled={controlsDisabled}
-            style={{
-              "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
-              "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
-            } as CSSProperties}
+            style={
+              {
+                "--thumbnail-collapsed-peek": `${thumbnailCollapsedPeekPx(artifacts.length)}px`,
+                "--thumbnail-collapsed-hover-peek": `${thumbnailCollapsedPeekPx(artifacts.length, true)}px`,
+              } as CSSProperties
+            }
             onPointerDown={onCollapsedStackPointerDown}
             onDragStart={(event) => preventThumbnailHtml5Drag(event.nativeEvent)}
             onPointerEnter={(event) => {
@@ -7818,18 +8312,22 @@ export function Thumbnail() {
         )}
       </main>
       {!collapsed && livePreviewCount >= 2 && (
-        <div className={[
-          "thumbnail-stack-toolbar",
-          stackAnchor === "top" ? "thumbnail-stack-toolbar-anchor-top" : "",
-          stackSide === "right" ? "thumbnail-stack-toolbar-anchor-right" : "",
-          stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
-          stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
-          (stackClearing || exitingOnly) && stackMotion !== "collapsing"
-            ? stackClearing
-              ? "thumbnail-stack-toolbar-clearing"
-              : "thumbnail-stack-toolbar-exiting"
-            : "",
-        ].filter(Boolean).join(" ")}>
+        <div
+          className={[
+            "thumbnail-stack-toolbar",
+            stackAnchor === "top" ? "thumbnail-stack-toolbar-anchor-top" : "",
+            stackSide === "right" ? "thumbnail-stack-toolbar-anchor-right" : "",
+            stackMotion === "collapsing" ? "thumbnail-stack-toolbar-leaving" : "",
+            stackMotion === "expanding" ? "thumbnail-stack-toolbar-entering" : "",
+            (stackClearing || exitingOnly) && stackMotion !== "collapsing"
+              ? stackClearing
+                ? "thumbnail-stack-toolbar-clearing"
+                : "thumbnail-stack-toolbar-exiting"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
           {showClearAll && (
             <button
               type="button"
@@ -8056,16 +8554,16 @@ export function ThumbnailCard({
     if (!editorPresenceLeaving) return;
     const leaveMs = prefersReducedMotion() ? 0 : EDITOR_PRESENCE_LEAVE_MS;
     const timer = window.setTimeout(() => {
-      setEditorPresence((current) => (
+      setEditorPresence((current) =>
         current.leaving
           ? {
-            visible: false,
-            leaving: false,
-            lingering: true,
-            trackedActive: current.trackedActive,
-          }
-          : current
-      ));
+              visible: false,
+              leaving: false,
+              lingering: true,
+              trackedActive: current.trackedActive,
+            }
+          : current,
+      );
     }, leaveMs);
     return () => window.clearTimeout(timer);
   }, [editorPresenceLeaving]);
@@ -8073,11 +8571,9 @@ export function ThumbnailCard({
   useEffect(() => {
     if (!editorPresenceLingering) return;
     const timer = window.setTimeout(() => {
-      setEditorPresence((current) => (
-        current.lingering
-          ? { ...current, lingering: false }
-          : current
-      ));
+      setEditorPresence((current) =>
+        current.lingering ? { ...current, lingering: false } : current,
+      );
     }, EDITOR_PRESENCE_LINGER_MS);
     return () => window.clearTimeout(timer);
   }, [editorPresenceLingering]);
@@ -8112,10 +8608,7 @@ export function ThumbnailCard({
     }, THUMBNAIL_SAVED_FEEDBACK_MS);
   };
 
-  const runAction = async (
-    action: string,
-    success?: "copied" | "saved",
-  ): Promise<boolean> => {
+  const runAction = async (action: string, success?: "copied" | "saved"): Promise<boolean> => {
     if (isExitLocked() || isExiting) return false;
     if (success && busy) return false;
     setError("");
@@ -8163,10 +8656,7 @@ export function ThumbnailCard({
     });
   };
 
-  const finishFileDrag = (
-    result: "Dropped" | "Cancelled",
-    cursorPos: { x: number; y: number },
-  ) => {
+  const finishFileDrag = (result: "Dropped" | "Cancelled", cursorPos: { x: number; y: number }) => {
     fileDraggingRef.current = false;
     setFileDragging(false);
     // Native OS file drags can leave the always-on-top preview stack
@@ -8307,12 +8797,14 @@ export function ThumbnailCard({
       // Before a folder save the delete control is the first control; after
       // save it sits next to Close. Mirror the wave origin with the controls.
       const hasFolderFile = Boolean(artifact.path);
-      setDustParticles(buildThumbnailDustParticles(width, height, {
-        imageWidth: artifact.width,
-        imageHeight: artifact.height,
-        originX: thumbnailDeleteOriginX(width, hasFolderFile, stackSide),
-        originY: THUMBNAIL_DELETE_ORIGIN_Y,
-      }));
+      setDustParticles(
+        buildThumbnailDustParticles(width, height, {
+          imageWidth: artifact.width,
+          imageHeight: artifact.height,
+          originX: thumbnailDeleteOriginX(width, hasFolderFile, stackSide),
+          originY: THUMBNAIL_DELETE_ORIGIN_Y,
+        }),
+      );
     } else {
       setDustParticles(null);
       setDustDomFallback(false);
@@ -8326,8 +8818,8 @@ export function ThumbnailCard({
     // artifact waiting forever for animationend.
     exitFallbackTimer.current = setTimeout(
       completeExit,
-      (kind === "delete" ? THUMBNAIL_DELETE_FALLBACK_MS : THUMBNAIL_DISMISS_FALLBACK_MS)
-        + (kind === "dismiss" ? clearDelayMs : 0),
+      (kind === "delete" ? THUMBNAIL_DELETE_FALLBACK_MS : THUMBNAIL_DISMISS_FALLBACK_MS) +
+        (kind === "dismiss" ? clearDelayMs : 0),
     );
   };
 
@@ -8341,11 +8833,12 @@ export function ThumbnailCard({
   const finishExit = (event: React.AnimationEvent<HTMLElement>) => {
     // Ignore bubbled animationend from image streak / dust chips / chrome wave / clip layer.
     if (!exit || event.target !== event.currentTarget || !exitAction.current) return;
-    const expectedNames = exit === "delete"
-      ? dustParticles && dustParticles.length > 0
-        ? ["thumbnail-delete"]
-        : ["thumbnail-delete-fallback"]
-      : ["thumbnail-dismiss"];
+    const expectedNames =
+      exit === "delete"
+        ? dustParticles && dustParticles.length > 0
+          ? ["thumbnail-delete"]
+          : ["thumbnail-delete-fallback"]
+        : ["thumbnail-dismiss"];
     if (!expectedNames.includes(event.animationName)) return;
     completeExit();
   };
@@ -8389,28 +8882,34 @@ export function ThumbnailCard({
         exit ? `thumbnail-exit-${exit}` : "",
         usingDust ? "thumbnail-exit-dust" : "",
         isExiting ? "thumbnail-exiting" : "",
-      ].filter(Boolean).join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       data-thumbnail-id={artifact.id}
-      style={stackCollapsed || clearDelayMs > 0 ? {
-        ...(stackCollapsed ? {
-          "--thumbnail-stack-base-depth": stackDepth,
-          "--thumbnail-stack-layer-rotation": thumbnailStackLayerRotationDeg(
-            artifact.id,
-            stackDepth,
-          ),
-          "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
-          ...(expandFromPose
-            ? {
-              "--thumbnail-stack-expand-from": expandFromPose.transform,
-              "--thumbnail-stack-expand-blur-from": expandFromPose.blur,
-              "--thumbnail-stack-expand-dim-from": expandFromPose.dim,
-            }
-            : {}),
-        } : {}),
-        ...(clearDelayMs > 0
-          ? { "--thumbnail-clear-delay": `${clearDelayMs}ms` }
-          : {}),
-      } as CSSProperties : undefined}
+      style={
+        stackCollapsed || clearDelayMs > 0
+          ? ({
+              ...(stackCollapsed
+                ? {
+                    "--thumbnail-stack-base-depth": stackDepth,
+                    "--thumbnail-stack-layer-rotation": thumbnailStackLayerRotationDeg(
+                      artifact.id,
+                      stackDepth,
+                    ),
+                    "--thumbnail-stack-peek-jitter": `${thumbnailStackPeekJitterPx(stackDepth)}px`,
+                    ...(expandFromPose
+                      ? {
+                          "--thumbnail-stack-expand-from": expandFromPose.transform,
+                          "--thumbnail-stack-expand-blur-from": expandFromPose.blur,
+                          "--thumbnail-stack-expand-dim-from": expandFromPose.dim,
+                        }
+                      : {}),
+                  }
+                : {}),
+              ...(clearDelayMs > 0 ? { "--thumbnail-clear-delay": `${clearDelayMs}ms` } : {}),
+            } as CSSProperties)
+          : undefined
+      }
       // HTML inert disables all descendant input/focus while the card is decorative.
       inert={isExiting || stackCollapsed ? true : undefined}
       aria-hidden={stackCollapsed || undefined}
@@ -8456,36 +8955,34 @@ export function ThumbnailCard({
         />
       </div>
       {usingDust && (
-        <div
-          ref={dustLayerRef}
-          className="thumbnail-dust-layer"
-          aria-hidden="true"
-        >
-          {dustDomFallback ? dustParticles.map((particle) => (
-            <span
-              key={particle.id}
-              className="thumbnail-dust"
-              style={{
-                left: particle.left,
-                top: particle.top,
-                width: particle.width,
-                height: particle.height,
-              }}
-            >
+        <div ref={dustLayerRef} className="thumbnail-dust-layer" aria-hidden="true">
+          {dustDomFallback ? (
+            dustParticles.map((particle) => (
               <span
-                className="thumbnail-dust-surface"
+                key={particle.id}
+                className="thumbnail-dust"
                 style={{
-                  left: -particle.sourceLeft,
-                  top: -particle.sourceTop,
-                  width: particle.cardWidth,
-                  height: particle.cardHeight,
-                  backgroundImage: cssUrl(artifact.preview_url),
-                  backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
-                  backgroundPosition: `${particle.surfaceOffsetX}px ${particle.surfaceOffsetY}px`,
+                  left: particle.left,
+                  top: particle.top,
+                  width: particle.width,
+                  height: particle.height,
                 }}
-              />
-            </span>
-          )) : (
+              >
+                <span
+                  className="thumbnail-dust-surface"
+                  style={{
+                    left: -particle.sourceLeft,
+                    top: -particle.sourceTop,
+                    width: particle.cardWidth,
+                    height: particle.cardHeight,
+                    backgroundImage: cssUrl(artifact.preview_url),
+                    backgroundSize: `${particle.surfaceWidth}px ${particle.surfaceHeight}px`,
+                    backgroundPosition: `${particle.surfaceOffsetX}px ${particle.surfaceOffsetY}px`,
+                  }}
+                />
+              </span>
+            ))
+          ) : (
             <canvas ref={dustCanvasRef} className="thumbnail-dust-canvas" />
           )}
         </div>
@@ -8529,7 +9026,9 @@ export function ThumbnailCard({
           "thumbnail-editor-control",
           editorControlPresent ? "is-present" : "",
           editorControlLeaving ? "leaving" : "",
-        ].filter(Boolean).join(" ")}
+        ]
+          .filter(Boolean)
+          .join(" ")}
         aria-label={editorControlAriaLabel}
         aria-pressed={editorControlPresent || undefined}
         disabled={isExiting}
@@ -8548,7 +9047,9 @@ export function ThumbnailCard({
           )}
         </span>
         {!(editorControlPresent || editorControlLeaving) && (
-          <span className="thumbnail-editor-control-tip" aria-hidden="true">Edit</span>
+          <span className="thumbnail-editor-control-tip" aria-hidden="true">
+            Edit
+          </span>
         )}
       </button>
       <div className="thumbnail-main-actions">
@@ -8558,29 +9059,48 @@ export function ThumbnailCard({
             disabled={busy !== null || isExiting}
             onClick={() => void runAction("copy_artifact", "copied")}
           >
-            <CopyIcon />Copy
+            <CopyIcon />
+            Copy
           </button>
         )}
         <button
           type="button"
           disabled={busy !== null || isExiting}
-          onClick={() => void runAction(chrome.hasPath ? "reveal_artifact" : "save_artifact", chrome.hasPath ? undefined : "saved")}
+          onClick={() =>
+            void runAction(
+              chrome.hasPath ? "reveal_artifact" : "save_artifact",
+              chrome.hasPath ? undefined : "saved",
+            )
+          }
         >
-          {chrome.feedback === "saved"
-            ? <><CheckIcon />Saved</>
-            : chrome.hasPath
-              ? <><FolderIcon />Show in Folder</>
-              : <><SaveIcon />Save file</>}
+          {chrome.feedback === "saved" ? (
+            <>
+              <CheckIcon />
+              Saved
+            </>
+          ) : chrome.hasPath ? (
+            <>
+              <FolderIcon />
+              Show in Folder
+            </>
+          ) : (
+            <>
+              <SaveIcon />
+              Save file
+            </>
+          )}
         </button>
       </div>
       <div className="thumbnail-bottom-bar">
         <div className="thumbnail-meta">
-          <span>{artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}</span>
-          {!chrome.clipboardCurrent && !chrome.historySaved
-            ? <span className="warning">Not in History</span>
-            : !chrome.clipboardCurrent && chrome.copyFailed
-              ? <span className="warning">Clipboard unavailable</span>
-              : null}
+          <span>
+            {artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}
+          </span>
+          {!chrome.clipboardCurrent && !chrome.historySaved ? (
+            <span className="warning">Not in History</span>
+          ) : !chrome.clipboardCurrent && chrome.copyFailed ? (
+            <span className="warning">Clipboard unavailable</span>
+          ) : null}
         </div>
         <div className="thumbnail-status-chips">
           {chrome.clipboardCurrent && (
@@ -8626,31 +9146,63 @@ function IconButton({
 }
 
 function CopyIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="8" y="8" width="11" height="11" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+    </svg>
+  );
 }
 
 function FolderIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><circle cx="16.5" cy="13.5" r="2.5" /><path d="m18.3 15.3 2.2 2.2" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+      <circle cx="16.5" cy="13.5" r="2.5" />
+      <path d="m18.3 15.3 2.2 2.2" />
+    </svg>
+  );
 }
 
 function EditIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-1 5 5-1L19 9l-4-4ZM13.5 6.5l4 4M4 16l4 4" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m4 16-1 5 5-1L19 9l-4-4ZM13.5 6.5l4 4M4 16l4 4" />
+    </svg>
+  );
 }
 
 function TrashIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
+    </svg>
+  );
 }
 
 function CloseIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m6 6 12 12M18 6 6 18" />
+    </svg>
+  );
 }
 
 function SaveIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z" /><path d="M8 4v6h8V4M8 20v-6h8v6" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 4h12l2 2v14H5Z" />
+      <path d="M8 4v6h8V4M8 20v-6h8v6" />
+    </svg>
+  );
 }
 
 function CheckIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>;
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m5 12 4 4L19 6" />
+    </svg>
+  );
 }
 
 function RecordingRecovery({
@@ -8666,7 +9218,10 @@ function RecordingRecovery({
 
   if (drafts.length === 0 && !error) return null;
 
-  const run = async (command: "recover_recording_draft" | "discard_recording_draft", sessionId: string) => {
+  const run = async (
+    command: "recover_recording_draft" | "discard_recording_draft",
+    sessionId: string,
+  ) => {
     if (busyId) return;
     setBusyId(sessionId);
     setError("");
@@ -8685,7 +9240,10 @@ function RecordingRecovery({
   return (
     <section className="recording-recovery-section">
       <h2>Interrupted recordings</h2>
-      <p className="help-text">These recordings stopped before Captures could finish saving them. Recover one to add its playable segments to Capture History, or discard it.</p>
+      <p className="help-text">
+        These recordings stopped before Captures could finish saving them. Recover one to add its
+        playable segments to Capture History, or discard it.
+      </p>
       {drafts.map((draft) => {
         const duration = draft.segments
           .filter((segment) => segment.complete)
@@ -8695,13 +9253,22 @@ function RecordingRecovery({
           <div className="recording-recovery-row" key={draft.session_id}>
             <div>
               <strong>{draft.options.kind === "gif" ? "GIF" : "Video"} recording</strong>
-              <small>{new Date(draft.created_at_ms).toLocaleString()} · {formatRecordingTime(duration)} recovered so far</small>
+              <small>
+                {new Date(draft.created_at_ms).toLocaleString()} · {formatRecordingTime(duration)}{" "}
+                recovered so far
+              </small>
               {draft.last_error && (
                 <small className="warning">{recordingErrorMessage(draft.last_error)}</small>
               )}
             </div>
             <div>
-              <button type="button" disabled={Boolean(busyId)} onClick={() => void run("recover_recording_draft", draft.session_id)}>{isBusy ? "Recovering…" : "Recover"}</button>
+              <button
+                type="button"
+                disabled={Boolean(busyId)}
+                onClick={() => void run("recover_recording_draft", draft.session_id)}
+              >
+                {isBusy ? "Recovering…" : "Recover"}
+              </button>
               <button
                 type="button"
                 className={confirmDiscardId === draft.session_id ? "danger" : ""}
@@ -8713,12 +9280,18 @@ function RecordingRecovery({
                     setConfirmDiscardId(draft.session_id);
                   }
                 }}
-              >{confirmDiscardId === draft.session_id ? "Discard permanently?" : "Discard"}</button>
+              >
+                {confirmDiscardId === draft.session_id ? "Discard permanently?" : "Discard"}
+              </button>
             </div>
           </div>
         );
       })}
-      {error && <p className="settings-error" role="alert">{error}</p>}
+      {error && (
+        <p className="settings-error" role="alert">
+          {error}
+        </p>
+      )}
     </section>
   );
 }
@@ -8820,17 +9393,20 @@ function usePreferencesFind(
     });
   }, []);
 
-  const updateQuery = useCallback((value: string) => {
-    setQuery(value);
-    setCurrentIndex(0);
-    scrolledKeyRef.current = "";
-    const root = scrollerRef.current;
-    const matches = root
-      ? matchPreferenceFindTargets(collectPreferenceFindTargets(root), value)
-      : [];
-    matchesRef.current = matches;
-    setMatchCount(matches.length);
-  }, [scrollerRef]);
+  const updateQuery = useCallback(
+    (value: string) => {
+      setQuery(value);
+      setCurrentIndex(0);
+      scrolledKeyRef.current = "";
+      const root = scrollerRef.current;
+      const matches = root
+        ? matchPreferenceFindTargets(collectPreferenceFindTargets(root), value)
+        : [];
+      matchesRef.current = matches;
+      setMatchCount(matches.length);
+    },
+    [scrollerRef],
+  );
 
   useLayoutEffect(() => {
     if (!open) {
@@ -8868,9 +9444,9 @@ function usePreferencesFind(
         : [];
       matchesRef.current = matches;
       setMatchCount(matches.length);
-      setCurrentIndex((current) => (
-        matches.length === 0 ? 0 : Math.min(current, matches.length - 1)
-      ));
+      setCurrentIndex((current) =>
+        matches.length === 0 ? 0 : Math.min(current, matches.length - 1),
+      );
     });
     return () => window.cancelAnimationFrame(frame);
   }, [contentRevision, open, query, scrollerRef]);
@@ -8878,11 +9454,7 @@ function usePreferencesFind(
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (recordingShortcut) return;
-      const command = preferencesFindCommand(
-        event,
-        detectShortcutPlatform(),
-        open,
-      );
+      const command = preferencesFindCommand(event, detectShortcutPlatform(), open);
       if (!command) return;
       event.preventDefault();
       if (command === "open") {
@@ -8945,7 +9517,9 @@ function PreferencesFindBar({
         spellCheck={false}
         onChange={(event) => onQueryChange(event.target.value)}
       />
-      <span className="preferences-find-count" aria-live="polite">{countLabel}</span>
+      <span className="preferences-find-count" aria-live="polite">
+        {countLabel}
+      </span>
       <button
         type="button"
         className="preferences-find-step"
@@ -8953,7 +9527,9 @@ function PreferencesFindBar({
         disabled={matchCount === 0}
         onClick={onPrevious}
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4" /></svg>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m4 10 4-4 4 4" />
+        </svg>
       </button>
       <button
         type="button"
@@ -8962,7 +9538,9 @@ function PreferencesFindBar({
         disabled={matchCount === 0}
         onClick={onNext}
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m4 6 4 4 4-4" />
+        </svg>
       </button>
       <button
         type="button"
@@ -8985,8 +9563,9 @@ function MiniPreviewPlacementPicker({
   disabled?: boolean;
   onChange: (placement: MiniPreviewPlacement) => void;
 }) {
-  const selected = MINI_PREVIEW_PLACEMENTS.find((placement) => placement.id === value)
-    ?? MINI_PREVIEW_PLACEMENTS[2];
+  const selected =
+    MINI_PREVIEW_PLACEMENTS.find((placement) => placement.id === value) ??
+    MINI_PREVIEW_PLACEMENTS[2];
   return (
     <div className={`mini-preview-placement${disabled ? " is-disabled" : ""}`}>
       <div
@@ -9096,10 +9675,13 @@ export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [canExcludeRecordingControls, setCanExcludeRecordingControls] = useState(true);
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
-  const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({ kind: "idle", message: "" });
+  const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({
+    kind: "idle",
+    message: "",
+  });
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
-  const [requestedPreferenceTarget, setRequestedPreferenceTarget] = useState<string | null>(
-    () => query("target"),
+  const [requestedPreferenceTarget, setRequestedPreferenceTarget] = useState<string | null>(() =>
+    query("target"),
   );
   const [highlightedPreference, setHighlightedPreference] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -9118,10 +9700,12 @@ export function Preferences() {
     let dispose: (() => void) | undefined;
     void listen<string>(PREFERENCES_TARGET_EVENT, ({ payload }) => {
       if (active) setRequestedPreferenceTarget(payload);
-    }).then((unlisten) => {
-      if (active) dispose = unlisten;
-      else unlisten();
-    }).catch(() => undefined);
+    })
+      .then((unlisten) => {
+        if (active) dispose = unlisten;
+        else unlisten();
+      })
+      .catch(() => undefined);
     return () => {
       active = false;
       dispose?.();
@@ -9135,11 +9719,14 @@ export function Preferences() {
     }).catch(() => undefined);
   }, []);
 
-  useEffect(() => () => {
-    void invoke("set_shortcut_capture_suppressed", {
-      suppressed: false,
-    }).catch(() => undefined);
-  }, []);
+  useEffect(
+    () => () => {
+      void invoke("set_shortcut_capture_suppressed", {
+        suppressed: false,
+      }).catch(() => undefined);
+    },
+    [],
+  );
 
   const clearSavedStatusTimer = useCallback(() => {
     if (!savedStatusTimerRef.current) return;
@@ -9264,11 +9851,14 @@ export function Preferences() {
     return () => window.cancelAnimationFrame(frame);
   }, [requestedPreferenceTarget, setVisibleSection, settings]);
 
-  useEffect(() => () => {
-    if (preferenceHighlightTimerRef.current) {
-      window.clearTimeout(preferenceHighlightTimerRef.current);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (preferenceHighlightTimerRef.current) {
+        window.clearTimeout(preferenceHighlightTimerRef.current);
+      }
+    },
+    [],
+  );
 
   if (!settings) return <main className="preferences loading">Loading preferences…</main>;
 
@@ -9309,7 +9899,11 @@ export function Preferences() {
   };
 
   const chooseDirectory = async () => {
-    const selected = await open({ directory: true, multiple: false, title: "Choose capture folder" });
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose capture folder",
+    });
     if (typeof selected === "string") update("output_directory", selected);
   };
 
@@ -9330,7 +9924,9 @@ export function Preferences() {
     <main className="preferences">
       <aside className="preferences-nav">
         <div className="preferences-nav-brand">
-          <span aria-hidden="true"><CaptureIcon /></span>
+          <span aria-hidden="true">
+            <CaptureIcon />
+          </span>
           <strong>Captures</strong>
         </div>
         <nav aria-label="Preferences sections">
@@ -9363,8 +9959,13 @@ export function Preferences() {
               Capture History…
             </button>
             {saveStatus.kind !== "idle" && (
-              <div className={`preferences-save-status preferences-save-${saveStatus.kind}`} role="status">
-                <span aria-hidden="true">{saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}</span>
+              <div
+                className={`preferences-save-status preferences-save-${saveStatus.kind}`}
+                role="status"
+              >
+                <span aria-hidden="true">
+                  {saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}
+                </span>
                 {saveStatus.message}
               </div>
             )}
@@ -9459,14 +10060,22 @@ function PreferencesSections({
       <section className="settings-card" id="appearance" aria-labelledby="appearance-heading">
         <header className="settings-card-header">
           <h2 id="appearance-heading">Appearance</h2>
-          <p>One look across every Captures window. Capture overlays stay dark so they read on any desktop.</p>
+          <p>
+            One look across every Captures window. Capture overlays stay dark so they read on any
+            desktop.
+          </p>
         </header>
 
         <SettingRow
           title="Interface theme"
           description="Follow the system setting, or lock Captures to light or dark."
-          control={(
-            <div className="ui-segmented appearance-switch" role="group" aria-label="Interface theme" data-active={appearance}>
+          control={
+            <div
+              className="ui-segmented appearance-switch"
+              role="group"
+              aria-label="Interface theme"
+              data-active={appearance}
+            >
               <SegmentedControlIndicator value={appearance} />
               {APPEARANCE_MODES.map((mode) => (
                 <button
@@ -9480,19 +10089,20 @@ function PreferencesSections({
                 </button>
               ))}
             </div>
-          )}
+          }
         />
 
         <SettingRow
           layout="stack"
           title="Accent color"
           description="Used for the capture action, selection, and focus. Status colors keep their meaning."
-          control={(
+          control={
             <div className="theme-options" role="radiogroup" aria-label="Color theme">
               {COLOR_THEMES.map((theme) => {
-                const previewStyle = theme.id === "custom"
-                  ? buildCustomThemeVariables(settings.custom_theme) as CSSProperties
-                  : undefined;
+                const previewStyle =
+                  theme.id === "custom"
+                    ? (buildCustomThemeVariables(settings.custom_theme) as CSSProperties)
+                    : undefined;
                 return (
                   <button
                     key={theme.id}
@@ -9517,12 +10127,14 @@ function PreferencesSections({
                       <strong>{theme.name}</strong>
                       <small>{theme.description}</small>
                     </span>
-                    <span className="theme-option-check" aria-hidden="true">✓</span>
+                    <span className="theme-option-check" aria-hidden="true">
+                      ✓
+                    </span>
                   </button>
                 );
               })}
             </div>
-          )}
+          }
         />
 
         {settings.theme === "custom" && (
@@ -9530,12 +10142,11 @@ function PreferencesSections({
             <div className="custom-theme-editor-heading">
               <div>
                 <strong>Custom colors</strong>
-                <small>Open either RGB picker or enter a hex value. Supporting shades stay readable.</small>
+                <small>
+                  Open either RGB picker or enter a hex value. Supporting shades stay readable.
+                </small>
               </div>
-              <button
-                type="button"
-                onClick={() => setCustomTheme({ ...DEFAULT_CUSTOM_THEME })}
-              >
+              <button type="button" onClick={() => setCustomTheme({ ...DEFAULT_CUSTOM_THEME })}>
                 Reset colors
               </button>
             </div>
@@ -9566,7 +10177,7 @@ function PreferencesSections({
         <SettingRow
           layout="stack"
           title="Save captures to"
-          control={(
+          control={
             <div className="directory-input">
               <input
                 id="output-directory"
@@ -9574,9 +10185,11 @@ function PreferencesSections({
                 value={settings.output_directory}
                 onChange={(event) => update("output_directory", event.target.value)}
               />
-              <button type="button" onClick={() => void chooseDirectory()}>Choose…</button>
+              <button type="button" onClick={() => void chooseDirectory()}>
+                Choose…
+              </button>
             </div>
-          )}
+          }
         />
 
         <label className="check-row switch-row">
@@ -9593,9 +10206,11 @@ function PreferencesSections({
 
         <label
           id={AUTO_START_PREFERENCE_ID}
-          className={`check-row switch-row${highlightedPreference === AUTO_START_PREFERENCE_TARGET
-            ? " preference-target-highlight"
-            : ""}`}
+          className={`check-row switch-row${
+            highlightedPreference === AUTO_START_PREFERENCE_TARGET
+              ? " preference-target-highlight"
+              : ""
+          }`}
         >
           <input
             type="checkbox"
@@ -9605,9 +10220,8 @@ function PreferencesSections({
           <span>
             Start capture as soon as a target is selected
             <small>
-              Drawing a region, choosing a window, or clicking Full screen
-              immediately starts the capture. When this is off, press Enter
-              in the capture menu to confirm.
+              Drawing a region, choosing a window, or clicking Full screen immediately starts the
+              capture. When this is off, press Enter in the capture menu to confirm.
             </small>
           </span>
         </label>
@@ -9627,13 +10241,13 @@ function PreferencesSections({
         <SettingRow
           title="Mini preview position"
           description="Choose a screen corner. Show less stays on that edge, and the stack opens away from it. You can still drag the collapsed pile during a session."
-          control={(
+          control={
             <MiniPreviewPlacementPicker
               value={settings.mini_preview_placement ?? DEFAULT_MINI_PREVIEW_PLACEMENT}
               disabled={!settings.show_mini_previews}
               onChange={(placement) => update("mini_preview_placement", placement)}
             />
-          )}
+          }
         />
 
         <label className="check-row switch-row">
@@ -9657,24 +10271,35 @@ function PreferencesSections({
 
         <label
           id={RECORDING_CONTROLS_PREFERENCE_ID}
-          className={`check-row switch-row${highlightedPreference === RECORDING_CONTROLS_PREFERENCE_TARGET
-            ? " preference-target-highlight"
-            : ""}`}
+          className={`check-row switch-row${
+            highlightedPreference === RECORDING_CONTROLS_PREFERENCE_TARGET
+              ? " preference-target-highlight"
+              : ""
+          }`}
         >
           <input
             type="checkbox"
             checked={settings.include_recording_controls_in_captures}
-            onChange={(event) => update("include_recording_controls_in_captures", event.target.checked)}
+            onChange={(event) =>
+              update("include_recording_controls_in_captures", event.target.checked)
+            }
             disabled={!canExcludeRecordingControls}
           />
           <span>
             Show recording controls in screenshots and recordings
             <small>
-              {!canExcludeRecordingControls
-                ? "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen."
-                : settings.include_recording_controls_in_captures
-                  ? <>Recording controls <strong>will</strong> show in screenshots and recordings. Turn this off to keep them out.</>
-                  : <>Recording controls <strong>won’t</strong> show in screenshots or recordings.</>}
+              {!canExcludeRecordingControls ? (
+                "This desktop session cannot keep recording controls out of screenshots and recordings. Use Hide controls on the recording bar to keep them off-screen."
+              ) : settings.include_recording_controls_in_captures ? (
+                <>
+                  Recording controls <strong>will</strong> show in screenshots and recordings. Turn
+                  this off to keep them out.
+                </>
+              ) : (
+                <>
+                  Recording controls <strong>won’t</strong> show in screenshots or recordings.
+                </>
+              )}
             </small>
           </span>
         </label>
@@ -9688,8 +10313,8 @@ function PreferencesSections({
           <span>
             Freeze screen when capturing
             <small>
-              Holds hover states, tooltips, menus, and motion still while you choose a region or window.
-              Turn this off to select from the live desktop.
+              Holds hover states, tooltips, menus, and motion still while you choose a region or
+              window. Turn this off to select from the live desktop.
             </small>
           </span>
         </label>
@@ -9712,7 +10337,7 @@ function PreferencesSections({
         <SettingRow
           title="Screenshot format"
           description="Used when you save or export. Capture History keeps a lossless PNG until then."
-          control={(
+          control={
             <CustomSelect
               value={settings.screenshot_format}
               ariaLabel="Screenshot format"
@@ -9723,13 +10348,13 @@ function PreferencesSections({
               ]}
               onChange={(value) => update("screenshot_format", value as ScreenshotFormat)}
             />
-          )}
+          }
         />
 
         <SettingRow
           title="Screenshot countdown"
           description="Wait before capturing so you can open menus or hover states. Press Esc to cancel."
-          control={(
+          control={
             <CustomSelect
               value={String(settings.screenshot_countdown_seconds)}
               ariaLabel="Screenshot countdown"
@@ -9739,7 +10364,7 @@ function PreferencesSections({
               }))}
               onChange={(value) => update("screenshot_countdown_seconds", Number(value))}
             />
-          )}
+          }
         />
       </section>
 
@@ -9747,7 +10372,8 @@ function PreferencesSections({
         <header className="settings-card-header">
           <h2 id="shortcuts-heading">Shortcuts</h2>
           <p>
-            Select a shortcut, then press the key combination you want. Press Esc to cancel recording.
+            Select a shortcut, then press the key combination you want. Press Esc to cancel
+            recording.
             {` ${shortcutHelp.intro}`}
           </p>
         </header>
@@ -9770,7 +10396,9 @@ function PreferencesSections({
             label="New Capture"
             value={settings.new_capture_shortcut}
             recording={recordingShortcut === "new-capture-shortcut"}
-            onRecordingChange={(recording) => setShortcutRecording("new-capture-shortcut", recording)}
+            onRecordingChange={(recording) =>
+              setShortcutRecording("new-capture-shortcut", recording)
+            }
             onChange={(value) => update("new_capture_shortcut", value)}
           />
           <ShortcutInput
@@ -9802,7 +10430,9 @@ function PreferencesSections({
             label="Record Region"
             value={settings.recording.video_shortcut}
             recording={recordingShortcut === "record-region-shortcut"}
-            onRecordingChange={(recording) => setShortcutRecording("record-region-shortcut", recording)}
+            onRecordingChange={(recording) =>
+              setShortcutRecording("record-region-shortcut", recording)
+            }
             onChange={(value) => updateRecording("video_shortcut", value)}
           />
           <ShortcutInput
@@ -9810,7 +10440,9 @@ function PreferencesSections({
             label="Record Window"
             value={settings.recording.window_shortcut}
             recording={recordingShortcut === "record-window-shortcut"}
-            onRecordingChange={(recording) => setShortcutRecording("record-window-shortcut", recording)}
+            onRecordingChange={(recording) =>
+              setShortcutRecording("record-window-shortcut", recording)
+            }
             onChange={(value) => updateRecording("window_shortcut", value)}
           />
           <ShortcutInput
@@ -9818,7 +10450,9 @@ function PreferencesSections({
             label="Record Full Screen"
             value={settings.recording.display_shortcut}
             recording={recordingShortcut === "record-display-shortcut"}
-            onRecordingChange={(recording) => setShortcutRecording("record-display-shortcut", recording)}
+            onRecordingChange={(recording) =>
+              setShortcutRecording("record-display-shortcut", recording)
+            }
             onChange={(value) => updateRecording("display_shortcut", value)}
           />
         </div>
@@ -9833,7 +10467,7 @@ function PreferencesSections({
         <SettingRow
           title="Recording format"
           description="Recordings are captured as H.264 MP4. GIF and WebM are converted when you save or export."
-          control={(
+          control={
             <CustomSelect
               value={settings.recording.video_format}
               ariaLabel="Recording format"
@@ -9844,26 +10478,29 @@ function PreferencesSections({
               ]}
               onChange={(value) => updateRecording("video_format", value as VideoFormat)}
             />
-          )}
+          }
         />
 
         <div className="setting-grid">
           <SettingRow
             layout="stack"
             title="Frames per second"
-            control={(
+            control={
               <CustomSelect
                 value={String(settings.recording.video_fps)}
                 ariaLabel="Recording frames per second"
-                options={[60, 30, 15].map((value) => ({ value: String(value), label: `${value} FPS` }))}
+                options={[60, 30, 15].map((value) => ({
+                  value: String(value),
+                  label: `${value} FPS`,
+                }))}
                 onChange={(value) => updateRecording("video_fps", Number(value))}
               />
-            )}
+            }
           />
           <SettingRow
             layout="stack"
             title="Maximum resolution"
-            control={(
+            control={
               <CustomSelect
                 value={settings.recording.video_max_resolution}
                 ariaLabel="Recording maximum resolution"
@@ -9872,16 +10509,18 @@ function PreferencesSections({
                   { value: "p1080", label: "1080p" },
                   { value: "p720", label: "720p" },
                 ]}
-                onChange={(value) => updateRecording("video_max_resolution", value as MaxResolution)}
+                onChange={(value) =>
+                  updateRecording("video_max_resolution", value as MaxResolution)
+                }
               />
-            )}
+            }
           />
         </div>
 
         <SettingRow
           title="Countdown"
           description="Delay before a recording starts."
-          control={(
+          control={
             <CustomSelect
               value={String(settings.recording.countdown_seconds)}
               ariaLabel="Recording countdown"
@@ -9891,13 +10530,13 @@ function PreferencesSections({
               }))}
               onChange={(value) => updateRecording("countdown_seconds", Number(value))}
             />
-          )}
+          }
         />
 
         <SettingRow
           title="Default microphone"
           description="Used when a recording starts with microphone audio."
-          control={(
+          control={
             <CustomSelect
               value={settings.recording.microphone_device_id ?? "off"}
               ariaLabel="Default microphone"
@@ -9905,9 +10544,11 @@ function PreferencesSections({
                 { value: "off", label: "Off" },
                 ...recordingDevices.map((device) => ({ value: device.id, label: device.name })),
               ]}
-              onChange={(value) => updateRecording("microphone_device_id", value === "off" ? null : value)}
+              onChange={(value) =>
+                updateRecording("microphone_device_id", value === "off" ? null : value)
+              }
             />
-          )}
+          }
         />
 
         <label className="check-row switch-row">
@@ -9949,11 +10590,16 @@ function PreferencesSections({
           <input
             type="checkbox"
             checked={settings.recording.open_editor_after_recording}
-            onChange={(event) => updateRecording("open_editor_after_recording", event.target.checked)}
+            onChange={(event) =>
+              updateRecording("open_editor_after_recording", event.target.checked)
+            }
           />
           <span>
             Open the editor after recording
-            <small>The recording is kept in Capture History for 30 days, so closing the editor never loses it.</small>
+            <small>
+              The recording is kept in Capture History for 30 days, so closing the editor never
+              loses it.
+            </small>
           </span>
         </label>
       </section>
@@ -9967,38 +10613,47 @@ function PreferencesSections({
           <SettingRow
             layout="stack"
             title="Frames per second"
-            control={(
+            control={
               <CustomSelect
                 value={String(settings.recording.gif_fps)}
                 ariaLabel="GIF frames per second"
-                options={[8, 10, 12, 15, 20, 24, 30].map((value) => ({ value: String(value), label: `${value} FPS` }))}
+                options={[8, 10, 12, 15, 20, 24, 30].map((value) => ({
+                  value: String(value),
+                  label: `${value} FPS`,
+                }))}
                 onChange={(value) => updateRecording("gif_fps", Number(value))}
               />
-            )}
+            }
           />
           <SettingRow
             layout="stack"
             title="Maximum width"
-            control={(
+            control={
               <CustomSelect
                 value={String(settings.recording.gif_max_width)}
                 ariaLabel="GIF maximum width"
-                options={[320, 480, 640, 800, 1200].map((value) => ({ value: String(value), label: `${value} px` }))}
+                options={[320, 480, 640, 800, 1200].map((value) => ({
+                  value: String(value),
+                  label: `${value} px`,
+                }))}
                 onChange={(value) => updateRecording("gif_max_width", Number(value))}
               />
-            )}
+            }
           />
           <SettingRow
             layout="stack"
             title="Palette colors"
-            control={(
+            control={
               <CustomSelect
                 value={String(settings.recording.gif_max_colors)}
                 ariaLabel="GIF palette colors"
-                options={[64, 96, 128, 256].map((value) => ({ value: String(value), label: String(value) }))}
+                options={[64, 96, 128, 256].map((value) => ({
+                  value: String(value),
+                  label: String(value),
+                }))}
                 onChange={(value) => updateRecording("gif_max_colors", Number(value))}
               />
-            )}
+            }
           />
         </div>
       </section>
@@ -10011,14 +10666,20 @@ function PreferencesSections({
       <section className="settings-card" id="about" aria-labelledby="about-heading">
         <header className="settings-card-header">
           <h2 id="about-heading">About</h2>
-          <p>Captures is in active development. Telling us what breaks is the fastest way to fix it.</p>
+          <p>
+            Captures is in active development. Telling us what breaks is the fastest way to fix it.
+          </p>
         </header>
         <div className="settings-utility-row">
           <div className="settings-utility-copy">
             <strong>Send feedback</strong>
             <small>Report a bug or share an idea.</small>
           </div>
-          <button className="settings-utility-action" type="button" onClick={() => void invoke("open_feedback")}>
+          <button
+            className="settings-utility-action"
+            type="button"
+            onClick={() => void invoke("open_feedback")}
+          >
             Open
           </button>
         </div>
@@ -10104,11 +10765,17 @@ export function ShortcutInput({
           onKeyDown={onKeyDown}
           onKeyUp={onKeyUp}
         >
-          {keys.length > 0
-            ? keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)
-            : <span className="shortcut-prompt">Press shortcut…</span>}
+          {keys.length > 0 ? (
+            keys.map((key, index) => <kbd key={`${key}-${index}`}>{key}</kbd>)
+          ) : (
+            <span className="shortcut-prompt">Press shortcut…</span>
+          )}
         </button>
-        {error && <span className="shortcut-error" role="status">{error}</span>}
+        {error && (
+          <span className="shortcut-error" role="status">
+            {error}
+          </span>
+        )}
       </div>
     </div>
   );

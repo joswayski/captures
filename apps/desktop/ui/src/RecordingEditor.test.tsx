@@ -5,11 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { RecordingEditor } from "./App";
 import { editorCropAfterDrag, recordingFilenameError } from "./lib/recordingEditor";
-import type {
-  AppSettings,
-  RecordingArtifact,
-  RecordingTimelinePreview,
-} from "./types";
+import type { AppSettings, RecordingArtifact, RecordingTimelinePreview } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -128,10 +124,12 @@ describe("RecordingEditor", () => {
       if (command === "prepare_recording_timeline_preview") return timeline;
       if (command === "start_recording_export") return "export-1";
       if (command === "estimate_recording_export") {
-        const request = args as {
-          edit?: { output_height?: number | null };
-          export?: { quality?: string };
-        } | undefined;
+        const request = args as
+          | {
+              edit?: { output_height?: number | null };
+              export?: { quality?: string };
+            }
+          | undefined;
         if (request?.export?.quality && request.export.quality !== "preserve") {
           if (request.export.quality === "tiny") {
             return { sizeBytes: 800_000, exact: false };
@@ -142,8 +140,8 @@ describe("RecordingEditor", () => {
           return { sizeBytes: 1_680_000, exact: false };
         }
         if (
-          typeof request?.edit?.output_height === "number"
-          && request.edit.output_height < artifact.height
+          typeof request?.edit?.output_height === "number" &&
+          request.edit.output_height < artifact.height
         ) {
           return { sizeBytes: 1_050_000, exact: false };
         }
@@ -176,10 +174,12 @@ describe("RecordingEditor", () => {
       "aria-valuetext",
       "0:08.750",
     );
-    expect(screen.getByRole("slider", { name: "Trim start" }).style.getPropertyValue("--trim"))
-      .toBe("0");
-    expect(screen.getByRole("slider", { name: "Trim end" }).style.getPropertyValue("--trim"))
-      .toBe("1");
+    expect(
+      screen.getByRole("slider", { name: "Trim start" }).style.getPropertyValue("--trim"),
+    ).toBe("0");
+    expect(screen.getByRole("slider", { name: "Trim end" }).style.getPropertyValue("--trim")).toBe(
+      "1",
+    );
     const track = container.querySelector<HTMLElement>(".timeline-track");
     expect(track).not.toBeNull();
     track!.setPointerCapture = vi.fn();
@@ -211,8 +211,9 @@ describe("RecordingEditor", () => {
     expect(screen.getAllByRole("button", { name: /Resize crop/ })).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: "100%" }));
     expect(preview).toHaveStyle({ width: "1140px", height: "692px" });
-    expect(container.querySelector(".preview-size-segmented .capture-segmented-indicator"))
-      .not.toBeNull();
+    expect(
+      container.querySelector(".preview-size-segmented .capture-segmented-indicator"),
+    ).not.toBeNull();
     expect(screen.getByRole("button", { name: "Loop preview" })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -221,7 +222,9 @@ describe("RecordingEditor", () => {
     const video = container.querySelector<HTMLVideoElement>("video");
     expect(video).not.toBeNull();
     expect(preview?.querySelector(".recording-preview-overlay-play")).toBeInTheDocument();
-    expect(container.querySelector(".recording-preview-toolbar .recording-preview-overlay-play")).not.toBeInTheDocument();
+    expect(
+      container.querySelector(".recording-preview-toolbar .recording-preview-overlay-play"),
+    ).not.toBeInTheDocument();
     const play = vi.spyOn(video!, "play").mockResolvedValue();
     fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
     expect(play).toHaveBeenCalledOnce();
@@ -279,7 +282,7 @@ describe("RecordingEditor", () => {
     expect(video!.currentTime).toBe(2);
     expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
-      left: `${2_000 / artifact.duration_ms * 100}%`,
+      left: `${(2_000 / artifact.duration_ms) * 100}%`,
     });
     fireEvent.pointerUp(trimStart, { pointerId: 1 });
     expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
@@ -290,7 +293,7 @@ describe("RecordingEditor", () => {
     expect(video!.currentTime).toBe(6.75);
     expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
-      left: `${6_750 / artifact.duration_ms * 100}%`,
+      left: `${(6_750 / artifact.duration_ms) * 100}%`,
     });
     fireEvent.pointerUp(trimEnd, { pointerId: 2 });
     expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
@@ -315,7 +318,7 @@ describe("RecordingEditor", () => {
     expect(pause).toHaveBeenCalledOnce();
     expect(video!.currentTime).toBe(6.75);
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
-      left: `${6_750 / artifact.duration_ms * 100}%`,
+      left: `${(6_750 / artifact.duration_ms) * 100}%`,
     });
 
     const loop = screen.getByRole("button", { name: "Loop preview" });
@@ -328,7 +331,7 @@ describe("RecordingEditor", () => {
     expect(pause).toHaveBeenCalledOnce();
     expect(video!.currentTime).toBe(2);
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
-      left: `${2_000 / artifact.duration_ms * 100}%`,
+      left: `${(2_000 / artifact.duration_ms) * 100}%`,
     });
   });
 
@@ -407,7 +410,7 @@ describe("RecordingEditor", () => {
       for (const callback of pending) callback(performance.now());
     });
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
-      left: `${1_250 / artifact.duration_ms * 100}%`,
+      left: `${(1_250 / artifact.duration_ms) * 100}%`,
     });
 
     video!.currentTime = 3.5;
@@ -416,7 +419,7 @@ describe("RecordingEditor", () => {
       for (const callback of next) callback(performance.now());
     });
     expect(container.querySelector(".timeline-playhead")).toHaveStyle({
-      left: `${3_500 / artifact.duration_ms * 100}%`,
+      left: `${(3_500 / artifact.duration_ms) * 100}%`,
     });
   });
 
@@ -431,15 +434,14 @@ describe("RecordingEditor", () => {
     expect((filename as HTMLInputElement).selectionEnd).toBe("Captures_1140x692".length);
     expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
     expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".mp4");
-    expect(filename.closest(".recording-filename-input"))
-      .toContainElement(screen.getByRole("combobox", { name: "Format" }));
+    expect(filename.closest(".recording-filename-input")).toContainElement(
+      screen.getByRole("combobox", { name: "Format" }),
+    );
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
       "Preserve quality",
     );
-    expect(screen.getByLabelText("Save location")).toHaveTextContent(
-      "/Users/josevalerio/Captures",
-    );
+    expect(screen.getByLabelText("Save location")).toHaveTextContent("/Users/josevalerio/Captures");
     expect(screen.getByText("Saving to")).toBeInTheDocument();
     expect(screen.queryByText("Ready to save.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change save location" })).toBeInTheDocument();
@@ -472,8 +474,9 @@ describe("RecordingEditor", () => {
         },
       });
     });
-    expect(screen.getByText("Video saved — 40.7 KB.").closest(".recording-save-toast"))
-      .toHaveClass("success");
+    expect(screen.getByText("Video saved — 40.7 KB.").closest(".recording-save-toast")).toHaveClass(
+      "success",
+    );
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Saved" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show in Folder" }));
@@ -524,9 +527,7 @@ describe("RecordingEditor", () => {
     const stem = (filename as HTMLInputElement).value;
     expect(stem).toMatch(/^Captures_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_\d{3}$/);
     expect(stem).not.toBe("media");
-    expect(screen.getByLabelText("Save location")).toHaveTextContent(
-      "/Users/josevalerio/Captures",
-    );
+    expect(screen.getByLabelText("Save location")).toHaveTextContent("/Users/josevalerio/Captures");
     expect(screen.getByLabelText("Save location")).not.toHaveTextContent("history");
     expect(screen.getByRole("checkbox", { name: "Save as new file" })).not.toBeChecked();
 
@@ -589,8 +590,7 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
     const quality = screen.getByRole("combobox", { name: "Compression quality" });
     expect(quality).toHaveTextContent("Highest");
-    expect(screen.queryByRole("slider", { name: "Compression quality" }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Compression quality" })).not.toBeInTheDocument();
 
     fireEvent.click(quality);
     expect(screen.getByRole("option", { name: /Tiny/ })).toBeInTheDocument();
@@ -624,8 +624,7 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("option", { name: "GIF" }));
     expect(screen.getByRole("combobox", { name: "Format" })).toHaveTextContent(".gif");
     expect(screen.queryByRole("combobox", { name: "GIF palette" })).not.toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
     const quality = screen.getByRole("combobox", { name: "Compression quality" });
     fireEvent.click(quality);
     fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
@@ -655,28 +654,40 @@ describe("RecordingEditor", () => {
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
 
     // Default compress preset is Highest. 2.73 MB vs the 4.2 MB source is −35%.
-    await waitFor(() => {
-      expect(screen.getByText("≈ 2.7 MB")).toBeInTheDocument();
-    }, { timeout: 3_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByText("≈ 2.7 MB")).toBeInTheDocument();
+      },
+      { timeout: 3_000 },
+    );
     expect(screen.getByText("−35%")).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("estimate_recording_export", expect.objectContaining({
-      artifactId: artifact.id,
-      export: expect.objectContaining({ format: "mp4", quality: "highest" }),
-    }));
+    expect(invoke).toHaveBeenCalledWith(
+      "estimate_recording_export",
+      expect.objectContaining({
+        artifactId: artifact.id,
+        export: expect.objectContaining({ format: "mp4", quality: "highest" }),
+      }),
+    );
 
     fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Tiny/ }));
-    await waitFor(() => {
-      expect(screen.getByText("≈ 800 KB")).toBeInTheDocument();
-      expect(screen.getByText("−81%")).toBeInTheDocument();
-    }, { timeout: 3_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByText("≈ 800 KB")).toBeInTheDocument();
+        expect(screen.getByText("−81%")).toBeInTheDocument();
+      },
+      { timeout: 3_000 },
+    );
 
     fireEvent.click(screen.getByRole("combobox", { name: "Compression quality" }));
     fireEvent.click(screen.getByRole("option", { name: /^High(?!est)/ }));
-    await waitFor(() => {
-      expect(screen.getByText("≈ 1.7 MB")).toBeInTheDocument();
-      expect(screen.getByText("−60%")).toBeInTheDocument();
-    }, { timeout: 3_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByText("≈ 1.7 MB")).toBeInTheDocument();
+        expect(screen.getByText("−60%")).toBeInTheDocument();
+      },
+      { timeout: 3_000 },
+    );
     expect(screen.queryByText("+110%")).not.toBeInTheDocument();
 
     // Maximum mode shows the cap instead of a sampled estimate.
@@ -689,15 +700,20 @@ describe("RecordingEditor", () => {
     render(<RecordingEditor />);
     await screen.findByRole("heading", { name: "Edit recording" });
 
-    await waitFor(() => {
-      expect(screen.getByTitle("Estimated saved file size for the current edits and settings"))
-        .toHaveTextContent("4.2 MB");
-    }, { timeout: 3_000 });
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTitle("Estimated saved file size for the current edits and settings"),
+        ).toHaveTextContent("4.2 MB");
+      },
+      { timeout: 3_000 },
+    );
     expect(document.querySelector(".recording-output-estimate-delta")).toBeNull();
 
     fireEvent.click(screen.getByRole("combobox", { name: "Output resolution" }));
-    expect(screen.getByRole("listbox", { name: "Output resolution" }).parentElement)
-      .toBe(document.body);
+    expect(screen.getByRole("listbox", { name: "Output resolution" }).parentElement).toBe(
+      document.body,
+    );
     expect(screen.getByRole("option", { name: /Choose exact pixel dimensions/ })).toHaveTextContent(
       "Choose exact pixel dimensions.",
     );
@@ -707,17 +723,24 @@ describe("RecordingEditor", () => {
     fireEvent.change(within(customSize as HTMLElement).getByRole("spinbutton", { name: "Width" }), {
       target: { value: "570" },
     });
-    fireEvent.change(within(customSize as HTMLElement).getByRole("spinbutton", { name: "Height" }), {
-      target: { value: "346" },
-    });
+    fireEvent.change(
+      within(customSize as HTMLElement).getByRole("spinbutton", { name: "Height" }),
+      {
+        target: { value: "346" },
+      },
+    );
 
-    await waitFor(() => {
-      expect(screen.getByText("≈ 1.1 MB")).toBeInTheDocument();
-      expect(screen.getByText("−75%")).toBeInTheDocument();
-    }, { timeout: 3_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByText("≈ 1.1 MB")).toBeInTheDocument();
+        expect(screen.getByText("−75%")).toBeInTheDocument();
+      },
+      { timeout: 3_000 },
+    );
     expect(screen.getByText("−75%")).toHaveClass("recording-output-estimate-delta", "is-smaller");
-    expect(screen.getByRole("combobox", { name: "Save quality" }))
-      .toHaveTextContent("Preserve quality");
+    expect(screen.getByRole("combobox", { name: "Save quality" })).toHaveTextContent(
+      "Preserve quality",
+    );
   });
 
   it("shows the before/after comparison in the preview when Compress is selected", async () => {
@@ -730,48 +753,53 @@ describe("RecordingEditor", () => {
     const video = container.querySelector<HTMLVideoElement>("video");
     expect(video).not.toBeNull();
 
-    expect(screen.queryByRole("button", { name: "Compare before / after" }))
-      .not.toBeInTheDocument();
-    expect(screen.queryByRole("group", { name: "Compression comparison" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Compare before / after" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Compression comparison" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
 
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Hide compression comparison" }))
-      .toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Compression preview" }))
-      .not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("preview_recording_export", expect.objectContaining({
-        artifactId: artifact.id,
-        atMs: 0,
-        export: expect.objectContaining({ format: "mp4", quality: "highest" }),
-      }));
-    }, { timeout: 3_000 });
+    expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide compression comparison" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Compression preview" })).not.toBeInTheDocument();
+    await waitFor(
+      () => {
+        expect(invoke).toHaveBeenCalledWith(
+          "preview_recording_export",
+          expect.objectContaining({
+            artifactId: artifact.id,
+            atMs: 0,
+            export: expect.objectContaining({ format: "mp4", quality: "highest" }),
+          }),
+        );
+      },
+      { timeout: 3_000 },
+    );
     await waitFor(() => {
       expect(createObjectURL).toHaveBeenCalledTimes(2);
     });
-    expect(screen.getByAltText("Before compression")).toHaveAttribute("src", "blob:recording-preview");
-    expect(screen.getByAltText("After compression")).toHaveAttribute("src", "blob:recording-preview");
+    expect(screen.getByAltText("Before compression")).toHaveAttribute(
+      "src",
+      "blob:recording-preview",
+    );
+    expect(screen.getByAltText("After compression")).toHaveAttribute(
+      "src",
+      "blob:recording-preview",
+    );
 
     fireEvent.play(video!);
-    expect(screen.queryByRole("group", { name: "Compression comparison" }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Compression comparison" })).not.toBeInTheDocument();
     fireEvent.pause(video!);
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Maximum file size/ }));
-    expect(screen.getByRole("group", { name: "Compression comparison" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Compression comparison" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
     fireEvent.click(screen.getByRole("option", { name: /Preserve quality/ }));
-    expect(screen.queryByRole("group", { name: "Compression comparison" }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Compression comparison" })).not.toBeInTheDocument();
   });
 
   it("uses shared accessible controls for output format and recorded-audio volume", async () => {
@@ -885,7 +913,8 @@ describe("RecordingEditor", () => {
         return { ...settings, recording: { ...settings.recording, video_format: "webm" } };
       }
       if (command === "prepare_recording_timeline_preview") return timeline;
-      if (command === "estimate_recording_export") return { sizeBytes: artifact.size_bytes, exact: true };
+      if (command === "estimate_recording_export")
+        return { sizeBytes: artifact.size_bytes, exact: true };
       if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
       throw new Error(`unexpected command: ${command}`);
     });
@@ -907,7 +936,8 @@ describe("RecordingEditor", () => {
       if (command === "get_settings") return settings;
       if (command === "prepare_recording_timeline_preview") return timeline;
       if (command === "start_recording_export") return "export-1";
-      if (command === "estimate_recording_export") return { sizeBytes: artifact.size_bytes, exact: true };
+      if (command === "estimate_recording_export")
+        return { sizeBytes: artifact.size_bytes, exact: true };
       if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
       throw new Error(`unexpected command: ${command}`);
     });
@@ -942,7 +972,8 @@ describe("RecordingEditor", () => {
         return { ...settings, recording: { ...settings.recording, video_format: "webm" } };
       }
       if (command === "prepare_recording_timeline_preview") return timeline;
-      if (command === "estimate_recording_export") return { sizeBytes: artifact.size_bytes, exact: true };
+      if (command === "estimate_recording_export")
+        return { sizeBytes: artifact.size_bytes, exact: true };
       if (command === "preview_recording_export") return { beforePng: [1, 2], afterPng: [3, 4] };
       throw new Error(`unexpected command: ${command}`);
     });
@@ -954,13 +985,15 @@ describe("RecordingEditor", () => {
 
 describe("recording editor geometry", () => {
   it("moves and resizes crop bounds without escaping the source", () => {
-    expect(editorCropAfterDrag(
-      { x: 100, y: 50, width: 400, height: 200 },
-      "move",
-      { x: 900, y: 900 },
-      { width: 1_140, height: 692 },
-      false,
-    )).toEqual({ x: 740, y: 492, width: 400, height: 200 });
+    expect(
+      editorCropAfterDrag(
+        { x: 100, y: 50, width: 400, height: 200 },
+        "move",
+        { x: 900, y: 900 },
+        { width: 1_140, height: 692 },
+        false,
+      ),
+    ).toEqual({ x: 740, y: 492, width: 400, height: 200 });
 
     const resized = editorCropAfterDrag(
       { x: 100, y: 50, width: 400, height: 200 },

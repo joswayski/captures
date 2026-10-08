@@ -32,8 +32,9 @@ test("every declared color theme has a shared CSS palette and backend value", as
   const ids = [...sharedTs.matchAll(/\bid:\s*"([^"]+)"/gu)].map((match) => match[1]);
   const rustEnum = rustModels.match(/pub enum ColorTheme\s*\{([^}]+)\}/u)?.[1];
   assert.ok(rustEnum, "missing Rust ColorTheme enum");
-  const backendIds = [...rustEnum.matchAll(/^\s*([A-Z][A-Za-z]+),$/gmu)]
-    .map((match) => match[1].replaceAll(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase());
+  const backendIds = [...rustEnum.matchAll(/^\s*([A-Z][A-Za-z]+),$/gmu)].map((match) =>
+    match[1].replaceAll(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase(),
+  );
 
   assert.deepEqual(ids, [
     "mustard",
@@ -62,8 +63,9 @@ test("every appearance mode has design tokens and a backend value", async () => 
   const ids = [...appearanceTs.matchAll(/\bid:\s*"([^"]+)"/gu)].map((match) => match[1]);
   const rustEnum = rustModels.match(/pub enum Appearance\s*\{([^}]+)\}/u)?.[1];
   assert.ok(rustEnum, "missing Rust Appearance enum");
-  const backendIds = [...rustEnum.matchAll(/^\s*([A-Z][A-Za-z]+),$/gmu)]
-    .map((match) => match[1].toLowerCase());
+  const backendIds = [...rustEnum.matchAll(/^\s*([A-Z][A-Za-z]+),$/gmu)].map((match) =>
+    match[1].toLowerCase(),
+  );
 
   assert.deepEqual(ids, ["system", "light", "dark"]);
   assert.deepEqual(backendIds, ids);
@@ -80,9 +82,8 @@ test("light and dark declare the same semantic surface tokens", async () => {
     const close = designCss.indexOf("\n}", open);
     return designCss.slice(open, close);
   };
-  const names = (text) => new Set(
-    [...text.matchAll(/^\s*(--[a-z0-9-]+):/gmu)].map((match) => match[1]),
-  );
+  const names = (text) =>
+    new Set([...text.matchAll(/^\s*(--[a-z0-9-]+):/gmu)].map((match) => match[1]));
 
   const dark = names(block(`[data-appearance="dark"]`));
   const light = names(block(`[data-appearance="light"]`));
@@ -127,18 +128,12 @@ test("first-run setup follows the shared appearance tokens", async () => {
 test("preferences keeps presets compact and gives Custom a full-spectrum treatment", async () => {
   const desktopCss = await readDesktopCss();
 
-  assert.match(
-    desktopCss,
-    /\.theme-options\s*\{[^}]*grid-template-columns:\s*repeat\(5,/u,
-  );
+  assert.match(desktopCss, /\.theme-options\s*\{[^}]*grid-template-columns:\s*repeat\(5,/u);
   assert.match(
     desktopCss,
     /\.theme-option-custom \.theme-option-preview\s*\{[^}]*linear-gradient/u,
   );
-  assert.match(
-    desktopCss,
-    /\.custom-theme-editor::before\s*\{[^}]*linear-gradient/u,
-  );
+  assert.match(desktopCss, /\.custom-theme-editor::before\s*\{[^}]*linear-gradient/u);
 });
 
 test("mini-preview stack controls use opaque glass tokens and contained shadows", async () => {
@@ -153,17 +148,13 @@ test("mini-preview stack controls use opaque glass tokens and contained shadows"
     /html\[data-preview-harness-view="thumbnail"\] #root\s*\{[^}]*width:\s*340px/u,
   );
 
-  const stackControl =
-    desktopCss.match(/\.thumbnail-stack-control\s*\{([\s\S]*?)\n\}/u)?.[1];
+  const stackControl = desktopCss.match(/\.thumbnail-stack-control\s*\{([\s\S]*?)\n\}/u)?.[1];
   assert.ok(stackControl, "missing .thumbnail-stack-control rule");
   assert.match(stackControl, /background:\s*var\(--glass-strong-solid\)/u);
   assert.match(stackControl, /width:\s*28px/u);
   assert.doesNotMatch(stackControl, /rgb\(/u);
   assert.doesNotMatch(stackControl, /var\(--glass-shadow\)/u);
-  assert.match(
-    desktopCss,
-    /--thumbnail-card-shadow:\s*0 6px 14px[\s\S]*?0 2px 5px/u,
-  );
+  assert.match(desktopCss, /--thumbnail-card-shadow:\s*0 6px 14px[\s\S]*?0 2px 5px/u);
   assert.match(
     desktopCss,
     /\.thumbnail-stack-control:hover[\s\S]*?background:\s*var\(--glass-raised-solid\)/u,
@@ -172,39 +163,25 @@ test("mini-preview stack controls use opaque glass tokens and contained shadows"
     desktopCss,
     /\.thumbnail-stack-control:hover[\s\S]*?border-color:\s*var\(--glass-border-strong\)/u,
   );
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-minimize:hover[\s\S]*?width:\s*92px/u,
-  );
+  assert.match(desktopCss, /\.thumbnail-stack-minimize:hover[\s\S]*?width:\s*92px/u);
   assert.match(
     desktopCss,
     /\.thumbnail-stack-minimize:hover \.thumbnail-stack-minimize-label[\s\S]*?opacity:\s*1/u,
   );
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-compact > \.thumbnail-card[\s\S]*?translate3d/u,
-  );
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-compact > \.thumbnail-card[\s\S]*?-13px/u,
-  );
-  const stackToolbar =
-    desktopCss.match(/\.thumbnail-stack-toolbar\s*\{([\s\S]*?)\n\}/u)?.[1];
+  assert.match(desktopCss, /\.thumbnail-stack-compact > \.thumbnail-card[\s\S]*?translate3d/u);
+  assert.match(desktopCss, /\.thumbnail-stack-compact > \.thumbnail-card[\s\S]*?-13px/u);
+  const stackToolbar = desktopCss.match(/\.thumbnail-stack-toolbar\s*\{([\s\S]*?)\n\}/u)?.[1];
   assert.ok(stackToolbar, "missing .thumbnail-stack-toolbar rule");
   assert.match(stackToolbar, /bottom:\s*16px/u);
   assert.match(stackToolbar, /left:\s*28px/u);
   assert.doesNotMatch(stackToolbar, /\btop:/u);
   assert.doesNotMatch(stackToolbar, /\bright:/u);
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-control\s*\{[\s\S]*?border-radius:\s*var\(--r-md\)/u,
-  );
+  assert.match(desktopCss, /\.thumbnail-stack-control\s*\{[\s\S]*?border-radius:\s*var\(--r-md\)/u);
   assert.match(
     desktopCss,
     /\.thumbnail-stack-control\s*\{[\s\S]*?box-shadow:\s*var\(--thumbnail-card-shadow\)/u,
   );
-  const stackClear =
-    desktopCss.match(/\.thumbnail-stack-clear\s*\{([\s\S]*?)\n\}/u)?.[1];
+  const stackClear = desktopCss.match(/\.thumbnail-stack-clear\s*\{([\s\S]*?)\n\}/u)?.[1];
   assert.ok(stackClear, "missing .thumbnail-stack-clear rule");
   assert.match(stackClear, /flex:\s*0 0 28px/u);
   assert.doesNotMatch(stackClear, /background:/u);
@@ -284,8 +261,8 @@ function contrast(first, second) {
 
 function luminance(hex) {
   const channels = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255);
-  const linear = channels.map((channel) => (
-    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
-  ));
-  return (0.2126 * linear[0]) + (0.7152 * linear[1]) + (0.0722 * linear[2]);
+  const linear = channels.map((channel) =>
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
 }

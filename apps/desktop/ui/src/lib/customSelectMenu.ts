@@ -32,8 +32,8 @@ export function placeCustomSelectMenu(
   viewport: { width: number; height: number },
   optionCount: number,
 ): CustomSelectMenuLayout {
-  const measuredHeight = menu.height
-    || Math.min(CUSTOM_SELECT_MAX_MENU_HEIGHT, optionCount * 31 + 8);
+  const measuredHeight =
+    menu.height || Math.min(CUSTOM_SELECT_MAX_MENU_HEIGHT, optionCount * 31 + 8);
   const desiredHeight = Math.min(CUSTOM_SELECT_MAX_MENU_HEIGHT, measuredHeight);
   const spaceAbove = Math.max(0, trigger.top - CUSTOM_SELECT_VIEWPORT_PADDING);
   const spaceBelow = Math.max(0, viewport.height - trigger.bottom - CUSTOM_SELECT_VIEWPORT_PADDING);
@@ -60,9 +60,10 @@ export function placeCustomSelectMenu(
   const maxLeft = viewport.width - CUSTOM_SELECT_VIEWPORT_PADDING - menuWidth;
   left = Math.min(Math.max(minLeft, left), Math.max(minLeft, maxLeft));
 
-  let top = placement === "above"
-    ? trigger.top - CUSTOM_SELECT_MENU_GAP - menuHeight
-    : trigger.bottom + CUSTOM_SELECT_MENU_GAP;
+  let top =
+    placement === "above"
+      ? trigger.top - CUSTOM_SELECT_MENU_GAP - menuHeight
+      : trigger.bottom + CUSTOM_SELECT_MENU_GAP;
   const minTop = CUSTOM_SELECT_VIEWPORT_PADDING;
   const maxTop = Math.max(minTop, viewport.height - menuHeight - CUSTOM_SELECT_VIEWPORT_PADDING);
   top = Math.min(Math.max(minTop, top), maxTop);
@@ -88,4 +89,3 @@ export function eventTargetBelongsToSelectIn(
     (element) => element.getAttribute("aria-controls") === listbox.id,
   );
 }
-

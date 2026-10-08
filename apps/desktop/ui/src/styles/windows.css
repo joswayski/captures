@@ -510,10 +510,22 @@
   cursor: pointer;
 }
 
-.mini-preview-placement-top_left { justify-self: start; align-self: start; }
-.mini-preview-placement-top_right { justify-self: end; align-self: start; }
-.mini-preview-placement-bottom_left { justify-self: start; align-self: end; }
-.mini-preview-placement-bottom_right { justify-self: end; align-self: end; }
+.mini-preview-placement-top_left {
+  justify-self: start;
+  align-self: start;
+}
+.mini-preview-placement-top_right {
+  justify-self: end;
+  align-self: start;
+}
+.mini-preview-placement-bottom_left {
+  justify-self: start;
+  align-self: end;
+}
+.mini-preview-placement-bottom_right {
+  justify-self: end;
+  align-self: end;
+}
 
 .mini-preview-placement-corner:hover:not(:disabled):not(.active) {
   border-color: var(--theme-accent);
@@ -1847,7 +1859,11 @@
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
   background-size: 16px 16px;
 }
 
@@ -3003,7 +3019,11 @@ html[data-preview-harness-view="recording-saved"] #root {
     linear-gradient(-45deg, var(--canvas-checker-a) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, var(--canvas-checker-a) 75%),
     linear-gradient(-45deg, transparent 75%, var(--canvas-checker-a) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
   background-size: 16px 16px;
 }
 
@@ -3068,13 +3088,12 @@ html[data-preview-harness-view="recording-saved"] #root {
   position: absolute;
   inset: 0;
   z-index: 2;
-  background:
-    radial-gradient(
-      ellipse at center,
-      var(--glass-veil-soft) 0%,
-      var(--glass-veil) 62%,
-      var(--glass-veil-heavy) 100%
-    );
+  background: radial-gradient(
+    ellipse at center,
+    var(--glass-veil-soft) 0%,
+    var(--glass-veil) 62%,
+    var(--glass-veil-heavy) 100%
+  );
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-2) var(--ease-standard);
@@ -3117,7 +3136,8 @@ html[data-preview-harness-view="recording-saved"] #root {
   animation: preferences-status-spin 0.72s linear infinite;
 }
 
-.compression-preview-frame[data-pending="true"]:not(.is-waiting):not(.is-processing) .compression-preview-veil {
+.compression-preview-frame[data-pending="true"]:not(.is-waiting):not(.is-processing)
+  .compression-preview-veil {
   opacity: 1;
 }
 

@@ -65,9 +65,15 @@ describe("color themes", () => {
       signal: "#000000",
     });
 
-    expect(contrast(variables["--theme-accent"], variables["--theme-accent-ink"])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(variables["--theme-accent-hover"], variables["--theme-accent-ink"])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(variables["--theme-signal"], variables["--theme-signal-ink"])).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(variables["--theme-accent"], variables["--theme-accent-ink"]),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(variables["--theme-accent-hover"], variables["--theme-accent-ink"]),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(variables["--theme-signal"], variables["--theme-signal-ink"]),
+    ).toBeGreaterThanOrEqual(4.5);
 
     applyColorTheme("custom", {
       accent: "#ffffff",
@@ -85,8 +91,12 @@ describe("color themes", () => {
       signal: "#777777",
     });
 
-    expect(contrast(variables["--theme-accent"], variables["--theme-accent-ink"])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(variables["--theme-signal"], variables["--theme-signal-ink"])).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(variables["--theme-accent"], variables["--theme-accent-ink"]),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(variables["--theme-signal"], variables["--theme-signal-ink"]),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });
 
@@ -96,11 +106,9 @@ function contrast(first: string, second: string): number {
 }
 
 function luminance(hex: string): number {
-  const channels = [1, 3, 5].map(
-    (index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255,
+  const channels = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255);
+  const linear = channels.map((channel) =>
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
   );
-  const linear = channels.map((channel) => (
-    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
-  ));
-  return (0.2126 * linear[0]) + (0.7152 * linear[1]) + (0.0722 * linear[2]);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
 }

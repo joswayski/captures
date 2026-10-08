@@ -68,31 +68,35 @@ test("published asset lookup ignores drafts and keeps unique download URLs", () 
     [
       {
         draft: true,
-        assets: [{
-          name: "ffmpeg-8.1.2.tar.xz",
-          browser_download_url: "https://example.test/draft.tar.xz",
-        }],
+        assets: [
+          {
+            name: "ffmpeg-8.1.2.tar.xz",
+            browser_download_url: "https://example.test/draft.tar.xz",
+          },
+        ],
       },
       {
         draft: false,
-        assets: [{
-          name: "ffmpeg-8.1.2.tar.xz",
-          browser_download_url: "https://example.test/v1/ffmpeg-8.1.2.tar.xz",
-        }],
+        assets: [
+          {
+            name: "ffmpeg-8.1.2.tar.xz",
+            browser_download_url: "https://example.test/v1/ffmpeg-8.1.2.tar.xz",
+          },
+        ],
       },
       {
         prerelease: true,
-        assets: [{
-          name: "ffmpeg-8.1.2.tar.xz",
-          browser_download_url: "https://example.test/v1/ffmpeg-8.1.2.tar.xz",
-        }],
+        assets: [
+          {
+            name: "ffmpeg-8.1.2.tar.xz",
+            browser_download_url: "https://example.test/v1/ffmpeg-8.1.2.tar.xz",
+          },
+        ],
       },
     ],
     ["ffmpeg-8.1.2.tar.xz"],
   );
-  assert.deepEqual(urls["ffmpeg-8.1.2.tar.xz"], [
-    "https://example.test/v1/ffmpeg-8.1.2.tar.xz",
-  ]);
+  assert.deepEqual(urls["ffmpeg-8.1.2.tar.xz"], ["https://example.test/v1/ffmpeg-8.1.2.tar.xz"]);
 });
 
 test("download helper fails over after a timeout and verifies the pinned checksum", async () => {
@@ -104,7 +108,9 @@ test("download helper fails over after a timeout and verifies the pinned checksu
   const fetchImpl = async (url) => {
     calls.push(String(url));
     if (String(url).includes("ffmpeg.org")) {
-      throw new Error("Failed to connect to ffmpeg.org port 443 after 20000 ms: Timeout was reached");
+      throw new Error(
+        "Failed to connect to ffmpeg.org port 443 after 20000 ms: Timeout was reached",
+      );
     }
     return okBody(body);
   };
@@ -165,18 +171,22 @@ test("ensurePinnedFfmpegSource prefers GitHub copies on Actions when ffmpeg.org 
     const target = String(url);
     calls.push(target);
     if (target.includes("/repos/") && target.includes("/releases")) {
-      return okBody(JSON.stringify([
-        {
-          draft: false,
-          assets: [
-            { name: pin.archiveName, browser_download_url: githubArchive },
-            { name: pin.signatureName, browser_download_url: githubSignature },
-          ],
-        },
-      ]));
+      return okBody(
+        JSON.stringify([
+          {
+            draft: false,
+            assets: [
+              { name: pin.archiveName, browser_download_url: githubArchive },
+              { name: pin.signatureName, browser_download_url: githubSignature },
+            ],
+          },
+        ]),
+      );
     }
     if (target.includes("ffmpeg.org")) {
-      throw new Error("Failed to connect to ffmpeg.org port 443 after 20000 ms: Timeout was reached");
+      throw new Error(
+        "Failed to connect to ffmpeg.org port 443 after 20000 ms: Timeout was reached",
+      );
     }
     return okBody(target.endsWith(".asc") ? signature : archive);
   };
@@ -194,7 +204,10 @@ test("ensurePinnedFfmpegSource prefers GitHub copies on Actions when ffmpeg.org 
 
   assert.equal(readFileSync(result.paths.archive, "utf8"), archive);
   assert.equal(readFileSync(result.paths.signature, "utf8"), signature);
-  assert.equal(calls[0], `https://api.github.com/repos/${DEFAULT_REPOSITORY}/releases?per_page=100`);
+  assert.equal(
+    calls[0],
+    `https://api.github.com/repos/${DEFAULT_REPOSITORY}/releases?per_page=100`,
+  );
   assert.equal(calls[1], githubArchive);
   assert.ok(!calls.some((url) => url.includes("ffmpeg.org")));
   rmSync(workspace, { recursive: true, force: true });
@@ -211,8 +224,5 @@ test("sidecar packaging downloads with fallbacks after cache restore", () => {
   const validate = action.indexOf("run: bash scripts/build-ffmpeg-sidecars.sh");
   const save = action.indexOf("uses: actions/cache/save@v4");
   assert.ok(restore > 0 && restore < download && download < validate && validate < save);
-  assert.match(
-    workflow,
-    /sparse-checkout:[\s\S]*?scripts\/download-ffmpeg-source\.mjs/u,
-  );
+  assert.match(workflow, /sparse-checkout:[\s\S]*?scripts\/download-ffmpeg-source\.mjs/u);
 });

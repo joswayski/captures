@@ -67,10 +67,10 @@ export function hitTestImageElement(
     if (!element.visible || element.kind !== "image") continue;
     const localPoint = elementLocalPoint(element, point);
     if (
-      localPoint.x >= element.x
-      && localPoint.x < element.x + element.width
-      && localPoint.y >= element.y
-      && localPoint.y < element.y + element.height
+      localPoint.x >= element.x &&
+      localPoint.x < element.x + element.width &&
+      localPoint.y >= element.y &&
+      localPoint.y < element.y + element.height
     ) {
       return element;
     }
@@ -90,12 +90,7 @@ export function documentPointToImagePixel(
   const localPoint = elementLocalPoint(element, point);
   const localX = localPoint.x - element.x;
   const localY = localPoint.y - element.y;
-  if (
-    localX < 0
-    || localY < 0
-    || localX >= element.width
-    || localY >= element.height
-  ) {
+  if (localX < 0 || localY < 0 || localX >= element.width || localY >= element.height) {
     return null;
   }
   const matrix = imageOrientationMatrix(element.orientation);
@@ -191,14 +186,8 @@ export function sampleImagePixel(
   y: number,
   scratch?: HTMLCanvasElement,
 ): Rgba | null {
-  const width = Math.max(
-    1,
-    Math.round(image.naturalWidth ?? (image as HTMLImageElement).width),
-  );
-  const height = Math.max(
-    1,
-    Math.round(image.naturalHeight ?? (image as HTMLImageElement).height),
-  );
+  const width = Math.max(1, Math.round(image.naturalWidth ?? (image as HTMLImageElement).width));
+  const height = Math.max(1, Math.round(image.naturalHeight ?? (image as HTMLImageElement).height));
   if (x < 0 || y < 0 || x >= width || y >= height) return null;
 
   const canvas = scratch ?? document.createElement("canvas");
@@ -269,14 +258,8 @@ export function paintWandColorLoupe(
   const dpr = Math.max(1, options?.devicePixelRatio ?? 1);
   const oddExtent = Math.max(1, sampleExtent | 1); // force odd so a true center pixel exists
   const half = Math.floor(oddExtent / 2);
-  const width = Math.max(
-    1,
-    Math.round(image.naturalWidth ?? (image as HTMLImageElement).width),
-  );
-  const height = Math.max(
-    1,
-    Math.round(image.naturalHeight ?? (image as HTMLImageElement).height),
-  );
+  const width = Math.max(1, Math.round(image.naturalWidth ?? (image as HTMLImageElement).width));
+  const height = Math.max(1, Math.round(image.naturalHeight ?? (image as HTMLImageElement).height));
 
   const pixelSize = Math.max(1, Math.round(sizePx * dpr));
   if (target.width !== pixelSize) target.width = pixelSize;
@@ -291,7 +274,7 @@ export function paintWandColorLoupe(
   const check = 6;
   for (let row = 0; row < sizePx; row += check) {
     for (let col = 0; col < sizePx; col += check) {
-      const dark = ((row / check) + (col / check)) % 2 === 0;
+      const dark = (row / check + col / check) % 2 === 0;
       context.fillStyle = dark ? "#c4c4c8" : "#ececee";
       context.fillRect(col, row, check, check);
     }
@@ -303,17 +286,7 @@ export function paintWandColorLoupe(
 
   context.imageSmoothingEnabled = false;
   try {
-    context.drawImage(
-      image,
-      srcX,
-      srcY,
-      oddExtent,
-      oddExtent,
-      0,
-      0,
-      sizePx,
-      sizePx,
-    );
+    context.drawImage(image, srcX, srcY, oddExtent, oddExtent, 0, 0, sizePx, sizePx);
   } catch {
     return false;
   }
@@ -357,10 +330,12 @@ export function wandLoupeScreenPosition(
 ): { left: number; top: number } {
   const sizePx = options?.sizePx ?? WAND_LOUPE_SIZE_PX;
   const offsetPx = options?.offsetPx ?? WAND_LOUPE_OFFSET_PX;
-  const viewportWidth = options?.viewportWidth
-    ?? (typeof window !== "undefined" ? window.innerWidth : clientX + sizePx + offsetPx);
-  const viewportHeight = options?.viewportHeight
-    ?? (typeof window !== "undefined" ? window.innerHeight : clientY + sizePx + offsetPx);
+  const viewportWidth =
+    options?.viewportWidth ??
+    (typeof window !== "undefined" ? window.innerWidth : clientX + sizePx + offsetPx);
+  const viewportHeight =
+    options?.viewportHeight ??
+    (typeof window !== "undefined" ? window.innerHeight : clientY + sizePx + offsetPx);
   const margin = 8;
 
   let left = clientX + offsetPx;
@@ -378,11 +353,7 @@ export function wandLoupeScreenPosition(
 
 /** Chebyshev distance on RGB channels (classic magic-wand style). */
 export function colorDistanceRgb(a: Rgba, b: Rgba): number {
-  return Math.max(
-    Math.abs(a.r - b.r),
-    Math.abs(a.g - b.g),
-    Math.abs(a.b - b.b),
-  );
+  return Math.max(Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b));
 }
 
 function pixelMatches(
@@ -500,9 +471,9 @@ export function stampRemoveBackgroundBrush(
   if (radius <= 0) return 0;
   if (mode === "restore" && !original) return 0;
   if (
-    mode === "restore"
-    && original
-    && (original.width !== working.width || original.height !== working.height)
+    mode === "restore" &&
+    original &&
+    (original.width !== working.width || original.height !== working.height)
   ) {
     return 0;
   }
@@ -553,10 +524,10 @@ export function stampRemoveBackgroundBrush(
         const afterB = Math.round(data[index + 2] + (src[index + 2] - data[index + 2]) * strength);
         const afterA = Math.round(data[index + 3] + (src[index + 3] - data[index + 3]) * strength);
         if (
-          afterR === data[index]
-          && afterG === data[index + 1]
-          && afterB === data[index + 2]
-          && afterA === data[index + 3]
+          afterR === data[index] &&
+          afterG === data[index + 1] &&
+          afterB === data[index + 2] &&
+          afterA === data[index + 3]
         ) {
           continue;
         }
@@ -589,15 +560,7 @@ export function strokeRemoveBackgroundBrush(
   const distance = Math.hypot(dx, dy);
   const step = Math.max(0.5, radius * 0.35);
   if (distance < 0.001) {
-    return stampRemoveBackgroundBrush(
-      working,
-      toX,
-      toY,
-      radius,
-      mode,
-      original,
-      hardness,
-    );
+    return stampRemoveBackgroundBrush(working, toX, toY, radius, mode, original, hardness);
   }
   let changed = 0;
   const steps = Math.max(1, Math.ceil(distance / step));
@@ -617,20 +580,16 @@ export function strokeRemoveBackgroundBrush(
 }
 
 /** Rasterize an HTML image into a full-resolution ImageData buffer. */
-export function imageToImageData(image: CanvasImageSource & {
-  naturalWidth?: number;
-  naturalHeight?: number;
-  width: number;
-  height: number;
-}): ImageData {
-  const width = Math.max(
-    1,
-    Math.round(image.naturalWidth ?? (image as HTMLImageElement).width),
-  );
-  const height = Math.max(
-    1,
-    Math.round(image.naturalHeight ?? (image as HTMLImageElement).height),
-  );
+export function imageToImageData(
+  image: CanvasImageSource & {
+    naturalWidth?: number;
+    naturalHeight?: number;
+    width: number;
+    height: number;
+  },
+): ImageData {
+  const width = Math.max(1, Math.round(image.naturalWidth ?? (image as HTMLImageElement).width));
+  const height = Math.max(1, Math.round(image.naturalHeight ?? (image as HTMLImageElement).height));
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -643,9 +602,7 @@ export function imageToImageData(image: CanvasImageSource & {
   try {
     return context.getImageData(0, 0, width, height);
   } catch {
-    throw new Error(
-      "This image cannot be edited with the eraser (protected or still loading).",
-    );
+    throw new Error("This image cannot be edited with the eraser (protected or still loading).");
   }
 }
 

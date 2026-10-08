@@ -149,14 +149,17 @@ export function CompressionPreview({
   splitDragEnabled = true,
   className = "",
 }: CompressionPreviewProps) {
-  const [split, setSplitState] = useState(() => (
-    Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, initialSplit))
-  ));
-  const setSplit = useCallback((value: number) => {
-    const next = Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, value));
-    setSplitState(next);
-    onSplitChange?.(next);
-  }, [onSplitChange]);
+  const [split, setSplitState] = useState(() =>
+    Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, initialSplit)),
+  );
+  const setSplit = useCallback(
+    (value: number) => {
+      const next = Math.min(MAX_SPLIT_PERCENT, Math.max(MIN_SPLIT_PERCENT, value));
+      setSplitState(next);
+      onSplitChange?.(next);
+    },
+    [onSplitChange],
+  );
 
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
   const [afterHintPos, setAfterHintPos] = useState<{ x: number; y: number } | null>(null);
@@ -167,10 +170,11 @@ export function CompressionPreview({
   useLayoutEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
-    const update = () => setFrameSize({
-      width: frame.clientWidth,
-      height: frame.clientHeight,
-    });
+    const update = () =>
+      setFrameSize({
+        width: frame.clientWidth,
+        height: frame.clientHeight,
+      });
     if (typeof ResizeObserver === "undefined") {
       queueMicrotask(update);
       return;
@@ -187,10 +191,10 @@ export function CompressionPreview({
       if (!frame) return;
       const bounds = frame.getBoundingClientRect();
       if (
-        clientX < bounds.left
-        || clientX > bounds.right
-        || clientY < bounds.top
-        || clientY > bounds.bottom
+        clientX < bounds.left ||
+        clientX > bounds.right ||
+        clientY < bounds.top ||
+        clientY > bounds.bottom
       ) {
         setAfterHintPos(null);
         return;
@@ -201,14 +205,16 @@ export function CompressionPreview({
         return;
       }
       const hint = afterHintRef.current;
-      setAfterHintPos(compressionAfterHintPosition(
-        clientX - bounds.left,
-        clientY - bounds.top,
-        bounds.width,
-        bounds.height,
-        hint?.offsetWidth || AFTER_HINT_FALLBACK_WIDTH,
-        hint?.offsetHeight || AFTER_HINT_FALLBACK_HEIGHT,
-      ));
+      setAfterHintPos(
+        compressionAfterHintPosition(
+          clientX - bounds.left,
+          clientY - bounds.top,
+          bounds.width,
+          bounds.height,
+          hint?.offsetWidth || AFTER_HINT_FALLBACK_WIDTH,
+          hint?.offsetHeight || AFTER_HINT_FALLBACK_HEIGHT,
+        ),
+      );
     };
     const onPointerMove = (event: PointerEvent) => {
       updateHint(event.clientX, event.clientY);
@@ -228,35 +234,40 @@ export function CompressionPreview({
   const canDragHandle = !processing;
   const canDragRange = splitDragEnabled && canDragHandle;
 
-  const setSplitFromClientX = useCallback((clientX: number) => {
-    const frame = frameRef.current;
-    if (!frame) return;
-    const bounds = frame.getBoundingClientRect();
-    const next = ((clientX - bounds.left) / Math.max(1, bounds.width)) * 100;
-    setSplit(next);
-  }, [setSplit]);
+  const setSplitFromClientX = useCallback(
+    (clientX: number) => {
+      const frame = frameRef.current;
+      if (!frame) return;
+      const bounds = frame.getBoundingClientRect();
+      const next = ((clientX - bounds.left) / Math.max(1, bounds.width)) * 100;
+      setSplit(next);
+    },
+    [setSplit],
+  );
 
-  const beginSplitDrag = useCallback((clientX: number) => {
-    if (!canDragHandle) return;
-    draggingRef.current = true;
-    setSplitFromClientX(clientX);
-  }, [canDragHandle, setSplitFromClientX]);
+  const beginSplitDrag = useCallback(
+    (clientX: number) => {
+      if (!canDragHandle) return;
+      draggingRef.current = true;
+      setSplitFromClientX(clientX);
+    },
+    [canDragHandle, setSplitFromClientX],
+  );
 
-  const savings = beforeBytes !== null
-    && afterBytes !== null
-    && beforeBytes > 0
-    && afterBytes < beforeBytes
-    ? Math.round((1 - afterBytes / beforeBytes) * 100)
-    : null;
+  const savings =
+    beforeBytes !== null && afterBytes !== null && beforeBytes > 0 && afterBytes < beforeBytes
+      ? Math.round((1 - afterBytes / beforeBytes) * 100)
+      : null;
 
   const showAfter = Boolean(afterUrl);
   const showBeforeImage = Boolean(beforeUrl) && !liveBefore;
   const showSplit = showAfter && (liveBefore || showBeforeImage);
   const waiting = !showAfter && !showBeforeImage;
-  const embedded = liveBefore
-    || className.includes("is-embed")
-    || className.includes("is-cover")
-    || className.includes("is-live");
+  const embedded =
+    liveBefore ||
+    className.includes("is-embed") ||
+    className.includes("is-cover") ||
+    className.includes("is-live");
   const { width: frameWidth, height: frameHeight } = frameSize;
   const showAfterHint = Boolean(afterHint && afterHintPos && !suppressed && showSplit);
 
@@ -271,17 +282,17 @@ export function CompressionPreview({
         canDragRange ? "" : "is-draw-locked",
         processing ? "is-processing" : "",
         className,
-      ].filter(Boolean).join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
       data-pending={pending ? "true" : undefined}
       role="group"
       aria-label="Compression comparison"
     >
       {liveBefore ? (
-        showAfter && afterUrl && (
-          <div
-            className="compression-preview-after-clip"
-            style={{ left: `${split}%` }}
-          >
+        showAfter &&
+        afterUrl && (
+          <div className="compression-preview-after-clip" style={{ left: `${split}%` }}>
             <LiveAfterCanvas
               url={afterUrl}
               frameWidth={frameWidth}
@@ -310,10 +321,7 @@ export function CompressionPreview({
             <div className="compression-preview-empty">Preparing preview…</div>
           ) : null}
           {showBeforeImage && (
-            <div
-              className="compression-preview-before-clip"
-              style={{ width: `${split}%` }}
-            >
+            <div className="compression-preview-before-clip" style={{ width: `${split}%` }}>
               <img
                 className="compression-preview-image compression-preview-before"
                 src={beforeUrl ?? undefined}
@@ -328,10 +336,7 @@ export function CompressionPreview({
       <div className="compression-preview-veil" aria-hidden="true" />
       {showSplit && (
         <>
-          <div
-            className="compression-preview-divider"
-            style={{ left: `${split}%` }}
-          >
+          <div className="compression-preview-divider" style={{ left: `${split}%` }}>
             <button
               type="button"
               className="compression-preview-handle"
@@ -383,13 +388,13 @@ export function CompressionPreview({
         {processing
           ? " · Processing…"
           : afterBytes !== null && (
-            <>
-              {` · ${formatFileSize(afterBytes)}`}
-              {savings !== null && (
-                <span className="compression-preview-savings"> · {savings}% smaller</span>
-              )}
-            </>
-          )}
+              <>
+                {` · ${formatFileSize(afterBytes)}`}
+                {savings !== null && (
+                  <span className="compression-preview-savings"> · {savings}% smaller</span>
+                )}
+              </>
+            )}
       </span>
       {onDismiss && (
         <button

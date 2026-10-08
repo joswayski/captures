@@ -75,7 +75,9 @@ function stepFrom(
   const current = parseCurrent(value);
   const base = Number.isFinite(current)
     ? current
-    : (min !== undefined && Number.isFinite(min) ? min : 0);
+    : min !== undefined && Number.isFinite(min)
+      ? min
+      : 0;
   const places = decimalPlaces(step);
   const raw = base + step * direction;
   const rounded = places === 0 ? Math.round(raw) : Number(raw.toFixed(places));
@@ -107,51 +109,66 @@ export function NumberInput({
   const showSteppers = !hideSteppers && !readOnly && !disabled;
   const canEdit = !disabled && !readOnly;
 
-  const emitValue = useCallback((next: number) => {
-    if (onTextChange || onCommit) {
-      const text = formatStepped(next, step);
-      onTextChange?.(text);
-      onCommit?.(text);
-      return;
-    }
-    onChange?.(next);
-  }, [onChange, onCommit, onTextChange, step]);
+  const emitValue = useCallback(
+    (next: number) => {
+      if (onTextChange || onCommit) {
+        const text = formatStepped(next, step);
+        onTextChange?.(text);
+        onCommit?.(text);
+        return;
+      }
+      onChange?.(next);
+    },
+    [onChange, onCommit, onTextChange, step],
+  );
 
-  const handleInput = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    if (!canEdit) return;
-    if (onTextChange) {
-      onTextChange(event.target.value);
-      return;
-    }
-    onChange?.(Number(event.target.value));
-  }, [canEdit, onChange, onTextChange]);
+  const handleInput = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      if (!canEdit) return;
+      if (onTextChange) {
+        onTextChange(event.target.value);
+        return;
+      }
+      onChange?.(Number(event.target.value));
+    },
+    [canEdit, onChange, onTextChange],
+  );
 
-  const nudge = useCallback((direction: 1 | -1) => {
-    if (!canEdit) return;
-    emitValue(stepFrom(value, step, direction, min, max));
-  }, [canEdit, emitValue, max, min, step, value]);
+  const nudge = useCallback(
+    (direction: 1 | -1) => {
+      if (!canEdit) return;
+      emitValue(stepFrom(value, step, direction, min, max));
+    },
+    [canEdit, emitValue, max, min, step, value],
+  );
 
-  const handleBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
-    if (!canEdit) return;
-    onCommit?.(event.currentTarget.value);
-  }, [canEdit, onCommit]);
+  const handleBlur = useCallback(
+    (event: FocusEvent<HTMLInputElement>) => {
+      if (!canEdit) return;
+      onCommit?.(event.currentTarget.value);
+    },
+    [canEdit, onCommit],
+  );
 
-  const handleKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
-    if (!canEdit) return;
-    if (event.key === "Enter" && onCommit) {
-      event.preventDefault();
-      onCommit(event.currentTarget.value);
-      return;
-    }
-    if (!showSteppers) return;
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      nudge(1);
-    } else if (event.key === "ArrowDown") {
-      event.preventDefault();
-      nudge(-1);
-    }
-  }, [canEdit, nudge, onCommit, showSteppers]);
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (!canEdit) return;
+      if (event.key === "Enter" && onCommit) {
+        event.preventDefault();
+        onCommit(event.currentTarget.value);
+        return;
+      }
+      if (!showSteppers) return;
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        nudge(1);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        nudge(-1);
+      }
+    },
+    [canEdit, nudge, onCommit, showSteppers],
+  );
 
   const current = parseCurrent(value);
   const atMin = min !== undefined && Number.isFinite(current) && current <= min;
@@ -166,7 +183,9 @@ export function NumberInput({
         disabled ? "is-disabled" : "",
         readOnly ? "is-readonly" : "",
         className,
-      ].filter(Boolean).join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
       <input
         id={inputId}

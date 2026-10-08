@@ -38,10 +38,7 @@ export type DragSelectionOptions = {
 export function frontToBackWindows<T extends { z_order: number }>(windows: readonly T[]): T[] {
   return windows
     .map((window, index) => ({ index, window }))
-    .sort((left, right) => (
-      right.window.z_order - left.window.z_order
-      || left.index - right.index
-    ))
+    .sort((left, right) => right.window.z_order - left.window.z_order || left.index - right.index)
     .map(({ window }) => window);
 }
 
@@ -51,13 +48,15 @@ export function frontToBackWindows<T extends { z_order: number }>(windows: reado
  * Overlay coordinates are `(window.x - origin.x) / scale`. Uses half-open
  * edges so neighboring windows don't both claim a shared pixel.
  */
-export function frontmostWindowAtPoint<T extends {
-  z_order: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}>(
+export function frontmostWindowAtPoint<
+  T extends {
+    z_order: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  },
+>(
   windows: readonly T[],
   point: SelectionPoint,
   origin: { x: number; y: number },
@@ -70,12 +69,7 @@ export function frontmostWindowAtPoint<T extends {
     const top = (window.y - origin.y) / safeScale;
     const width = window.width / safeScale;
     const height = window.height / safeScale;
-    if (
-      point.x >= left
-      && point.y >= top
-      && point.x < left + width
-      && point.y < top + height
-    ) {
+    if (point.x >= left && point.y >= top && point.x < left + width && point.y < top + height) {
       return window;
     }
   }
@@ -105,11 +99,11 @@ export function keepReadyWindowTargets<T extends WindowTargetSelection>(
   incoming: T,
 ): T {
   if (
-    previous.id !== incoming.id
-    || previous.snapshot_url !== incoming.snapshot_url
-    || previous.display.id !== incoming.display.id
-    || !windowListingIsReady(previous.windows_ready)
-    || windowListingIsReady(incoming.windows_ready)
+    previous.id !== incoming.id ||
+    previous.snapshot_url !== incoming.snapshot_url ||
+    previous.display.id !== incoming.display.id ||
+    !windowListingIsReady(previous.windows_ready) ||
+    windowListingIsReady(incoming.windows_ready)
   ) {
     return incoming;
   }
@@ -130,13 +124,15 @@ export type CapturePointerHitKind = "window" | "chrome";
  * bar / taskbar does not steal the pointer. Hits on chrome are not window
  * captures; callers treat them as the display.
  */
-export function frontmostCaptureTargetAtPoint<T extends {
-  z_order: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}>(
+export function frontmostCaptureTargetAtPoint<
+  T extends {
+    z_order: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  },
+>(
   windows: readonly T[],
   shellChrome: readonly T[],
   point: SelectionPoint,
@@ -162,14 +158,16 @@ export type WindowPointerHover = {
  * Overlay-space hover for window capture: the frontmost window, shell chrome
  * (treated as the display), or the display itself once listing is ready.
  */
-export function windowPointerHoverAtPoint<T extends {
-  id: string;
-  z_order: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}>(
+export function windowPointerHoverAtPoint<
+  T extends {
+    id: string;
+    z_order: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  },
+>(
   windows: readonly T[],
   shellChrome: readonly T[],
   point: SelectionPoint,
@@ -285,9 +283,7 @@ export function constrainSelectionToAspect(
   return { x, y, width, height };
 }
 
-export function isCapturableSelection(
-  rect: SelectionRect | null,
-): rect is SelectionRect {
+export function isCapturableSelection(rect: SelectionRect | null): rect is SelectionRect {
   return rect !== null && rect.width >= 2 && rect.height >= 2;
 }
 
@@ -296,10 +292,7 @@ export function roundedRectPath(rect: SelectionRect, cornerRadius: number): stri
   const top = rect.y;
   const right = rect.x + rect.width;
   const bottom = rect.y + rect.height;
-  const radius = Math.max(
-    0,
-    Math.min(cornerRadius, rect.width / 2, rect.height / 2),
-  );
+  const radius = Math.max(0, Math.min(cornerRadius, rect.width / 2, rect.height / 2));
   if (radius === 0) {
     return `M${left} ${top}H${right}V${bottom}H${left}Z`;
   }
@@ -377,9 +370,11 @@ export function dragSelectionRect(
   let right = initial.x + initial.width;
   let bottom = initial.y + initial.height;
   if (mode.includes("w")) left = clamp(initial.x + dx, 0, right - minimumSize);
-  if (mode.includes("e")) right = clamp(initial.x + initial.width + dx, left + minimumSize, bounds.width);
+  if (mode.includes("e"))
+    right = clamp(initial.x + initial.width + dx, left + minimumSize, bounds.width);
   if (mode.includes("n")) top = clamp(initial.y + dy, 0, bottom - minimumSize);
-  if (mode.includes("s")) bottom = clamp(initial.y + initial.height + dy, top + minimumSize, bounds.height);
+  if (mode.includes("s"))
+    bottom = clamp(initial.y + initial.height + dy, top + minimumSize, bounds.height);
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
@@ -476,7 +471,13 @@ function resizeCornerWithAspect(
 
   // Keep both axes at least `minimumSize` without breaking the aspect when space allows.
   const min = Math.max(1, minimumSize);
-  if ((width < min || height < min) && maxWidth >= min && maxHeight >= min / aspect && maxHeight >= min && maxWidth >= min * aspect) {
+  if (
+    (width < min || height < min) &&
+    maxWidth >= min &&
+    maxHeight >= min / aspect &&
+    maxHeight >= min &&
+    maxWidth >= min * aspect
+  ) {
     if (aspect >= 1) {
       width = Math.max(min, Math.min(width, maxWidth));
       height = width / aspect;

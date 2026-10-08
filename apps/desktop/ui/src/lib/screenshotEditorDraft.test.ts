@@ -149,11 +149,7 @@ describe("screenshot editor drafts", () => {
     const oversized: number[] = [];
     oversized.length = SCREENSHOT_EDITOR_DRAFT_MAX_TOTAL_BYTES + 1;
     await expect(
-      buildScreenshotEditorDraftPayload(
-        "capture-1",
-        sampleDocument(),
-        async () => oversized,
-      ),
+      buildScreenshotEditorDraftPayload("capture-1", sampleDocument(), async () => oversized),
     ).rejects.toThrow(/too large/i);
   });
 });

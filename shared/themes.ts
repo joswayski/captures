@@ -104,13 +104,14 @@ export function normalizeHexColor(value: unknown): string | null {
   if (/^#[0-9a-f]{6}$/u.test(trimmed)) return trimmed;
   const shorthand = trimmed.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/u);
   if (!shorthand) return null;
-  return `#${shorthand.slice(1).map((channel) => channel.repeat(2)).join("")}`;
+  return `#${shorthand
+    .slice(1)
+    .map((channel) => channel.repeat(2))
+    .join("")}`;
 }
 
 export function normalizeCustomThemeColors(value: unknown): CustomThemeColors {
-  const candidate = value && typeof value === "object"
-    ? value as Partial<CustomThemeColors>
-    : {};
+  const candidate = value && typeof value === "object" ? (value as Partial<CustomThemeColors>) : {};
   return {
     accent: normalizeHexColor(candidate.accent) ?? DEFAULT_CUSTOM_THEME.accent,
     signal: normalizeHexColor(candidate.signal) ?? DEFAULT_CUSTOM_THEME.signal,
@@ -150,7 +151,11 @@ export function buildCustomThemeVariables(colors: CustomThemeColors): Record<str
     "--theme-accent-ink": accentInk,
     "--theme-accent-readable": ensureContrast(custom.accent, WEB_CANVAS, "#000000"),
     "--theme-accent-rgb": rgbChannels(custom.accent),
-    "--theme-accent-text": ensureContrast(mix(custom.accent, LIGHT_INK, 0.38), DARK_SURFACE, LIGHT_INK),
+    "--theme-accent-text": ensureContrast(
+      mix(custom.accent, LIGHT_INK, 0.38),
+      DARK_SURFACE,
+      LIGHT_INK,
+    ),
     "--theme-accent-text-strong": mix(custom.accent, LIGHT_INK, 0.72),
     "--theme-accent-surface": mix(DARK_SURFACE, custom.accent, 0.14),
     "--theme-accent-surface-strong": mix(DARK_SURFACE, custom.accent, 0.22),
@@ -160,7 +165,11 @@ export function buildCustomThemeVariables(colors: CustomThemeColors): Record<str
     "--theme-signal-deep": mix(custom.signal, "#000000", 0.3),
     "--theme-signal-ink": signalInk,
     "--theme-signal-rgb": rgbChannels(custom.signal),
-    "--theme-signal-text": ensureContrast(mix(custom.signal, LIGHT_INK, 0.42), DARK_SURFACE, LIGHT_INK),
+    "--theme-signal-text": ensureContrast(
+      mix(custom.signal, LIGHT_INK, 0.42),
+      DARK_SURFACE,
+      LIGHT_INK,
+    ),
     "--theme-signal-text-strong": mix(custom.signal, LIGHT_INK, 0.64),
     "--theme-signal-surface": mix(DARK_SURFACE, custom.signal, 0.14),
   };
@@ -221,17 +230,15 @@ function luminance(color: string): number {
   const { red, green, blue } = parseHex(color);
   const linear = [red, green, blue].map((channel) => {
     const normalized = channel / 255;
-    return normalized <= 0.03928
-      ? normalized / 12.92
-      : ((normalized + 0.055) / 1.055) ** 2.4;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
   });
-  return (0.2126 * linear[0]) + (0.7152 * linear[1]) + (0.0722 * linear[2]);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
 }
 
 function mix(first: string, second: string, amount: number): string {
   const start = parseHex(first);
   const end = parseHex(second);
-  const channel = (from: number, to: number) => Math.round(from + ((to - from) * amount));
+  const channel = (from: number, to: number) => Math.round(from + (to - from) * amount);
   return toHex({
     red: channel(start.red, end.red),
     green: channel(start.green, end.green),
@@ -254,7 +261,5 @@ function parseHex(color: string): { red: number; green: number; blue: number } {
 }
 
 function toHex({ red, green, blue }: { red: number; green: number; blue: number }): string {
-  return `#${[red, green, blue]
-    .map((channel) => channel.toString(16).padStart(2, "0"))
-    .join("")}`;
+  return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }

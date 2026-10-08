@@ -47,9 +47,7 @@ function solidImageData(
   return { data, width, height, colorSpace: "srgb" } as ImageData;
 }
 
-function imageElement(
-  overrides: Partial<EditorImageElement> = {},
-): EditorImageElement {
+function imageElement(overrides: Partial<EditorImageElement> = {}): EditorImageElement {
   return {
     id: "img-1",
     kind: "image",
@@ -190,10 +188,9 @@ describe("brushStrokeDirtyRect", () => {
 
 describe("colorDistanceRgb", () => {
   it("uses max channel delta", () => {
-    expect(colorDistanceRgb(
-      { r: 10, g: 20, b: 30, a: 255 },
-      { r: 12, g: 0, b: 30, a: 255 },
-    )).toBe(20);
+    expect(colorDistanceRgb({ r: 10, g: 20, b: 30, a: 255 }, { r: 12, g: 0, b: 30, a: 255 })).toBe(
+      20,
+    );
   });
 });
 
@@ -248,15 +245,7 @@ describe("removeColorToTransparent", () => {
 describe("stampRemoveBackgroundBrush", () => {
   it("erases alpha under a hard brush", () => {
     const image = solidImageData(5, 5, [20, 40, 60, 255]);
-    const changed = stampRemoveBackgroundBrush(
-      image,
-      2,
-      2,
-      1.2,
-      "erase",
-      null,
-      1,
-    );
+    const changed = stampRemoveBackgroundBrush(image, 2, 2, 1.2, "erase", null, 1);
     expect(changed).toBeGreaterThan(0);
     expect(samplePixel(image, 2, 2)?.a).toBe(0);
     // Far corner stays opaque.
@@ -278,24 +267,14 @@ describe("stampRemoveBackgroundBrush", () => {
   it("converts softness percent to hardness", () => {
     expect(brushHardnessFromSoftness(0)).toBe(1);
     expect(brushHardnessFromSoftness(100)).toBe(0);
-    expect(brushHardnessFromSoftness(DEFAULT_BRUSH_SOFTNESS))
-      .toBeCloseTo(DEFAULT_BRUSH_HARDNESS);
-    expect(brushSoftnessFromHardness(DEFAULT_BRUSH_HARDNESS))
-      .toBe(DEFAULT_BRUSH_SOFTNESS);
+    expect(brushHardnessFromSoftness(DEFAULT_BRUSH_SOFTNESS)).toBeCloseTo(DEFAULT_BRUSH_HARDNESS);
+    expect(brushSoftnessFromHardness(DEFAULT_BRUSH_HARDNESS)).toBe(DEFAULT_BRUSH_SOFTNESS);
   });
 
   it("restores pixels from the original bitmap", () => {
     const original = solidImageData(3, 3, [10, 20, 30, 255]);
     const working = solidImageData(3, 3, [0, 0, 0, 0]);
-    const changed = stampRemoveBackgroundBrush(
-      working,
-      1,
-      1,
-      2,
-      "restore",
-      original,
-      1,
-    );
+    const changed = stampRemoveBackgroundBrush(working, 1, 1, 2, "restore", original, 1);
     expect(changed).toBeGreaterThan(0);
     expect(samplePixel(working, 1, 1)).toEqual({
       r: 10,
