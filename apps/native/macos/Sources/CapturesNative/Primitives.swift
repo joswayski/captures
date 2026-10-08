@@ -124,6 +124,10 @@ final class ClosurePopUpButton: NSPopUpButton {
     private var listboxMonitor: Any?
     var isListboxOpen: Bool { listbox != nil }
 
+    override var isEnabled: Bool {
+        didSet { if !isEnabled { closeListbox() } }
+    }
+
     @objc func selectedValue() { change?(indexOfSelectedItem) }
 
     func bindChange(_ callback: @escaping (Int) -> Void) {
@@ -158,6 +162,22 @@ final class ClosurePopUpButton: NSPopUpButton {
         performClick(nil); return true
     }
 
+    override func accessibilityPerformShowMenu() -> Bool {
+        guard isEnabled else { return false }
+        if !isListboxOpen { openListbox() }
+        return isListboxOpen
+    }
+
+    override func isAccessibilityExpanded() -> Bool { isListboxOpen }
+
+    override func accessibilityLinkedUIElements() -> [Any]? {
+        listbox.map { [$0] } ?? []
+    }
+
+    override func accessibilityFocusedUIElement() -> Any? {
+        listbox?.accessibilityFocusedUIElement() ?? super.accessibilityFocusedUIElement()
+    }
+
     override func keyDown(with event: NSEvent) {
         let keys: [UInt16: String] = [125: "arrow_down", 126: "arrow_up", 115: "home", 119: "end",
                                       36: "enter", 76: "enter", 49: "space", 53: "escape"]
@@ -189,11 +209,13 @@ final class ClosurePopUpButton: NSPopUpButton {
     /// Select an item as a click in the listbox does, reporting the change.
     func choose(_ index: Int) {
         closeListbox()
-        guard (0..<numberOfItems).contains(index), let option = self.item(at: index), option.isEnabled else { return }
+        guard isEnabled, (0..<numberOfItems).contains(index),
+              let option = self.item(at: index), option.isEnabled else { return }
         // Like the native menu, choosing reports even the current item.
         selectItem(at: index)
         needsDisplay = true
         _ = sendAction(action, to: target)
+        NSAccessibility.post(element: self, notification: .valueChanged)
     }
 
     /// Open shipping's listbox below (or above) the trigger, highlighting
@@ -207,6 +229,8 @@ final class ClosurePopUpButton: NSPopUpButton {
         }
         let list = TokenSelectListView(tokens: tokens, glass: selectStyle == .glass, options: options,
                                        selected: indexOfSelectedItem)
+        list.trigger = self
+        list.setAccessibilityLabel(accessibilityLabel() ?? "Options")
         list.active = active ?? max(0, indexOfSelectedItem)
         list.choose = { [weak self] index in self?.choose(index) }
         let content = list.contentSize(minimumWidth: bounds.width)
@@ -240,6 +264,8 @@ final class ClosurePopUpButton: NSPopUpButton {
         listbox = list; listboxWindow = panel
         list.revealActive()
         needsDisplay = true
+        NSAccessibility.post(element: self, notification: .layoutChanged)
+        list.announceActive()
         // A click elsewhere closes the listbox, like shipping's outside press.
         listboxMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
             [weak self] event in
@@ -260,6 +286,7 @@ final class ClosurePopUpButton: NSPopUpButton {
         panel.orderOut(nil)
         listboxWindow = nil; listbox = nil
         needsDisplay = true
+        NSAccessibility.post(element: self, notification: .layoutChanged)
     }
 
     override func updateTrackingAreas() {
@@ -364,9 +391,17 @@ final class TokenSelectListView: NSView {
     let glass: Bool
     let options: [Option]
     let selected: Int
-    var active = 0 { didSet { if active != oldValue { needsDisplay = true } } }
+    weak var trigger: ClosurePopUpButton?
+    var active = 0 {
+        didSet {
+            if active != oldValue { needsDisplay = true; announceActive() }
+        }
+    }
     var choose: (Int) -> Void = { _ in }
     private var pointerTracking: NSTrackingArea?
+    private lazy var accessibilityOptions = options.indices.map {
+        TokenSelectAccessibilityOption(list: self, index: $0)
+    }
 
     /// 30 pt rows, 46 pt with a description, taller for a preview chip.
     static func rowHeight(_ option: Option) -> CGFloat {
@@ -448,11 +483,25 @@ final class TokenSelectListView: NSView {
     }
 
     override func accessibilityChildren() -> [Any]? {
-        options.indices.map { index in
-            let frame = window?.convertToScreen(convert(rowRect(index), to: nil)) ?? .zero
-            return NSAccessibilityElement.element(withRole: .menuItem, frame: frame,
-                                                  label: options[index].title, parent: self)
-        }
+        accessibilityOptions
+    }
+
+    override func accessibilitySelectedChildren() -> [Any]? {
+        options.indices.contains(selected) ? [accessibilityOptions[selected]] : []
+    }
+
+    override func accessibilityFocusedUIElement() -> Any? {
+        guard options.indices.contains(active), options[active].enabled else { return self }
+        return accessibilityOptions[active]
+    }
+
+    func announceActive() {
+        guard trigger?.listbox === self, options.indices.contains(active), options[active].enabled else { return }
+        NSAccessibility.post(element: accessibilityOptions[active], notification: .focusedUIElementChanged)
+    }
+
+    fileprivate var acceptsAccessibilityActions: Bool {
+        trigger?.isEnabled == true && trigger?.listbox === self
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -508,6 +557,48 @@ final class TokenSelectListView: NSView {
             mark.lineWidth = 1.7; mark.lineCapStyle = .round; mark.lineJoinStyle = .round
             check.withAlphaComponent(alpha).setStroke(); mark.stroke()
         }
+    }
+}
+
+/// Stable, actionable AX rows backed by the same list state as pointer/keys.
+private final class TokenSelectAccessibilityOption: NSAccessibilityElement {
+    private weak var list: TokenSelectListView?
+    private let index: Int
+
+    init(list: TokenSelectListView, index: Int) {
+        self.list = list; self.index = index
+        super.init()
+        setAccessibilityRole(.row)
+        setAccessibilityLabel(list.options[index].title)
+        setAccessibilityHelp(list.options[index].detail)
+    }
+
+    override func accessibilityParent() -> Any? { list }
+
+    override func accessibilityFrame() -> NSRect {
+        guard let list, let window = list.window else { return .zero }
+        return window.convertToScreen(list.convert(list.rowRect(index), to: nil))
+    }
+
+    override func isAccessibilityEnabled() -> Bool {
+        list?.acceptsAccessibilityActions == true && list?.options[index].enabled == true
+    }
+
+    override func isAccessibilitySelected() -> Bool { list?.selected == index }
+
+    override func isAccessibilityFocused() -> Bool {
+        isAccessibilityEnabled() && list?.active == index
+    }
+
+    override func setAccessibilityFocused(_ focused: Bool) {
+        guard focused, isAccessibilityEnabled(), let list else { return }
+        list.active = index; list.revealActive()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isAccessibilityEnabled(), let list else { return false }
+        list.choose(index)
+        return true
     }
 }
 

@@ -10583,6 +10583,25 @@ mod tests {
         assert_eq!(view.selected_layer.as_deref(), Some(id.as_str()));
         assert!(view.layer_gesture.is_none() && rx.try_recv().is_err());
         assert!(!egui::Popup::is_any_open(&ctx));
+        frame(&mut view, vec![arrow.clone()]);
+        assert!(
+            rx.try_recv().is_err(),
+            "after choosing, the focused trigger still owns keyboard input"
+        );
+        let canvas_point = egui::pos2(125., 125.);
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(canvas_point),
+                button(canvas_point, true),
+            ],
+        );
+        frame(&mut view, vec![button(canvas_point, false)]);
+        frame(&mut view, vec![]);
+        assert!(
+            rx.try_recv().is_err(),
+            "a canvas click without movement is not an edit"
+        );
         frame(&mut view, vec![arrow]);
         assert!(
             matches!(
@@ -10592,7 +10611,7 @@ mod tests {
                     ..
                 }))
             ),
-            "with the listbox closed, arrows nudge again"
+            "with the listbox closed and canvas focused, arrows nudge again"
         );
     }
 
