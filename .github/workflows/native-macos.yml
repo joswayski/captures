@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: '0.12.23'
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -243,7 +243,7 @@ jobs:
           name: native-macos-build
           path: native-build
       - uses: ./.github/actions/prepare-media
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: '0.12.23'
       - name: Stage the isolated native test app with pinned media tools
