@@ -14,7 +14,7 @@ pub mod checks;
 mod health;
 mod installation;
 mod staging;
-pub use health::HealthAcknowledgement;
+pub use health::{HealthAcknowledgement, take_restart_preferences};
 pub use installation::{LaunchFailure, PackageUse, PendingInstallation, recover_installation};
 pub use staging::StagedUpdate;
 

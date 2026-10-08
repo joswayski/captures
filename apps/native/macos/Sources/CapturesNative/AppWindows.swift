@@ -63,15 +63,17 @@ enum InteractiveLaunch: Equatable {
     case setup
     /// A quiet (login) launch stays in the menu bar with the launch notice.
     case startupNotice
+    case startupNoticeAndPreferences
     case preferences
 }
 
 /// Shipping `interactive_launch_action`: a launch that opens files goes
 /// straight to their editors and shows none of these windows.
 func interactiveLaunch(onboardingComplete: Bool, launchedQuietly: Bool,
-                       openingFiles: Bool) -> InteractiveLaunch? {
+                       openingFiles: Bool, restorePreferences: Bool = false) -> InteractiveLaunch? {
     if openingFiles { return nil }
     if !onboardingComplete { return .setup }
+    if launchedQuietly && restorePreferences { return .startupNoticeAndPreferences }
     return launchedQuietly ? .startupNotice : .preferences
 }
 

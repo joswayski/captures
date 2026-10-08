@@ -258,6 +258,24 @@ Completing import alone never confirms the replacement: it must pass the same
 exact-token, packaged-tools and live-root health checks as the empty-profile mode.
 An import failure leaves the replacement unconfirmed and does not launch a host.
 
+Optionally add `--restore-preferences true|false` to carry an **operator-supplied**
+Preferences visibility value through the development handoff. A private one-shot
+JSON sidecar is consumed only by the elected primary before choosing its windows.
+For a completed profile, `true` selects the existing ready notice plus Preferences;
+`false` and an empty legacy sidecar select the notice alone. An absent sidecar
+preserves ordinary launch routing. The intent never substitutes for health: a host
+that acknowledges readiness without consuming it cannot confirm replacement.
+Malformed, oversized or linked markers are retained and fail primary startup.
+
+**This is not automatic installed Settings restoration.** There is no native GUI
+successful-update shutdown boundary to snapshot visibility yet. The helper's new
+empty/imported profiles require setup, which takes priority over restoration;
+permission-recovery capture and explicit media-open routing also keep their priority.
+Injected markers with completed isolated profiles exercise the window routing only.
+A future GUI updater must snapshot actual Preferences visibility immediately before
+successful-update shutdown, not focus or the origin of the update click. No installed
+profile, global marker or production update channel is discovered by this protocol.
+
 The helper acquires/stages signed bytes, activates the replacement and launches
 the packaged executable directly. It disables system-shortcut takeover and passes
 only the new history/settings paths. AppKit and wgpu acknowledge only as the elected

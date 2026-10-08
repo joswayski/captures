@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 import subprocess
 import time
+import uuid
 
 from history_fixture import write_completed_settings
 from instance_smoke import png
@@ -16,7 +17,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--notices-only", action="store_true", help="Focused quiet launch/long-shortcut notice checks")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--notices-only", action="store_true", help="Focused quiet launch/long-shortcut notice checks")
+    mode.add_argument("--update-restart-only", action="store_true", help="Injected development restart intent; binary needs packaged media tools")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -74,6 +77,11 @@ def main():
             run("xdpyinfo")
             spawn(["openbox", "--sm-disable"])
             wait(lambda: b"window id" in run("xprop", "-root", "_NET_SUPPORTING_WM_CHECK"), "window manager ready")
+            if args.update_restart_only:
+                update_restart_launch(binary, output, env, spawn, wait, windows, run)
+                (output / "result.json").write_text(json.dumps({"passed": True,
+                    "scope": "Injected development intent on private X11; not an installed update."}, indent=2))
+                return
             if args.notices_only:
                 profile = output / "dark"
                 profile.mkdir()
@@ -244,8 +252,8 @@ PANEL = """<?xml version="1.0" encoding="UTF-8"?>
 </channel>"""
 
 
-def quiet_launch_notice(binary, output, env, spawn, wait, windows, run):
-    """A hidden, tray-resident launch of a completed profile shows the notice for 5 s."""
+def start_tray(output, env, spawn, wait):
+    """Private SNI host lets quiet launches keep their root window hidden."""
     import dbus
 
     config = output / "config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
@@ -266,6 +274,97 @@ def quiet_launch_notice(binary, output, env, spawn, wait, windows, run):
                                 dbus_interface="org.freedesktop.DBus.Properties"))
 
     wait(host_registered, "real SNI tray host")
+    return bus
+
+
+def update_restart_launch(binary, output, env, spawn, wait, windows, run):
+    """Exercise real primary routing with private one-shot health markers."""
+    bus = start_tray(output, env, spawn, wait)
+    for label, appearance, intent, setup in (
+        ("visible-dark", "dark", True, False),
+        ("visible-light", "light", True, False),
+        ("closed", "dark", False, False),
+        ("legacy", "dark", None, False),
+        ("setup", "dark", True, True),
+    ):
+        profile = output / label
+        profile.mkdir()
+        settings = profile / "settings.json"
+        if not setup:
+            write_completed_settings(settings)
+        ready = profile / "ready"
+        ready.write_bytes(b"")
+        marker = ready.with_suffix(".restart.json")
+        marker.write_bytes(b"" if intent is None else json.dumps({"restore_preferences": intent}).encode())
+        token = str(uuid.uuid4())
+        common = [str(binary), "--live", "--history-root", str(profile / "history"),
+                  "--settings-file", str(settings), "--appearance", appearance]
+        app = spawn(common + ["--native-update-ready-file", str(ready), "--native-update-ready-token", token])
+        wait(lambda: ready.read_bytes() == f"{token}\n".encode(), f"{label}: exact live readiness")
+        assert not marker.exists(), "primary did not consume intent"
+        if setup:
+            wait(lambda: windows(app.pid), "setup wins over Preferences restoration")
+            assert not windows(app.pid, "^Captures Preferences$"), "restart bypassed setup"
+            assert not settings.exists(), "restart completed setup"
+        else:
+            notice = wait(lambda: windows(app.pid, "^Captures is running$"), f"{label}: ready notice")[0]
+            wait(lambda: not windows(app.pid, "^Capture History$"), f"{label}: hidden History")
+            if intent:
+                preferences = wait(lambda: windows(app.pid, "^Captures Preferences$"), "restored Preferences")[0]
+                wait(lambda: run("xdotool", "getwindowfocus").decode().strip() == preferences,
+                     "restored Preferences focused; notice stays nonactivating")
+                time.sleep(.6)
+                run("import", "-window", "root", str(output / f"restart-{label}.png"))
+                wait(lambda: not windows(app.pid, "^Captures is running$"), "ready notice expires")
+                assert windows(app.pid, "^Captures Preferences$") == [preferences], "expiry closed Preferences"
+            else:
+                time.sleep(.6)
+                assert not windows(app.pid, "^Captures Preferences$"), "closed/legacy intent restored Preferences"
+                run("import", "-window", notice, str(output / f"restart-{label}.png"))
+        if intent and not setup:
+            run("xdotool", "windowactivate", "--sync", preferences, "windowfocus", "--sync", preferences,
+                "sleep", ".4", "key", "ctrl+q")
+            assert app.wait(timeout=20) == 0
+        else:
+            app.terminate()
+            app.wait(timeout=20)
+        if not setup:
+            again = spawn(common + ["--scene", "idle"])
+            wait(lambda: windows(again.pid, "^Captures is running$"), "ordinary quiet relaunch")
+            time.sleep(.6)
+            assert not windows(again.pid, "^Captures Preferences$"), "restore repeated after consumption"
+            again.terminate()
+            again.wait(timeout=20)
+        print(f"PASS {label}: primary consumption, launch priority, readiness and no repeated restore", flush=True)
+
+    profile = output / "secondary"
+    profile.mkdir()
+    settings = profile / "settings.json"
+    write_completed_settings(settings)
+    common = [str(binary), "--live", "--history-root", str(profile / "history"), "--settings-file", str(settings)]
+    primary = spawn(common)
+    wait(lambda: windows(primary.pid, "^Captures Preferences$"), "primary before secondary")
+    ready = profile / "ready"
+    ready.write_bytes(b"")
+    marker = ready.with_suffix(".restart.json")
+    contents = b'{"restore_preferences":true}'
+    marker.write_bytes(contents)
+    secondary = subprocess.run(common + ["--native-update-ready-file", str(ready),
+                               "--native-update-ready-token", str(uuid.uuid4())], env=env, capture_output=True, timeout=20)
+    assert secondary.returncode == 0, secondary.stderr
+    assert marker.read_bytes() == contents, "secondary consumed primary intent"
+    assert ready.read_bytes() == b"", "secondary acknowledged readiness"
+    preferences = windows(primary.pid, "^Captures Preferences$")[0]
+    run("xdotool", "windowactivate", "--sync", preferences, "windowfocus", "--sync", preferences,
+        "sleep", ".4", "key", "ctrl+q")
+    assert primary.wait(timeout=20) == 0
+    bus.close()
+    print("PASS forwarded secondary: intent and readiness remain untouched", flush=True)
+
+
+def quiet_launch_notice(binary, output, env, spawn, wait, windows, run):
+    """A hidden, tray-resident launch of a completed profile shows the notice for 5 s."""
+    bus = start_tray(output, env, spawn, wait)
     profile = output / "dark"
     app = spawn([str(binary), "--live", "--scene", "idle",
                  "--history-root", str(profile / "history"),

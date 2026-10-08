@@ -16,6 +16,7 @@ struct Options {
     var settingsFile: String?
     var nativeUpdateReadyFile: String?
     var nativeUpdateReadyToken: String?
+    var nativeUpdateRestorePreferences = false
     var nativeUpdateChecks: UpdateCheckModel?
     var screenshot: String?
     /// Workbench update notice fixture (stub status source; no updater).
@@ -123,6 +124,16 @@ struct Options {
             nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(configuration: configuration))
         }
     }
+    /// Only the elected primary calls this, before window/renderer startup.
+    mutating func takeUpdateRestartIntent(transport: SettingsTransport = SettingsBridge()) throws {
+        guard let file = nativeUpdateReadyFile else { return }
+        let reply = try transport.request(["operation": "update_restart_take", "ready_file": file])
+        if let visible = reply["restore_preferences"] as? Bool {
+            scene = "idle"
+            nativeUpdateRestorePreferences = visible
+        }
+    }
+
     enum Usage: Error { case invalid }
 }
 
@@ -144,7 +155,7 @@ struct Options {
             }
             defer { captures_package_use_free_v1(packageUse) }
             let bundled = Bundle.main.object(forInfoDictionaryKey: "CapturesNativeLive") as? Bool == true
-            let options = try Options(Array(CommandLine.arguments.dropFirst()), bundled: bundled)
+            var options = try Options(Array(CommandLine.arguments.dropFirst()), bundled: bundled)
             if bundled {
                 runBundle(options)
                 return
@@ -159,6 +170,7 @@ struct Options {
                 catch { reportDiagnosticsFailure(error) }
             }
             defer { nativeInstance?.close() }
+            try options.takeUpdateRestartIntent()
             let application = NSApplication.shared
             application.setActivationPolicy(options.scene == "idle" ? .accessory : .regular)
             let delegate = Workbench(options: options, nativeInstance: nativeInstance,
@@ -189,9 +201,11 @@ struct Options {
             let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
             guard result.primary else { return false }
             nativeInstance = result.owner
+            var primaryOptions = options
+            try primaryOptions.takeUpdateRestartIntent()
             do { crashDiagnostics = try CrashDiagnostics.start(historyRoot: options.historyRoot) }
             catch { reportDiagnosticsFailure(error) }
-            let delegate = Workbench(options: options, nativeInstance: nativeInstance,
+            let delegate = Workbench(options: primaryOptions, nativeInstance: nativeInstance,
                                      crashDiagnostics: crashDiagnostics)
             workbench = delegate
             application.delegate = delegate

@@ -124,6 +124,8 @@ pub struct Options {
     /// would, instead of shipping's launch Preferences window.
     pub open_history: bool,
     pub native_update_health: Option<captures_app::updater::HealthAcknowledgement>,
+    /// Consumed only after primary election, from the private health sidecar.
+    pub native_update_restore_preferences: bool,
     pub native_update_checks: Option<captures_app::updater::UpdateClient>,
     pub native_update_staging_directory: Option<PathBuf>,
 }
@@ -155,6 +157,7 @@ impl Options {
             open_preferences: false,
             open_history: false,
             native_update_health: None,
+            native_update_restore_preferences: false,
             native_update_checks: None,
             native_update_staging_directory: None,
         };

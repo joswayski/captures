@@ -5,7 +5,7 @@ use captures_app::updater::{Renderer, Target, UpdateClient, recover_installation
 use captures_media::CancelToken;
 use serde_json::json;
 
-const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
+const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1)) {
@@ -49,6 +49,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let mut source_settings = None;
     let mut source_data = None;
     let mut stopped = false;
+    let mut restore_preferences = None;
     let mut timeout = Duration::from_secs(60);
     while let Some(argument) = arguments.next() {
         if argument == "--all-app-processes-stopped" {
@@ -80,6 +81,9 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
             }
             "--source-data-directory" if source_data.is_none() => {
                 source_data = Some(PathBuf::from(value))
+            }
+            "--restore-preferences" if restore_preferences.is_none() => {
+                restore_preferences = Some(value.parse::<bool>().map_err(|_| USAGE)?);
             }
             "--health-timeout-seconds" => {
                 let seconds: u64 = value.parse().map_err(|_| USAGE)?;
@@ -184,6 +188,10 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let pending = staged
         .replace(&destination, &cancel)
         .map_err(|error| error.to_string())?;
+    let pending = match restore_preferences {
+        Some(visible) => pending.with_restart_preferences(visible),
+        None => pending,
+    };
     let launched = if let Some((settings, data)) = &sources {
         pending.launch_importing(settings, data, &profile, timeout, &cancel)
     } else {
@@ -278,6 +286,20 @@ mod tests {
                 "/new",
                 "--new-development-profile",
                 "/other",
+            ],
+            vec![
+                "--empty-test-profile",
+                "/empty",
+                "--restore-preferences",
+                "1",
+            ],
+            vec![
+                "--empty-test-profile",
+                "/empty",
+                "--restore-preferences",
+                "true",
+                "--restore-preferences",
+                "false",
             ],
             vec!["--all-app-processes-stopped", "--all-app-processes-stopped"],
         ] {

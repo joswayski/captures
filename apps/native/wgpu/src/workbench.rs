@@ -512,12 +512,19 @@ impl Workbench {
             onboarding_complete,
             self.launched_quietly,
             self.launched_with_media,
+            std::mem::take(&mut self.options.native_update_restore_preferences),
         );
         emit(
             "launch",
             json!({"action": launch.map(|launch| format!("{launch:?}")), "openHistory": self.options.open_history}),
         );
-        if launch == Some(app_windows::InteractiveLaunch::Preferences) && !self.options.open_history
+        if matches!(
+            launch,
+            Some(
+                app_windows::InteractiveLaunch::Preferences
+                    | app_windows::InteractiveLaunch::StartupNoticeAndPreferences
+            )
+        ) && !self.options.open_history
         {
             self.preferences.open(ctx);
         }
