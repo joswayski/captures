@@ -28,7 +28,9 @@ png = "0.18"
 tiff = "0.11"
 file-id = "0.2.3"
 flate2 = "1"
+bzip2 = "0.6"
 plist = "1"
+qbsdiff = "1.4.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 resvg = { version = "0.48.1", default-features = false, features = ["text"] }
 roxmltree = "0.21"

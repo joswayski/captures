@@ -19,6 +19,7 @@ fn run() -> Result<(), String> {
     let mut renderer = None;
     let mut download_directory = None;
     let mut stage_directory = None;
+    let mut base_archive = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -37,6 +38,7 @@ fn run() -> Result<(), String> {
             }
             "--download-directory" => download_directory = Some(PathBuf::from(value)),
             "--stage-directory" => stage_directory = Some(PathBuf::from(value)),
+            "--base-archive" if base_archive.is_none() => base_archive = Some(PathBuf::from(value)),
             _ => return Err(format!("Unknown argument {argument}")),
         }
     }
@@ -44,7 +46,7 @@ fn run() -> Result<(), String> {
         return Err("Choose either --download-directory or --stage-directory.".into());
     }
     let stage = stage_directory.is_some();
-    let usage = "usage: native_update_probe --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu [--download-directory EXISTING_DIRECTORY | --stage-directory EXISTING_DIRECTORY]";
+    let usage = "usage: native_update_probe --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu [--download-directory EXISTING_DIRECTORY | --stage-directory EXISTING_DIRECTORY] [--base-archive ABSOLUTE_PATH]";
     let endpoint = endpoint.ok_or(usage)?;
     let public_key =
         fs::read_to_string(public_key.ok_or(usage)?).map_err(|error| error.to_string())?;
@@ -59,6 +61,12 @@ fn run() -> Result<(), String> {
     };
     let client = UpdateClient::new(&endpoint, &public_key, renderer, target, &current_version)
         .map_err(|error| error.to_string())?;
+    let client = match base_archive {
+        Some(path) => client
+            .with_base_archive(path)
+            .map_err(|error| error.to_string())?,
+        None => client,
+    };
     let cancel = CancelToken::default();
     match client.check(&cancel).map_err(|error| error.to_string())? {
         None => println!("{}", json!({"state": "up_to_date", "installed": false})),

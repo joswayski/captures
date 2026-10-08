@@ -25,6 +25,7 @@ struct Configuration {
     renderer: Renderer,
     current_version: String,
     staging_directory: Option<PathBuf>,
+    base_archive: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -64,6 +65,17 @@ pub unsafe extern "C" fn captures_update_checks_create_v1(
             &config.current_version,
         ) else {
             return std::ptr::null_mut();
+        };
+        let client = if let Some(path) = config.base_archive {
+            if config.staging_directory.is_none() {
+                return std::ptr::null_mut();
+            }
+            let Ok(client) = client.with_base_archive(path) else {
+                return std::ptr::null_mut();
+            };
+            client
+        } else {
+            client
         };
         let Ok(worker) = CheckWorker::new(client, Arc::new(|| {}), config.staging_directory) else {
             return std::ptr::null_mut();
@@ -216,6 +228,33 @@ mod tests {
         assert!(
             call(handle, r#"{"operation":"poll"}"#)["result"]["presentation"]["acquisition"]
                 .is_null()
+        );
+        unsafe { captures_update_checks_free_v1(handle) };
+        for (staging, base) in [
+            (false, root.path().join("unread-base")),
+            (true, "relative".into()),
+        ] {
+            let mut invalid = config.clone();
+            invalid["base_archive"] = json!(base);
+            if staging {
+                invalid["staging_directory"] = json!(root.path());
+            }
+            let input = CString::new(invalid.to_string()).unwrap();
+            assert!(unsafe { captures_update_checks_create_v1(input.as_ptr()) }.is_null());
+        }
+        let mut delta = config.clone();
+        delta["staging_directory"] = json!(root.path());
+        delta["base_archive"] = json!(root.path().join("unread-base"));
+        let input = CString::new(delta.to_string()).unwrap();
+        let handle = unsafe { captures_update_checks_create_v1(input.as_ptr()) };
+        assert!(!handle.is_null());
+        let reply = call(handle, r#"{"operation":"poll"}"#);
+        assert_eq!(reply["result"]["status"]["state"], "idle");
+        assert!(!reply.to_string().contains("unread-base"));
+        assert!(!root.path().join("unread-base").exists());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
         );
         unsafe { captures_update_checks_free_v1(handle) };
         let mut invalid = config;

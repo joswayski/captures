@@ -5,7 +5,7 @@ use captures_app::updater::{Renderer, Target, UpdateClient, recover_installation
 use captures_media::CancelToken;
 use serde_json::json;
 
-const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
+const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false] [--base-archive ABSOLUTE_PATH]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1)) {
@@ -50,6 +50,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let mut source_data = None;
     let mut stopped = false;
     let mut restore_preferences = None;
+    let mut base_archive = None;
     let mut timeout = Duration::from_secs(60);
     while let Some(argument) = arguments.next() {
         if argument == "--all-app-processes-stopped" {
@@ -85,6 +86,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
             "--restore-preferences" if restore_preferences.is_none() => {
                 restore_preferences = Some(value.parse::<bool>().map_err(|_| USAGE)?);
             }
+            "--base-archive" if base_archive.is_none() => base_archive = Some(PathBuf::from(value)),
             "--health-timeout-seconds" => {
                 let seconds: u64 = value.parse().map_err(|_| USAGE)?;
                 if !(1..=120).contains(&seconds) {
@@ -173,6 +175,12 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let key = fs::read_to_string(key).map_err(|error| error.to_string())?;
     let client = UpdateClient::new(&endpoint, &key, renderer, target, &version)
         .map_err(|error| error.to_string())?;
+    let client = match base_archive {
+        Some(path) => client
+            .with_base_archive(path)
+            .map_err(|error| error.to_string())?,
+        None => client,
+    };
     let cancel = CancelToken::default();
     let Some(update) = client.check(&cancel).map_err(|error| error.to_string())? else {
         println!("{}", json!({"state":"up_to_date","replaced":false}));
