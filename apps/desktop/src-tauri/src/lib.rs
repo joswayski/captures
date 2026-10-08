@@ -432,16 +432,20 @@ pub fn run() {
                 }
             };
             refresh_autostart_registration(app);
-            let restarted_after_update = updates::take_update_restart_pending();
+            let update_restart = updates::take_update_restart_pending();
+            let restarted_after_update = update_restart.is_some();
             crash_report::initialize(&handle, restarted_after_update);
             let opening_files = open_media::finish_setup(&handle);
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
                 let launched_quietly = restarted_after_update || launched_from_autostart();
-                if let Some(action) =
-                    interactive_launch_action(onboarding_completed, launched_quietly, opening_files)
-                {
+                if let Some(action) = interactive_launch_action(
+                    onboarding_completed,
+                    launched_quietly,
+                    opening_files,
+                    update_restart.is_some_and(|restart| restart.restore_preferences),
+                ) {
                     #[cfg(target_os = "macos")]
                     if should_defer_macos_open_with_launch(opening_files, launched_quietly) {
                         schedule_macos_open_with_launch(&handle, action);
@@ -504,22 +508,27 @@ fn launched_from_autostart() -> bool {
 enum InteractiveLaunchAction {
     Onboarding,
     StartupNotice,
+    StartupNoticeAndPreferences,
     Preferences,
 }
 
 /// First interactive launch opens Preferences, not a capture overlay.
-/// Autostart and post-update restarts stay in the tray with the startup notice.
+/// Autostart and post-update restarts show the startup notice; updates also
+/// restore Preferences if it was open before restarting.
 /// Opening a file from the OS skips those windows and goes to the matching editor.
 fn interactive_launch_action(
     onboarding_completed: bool,
     launched_quietly: bool,
     opening_files: bool,
+    restore_preferences: bool,
 ) -> Option<InteractiveLaunchAction> {
     if opening_files {
         return None;
     }
     Some(if !onboarding_completed {
         InteractiveLaunchAction::Onboarding
+    } else if launched_quietly && restore_preferences {
+        InteractiveLaunchAction::StartupNoticeAndPreferences
     } else if launched_quietly {
         InteractiveLaunchAction::StartupNotice
     } else {
@@ -532,6 +541,10 @@ fn perform_interactive_launch(app: &AppHandle, action: InteractiveLaunchAction) 
         InteractiveLaunchAction::Onboarding => show_onboarding(app),
         InteractiveLaunchAction::StartupNotice => {
             show_startup_notice(app, STARTUP_NOTICE_AUTOSTART_VISIBLE);
+        }
+        InteractiveLaunchAction::StartupNoticeAndPreferences => {
+            show_startup_notice(app, STARTUP_NOTICE_AUTOSTART_VISIBLE);
+            show_preferences(app);
         }
         InteractiveLaunchAction::Preferences => show_preferences(app),
     }
@@ -9269,22 +9282,40 @@ mod tests {
     #[test]
     fn interactive_launch_opens_preferences_instead_of_a_capture() {
         assert_eq!(
-            interactive_launch_action(false, false, false),
+            interactive_launch_action(false, false, false, false),
             Some(InteractiveLaunchAction::Onboarding)
         );
         assert_eq!(
-            interactive_launch_action(true, true, false),
+            interactive_launch_action(true, true, false, false),
             Some(InteractiveLaunchAction::StartupNotice)
         );
         assert_eq!(
-            interactive_launch_action(true, false, false),
+            interactive_launch_action(true, false, false, false),
             Some(InteractiveLaunchAction::Preferences)
         );
-        assert_eq!(interactive_launch_action(true, false, true), None);
-        assert_eq!(interactive_launch_action(false, false, true), None);
+        assert_eq!(interactive_launch_action(true, false, true, false), None);
+        assert_eq!(interactive_launch_action(false, false, true, false), None);
         assert!(should_defer_macos_open_with_launch(false, false));
         assert!(!should_defer_macos_open_with_launch(true, false));
         assert!(!should_defer_macos_open_with_launch(false, true));
+    }
+
+    #[test]
+    fn update_restart_reopens_preferences_alongside_the_ready_notice() {
+        assert_eq!(
+            interactive_launch_action(true, true, false, true),
+            Some(InteractiveLaunchAction::StartupNoticeAndPreferences)
+        );
+        assert_eq!(
+            interactive_launch_action(true, true, false, false),
+            Some(InteractiveLaunchAction::StartupNotice)
+        );
+        // Setup and explicit file opens keep their existing launch priority.
+        assert_eq!(
+            interactive_launch_action(false, true, false, true),
+            Some(InteractiveLaunchAction::Onboarding)
+        );
+        assert_eq!(interactive_launch_action(true, true, true, true), None);
     }
 
     #[test]
