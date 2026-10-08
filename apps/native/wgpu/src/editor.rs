@@ -773,13 +773,19 @@ impl View {
         self.shape_drag = None;
         self.freehand_points.clear();
         self.brush_points.clear();
-        if let Some(preview) = &mut self.drawing_preview {
+        if self.layer_gesture.is_none()
+            && let Some(preview) = &mut self.drawing_preview
+        {
             preview.cancel();
         }
     }
 
     fn cancel_layer_gesture(&mut self) {
-        self.layer_gesture = None;
+        if self.layer_gesture.take().is_some()
+            && let Some(preview) = &mut self.drawing_preview
+        {
+            preview.cancel();
+        }
     }
 
     fn cancel_edit_gestures(&mut self) {
@@ -3256,6 +3262,17 @@ fn show_layer_canvas(
         height: f64::from(presented.pixels.height()),
     };
     let display_scale = f64::from(preview.width()) / bounds.width;
+    let preview_geometry = |gesture: &LayerGesture| {
+        (
+            gesture.current,
+            match &gesture.kind {
+                LayerGestureKind::Rotate { snap, .. } => *snap,
+                LayerGestureKind::Resize { lock_aspect, .. } => *lock_aspect,
+                _ => false,
+            },
+        )
+    };
+    let previous_geometry = view.layer_gesture.as_ref().map(preview_geometry);
     if view
         .layer_gesture
         .as_ref()
@@ -3547,6 +3564,9 @@ fn show_layer_canvas(
                     let Some(gesture) = view.layer_gesture.take() else {
                         continue;
                     };
+                    if let Some(pixels) = &mut view.drawing_preview {
+                        pixels.cancel();
+                    }
                     let end = image_point(pos, preview, bounds);
                     match gesture.kind {
                         LayerGestureKind::Move {
@@ -3713,6 +3733,86 @@ fn show_layer_canvas(
             view.error = Some(error);
         }
         _ => {}
+    }
+    if first_pass && view.layer_gesture.as_ref().map(preview_geometry) != previous_geometry {
+        let request = view.layer_gesture.as_ref().and_then(|gesture| {
+            let delta_x = gesture.current.x - gesture.start.x;
+            let delta_y = gesture.current.y - gesture.start.y;
+            let moved = (delta_x * display_scale).hypot(delta_y * display_scale) >= 3.;
+            let (id, edit) = match &gesture.kind {
+                LayerGestureKind::Move {
+                    id: Some(id),
+                    display_scale,
+                    ..
+                } if moved => (
+                    id,
+                    LayerEdit::DragMove {
+                        delta_x,
+                        delta_y,
+                        display_scale: *display_scale,
+                    },
+                ),
+                LayerGestureKind::Rotate {
+                    id,
+                    outline,
+                    initial_radians,
+                    snap,
+                } => {
+                    let rotation = preview_rotation(
+                        *outline,
+                        *initial_radians,
+                        gesture.start,
+                        gesture.current,
+                        snap.then_some(view.rotation_snap_degrees),
+                    )?;
+                    if rotation.radians == *initial_radians {
+                        return None;
+                    }
+                    (
+                        id,
+                        LayerEdit::Rotate {
+                            radians: rotation.radians,
+                        },
+                    )
+                }
+                LayerGestureKind::Resize {
+                    id,
+                    handle,
+                    display_scale,
+                    lock_aspect,
+                    ..
+                } if moved => (
+                    id,
+                    LayerEdit::Resize {
+                        handle: *handle,
+                        current: gesture.current,
+                        display_scale: *display_scale,
+                        lock_aspect: *lock_aspect,
+                    },
+                ),
+                LayerGestureKind::Curve { id, handle, .. } if moved => (
+                    id,
+                    LayerEdit::Curve {
+                        edit: captures_app::editor_canvas::CurveEdit::Move {
+                            handle: *handle,
+                            point: gesture.current,
+                        },
+                    },
+                ),
+                _ => return None,
+            };
+            Some(Request::Layer {
+                id: id.clone(),
+                edit,
+            })
+        });
+        if let Some(pixels) = &mut view.drawing_preview {
+            if let Some(request) = request {
+                pixels.request(tx, request);
+            } else {
+                pixels.cancel();
+            }
+        }
     }
     if response.hovered() || view.layer_gesture.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -3955,7 +4055,11 @@ fn show_layer_canvas(
             ..
         }) => {
             if let Some(handles) = canvas::curve_drag_preview(shape, *handle, *current) {
-                canvas::paint_curve_handles(&painter, tokens, &handles, project, true);
+                let approximate = view
+                    .drawing_preview
+                    .as_ref()
+                    .is_none_or(|preview| preview.texture.is_none());
+                canvas::paint_curve_handles(&painter, tokens, &handles, project, approximate);
             }
         }
         None => {
@@ -13622,6 +13726,245 @@ mod tests {
                     frame(&mut view, vec![]);
                     assert_eq!(ctx.memory(|memory| memory.focused()), Some(focus));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_layer_pixels_coalesce_without_mutation_and_reject_release_or_cancel_replies() {
+        for action in ["drag_move", "rotate", "resize", "curve"] {
+            for release in [false, true] {
+                let ctx = egui::Context::default();
+                let (mut view, mut id) = canvas_view(
+                    &ctx,
+                    Point { x: 20., y: 50. },
+                    Point { x: 180., y: 50. },
+                    OpenShapeKind::Line,
+                );
+                if action != "curve" {
+                    let document = Arc::make_mut(&mut view.presented.as_mut().unwrap().document);
+                    document.elements.pop();
+                    id = document
+                        .create_closed_shape(ClosedShapeCreate {
+                            shape: ClosedShapeKind::Rectangle,
+                            start: Point { x: 40., y: 40. },
+                            end: Point { x: 140., y: 90. },
+                            style: ElementStyle::default(),
+                            opacity: 100.,
+                        })
+                        .unwrap();
+                    view.select_layer(Some(id.clone()));
+                }
+                let document = view.presented.as_ref().unwrap().document.clone();
+                view.drawing_preview = Some(drawing_preview::State::new(
+                    ctx.clone(),
+                    egui::ViewportId::ROOT,
+                ));
+                let preview =
+                    egui::Rect::from_min_size(egui::pos2(100., 100.), egui::vec2(100., 50.));
+                let (start, first, last) = match action {
+                    "drag_move" => (
+                        Point { x: 90., y: 65. },
+                        Point { x: 102., y: 72. },
+                        Point { x: 109., y: 75. },
+                    ),
+                    "resize" => (
+                        Point { x: 140., y: 90. },
+                        Point { x: 155., y: 95. },
+                        Point { x: 160., y: 98. },
+                    ),
+                    "curve" => (
+                        Point { x: 100., y: 50. },
+                        Point { x: 100., y: 80. },
+                        Point { x: 110., y: 85. },
+                    ),
+                    _ => {
+                        let element = document.elements.last().unwrap();
+                        let handle = rotation_handle(
+                            element.selection_outline().unwrap(),
+                            0.,
+                            0.5,
+                            200.,
+                            100.,
+                        )
+                        .unwrap();
+                        (
+                            handle.handle,
+                            Point { x: 160., y: 65. },
+                            Point { x: 150., y: 30. },
+                        )
+                    }
+                };
+                let project = |point: Point| {
+                    egui::pos2(100. + point.x as f32 * 0.5, 100. + point.y as f32 * 0.5)
+                };
+                let button = |point, pressed| egui::Event::PointerButton {
+                    pos: project(point),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                let (tx, rx) = mpsc::channel();
+                layer_frame(
+                    &ctx,
+                    &mut view,
+                    &tx,
+                    preview,
+                    true,
+                    egui::Modifiers::NONE,
+                    vec![button(start, true)],
+                );
+                assert!(rx.try_recv().is_err(), "press alone does not render");
+                layer_frame(
+                    &ctx,
+                    &mut view,
+                    &tx,
+                    preview,
+                    true,
+                    egui::Modifiers::NONE,
+                    vec![egui::Event::PointerMoved(project(first))],
+                );
+                let Job::DrawingPreview {
+                    request,
+                    epoch,
+                    reply,
+                } = rx.try_recv().unwrap()
+                else {
+                    panic!("missing {action} pixels")
+                };
+                let Request::Layer { id: layer, edit } = request else {
+                    panic!("expected layer preview")
+                };
+                assert_eq!(layer, id);
+                let first_request = serde_json::to_value(edit).unwrap();
+                assert_eq!(first_request["action"], action);
+                assert!(
+                    !view.pending
+                        && Arc::ptr_eq(&document, &view.presented.as_ref().unwrap().document)
+                );
+                layer_frame(
+                    &ctx,
+                    &mut view,
+                    &tx,
+                    preview,
+                    true,
+                    egui::Modifiers::NONE,
+                    vec![egui::Event::PointerMoved(project(last))],
+                );
+                assert!(
+                    rx.try_recv().is_err(),
+                    "latest value waits behind one render"
+                );
+                let modifiers = if matches!(action, "rotate" | "resize") {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                };
+                // Shift changes geometry without another pointer event and must
+                // replace the pending frame, not keep the unsnapped/aspect-free edit.
+                layer_frame(&ctx, &mut view, &tx, preview, true, modifiers, vec![]);
+                let pixels = Arc::new(RgbaImage::new(200, 100));
+                reply
+                    .send(drawing_preview::Reply {
+                        epoch,
+                        pixels: Ok(pixels.clone()),
+                    })
+                    .unwrap();
+                view.drawing_preview.as_mut().unwrap().receive(&tx);
+                let Job::DrawingPreview {
+                    request,
+                    epoch,
+                    reply,
+                } = rx.try_recv().unwrap()
+                else {
+                    panic!("missing latest preview")
+                };
+                let Request::Layer { id: layer, edit } = request else {
+                    panic!("expected layer preview")
+                };
+                assert_eq!(layer, id);
+                let last_request = serde_json::to_value(edit).unwrap();
+                assert_ne!(first_request, last_request);
+                assert_eq!(last_request["action"], action);
+                if action == "resize" {
+                    assert_eq!(last_request["lock_aspect"], true);
+                } else if action == "rotate" {
+                    // From centre (90,65), the final pointer vector is (60,-35).
+                    // Clockwise angle from up is about 60°, snapped to 60° at 15° stops.
+                    assert!(
+                        (last_request["radians"].as_f64().unwrap() - std::f64::consts::PI / 3.)
+                            .abs()
+                            < 1e-12
+                    );
+                }
+                view.cancel_drawing();
+                assert!(
+                    view.drawing_preview.as_ref().unwrap().texture.is_some(),
+                    "inactive drawing cleanup cannot cancel layer pixels"
+                );
+                layer_frame(&ctx, &mut view, &tx, preview, true, modifiers, vec![]);
+                assert!(
+                    rx.try_recv().is_err(),
+                    "static held geometry does not render repeatedly"
+                );
+                if release {
+                    layer_frame(
+                        &ctx,
+                        &mut view,
+                        &tx,
+                        preview,
+                        true,
+                        modifiers,
+                        vec![egui::Event::PointerButton {
+                            pos: project(last),
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers,
+                        }],
+                    );
+                    let Job::Apply(request) = rx.try_recv().unwrap() else {
+                        panic!("missing release")
+                    };
+                    let Request::Layer { id: layer, edit } = request else {
+                        panic!("expected layer commit")
+                    };
+                    assert_eq!(layer, id);
+                    assert_eq!(serde_json::to_value(edit).unwrap(), last_request);
+                    assert!(view.pending);
+                } else {
+                    layer_frame(
+                        &ctx,
+                        &mut view,
+                        &tx,
+                        preview,
+                        true,
+                        egui::Modifiers::NONE,
+                        vec![egui::Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                    assert!(!view.pending);
+                }
+                assert!(view.layer_gesture.is_none());
+                reply
+                    .send(drawing_preview::Reply {
+                        epoch,
+                        pixels: Ok(pixels),
+                    })
+                    .unwrap();
+                view.drawing_preview.as_mut().unwrap().receive(&tx);
+                assert!(
+                    view.drawing_preview.as_ref().unwrap().texture.is_none(),
+                    "late pixels cannot replace accepted state"
+                );
+                assert!(
+                    rx.try_recv().is_err(),
+                    "no queued work survives the gesture"
+                );
             }
         }
     }

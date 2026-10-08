@@ -112,6 +112,171 @@ fn drawing_preview_renders_shadow_pixels_without_publishing_or_consuming_redo() 
 }
 
 #[test]
+fn layer_gesture_previews_keep_canvas_pixels_history_redo_and_saved_draft_owned() {
+    use captures_app::editor::ResizeHandle;
+    use captures_app::editor_canvas::{CurveEdit, CurveHandle};
+    let data = tempfile::tempdir().unwrap();
+    let source = RgbaImage::from_pixel(64, 48, Rgba([40, 110, 166, 255]));
+    let capture = captures_app::persist_screenshot(
+        &data.path().join("history"),
+        &source,
+        CaptureMode::Region,
+    )
+    .unwrap();
+    let mut editor = open(data.path(), &capture.entry.id).unwrap();
+    editor
+        .execute(
+            serde_json::from_value(json!({"operation":"create_open_shape", "shape":"line",
+        "start":{"x":10,"y":12}, "end":{"x":40,"y":12},
+        "style":{"color":"#123456", "strokeWidth":4}}))
+            .unwrap(),
+        )
+        .unwrap();
+    let id = editor
+        .snapshot()
+        .document
+        .elements
+        .last()
+        .unwrap()
+        .base()
+        .id
+        .clone();
+    editor
+        .execute(Request::SetBackground {
+            color: Some("#d4e5f6".into()),
+        })
+        .unwrap();
+    editor.execute(Request::Undo).unwrap();
+    editor
+        .execute(Request::SaveDraft {
+            updated_at_ms: 1357,
+        })
+        .unwrap();
+    let snapshot = serde_json::to_value(editor.snapshot()).unwrap();
+    let pixels = editor.pixels();
+    let encoded = editor.encode_export(png_export_options()).unwrap();
+    let manifest = data
+        .path()
+        .join("drafts")
+        .join(&capture.entry.id)
+        .join("manifest.json");
+    let draft = fs::read(&manifest).unwrap();
+    assert!(editor.snapshot().can_redo);
+
+    // Independent interior pixels distinguish every transform from the accepted
+    // horizontal stroke. Corner resize maps its centre to (31,20); quarter-turn
+    // rotates it around (25,12); a moved endpoint passes through (25,21).
+    for (edit, point) in [
+        (
+            LayerEdit::DragMove {
+                delta_x: 7.,
+                delta_y: 9.,
+                display_scale: 1.,
+            },
+            (32, 21),
+        ),
+        (
+            LayerEdit::Rotate {
+                radians: std::f64::consts::FRAC_PI_2,
+            },
+            (25, 20),
+        ),
+        (
+            LayerEdit::Resize {
+                handle: ResizeHandle::Se,
+                current: Point { x: 54., y: 30. },
+                display_scale: 1.,
+                lock_aspect: false,
+            },
+            (30, 20),
+        ),
+        (
+            LayerEdit::Curve {
+                edit: CurveEdit::Move {
+                    handle: CurveHandle::Start,
+                    point: Point { x: 10., y: 30. },
+                },
+            },
+            (25, 21),
+        ),
+    ] {
+        let published_pixels = editor.pixels();
+        let frame = editor
+            .preview_drawing(Request::Layer {
+                id: id.clone(),
+                edit: edit.clone(),
+            })
+            .unwrap();
+        assert_eq!(frame.dimensions(), (64, 48));
+        assert_eq!(frame.get_pixel(point.0, point.1).0, [18, 52, 86, 255]);
+        assert_eq!(pixels.get_pixel(point.0, point.1).0, [40, 110, 166, 255]);
+        assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), snapshot);
+        assert!(Arc::ptr_eq(&published_pixels, &editor.pixels()));
+        assert_eq!(editor.encode_export(png_export_options()).unwrap(), encoded);
+        assert_eq!(fs::read(&manifest).unwrap(), draft);
+        // Release remains one normal edit, with no preview steps in Undo.
+        editor
+            .execute(Request::Layer {
+                id: id.clone(),
+                edit,
+            })
+            .unwrap();
+        assert_eq!(*frame, *editor.pixels());
+        editor.execute(Request::Undo).unwrap();
+        assert_eq!(*pixels, *editor.pixels());
+    }
+    // A fully lost layer is clipped during preview, not auto-expanded/rebased.
+    // Repeated previews always start at the published document, not each other.
+    for delta in [-90., 90., -91., 91.] {
+        let published_pixels = editor.pixels();
+        let frame = editor
+            .preview_drawing(Request::Layer {
+                id: id.clone(),
+                edit: LayerEdit::DragMove {
+                    delta_x: delta,
+                    delta_y: 0.,
+                    display_scale: 1.,
+                },
+            })
+            .unwrap();
+        assert_eq!(*frame, source);
+        assert_eq!(
+            serde_json::to_value(editor.snapshot())
+                .unwrap()
+                .get("document"),
+            snapshot.get("document")
+        );
+        assert!(Arc::ptr_eq(&published_pixels, &editor.pixels()));
+        assert_eq!(fs::read(&manifest).unwrap(), draft);
+    }
+    for edit in [
+        LayerEdit::Delete,
+        LayerEdit::Opacity { opacity: 20. },
+        LayerEdit::Curve {
+            edit: CurveEdit::Bend { bend: 0.5 },
+        },
+    ] {
+        assert!(
+            editor
+                .preview_drawing(Request::Layer {
+                    id: id.clone(),
+                    edit
+                })
+                .is_err()
+        );
+    }
+    assert!(
+        editor
+            .preview_drawing(Request::Layer {
+                id: "missing".into(),
+                edit: LayerEdit::Rotate { radians: 0.5 }
+            })
+            .is_err()
+    );
+    assert_eq!(fs::read(&manifest).unwrap(), draft);
+}
+
+#[test]
 fn combine_commands_publish_owned_rasters_and_preserve_history_and_drafts() {
     let (data, artifact_id, _) = setup();
     let mut editor = open(data.path(), &artifact_id).unwrap();

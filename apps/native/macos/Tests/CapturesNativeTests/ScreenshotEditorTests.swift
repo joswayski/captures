@@ -21,6 +21,70 @@ final class ScreenshotEditorTests: XCTestCase {
         super.tearDown()
     }
 
+    func testLayerPixelsShareBoundedQueueButKeepDrawingAndCancellationOwnershipSeparate() throws {
+        _ = NSApplication.shared
+        for action in ["drag_move", "rotate", "resize", "curve"] {
+            for release in [false, true] {
+                let element: [String: Any] = ["kind": "shape", "id": "front",
+                    "shape": action == "curve" ? "line" : "rectangle",
+                    "x": action == "curve" ? 180.0 : 100.0, "y": action == "curve" ? 150.0 : 80.0,
+                    "endX": action == "curve" ? 580.0 : 220.0, "endY": action == "curve" ? 150.0 : 140.0,
+                    "controls": [], "locked": false, "visible": true, "opacity": 100.0,
+                    "blendMode": "source-over", "style": ["color": "#ff3b5c", "fill": NSNull(), "strokeWidth": 8.0]]
+                let original = snapshot(id: "shot", layers: [element],
+                    extra: action == "curve" ? ["curve_handles": ["front": curveHandlesValue()]] : [:])
+                let worker = FakeEditorWorker(snapshot: original)
+                worker.deferDrawingPreviews = true
+                let controller = fittedController(worker)
+                defer { controller.window.orderOut(nil) }
+                try showLayers(in: controller.root)
+                try table("Screenshot layers", in: controller.root).selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+                let overlay = controller.selectionOverlay
+                let image = overlay.presentedImageRect, scale = image.width / 640
+                func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                    CGPoint(x: image.minX + x * scale, y: image.minY + y * scale)
+                }
+                let start: CGPoint, first: CGPoint, last: CGPoint
+                switch action {
+                case "curve": start = point(380, 150); first = point(380, 230); last = point(400, 240)
+                case "resize":
+                    let grip = try XCTUnwrap(overlay.resizeHandlePoints.dropFirst(4).first)
+                    start = point(grip.x, grip.y)
+                    first = point(grip.x + 30, grip.y + 20); last = point(grip.x + 45, grip.y + 25)
+                case "rotate":
+                    let handle = try XCTUnwrap(NativeEditorRotationHandle(outline: try XCTUnwrap(overlay.selectedOutline),
+                        radians: 0, displayScale: scale, canvas: overlay.canvasSize))
+                    start = point(handle.handle.x, handle.handle.y); first = point(250, 110); last = point(240, 70)
+                default: start = point(160, 110); first = point(170, 120); last = point(195, 130)
+                }
+                overlay.begin(at: start)
+                XCTAssertTrue(worker.drawingPreviews.isEmpty, "press does not render")
+                overlay.drag(to: first); overlay.drag(to: last)
+                XCTAssertEqual(worker.drawingPreviews.count, 1, "one render in flight")
+                XCTAssertTrue(worker.requests.isEmpty)
+                XCTAssertEqual(controller.state.snapshot, original)
+                worker.completeDrawingPreview()
+                XCTAssertTrue(overlay.pixelPreviewVisible)
+                XCTAssertEqual(worker.drawingPreviews.count, 2, "only the latest pending geometry renders")
+                let latest = try XCTUnwrap(worker.drawingPreviews.last)
+                XCTAssertEqual(latest["id"] as? String, "front")
+                XCTAssertEqual((latest["edit"] as? [String: Any])?["action"] as? String, action)
+                controller.drawOverlay.cancelGesture()
+                XCTAssertTrue(overlay.pixelPreviewVisible, "inactive drawing cleanup retains layer pixels")
+                if release {
+                    overlay.end(at: last)
+                    XCTAssertEqual(worker.requests.count, 1)
+                    XCTAssertEqual(try JSONSerialization.data(withJSONObject: worker.requests[0], options: .sortedKeys),
+                        try JSONSerialization.data(withJSONObject: latest, options: .sortedKeys))
+                } else { overlay.cancelGesture() }
+                worker.completeDrawingPreview()
+                XCTAssertFalse(overlay.pixelPreviewVisible, "late pixels cannot overwrite a released/cancelled gesture")
+                XCTAssertEqual(worker.drawingPreviews.count, 2)
+                XCTAssertEqual(controller.state.snapshot, original)
+            }
+        }
+    }
+
     func testDrawingPixelsCoalesceAndRejectResultsAfterCancellationCommitAndClose() throws {
         _ = NSApplication.shared
         let original = snapshot(id: "shot")
@@ -5279,6 +5343,10 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
             XCTAssertEqual(overlay.movePreview?.outline.first, .zero,
                            "a raw near-edge move previews the independently derived snapped outline")
+            waitUntil { overlay.pixelPreviewVisible }
+            XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 10, y: 10), [255, 59, 92, 255])
+            XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 110, y: 90), [247, 247, 245, 255])
+            XCTAssertFalse(controller.state.snapshot!.unsavedChanges, "held pixels do not publish an edit")
             try render(controller.root, name: "screenshot-editor-move-active-\(appearance)")
             overlay.end(at: end)
             waitUntil { !controller.state.busy && controller.state.snapshot!.unsavedChanges }
@@ -5351,6 +5419,10 @@ final class ScreenshotEditorTests: XCTestCase {
             let end = CGPoint(x: pivot.x + pivot.y - start.y, y: pivot.y)
             overlay.begin(at: start); overlay.drag(to: end, snap: true)
             XCTAssertEqual(try XCTUnwrap(overlay.rotationPreview?.radians), Double.pi / 2, accuracy: 1e-12)
+            XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
+            waitUntil { overlay.pixelPreviewVisible }
+            XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 160, y: 60), [255, 59, 92, 255])
+            XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 110, y: 110), [247, 247, 245, 255])
             XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
             try render(controller.root, name: "screenshot-editor-rotation-active-\(appearance)")
             overlay.end(at: end, snap: true)
@@ -5454,6 +5526,9 @@ final class ScreenshotEditorTests: XCTestCase {
             let release = CGPoint(x: pressPoint.x + 60 * scale, y: pressPoint.y + 40 * scale)
             overlay.begin(at: pressPoint); overlay.drag(to: release)
             XCTAssertNotNil(overlay.resizePreview); XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
+            waitUntil { overlay.pixelPreviewVisible }
+            XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 260, y: 165), [255, 59, 92, 255])
+            XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
             try render(controller.root, name: "screenshot-editor-resize-active-\(appearance)")
             overlay.end(at: release)
             waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == true }
@@ -8307,6 +8382,12 @@ final class ScreenshotEditorTests: XCTestCase {
 
     private func descendants(in view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { descendants(in: $0) }
+    }
+
+    private func canvasPreviewImage(in view: NSView) throws -> CGImage {
+        let preview = try XCTUnwrap(descendants(in: view).compactMap { $0 as? NSImageView }
+            .first { $0.accessibilityLabel() == "Edited screenshot preview" })
+        return try XCTUnwrap(preview.image?.cgImage(forProposedRect: nil, context: nil, hints: nil))
     }
 
     private func waitUntil(timeout: TimeInterval = 2, _ predicate: () -> Bool) {
