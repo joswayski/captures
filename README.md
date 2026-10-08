@@ -229,7 +229,9 @@ Wayland screenshot permission is handled by the desktop portal at capture time.
 Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
 "Captures is ready to use" notice with the New Capture shortcut on direct hosts;
 Wayland names the tray without advertising ungranted keys. Without a tray icon's
-screen position, the compositor places the notice and it has no directional caret.
+screen position, it uses a compact, left-aligned, unpointed card that grows to fit
+long shortcuts. On Wayland the compositor places it. Real tray/menu-bar anchors
+keep the centered pill and triangle.
 The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:

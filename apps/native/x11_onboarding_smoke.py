@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import time
 
+from history_fixture import write_completed_settings
 from instance_smoke import png
 
 
@@ -15,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--notices-only", action="store_true", help="Focused quiet launch/long-shortcut notice checks")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -72,6 +74,14 @@ def main():
             run("xdpyinfo")
             spawn(["openbox", "--sm-disable"])
             wait(lambda: b"window id" in run("xprop", "-root", "_NET_SUPPORTING_WM_CHECK"), "window manager ready")
+            if args.notices_only:
+                profile = output / "dark"
+                profile.mkdir()
+                write_completed_settings(profile / "fresh settings %.json")
+                quiet_launch_notice(binary, output, env, spawn, wait, windows, run)
+                (output / "result.json").write_text(json.dumps({"passed": True,
+                    "scope": "Quiet X11 notices only; not full onboarding or physical platform acceptance."}, indent=2))
+                return
             for appearance, hidden in (("dark", False), ("light", True)):
                 root = output / appearance
                 root.mkdir()
@@ -264,6 +274,9 @@ def quiet_launch_notice(binary, output, env, spawn, wait, windows, run):
     shown = time.monotonic()
     # eframe maps the root for its first paint before hiding it.
     wait(lambda: not windows(app.pid), "quiet launch root hidden")
+    time.sleep(.6)
+    geometry = run("xdotool", "getwindowgeometry", "--shell", notice).decode()
+    assert "WIDTH=352" in geometry and "HEIGHT=110" in geometry, geometry
     assert run("xdotool", "getwindowfocus").decode().strip() != notice, "launch notice took focus"
     run("import", "-window", notice, str(output / "startup-notice-quiet.png"))
     time.sleep(max(0, 3.5 - (time.monotonic() - shown)))
@@ -274,6 +287,32 @@ def quiet_launch_notice(binary, output, env, spawn, wait, windows, run):
     assert not windows(app.pid), "notice expiry showed the root window"
     app.terminate()
     app.wait(timeout=20)
+    for appearance, long in (("light", False), ("dark", True), ("light", True)):
+        label = f"{'long' if long else 'normal'}-{appearance}"
+        settings = output / f"shortcut-{label}.json"
+        value = json.loads((profile / "fresh settings %.json").read_text())
+        if long:
+            value["new_capture_shortcut"] = "Control+Alt+Shift+Super+F12"
+        settings.write_text(json.dumps(value))
+        app = spawn([str(binary), "--live", "--scene", "idle", "--settings-file", str(settings),
+                     "--history-root", str(output / f"history-{label}"), "--appearance", appearance])
+        notice = wait(lambda: windows(app.pid, "^Captures is running$"), f"{label} notice")[0]
+        wait(lambda: not windows(app.pid), f"{label} quiet root hidden")
+        time.sleep(.6)
+        geometry = dict(line.split("=", 1) for line in
+                        run("xdotool", "getwindowgeometry", "--shell", notice).decode().splitlines())
+        assert int(geometry["WIDTH"]) == 352, geometry
+        assert int(geometry["HEIGHT"]) > 110 if long else int(geometry["HEIGHT"]) == 110, geometry
+        assert run("xdotool", "getwindowfocus").decode().strip() != notice, "wrapped notice took focus"
+        run("import", "-window", notice, str(output / f"startup-notice-{label}.png"))
+        run("xdotool", "mousemove", "--sync", "--window", notice, "303", str(int(geometry["HEIGHT"]) // 2),
+            "mousemove_relative", "--sync", "1", "0",
+            "sleep", ".15", "mousedown", "1", "sleep", ".15", "mouseup", "1")
+        wait(lambda: not windows(app.pid, "^Captures is running$"), "wrapped notice Close")
+        assert not windows(app.pid), "Close activated the hidden root"
+        app.terminate()
+        app.wait(timeout=20)
+        print(f"PASS {label}: measured shortcut layout, nonactivating Close", flush=True)
     bus.close()
     print(f"PASS quiet tray launch: hidden root, nonactivating notice, expired after {elapsed:.1f}s", flush=True)
 

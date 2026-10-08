@@ -152,6 +152,18 @@ export function boxShadow(value) {
   });
 }
 
+// CSS drop-shadow's blur is a Gaussian sigma, whereas box-shadow's radius
+// is twice sigma. Export the equivalent layer for the existing native painters.
+export function dropShadow(value) {
+  if (!value.startsWith("drop-shadow(")) return null;
+  const match = /^drop-shadow\(((?:-?[\d.]+(?:px)?\s+){2,3})(rgba?\([^)]*\)|#[\da-f]{6})\)$/.exec(
+    value,
+  );
+  if (!match) throw new Error(`Unsupported drop-shadow ${value}`);
+  const [layer] = boxShadow(`${match[1]}${match[2]}`);
+  return [{ ...layer, blur: layer.blur * 2 }];
+}
+
 // Component-scoped shadow custom properties the native cards also paint.
 // Read from the shipping rule so the value cannot drift from the CSS.
 export function componentShadows(css) {
@@ -223,9 +235,11 @@ export async function prepare(destination, testDestination) {
         ),
         shadows: {
           ...Object.fromEntries(
-            Object.entries(raw).flatMap(([key, value]) =>
-              /(^|-)shadow(-|$)/.test(key) && boxShadow(value) ? [[key, boxShadow(value)]] : [],
-            ),
+            Object.entries(raw).flatMap(([key, value]) => {
+              if (!/(^|-)shadow(-|$)/.test(key)) return [];
+              const shadow = boxShadow(value) ?? dropShadow(value);
+              return shadow ? [[key, shadow]] : [];
+            }),
           ),
           ...componentShadows(preview),
         },
