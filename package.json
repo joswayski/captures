@@ -17,8 +17,8 @@
     "start:web": "npm run start --workspace @captures/web",
     "check": "npm run lint && npm run fmt:check && npm run test:release-version && npm run check --workspace @captures/desktop && npm test --workspace @captures/web && npm run build:web",
     "lint": "oxlint --deny-warnings",
-    "fmt": "oxfmt --write \"**/*.{js,mjs,cjs,ts,tsx,css}\" \"**/package.json\" \"**/tsconfig*.json\" \".ox*.json\"",
-    "fmt:check": "oxfmt --check \"**/*.{js,mjs,cjs,ts,tsx,css}\" \"**/package.json\" \"**/tsconfig*.json\" \".ox*.json\"",
+    "fmt": "oxfmt --write \"**/*.{js,mjs,cjs,ts,mts,tsx,css}\" \"**/package.json\" \"**/tsconfig*.json\" \".ox*.json\"",
+    "fmt:check": "oxfmt --check \"**/*.{js,mjs,cjs,ts,mts,tsx,css}\" \"**/package.json\" \"**/tsconfig*.json\" \".ox*.json\"",
     "test:release-version": "vitest run --project scripts",
     "test": "vitest run"
   },

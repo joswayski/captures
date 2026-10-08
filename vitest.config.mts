@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 
+// Explicit ESM without changing the runtime module mode of the root package.
 export default defineConfig({
   test: {
     projects: [
