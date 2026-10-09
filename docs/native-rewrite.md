@@ -657,6 +657,19 @@ show the login item as
 unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
 Windows, Wayland and screen-reader acceptance remain open.
 
+The wgpu Preferences Find keyboard follow-up consumes each accepted key with its
+own modifiers. Enter/Shift+Enter retain search-field focus for repeated navigation
+and continued typing; Enter on a focused Find button remains that button's action.
+F3/Shift+F3 and Ctrl+G/Ctrl+Shift+G wrap in the shipping direction. Ctrl/Alt+F3,
+Ctrl+Alt+G and extra modifiers on Ctrl+F do not become Find commands. Private-X11
+real-key checks cover four distinct matches, no results, clear/reopen, unchanged
+settings and normal Quit in both appearances at 880×660 and 560×440. The fixture
+waits for the current row's bounds to enter the scroll viewport before capturing
+the result; an earlier capture during smooth scrolling clipped the minimum-size
+match. AppKit's existing Cmd+G menu and find-field Return routing are unchanged;
+macOS, Windows, Wayland, physical keyboard and screen-reader execution remain
+unverified for this follow-up. No end-to-end acceptance gate closes.
+
 The coordinated Preferences/Feedback follow-up tracks shipping PR #926. General
 is first and contains **Start Captures on login**, with the shipping background
 sign-in description and a separate native development-profile identity. Existing

@@ -1019,6 +1019,14 @@ impl Preferences {
                 "page": [viewport.left(), viewport.top(), viewport.right(), viewport.bottom()],
                 "controls": self.shortcut_rects,
                 "recording": self.shortcut_recorder.as_ref().map(|recorder| recorder.field.label()),
+                "find": {
+                    "open": self.find_open,
+                    "count": self.matches.len(),
+                    "index": self.match_index,
+                    "focused": ui.memory(|m| m.has_focus(egui::Id::unique("settings-find"))),
+                    "current": self.matches.get(self.match_index).map(|(rect, _)|
+                        [rect.left(), rect.top(), rect.right(), rect.bottom()]),
+                },
                 "save_error": self.save_error.is_some(),
                 "update_checks": self.update_checks.as_ref().map(|checker| checker.presentation()),
                 "desktop_shortcuts": self.portal_shortcuts.as_ref().map(|status| match status {
@@ -1127,28 +1135,46 @@ impl Preferences {
         if self.is_recording_shortcut() || self.suppress_shortcut_commands {
             return;
         }
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
-            self.find_open = true;
-            ui.memory_mut(|m| m.request_focus(egui::Id::unique("settings-find")));
-        }
-        if self.find_open
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            self.close_find();
-        }
         let in_find = ui.memory(|m| m.has_focus(egui::Id::unique("settings-find")));
-        if self.find_open
-            && ui.input(|i| {
-                i.key_pressed(egui::Key::F3)
-                    || (i.key_pressed(egui::Key::G) && i.modifiers.command)
-                    || (in_find && i.key_pressed(egui::Key::Enter))
-            })
-        {
-            self.step_match(if ui.input(|i| i.modifiers.shift) {
-                -1
-            } else {
-                1
+        let mut focus_find = false;
+        ui.input_mut(|input| {
+            input.events.retain(|event| {
+                let egui::Event::Key {
+                    key,
+                    modifiers,
+                    pressed: true,
+                    ..
+                } = event
+                else {
+                    return true;
+                };
+                let shift = if modifiers.shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                };
+                let plain = modifiers.matches_exact(shift);
+                let command = modifiers.matches_exact(egui::Modifiers::COMMAND | shift);
+                if *key == egui::Key::F && command && !modifiers.shift {
+                    self.find_open = true;
+                    focus_find = true;
+                } else if self.find_open && *key == egui::Key::Escape && plain {
+                    self.close_find();
+                } else if self.find_open
+                    && ((*key == egui::Key::F3 && plain)
+                        || (*key == egui::Key::G && command)
+                        || (*key == egui::Key::Enter && in_find))
+                {
+                    self.step_match(if modifiers.shift { -1 } else { 1 });
+                } else {
+                    return true;
+                }
+                // Find owns this press; Enter must not also surrender TextEdit focus.
+                false
             });
+        });
+        if focus_find && self.find_open {
+            ui.memory_mut(|m| m.request_focus(egui::Id::unique("settings-find")));
         }
     }
 
@@ -3648,6 +3674,87 @@ mod tests {
         frame(&mut prefs, vec![button(true)]);
         frame(&mut prefs, vec![button(false)]);
         assert!(!prefs.value["freeze_screen"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn find_keys_keep_typing_focus_and_ignore_unrelated_chords() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+        prefs.io.flush();
+        prefs.receive(&ctx);
+        let original = serde_json::to_value(prefs.snapshot().unwrap()).unwrap();
+        let tokens = crate::tokens::load()["light-mustard"].clone();
+        let frame = |prefs: &mut Preferences, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(880., 660.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    prefs.ui(ui, &tokens, false);
+                },
+            );
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let key = |key, modifiers| {
+            vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+            ]
+        };
+        frame(&mut prefs, vec![]);
+        frame(&mut prefs, key(egui::Key::F, egui::Modifiers::COMMAND));
+        frame(&mut prefs, vec![egui::Event::Text("screenshots".into())]);
+        // Four separate shipping rows: previews after/in captures, controls and cursor.
+        assert!(frame(&mut prefs, vec![]).contains(&"1 of 4".into()));
+        use egui::{Key, Modifiers};
+        for (pressed, modifiers, expected) in [
+            (Key::Enter, Modifiers::NONE, "2 of 4"),
+            (Key::Enter, Modifiers::NONE, "3 of 4"),
+            (Key::F3, Modifiers::SHIFT, "2 of 4"),
+            (Key::G, Modifiers::COMMAND, "3 of 4"),
+            (Key::G, Modifiers::COMMAND | Modifiers::SHIFT, "2 of 4"),
+            (Key::Enter, Modifiers::SHIFT, "1 of 4"),
+            (Key::F3, Modifiers::SHIFT, "4 of 4"),
+            (Key::F3, Modifiers::CTRL, "4 of 4"),
+            (Key::F3, Modifiers::ALT, "4 of 4"),
+            (Key::G, Modifiers::COMMAND | Modifiers::ALT, "4 of 4"),
+            (Key::F3, Modifiers::NONE, "1 of 4"),
+        ] {
+            assert!(
+                frame(&mut prefs, key(pressed, modifiers)).contains(&expected.into()),
+                "{modifiers:?}+{pressed:?} should show {expected}"
+            );
+        }
+        frame(&mut prefs, vec![egui::Event::Text("zz".into())]);
+        assert!(frame(&mut prefs, vec![]).contains(&"No results".into()));
+        frame(&mut prefs, key(egui::Key::Escape, egui::Modifiers::NONE));
+        assert!(!frame(&mut prefs, vec![]).contains(&"No results".into()));
+        assert_eq!(
+            serde_json::to_value(prefs.snapshot().unwrap()).unwrap(),
+            original,
+            "Find never edits settings"
+        );
     }
 
     #[test]

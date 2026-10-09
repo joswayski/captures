@@ -20,6 +20,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--notices-only", action="store_true", help="Focused quiet launch/long-shortcut notice checks")
     mode.add_argument("--update-restart-only", action="store_true", help="Injected development restart intent; binary needs packaged media tools")
+    mode.add_argument("--preferences-find-only", action="store_true", help="Real Find keys and focus at normal/minimum sizes in both appearances")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
@@ -77,6 +78,11 @@ def main():
             run("xdpyinfo")
             spawn(["openbox", "--sm-disable"])
             wait(lambda: b"window id" in run("xprop", "-root", "_NET_SUPPORTING_WM_CHECK"), "window manager ready")
+            if args.preferences_find_only:
+                preferences_find_launch(binary, output, env, spawn, wait, windows, run)
+                (output / "result.json").write_text(json.dumps({"passed": True, "cases": 4,
+                    "scope": "Real Find input on private X11; not physical/accessibility acceptance."}, indent=2))
+                return
             if args.update_restart_only:
                 update_restart_launch(binary, output, env, spawn, wait, windows, run)
                 (output / "result.json").write_text(json.dumps({"passed": True,
@@ -230,6 +236,103 @@ def main():
                     except subprocess.TimeoutExpired:
                         child.kill()
                         child.wait()
+
+
+def preferences_find_launch(binary, output, env, spawn, wait, windows, run):
+    env["CAPTURES_NATIVE_LAYOUT_PROBE"] = "1"
+    for appearance in ("dark", "light"):
+        for size, dimensions in (("normal", (880, 660)), ("minimum", (560, 440))):
+            prefix = f"find-{appearance}-{size}"
+            profile = output / prefix
+            profile.mkdir()
+            settings = profile / "settings.json"
+            write_completed_settings(settings)
+            before = settings.read_bytes()
+            app = spawn([str(binary), "--live", "--history-root", str(profile / "history"),
+                         "--settings-file", str(settings), "--appearance", appearance])
+            window = wait(lambda: windows(app.pid, "^Captures Preferences$"), "Find Preferences")[0]
+            run("xdotool", "windowsize", "--sync", window, *(str(value) for value in dimensions),
+                "windowactivate", "--sync", window, "windowfocus", "--sync", window)
+
+            def find_state():
+                latest = None
+                for line in (output / "processes.log").read_text().splitlines():
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("pid") == app.pid and event.get("event") == "preferences-shortcuts-layout":
+                        latest = event["detail"]
+                return latest
+
+            def expect(count, index, focused=True, opened=True):
+                expected = dict(open=opened, count=count, index=index, focused=focused)
+                def matches():
+                    state = find_state()
+                    return state and all(state["find"][key] == value for key, value in expected.items())
+                wait(matches, f"{prefix}: {expected}, got {find_state()}")
+
+            def revealed():
+                state = find_state()
+                if not state or state["find"]["current"] is None:
+                    return False
+                current, page = state["find"]["current"], state["page"]
+                return current[1] >= page[1] and current[3] <= page[3]
+
+            def key(chord):
+                run("xdotool", "key", "--clearmodifiers", chord)
+
+            expect(0, 0, focused=False, opened=False)
+            for chord in ("ctrl+shift+f", "ctrl+alt+f", "F3", "ctrl+g"):
+                key(chord)
+                time.sleep(.2)
+                expect(0, 0, focused=False, opened=False)
+            key("ctrl+f")
+            expect(0, 0)
+            run("xdotool", "type", "--clearmodifiers", "--delay", "35", "screenshots")
+            expect(4, 0)
+            # Four distinct rows make next/previous errors visible (two would not).
+            for chord, index in (("Return", 1), ("Return", 2), ("shift+F3", 1),
+                                 ("ctrl+g", 2), ("ctrl+shift+g", 1), ("shift+Return", 0),
+                                 ("shift+F3", 3)):
+                key(chord)
+                expect(4, index)
+            for chord in ("ctrl+F3", "alt+F3", "ctrl+alt+g"):
+                key(chord)
+                time.sleep(.2)
+                expect(4, 3)
+            key("F3")
+            expect(4, 0)
+            wait(revealed, f"{prefix}: current match entirely visible, got {find_state()}")
+            time.sleep(.3)
+            run("import", "-window", window, str(output / f"{prefix}-matches.png"))
+            # Enter on the Previous button belongs to the button, not Find next.
+            key("Tab")
+            expect(4, 0, focused=False)
+            key("Return")
+            expect(4, 3, focused=False)
+            key("shift+Tab")
+            expect(4, 3)
+            key("Return")
+            expect(4, 0)
+            run("xdotool", "type", "--clearmodifiers", "zz")
+            expect(0, 0)
+            key("Return")
+            expect(0, 0)
+            key("ctrl+a")
+            run("xdotool", "type", "--clearmodifiers", "cursor")
+            expect(2, 0)
+            key("Escape")
+            expect(0, 0, focused=False, opened=False)
+            key("ctrl+f")
+            expect(0, 0)  # Close clears the old query; reopening focuses an empty field.
+            time.sleep(.3)
+            run("import", "-window", window, str(output / f"{prefix}-empty.png"))
+            key("ctrl+q")
+            assert app.wait(timeout=20) == 0, f"{prefix}: normal Quit"
+            assert settings.read_bytes() == before, f"{prefix}: Find wrote settings"
+            assert not list((profile / "history").glob("*/metadata.json")), "Find published media"
+            print(f"PASS {prefix}: Find next/previous/wrap, modifier/focus gates, retry typing, clear/reopen, settings unchanged", flush=True)
 
 
 PANEL = """<?xml version="1.0" encoding="UTF-8"?>
