@@ -509,6 +509,13 @@ unchanged drafts while configuring, undo/redo and default reset after reopening.
 Use `--text-input-only` for transient composing, preview-error clipboard ownership,
 outlined glyphs with selection/caret and rotation, middle-click PRIMARY at normal/
 minimum size, unchanged drafts, undo and quit.
+Use `--drawing-defaults-only` in both appearances for keyboard-entered exact custom
+colors, partial input without draft writes, independently expected line pixels and
+single Undo, normal/minimum color controls, and retained stroke/fill/shadow defaults.
+Run `cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml accessibility_`
+for shared range bounds/actions, mixed keyboard/assistive event ordering and
+custom-color input semantics. These checks do not replace physical screen-reader
+acceptance on macOS, Windows, X11 or Wayland.
 Run `python3 apps/native/primary_selection_smoke.py --binary
 apps/native/wgpu/target/debug/captures-wgpu-workbench` for private X11/Wayland
 PRIMARY transport, UTF-8/64 KiB boundaries, backend rejection, resource ceilings
