@@ -23,7 +23,7 @@ fn compact_picker(ui: &mut egui::Ui, tokens: &Tokens, hsva: &mut Hsva) -> bool {
     let mut changed = false;
     let (square, response) = ui.allocate_exact_size(
         vec2(width, (width * 0.55).clamp(72., 132.)),
-        Sense::click_and_drag(),
+        Sense::CLICK | Sense::DRAG,
     );
     if let Some(pointer) = response.interact_pointer_pos() {
         let s = ((pointer.x - square.left()) / square.width()).clamp(0., 1.);
@@ -68,12 +68,9 @@ fn compact_picker(ui: &mut egui::Ui, tokens: &Tokens, hsva: &mut Hsva) -> bool {
     );
     painter.circle_stroke(handle, 5., Stroke::new(2., Color32::WHITE));
     painter.circle_stroke(handle, 6.5, Stroke::new(1., Color32::BLACK));
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Saturation and brightness")
-    });
 
     ui.add_space(tokens.number("s-3"));
-    let (bar, response) = ui.allocate_exact_size(vec2(width, 14.), Sense::click_and_drag());
+    let (bar, response) = ui.allocate_exact_size(vec2(width, 14.), Sense::CLICK | Sense::DRAG);
     if let Some(pointer) = response.interact_pointer_pos() {
         let h = ((pointer.x - bar.left()) / bar.width()).clamp(0., 1.);
         if h != hsva.h {
@@ -114,7 +111,8 @@ fn compact_picker(ui: &mut egui::Ui, tokens: &Tokens, hsva: &mut Hsva) -> bool {
         Stroke::new(1., Color32::BLACK),
         StrokeKind::Outside,
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Hue"));
+    // Pointer gradients are not scalar sliders. The hex field below is the
+    // keyboard/assistive route to every opaque color, without inert tab stops.
     changed
 }
 
@@ -223,6 +221,7 @@ pub(super) fn color_field(
     compact: bool,
     enabled: bool,
 ) -> Option<String> {
+    let enabled = enabled && ui.is_enabled();
     let mut chosen = None;
     ui.push_id(("color-field", label), |ui| {
         if !compact {
@@ -257,6 +256,8 @@ pub(super) fn color_field(
         let tile = model::TILE as f32;
         let custom_id = ui.scope_id().with("custom-open");
         let draft_id = ui.scope_id().with("custom-draft");
+        let hex_id = ui.scope_id().with("custom-hex-draft");
+        let input_id = ui.scope_id().with("custom-hex-input");
         let mut custom_open = ui.data(|data| data.get_temp::<bool>(custom_id).unwrap_or(false));
         for index in 0..model::TILE_COUNT {
             let (x, y) = grid.center(index, f64::from(row_gap), f64::from(padding));
@@ -268,6 +269,9 @@ pub(super) fn color_field(
                 Sense::hover()
             };
             let response = ui.interact(bounds, ui.scope_id().with(("tile", index)), sense);
+            if response.clicked() {
+                response.request_focus();
+            }
             if let Some(swatch) = model::SWATCHES.get(index) {
                 let active = model::swatch_active(value, swatch);
                 let fill = Color32::from_hex(swatch).unwrap_or(Color32::BLACK);
@@ -320,11 +324,11 @@ pub(super) fn color_field(
                 let response = response.on_hover_text(model::CUSTOM_COLOR);
                 if response.clicked() {
                     custom_open = !custom_open;
-                    let seed =
-                        Color32::from_hex(&model::custom_seed(value)).unwrap_or(Color32::BLACK);
+                    let seed = seed(value);
                     ui.data_mut(|data| {
                         data.insert_temp(custom_id, custom_open);
                         data.insert_temp(draft_id, seed);
+                        data.insert_temp(hex_id, hex(Color32::from(seed)));
                     });
                 }
             }
@@ -335,10 +339,68 @@ pub(super) fn color_field(
             let mut draft = ui
                 .data(|data| data.get_temp::<Hsva>(draft_id))
                 .unwrap_or_else(|| seed(value));
-            if compact_picker(ui, tokens, &mut draft) {
+            let pointer_changed = compact_picker(ui, tokens, &mut draft);
+            if pointer_changed {
                 chosen = Some(hex(Color32::from(draft)));
             }
-            ui.data_mut(|data| data.insert_temp(draft_id, draft));
+            let mut input = ui
+                .data(|data| data.get_temp::<String>(hex_id))
+                .unwrap_or_else(|| hex(Color32::from(draft)));
+            if pointer_changed {
+                input = hex(Color32::from(draft));
+            }
+            let mut edited = false;
+            use egui::accesskit::{Action, ActionData};
+            ui.input_mut(|events| {
+                events.consume_accesskit_action_requests(input_id, |request| {
+                    if request.action == Action::SetValue
+                        && let Some(ActionData::Value(value)) = request.data.as_ref()
+                        && value.len() <= 7
+                    {
+                        input = value.to_string();
+                        edited = true;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            });
+            let response = inspector::labelled(ui, tokens, "Hex color", |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut input)
+                        .id(input_id)
+                        .char_limit(7)
+                        .hint_text("#rrggbb")
+                        .font(FontId::monospace(tokens.number("text-sm")))
+                        .margin(vec2(tokens.number("s-4"), tokens.number("s-3")))
+                        .min_size(vec2(0., tokens.number("h-md")))
+                        .desired_width(f32::INFINITY),
+                )
+            });
+            edited |= response.changed();
+            // Preserve TextEdit's value/selection semantics when naming it.
+            ui.ctx().accesskit_node_builder(input_id, |node| {
+                node.set_label(format!("{label} hex color"));
+                node.add_action(Action::SetValue);
+            });
+            if edited
+                && input.len() == 7
+                && input.starts_with('#')
+                && let Ok(color) = Color32::from_hex(&input)
+            {
+                let mut next = Hsva::from(color);
+                if next.s == 0. {
+                    next.h = draft.h;
+                }
+                draft = next;
+                chosen = Some(hex(color));
+                ui.ctx().request_repaint();
+            }
+            // Partial input survives live receipts without publishing a color.
+            ui.data_mut(|data| {
+                data.insert_temp(draft_id, draft);
+                data.insert_temp(hex_id, input);
+            });
         }
     });
     chosen
@@ -652,5 +714,100 @@ mod tests {
     #[test]
     fn hex_is_lowercase_rrggbb() {
         assert_eq!(hex(Color32::from_rgb(0xAB, 0x0C, 0xFF)), "#ab0cff");
+    }
+
+    #[test]
+    fn custom_color_keyboard_and_accessibility_preserve_partial_input_without_publishing_it() {
+        use crate::accessibility::tests::{find, tree};
+        use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
+
+        for theme in ["light-mustard", "dark-mustard"] {
+            let ctx = egui::Context::default();
+            let tokens = crate::tokens::load().remove(theme).unwrap();
+            let mut value = "#2d9cff".to_owned();
+            let run = |events, enabled, value: &mut String| {
+                let mut chosen = None;
+                let output = tree(&ctx, vec2(320., 540.), events, |ui| {
+                    ui.set_width(280.);
+                    chosen = color_field(ui, &tokens, "Text color", value, false, enabled);
+                });
+                if let Some(next) = &chosen {
+                    *value = next.clone();
+                }
+                (output, chosen)
+            };
+            let action = |target_node, action, data| {
+                egui::Event::AccessKitActionRequest(ActionRequest {
+                    action,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data,
+                })
+            };
+            let (closed, _) = run(vec![], true, &mut value);
+            let (custom, _) = find(&closed, "Custom color").unwrap();
+            let (open, chosen) = run(vec![action(custom, Action::Click, None)], true, &mut value);
+            assert!(chosen.is_none());
+            let (input, node) = find(&open, "Text color hex color").expect("keyboard color input");
+            assert_eq!(node.value(), Some("#2d9cff"));
+            assert!(node.supports_action(Action::SetValue));
+            let key = |key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let (focused, _) = run(vec![key(egui::Key::Tab)], true, &mut value);
+            assert_eq!(
+                focused.focus, input,
+                "Tab must reach input without pointer-only gradient stops"
+            );
+            let (partial, chosen) = run(
+                vec![action(
+                    input,
+                    Action::SetValue,
+                    Some(ActionData::Value("#12".into())),
+                )],
+                true,
+                &mut value,
+            );
+            assert!(chosen.is_none());
+            assert_eq!(value, "#2d9cff");
+            assert_eq!(
+                find(&partial, "Text color hex color").unwrap().1.value(),
+                Some("#12")
+            );
+            let (_, chosen) = run(vec![egui::Event::Text("3456".into())], true, &mut value);
+            assert_eq!(chosen.as_deref(), Some("#123456"));
+            let (_, chosen) = run(
+                vec![action(
+                    input,
+                    Action::SetValue,
+                    Some(ActionData::Value("#ABCDEF".into())),
+                )],
+                true,
+                &mut value,
+            );
+            assert_eq!(chosen.as_deref(), Some("#abcdef"));
+            let (_, chosen) = run(
+                vec![action(
+                    input,
+                    Action::SetValue,
+                    Some(ActionData::Value("#123456".into())),
+                )],
+                false,
+                &mut value,
+            );
+            assert!(chosen.is_none());
+            assert_eq!(value, "#abcdef");
+            run(vec![action(custom, Action::Click, None)], true, &mut value);
+            value = "#408020".into();
+            let (reopened, _) = run(vec![action(custom, Action::Click, None)], true, &mut value);
+            assert_eq!(
+                find(&reopened, "Text color hex color").unwrap().1.value(),
+                Some("#408020")
+            );
+        }
     }
 }

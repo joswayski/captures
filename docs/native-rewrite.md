@@ -1206,7 +1206,27 @@ and Rounded plate controls (the Outlined and Rounded Box styles set them, and "T
 background" adds shipping's `#111318` plate, clearing both) and the per-tool helper
 paragraphs. wgpu draws every row from `editor/inspector.rs` with the shared
 `NumberInput`, `RangeSlider`, `Select` and `ColorField` primitives (a typed decimal
-such as 37.5 now commits as typed when focus leaves). While the rail's Crop is
+such as 37.5 now commits as typed when focus leaves).
+The shared wgpu `RangeSlider` exposes minimum, maximum and step, and handles
+AccessKit Increment/Decrement/SetValue in arrival order alongside keyboard input.
+Finite values clamp to the bounds; disabled controls cannot adjust, and each
+discrete change retains its existing undo semantics. Custom `ColorField` gradients
+remain pointer controls rather than inert keyboard slider stops. Tab from the
+custom tile reaches a named Hex color input; only complete `#rrggbb` input publishes
+an opaque lowercase color. Partial input survives without changing the accepted
+color, and reopening seeds from that color. AppKit retains `NSSlider`/`NSColorWell`.
+Control tests cover both appearances, assistive requests, partial input and disabled
+state; private-X11 drawing smokes check real keyboard entry, independent line pixels,
+Undo and normal/minimum renders. No physical accessibility gate closes.
+
+| Platform | Inspector color/range input implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing native sliders/system color panel unchanged; physical VoiceOver and keyboard verification unavailable in this Linux orb |
+| Windows | Shared wgpu controls and AccessKit regression tests pass in the Linux orb; native Windows runtime/Narrator verification unperformed for this slice |
+| X11 | Shared tests and real dark/light keyboard, pixel, Undo and normal/minimum render smokes pass on disposable software-rendered X11; physical Orca acceptance open |
+| Wayland | Shared wgpu controls and regression tests pass; compositor/AT-SPI and physical verification unperformed for this slice |
+
+While the rail's Crop is
 active, wgpu stays ready for a new selection after Apply crop, Clear or Escape, as
 shipping does, and a selection starts only once a press becomes a drag. AppKit follows
 the same order, spacing, labels and control types: the selected layer (Shift rotation

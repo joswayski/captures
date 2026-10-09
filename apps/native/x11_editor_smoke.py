@@ -750,7 +750,7 @@ def main():
         left = {440: 375, 385: 320, 260: 246}[x]
         if name == "solid":
             return left + 30, 75
-        index = SWATCHES.index(name)
+        index = len(SWATCHES) if name == "custom" else SWATCHES.index(name)
         return (round(left + BACKGROUND_GRID_X + (index % 6 + .5) * 224 / 6),
                 BACKGROUND_GRID_Y + index // 6 * 30)
 
@@ -1892,6 +1892,38 @@ def main():
             toolbar_click("draw")
             prop_click(16, CLOSED_DRAW_ROWS["stroke"])  # Enable the initially disabled closed-shape stroke.
             shot(editor, "drawing-default-controls")
+            # Tab from Custom color must skip the pointer-only gradients and
+            # reach the exact-color input. Partial input must not publish.
+            prop_swatch(CLOSED_DRAW_ROWS["color"], "custom")
+            shot(editor, "drawing-hex-open")  # Present the new field before navigating to it.
+            run("xdotool", "key", "Tab", "sleep", ".3", "key", "ctrl+a", "sleep", ".2")
+            type_text("#01", 60)
+            shot(editor, "drawing-hex-partial")
+            assert draft_bytes() == before, "partial custom color wrote a draft"
+            type_text("3579", 60)
+            shot(editor, "drawing-hex-custom")
+            prop_swatch(CLOSED_DRAW_ROWS["color"], "custom")
+            draw_tool("line")
+            start, end = document_point((250, 70)), document_point((370, 70))
+            run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
+                *map(str, end), "sleep", ".3", "mouseup", "1", "sleep", ".3")
+            exact = save_layers(lambda values: len(values) == 2, "typed custom-color line")[-1]
+            assert exact["style"]["color"] == "#013579" and exact["opacity"] == 100, exact
+            shot(editor, "drawing-hex-pixels")
+            document_pixel("drawing-hex-pixels", 300, 70, (1, 53, 121), 1)
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 1, "one undo removes custom-color line")
+            toolbar_click("draw")
+            prop_swatch(OPEN_DRAW_ROWS["color"], "custom")
+            resize_editor(760, 540)
+            properties_end()
+            properties_move("click", "4", "sleep", ".6")  # Bring Hex color above the pinned footer.
+            shot(editor, "drawing-hex-minimum")
+            resize_editor(942, 1580)
+            properties_start()
+            prop_swatch(OPEN_DRAW_ROWS["color"], "custom")
+            draw_tool("rectangle")
             # Stroke color and Fill color are shipping swatch rows; Size and
             # Opacity are shipping RangeSliders set from the keyboard.
             prop_swatch(CLOSED_DRAW_ROWS["color"], "#111318")
@@ -1930,8 +1962,7 @@ def main():
             run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
                 "mousedown", "1", "sleep", ".2", "mousemove", "--sync", "--window", editor,
                 *map(str, end), "sleep", ".3")
-            shot(editor, "drawing-line-transient")
-            document_pixel("drawing-line-transient", 300, 70, (31, 76, 113), 2)
+            settled_document_pixel("drawing-line-transient", 300, 70, (31, 76, 113), 2)
             run("xdotool", "mouseup", "1", "sleep", ".3")
             line = save_layers(lambda values: len(values) == 2, "styled line created")[-1]
             assert line["shape"] == "line" and line["opacity"] == 37, line
@@ -2012,14 +2043,15 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["default-fields-no-write", "asymmetric-stroke-fill", "custom-width-opacity",
+                "checks": ["keyboard-exact-color", "typed-color-pixels", "custom-color-single-undo",
+                           "default-fields-no-write", "asymmetric-stroke-fill", "custom-width-opacity",
                            "independent-composited-pixels", "single-undo", "open-stroke-ignores-closed-toggle",
                            "tool-and-response-retention", "zero-opacity-layer", "original-unchanged",
                            "shadow-defaults-no-write", "asymmetric-shadow-offset-pixels",
                            "transient-shadow-pixels", "cancel-restores-pixels-without-write",
                            "disabled-shadow-pixels", "retained-shadow-style"],
             }, indent=2) + "\n")
-            print("PASS native drawing defaults: style, opacity, shadow pixels, undo and retained local choices")
+            print("PASS native drawing defaults: exact keyboard color, style, opacity, shadow pixels, undo and retained local choices")
             return
 
         if args.polygon_only:
@@ -3783,6 +3815,12 @@ def main():
             before = draft_bytes()
             background_open()
             shot(editor, "background-controls")
+            background_click("custom")
+            shot(editor, "background-hex-controls")
+            resize_editor(760, 540)
+            shot(editor, "background-hex-minimum")
+            resize_editor(1000, 801)
+            background_click("custom")
             assert draft_bytes() == before, "opening the card must not edit the draft"
 
             def background_is(color):
@@ -3792,8 +3830,7 @@ def main():
             background_click("#2d9cff")
             wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
                  "live background applied")
-            shot(editor, "background-live")
-            fixture_pixel("background-live", 700, 500, (45, 156, 255))
+            settled_document_pixel("background-live", 692, 411, (45, 156, 255))
             run("xdotool", "key", "Escape", "sleep", ".2")
             save_until(lambda: background_is("#2d9cff"), "solid canvas background")
             shot(editor, "background-solid")

@@ -1285,6 +1285,7 @@ impl<'a> RangeSlider<'a> {
         value: &mut f64,
     ) -> (egui::Response, Vec<f64>) {
         use captures_app::controls::range;
+        use egui::accesskit::{Action, ActionData, TreeId};
         let id = ui.make_persistent_id(self.id_salt);
         let enabled = ui.is_enabled();
         let alpha = if enabled { 1. } else { 0.45 };
@@ -1328,54 +1329,85 @@ impl<'a> RangeSlider<'a> {
                         },
                     );
                 });
-                let big = self.step * 10.;
-                // Every press counts in arrival order. Grouping by key type
-                // would apply Home after an arrow received later in the frame.
-                ui.input_mut(|input| {
-                    input.events.retain(|event| {
-                        let egui::Event::Key {
+            }
+            let focused = response.has_focus();
+            let big = self.step * 10.;
+            // Keyboard and assistive edits share arrival order and discrete undo
+            // steps. Grouping Increment/Decrement around SetValue loses edits.
+            ui.input_mut(|input| {
+                input.events.retain(|event| {
+                    let requested = match event {
+                        egui::Event::Key {
                             key,
                             pressed: true,
                             modifiers,
                             ..
-                        } = event
-                        else {
-                            return true;
-                        };
-                        if !modifiers.matches_logically(egui::Modifiers::NONE) {
-                            return true;
-                        }
-                        let previous = next;
-                        next = match key {
-                            egui::Key::ArrowRight | egui::Key::ArrowUp => {
-                                (next + self.step).clamp(self.min, self.max)
+                        } if focused && modifiers.matches_logically(egui::Modifiers::NONE) => {
+                            match key {
+                                egui::Key::ArrowRight | egui::Key::ArrowUp => next + self.step,
+                                egui::Key::ArrowLeft | egui::Key::ArrowDown => next - self.step,
+                                egui::Key::PageUp => next + big,
+                                egui::Key::PageDown => next - big,
+                                egui::Key::Home => self.min,
+                                egui::Key::End => self.max,
+                                _ => return true,
                             }
-                            egui::Key::ArrowLeft | egui::Key::ArrowDown => {
-                                (next - self.step).clamp(self.min, self.max)
-                            }
-                            egui::Key::PageUp => (next + big).clamp(self.min, self.max),
-                            egui::Key::PageDown => (next - big).clamp(self.min, self.max),
-                            egui::Key::Home => self.min,
-                            egui::Key::End => self.max,
-                            _ => return true,
-                        };
-                        if next != previous {
-                            steps.push(next);
                         }
-                        false
-                    });
+                        egui::Event::AccessKitActionRequest(request)
+                            if request.target_tree == TreeId::ROOT
+                                && request.target_node == id.accesskit_id() =>
+                        {
+                            match request.action {
+                                Action::Increment => next + self.step,
+                                Action::Decrement => next - self.step,
+                                Action::SetValue => match request.data.as_ref() {
+                                    Some(ActionData::NumericValue(value)) if value.is_finite() => {
+                                        *value
+                                    }
+                                    _ => return true,
+                                },
+                                _ => return true,
+                            }
+                        }
+                        _ => return true,
+                    };
+                    let previous = next;
+                    next = requested.clamp(self.min, self.max);
+                    if next != previous {
+                        steps.push(next);
+                    }
+                    false
                 });
-            }
+            });
         }
         if next != *value {
             *value = next;
             response.mark_changed();
+            ui.ctx().request_repaint();
         }
         let value_now = *value;
         response.widget_info(|| {
             let mut info = egui::WidgetInfo::slider(enabled, value_now, self.label);
-            info.current_text_value = Some(self.value_text.clone());
+            // The caller formatted the readout before input. Announce the new
+            // numeric value until the next pass supplies matching value text.
+            if !response.changed() {
+                info.current_text_value = Some(self.value_text.clone());
+            }
             info
+        });
+        ui.ctx().accesskit_node_builder(id, |node| {
+            node.set_min_numeric_value(self.min);
+            node.set_max_numeric_value(self.max);
+            node.set_numeric_value_step(self.step);
+            if enabled {
+                node.add_action(Action::SetValue);
+                if value_now < self.max {
+                    node.add_action(Action::Increment);
+                }
+                if value_now > self.min {
+                    node.add_action(Action::Decrement);
+                }
+            }
         });
 
         let painter = ui.painter();
@@ -2177,5 +2209,120 @@ mod tests {
             value, 189.,
             "End must precede decrements received in the same frame"
         );
+    }
+
+    #[test]
+    fn range_slider_accessibility_exposes_bounds_and_preserves_discrete_action_order() {
+        use crate::accessibility::tests::find_role;
+        use egui::accesskit::{Action, ActionData, ActionRequest, NodeId, Role, TreeId};
+
+        let (ctx, t) = setup();
+        ctx.enable_accesskit();
+        let mut value = 17.25;
+        let run = |events, enabled: bool, value: &mut f64| {
+            let mut steps = Vec::new();
+            let output = frame(&ctx, events, |ui| {
+                if !enabled {
+                    ui.disable();
+                }
+                steps = RangeSlider::new(
+                    "accessible-range",
+                    "Volume",
+                    214.,
+                    7. ..=23.,
+                    format!("{value}%"),
+                )
+                .show_steps(ui, &t, value)
+                .1;
+            });
+            (output.platform_output.accesskit_update.unwrap(), steps)
+        };
+        let action = |target_node, action, data| {
+            egui::Event::AccessKitActionRequest(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node,
+                data,
+            })
+        };
+        let (tree, _) = run(vec![], true, &mut value);
+        let (id, node) = find_role(&tree, Role::Slider, "Volume").unwrap();
+        assert_eq!(node.numeric_value(), Some(17.25));
+        assert_eq!(node.min_numeric_value(), Some(7.));
+        assert_eq!(node.max_numeric_value(), Some(23.));
+        assert_eq!(node.numeric_value_step(), Some(1.));
+        for command in [Action::Increment, Action::Decrement, Action::SetValue] {
+            assert!(node.supports_action(command));
+        }
+        run(vec![action(id, Action::Focus, None)], true, &mut value);
+        let (tree, steps) = run(
+            vec![
+                action(id, Action::Increment, None),
+                action(id, Action::SetValue, Some(ActionData::NumericValue(20.5))),
+                key(egui::Key::ArrowLeft),
+                action(id, Action::Decrement, None),
+            ],
+            true,
+            &mut value,
+        );
+        assert_eq!(steps, [18.25, 20.5, 19.5, 18.5]);
+        assert_eq!(value, 18.5);
+        assert_eq!(
+            find_role(&tree, Role::Slider, "Volume")
+                .unwrap()
+                .1
+                .numeric_value(),
+            Some(value)
+        );
+        let (tree, steps) = run(
+            vec![
+                action(id, Action::SetValue, Some(ActionData::NumericValue(100.))),
+                action(id, Action::Decrement, None),
+                action(
+                    NodeId(999_999),
+                    Action::SetValue,
+                    Some(ActionData::NumericValue(7.)),
+                ),
+                action(
+                    id,
+                    Action::SetValue,
+                    Some(ActionData::NumericValue(f64::NAN)),
+                ),
+            ],
+            true,
+            &mut value,
+        );
+        assert_eq!(steps, [23., 22.]);
+        assert_eq!(value, 22.);
+        assert!(
+            find_role(&tree, Role::Slider, "Volume")
+                .unwrap()
+                .1
+                .supports_action(Action::Increment)
+        );
+        let (tree, _) = run(vec![action(id, Action::Increment, None)], true, &mut value);
+        assert_eq!(value, 23.);
+        assert!(
+            !find_role(&tree, Role::Slider, "Volume")
+                .unwrap()
+                .1
+                .supports_action(Action::Increment)
+        );
+        let (tree, steps) = run(
+            vec![action(
+                id,
+                Action::SetValue,
+                Some(ActionData::NumericValue(7.)),
+            )],
+            false,
+            &mut value,
+        );
+        assert!(steps.is_empty());
+        assert_eq!(value, 23.);
+        let (_, node) = find_role(&tree, Role::Slider, "Volume").unwrap();
+        assert!(node.is_disabled());
+        for command in [Action::Increment, Action::Decrement, Action::SetValue] {
+            assert!(!node.supports_action(command));
+        }
     }
 }
