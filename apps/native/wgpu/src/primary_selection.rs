@@ -130,7 +130,11 @@ fn command(backend: Option<Backend>) -> Result<Command, String> {
 #[derive(Clone)]
 pub struct Reader(Arc<Owner>);
 
-struct Owner(Arc<Shared>, Duration);
+struct Owner(
+    Arc<Shared>,
+    Duration,
+    Mutex<Option<std::thread::JoinHandle<()>>>,
+);
 
 #[derive(Default)]
 struct Shared {
@@ -201,7 +205,7 @@ impl Reader {
             shared.stop();
         }
         // The deadline starts on the UI request, including queue/old-child drain.
-        Self(Arc::new(Owner(shared, timeout)))
+        Self(Arc::new(Owner(shared, timeout, Mutex::new(started.ok()))))
     }
 
     pub fn request(&self, ctx: egui::Context, viewport: egui::ViewportId) -> Pending {
@@ -248,6 +252,12 @@ impl Reader {
 
     pub fn shutdown(&self) {
         self.0.0.stop();
+        // Never hold state while joining: the supervisor clears active state
+        // after its Reading guard kills and reaps the packaged helper process.
+        let mut owned = self.0.2.lock().unwrap();
+        if let Some(worker) = owned.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -278,6 +288,9 @@ impl Shared {
 impl Drop for Owner {
     fn drop(&mut self) {
         self.0.stop();
+        if let Some(worker) = self.2.get_mut().unwrap().take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -513,6 +526,11 @@ mod tests {
             pid_file.exists() && std::fs::read_to_string(&pid_file).is_ok_and(|s| !s.is_empty())
         });
         let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+        reader.shutdown();
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "shutdown must return only after the blocked packaged child is reaped"
+        );
         drop(reader);
         assert!(reply(&pending).is_err());
         wait_for(|| !std::path::Path::new(&format!("/proc/{pid}")).exists());

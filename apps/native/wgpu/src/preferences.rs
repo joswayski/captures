@@ -279,6 +279,7 @@ pub struct Preferences {
     last_shortcut_probe: Option<Value>,
     feedback: crate::feedback::FeedbackWindow,
     update_checks: Option<captures_app::updater::checks::CheckWorker>,
+    install_update_requested: bool,
     login_root: Option<PathBuf>,
     login_enabled: Option<bool>,
     login_pending: bool,
@@ -384,6 +385,7 @@ impl Preferences {
             last_shortcut_probe: None,
             feedback: crate::feedback::FeedbackWindow::default(),
             update_checks: None,
+            install_update_requested: false,
             login_root: None,
             login_enabled: None,
             login_pending: false,
@@ -701,15 +703,20 @@ impl Preferences {
         client: captures_app::updater::UpdateClient,
         ctx: &egui::Context,
         staging_directory: Option<PathBuf>,
+        supervised_install: bool,
     ) -> Result<(), captures_app::updater::Error> {
         let wake = ctx.clone();
-        self.update_checks = Some(captures_app::updater::checks::CheckWorker::new(
+        let mut checker = captures_app::updater::checks::CheckWorker::new(
             client,
             Arc::new(move || {
                 wake.request_repaint_of(egui::ViewportId::ROOT);
             }),
             staging_directory,
-        )?);
+        )?;
+        if supervised_install {
+            checker.enable_install_request();
+        }
+        self.update_checks = Some(checker);
         Ok(())
     }
 
@@ -728,8 +735,29 @@ impl Preferences {
         match action {
             captures_app::update_notice::Action::DownloadVerify => checker.download(),
             captures_app::update_notice::Action::CancelDownload => checker.cancel_download(),
+            captures_app::update_notice::Action::Install => {
+                checker.poll();
+                let enabled = checker.presentation().acquisition.is_some_and(|button| {
+                    button.enabled && button.action == captures_app::update_notice::Action::Install
+                });
+                if !enabled || self.install_update_requested {
+                    return false;
+                }
+                self.install_update_requested = true;
+                true
+            }
             _ => false,
         }
+    }
+
+    /// Workbench owns editor vetoes, real visibility and the strong shutdown.
+    pub fn take_install_request(&mut self) -> bool {
+        std::mem::take(&mut self.install_update_requested)
+            && self.update_checks.as_ref().is_some_and(|checker| {
+                checker.presentation().acquisition.is_some_and(|button| {
+                    button.enabled && button.action == captures_app::update_notice::Action::Install
+                })
+            })
     }
 
     pub fn update_check_status(&mut self) -> Option<captures_app::updater::checks::CheckStatus> {
@@ -2544,12 +2572,16 @@ impl Preferences {
                     ui,
                     t,
                     "Package verification",
-                    "Temporary storage only; nothing is installed or executed.",
+                    if button.action == captures_app::update_notice::Action::Install {
+                        "Restart after capture work and drafts finish; update this development package only."
+                    } else {
+                        "Temporary storage only; nothing is installed or executed."
+                    },
                     &button.label,
                     button.enabled,
                 ) {
                     this.acquire_update(button.action.clone());
-                    ui.ctx().request_repaint();
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                 }
             }
             Self::divider(ui, t);
@@ -2952,7 +2984,9 @@ mod tests {
             "2026.9.99",
         )
         .unwrap();
-        prefs.connect_update_checks(client, &ctx, None).unwrap();
+        prefs
+            .connect_update_checks(client, &ctx, None, false)
+            .unwrap();
         assert_eq!(
             prefs.update_checks.as_ref().unwrap().presentation().status,
             "Not checked"

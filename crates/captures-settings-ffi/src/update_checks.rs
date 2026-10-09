@@ -1,4 +1,5 @@
-//! Signed native development checks and opt-in temporary acquisition. No install.
+//! Signed native development checks and opt-in acquisition/installation intent.
+//! Replacement belongs to the external development supervisor, not this bridge.
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -26,6 +27,8 @@ struct Configuration {
     current_version: String,
     staging_directory: Option<PathBuf>,
     base_archive: Option<PathBuf>,
+    #[serde(default)]
+    install_request: bool,
 }
 
 #[derive(Deserialize)]
@@ -45,6 +48,7 @@ struct ShutdownRequest {
     settings_file: PathBuf,
     status: Option<captures_app::updater::checks::CheckStatus>,
     preferences_visible: Option<bool>,
+    install_session: Option<String>,
 }
 
 /// Validate an explicit development-only shutdown destination, or publish a
@@ -76,10 +80,16 @@ pub unsafe extern "C" fn captures_update_shutdown_intent_v1(
                 &request.settings_file,
             )
             .map_err(|error| error.to_string())?;
+            let session = request
+                .install_session
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(|_| "Invalid installation session.".to_owned())?;
             let written = match (request.status, request.preferences_visible) {
-                (None, None) => false,
+                (None, None) if session.is_none() => false,
                 (Some(status), Some(visible)) => destination
-                    .write(&status, visible)
+                    .write(&status, visible, session)
                     .map_err(|error| error.to_string())?,
                 _ => return Err("Shutdown intent needs both staged status and visibility.".into()),
             };
@@ -117,6 +127,9 @@ pub unsafe extern "C" fn captures_update_checks_create_v1(
         let Ok(config) = serde_json::from_slice::<Configuration>(bytes) else {
             return std::ptr::null_mut();
         };
+        if config.install_request && config.staging_directory.is_none() {
+            return std::ptr::null_mut();
+        }
         let Ok(client) = client_from_key_file(
             &config.endpoint,
             &config.key_file,
@@ -136,9 +149,13 @@ pub unsafe extern "C" fn captures_update_checks_create_v1(
         } else {
             client
         };
-        let Ok(worker) = CheckWorker::new(client, Arc::new(|| {}), config.staging_directory) else {
+        let Ok(mut worker) = CheckWorker::new(client, Arc::new(|| {}), config.staging_directory)
+        else {
             return std::ptr::null_mut();
         };
+        if config.install_request {
+            worker.enable_install_request();
+        }
         Box::into_raw(Box::new(CapturesUpdateChecks { worker }))
     }))
     .unwrap_or(std::ptr::null_mut())
@@ -269,6 +286,10 @@ mod tests {
             std::io::ErrorKind::WouldBlock
         );
         unsafe { captures_update_checks_free_v1(handle) };
+        let mut invalid = config.clone();
+        invalid["install_request"] = json!(true);
+        let input = CString::new(invalid.to_string()).unwrap();
+        assert!(unsafe { captures_update_checks_create_v1(input.as_ptr()) }.is_null());
         for path in [
             "relative".into(),
             key_file.clone(),

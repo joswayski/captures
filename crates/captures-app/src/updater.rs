@@ -8,8 +8,10 @@
 //! until confirmation, with interruption recovery. An opt-in external helper can
 //! launch it with a new empty, explicitly imported or enrolled development profile
 //! and confirm its private readiness. Opt-in GUI shutdown intent carries visibility
-//! and the exact selected target, not installation authority. No GUI calls
-//! replacement, discovers installed data, registers it or activates a channel.
+//! and the exact selected target, not authentication. An external development
+//! supervisor can require a post-drain installation nonce and successful child exit
+//! before authenticated reacquisition/replacement. No GUI calls replacement,
+//! discovers installed data, registers it or activates a channel.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
 pub mod checks;
 mod delta;
@@ -85,7 +87,7 @@ impl Target {
         }
     }
 
-    fn package_executable(self) -> &'static str {
+    pub fn package_executable(self) -> &'static str {
         match self {
             Self::MacArm64 | Self::MacX64 => {
                 "Captures Native Development.app/Contents/MacOS/CapturesNative"

@@ -3552,6 +3552,12 @@ impl Live {
     }
 
     pub fn flush(&mut self) {
+        self.flush_for_shutdown(false);
+    }
+
+    /// A supervised installation must also reap tool verification processes
+    /// belonging to the selector worker, even when it never owned a take.
+    pub fn flush_for_shutdown(&mut self, installation: bool) {
         self.sharing.shutdown();
         self.open_media.clear();
         self.pending_editor_opens.clear();
@@ -3608,7 +3614,7 @@ impl Live {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        if drain_recording_worker {
+        if drain_recording_worker || installation {
             // Recording phases own draft media or an accepted take, so process
             // the queued Finish/Discard before allowing process teardown.
             self.recording_worker.shutdown();

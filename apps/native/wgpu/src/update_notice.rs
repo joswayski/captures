@@ -685,6 +685,8 @@ impl Host {
                 if self.live {
                     if action == Action::Check {
                         preferences.check_updates();
+                    } else {
+                        preferences.acquire_update(action);
                     }
                     return;
                 }

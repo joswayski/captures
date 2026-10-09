@@ -3599,5 +3599,8 @@ final class LiveCaptureController: NSObject {
         return true
     }
 
-    static func flush() { queue.sync {}; EditorWorker.flush(); RecordingEditorWorker.flush() }
+    static func flush(includeThumbnails: Bool = false) {
+        queue.sync {}; EditorWorker.flush(); RecordingEditorWorker.flush()
+        if includeThumbnails { thumbnailQueue.sync {} }
+    }
 }

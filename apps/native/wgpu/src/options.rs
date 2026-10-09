@@ -16,6 +16,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --native-update-staging-directory ABSOLUTE_PATH (existing scratch directory; enables explicit temporary download/verification, never installation)\n\
   --native-update-base-archive ABSOLUTE_PATH (optional retained archive for authenticated delta acquisition; requires staging)\n\
   --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (health launches only)\n\
+  --native-update-install-session UUID_V4 (development supervisor only; requires staging and shutdown intent)\n\
   --floating (HUD/preview only) --reduced-motion\n\
   --screenshot FILE.png --screenshot-after SECONDS";
 
@@ -130,6 +131,7 @@ pub struct Options {
     pub native_update_checks: Option<captures_app::updater::UpdateClient>,
     pub native_update_staging_directory: Option<PathBuf>,
     pub native_update_shutdown_intent: Option<captures_app::updater::ShutdownIntentDestination>,
+    pub native_update_install_session: Option<uuid::Uuid>,
 }
 
 impl Options {
@@ -163,6 +165,7 @@ impl Options {
             native_update_checks: None,
             native_update_staging_directory: None,
             native_update_shutdown_intent: None,
+            native_update_install_session: None,
         };
         let mut native_update_ready_file = None;
         let mut native_update_ready_token = None;
@@ -174,6 +177,20 @@ impl Options {
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--native-update-install-session"
+                    if options.native_update_install_session.is_none() =>
+                {
+                    let value = args.next().ok_or("Missing installation session")?;
+                    let session = uuid::Uuid::parse_str(&value)
+                        .map_err(|_| "Installation session must be a UUID v4")?;
+                    if session.get_version_num() != 4
+                        || session.get_variant() != uuid::Variant::RFC4122
+                        || session.to_string() != value
+                    {
+                        return Err("Installation session must be a canonical UUID v4".into());
+                    }
+                    options.native_update_install_session = Some(session);
+                }
                 "--native-update-shutdown-intent-file" if update_shutdown_intent.is_none() => {
                     update_shutdown_intent =
                         Some(args.next().ok_or("Missing shutdown intent path")?.into());
@@ -487,6 +504,11 @@ impl Options {
                 )
                 .map_err(|error| error.to_string())?,
             );
+        }
+        if options.native_update_install_session.is_some()
+            && options.native_update_shutdown_intent.is_none()
+        {
+            return Err("Supervised installation requires staged GUI shutdown intent".into());
         }
         if let Some(path) = update_base_archive {
             if options.native_update_staging_directory.is_none() {

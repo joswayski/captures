@@ -509,8 +509,8 @@ for temporary package validation, with progress, cancellation and retry. An expl
 retained base archive enables authenticated incremental downloads with signed full
 package fallback; this is development-only, not the Preview updater. Dismissing a
 pending operation keeps its result hidden until another explicit check or download.
-No automatic requests, installation, package execution or native update channel is
-enabled; ordinary check-only launches never fetch packages. A separate opt-in
+Ordinary check-only launches never fetch packages or enable installation; no
+automatic requests or native update channel is enabled. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
 checks signed native manifests, verifies downloads and can validate unpacked native
 packages in temporary storage. It never installs or replaces an app, and no native
@@ -521,9 +521,14 @@ profile with a retained pre-update data snapshot. It can also recover a failed
 package replacement after all app processes stop; package recovery does not restore
 profile data. It does not update installed copies or reuse their profiles.
 An opt-in development GUI shutdown record can carry actual Preferences visibility
-and the verified target digest to that external helper; it is not a GUI installer
-and still requires all app/data writers stopped. Its optional intent is development-only; fresh
-profiles still require setup, and automatic installed Settings restoration is not
+and the verified target digest to that external helper. An explicit
+[supervised development launch](apps/native/README.md#supervised-development-gui-installation)
+also enables **Restart and install** after verification: the external parent waits
+for an accepted, drained shutdown, authenticates/reacquires the exact package,
+snapshots development data and confirms replacement startup. Ordinary Quit does
+not install. Other app/data writers and launches must remain excluded; this does
+not update installed copies or establish OS signing/permission identity. Fresh
+profiles still require setup; automatic installed Settings restoration is not
 connected. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
 also available separately, copies explicitly selected shipping settings, retained
 History and drafts with an original-data snapshot. Shipping data and exports stay

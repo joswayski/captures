@@ -118,6 +118,7 @@ pub struct Workbench {
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
     quitting: bool,
+    install_update_requested: bool,
     shutdown_update_intent: Option<(captures_app::updater::checks::CheckStatus, bool)>,
     update_notice: crate::update_notice::Host,
     crash: Option<Arc<captures_app::crash::Session>>,
@@ -253,6 +254,7 @@ impl Workbench {
                     client,
                     &cc.egui_ctx,
                     options.native_update_staging_directory.take(),
+                    options.native_update_install_session.is_some(),
                 )
                 .err()
                 .map(|e| e.to_string())
@@ -409,6 +411,7 @@ impl Workbench {
             action_rx,
             action_error: update_error,
             quitting: false,
+            install_update_requested: false,
             shutdown_update_intent: None,
             update_notice,
             crash,
@@ -831,6 +834,7 @@ impl Workbench {
             && let Err(error) = live.flush_editors(ctx)
         {
             self.action_error = Some(format!("Quit cancelled: editor work remains open: {error}"));
+            self.install_update_requested = false;
             // The failing editor focuses its recoverable session. Do not raise
             // the root over that window and hide its save error.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -845,6 +849,15 @@ impl Workbench {
                 .update_check_status()
                 .zip(self.preferences.shutdown_visibility(ctx));
         }
+        if self.install_update_requested && self.shutdown_update_intent.is_none() {
+            self.install_update_requested = false;
+            self.action_error = Some(
+                "Restart cancelled: update status or native Preferences visibility is unavailable."
+                    .into(),
+            );
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         #[cfg(target_os = "linux")]
         self.primary_selection.shutdown();
         self.quitting = true;
@@ -855,7 +868,7 @@ impl Workbench {
         // release the election while a blocked request still owns scratch.
         self.preferences_state.try_shutdown_updates();
         if let Some(live) = &mut self.live {
-            live.flush();
+            live.flush_for_shutdown(self.install_update_requested);
         }
         self.shortcuts.0.borrow_mut().take();
         self.root_hidden = true;
@@ -877,7 +890,13 @@ impl Workbench {
         self.preferences_state.flush();
         if let Some(destination) = &self.options.native_update_shutdown_intent
             && let Some((status, visible)) = self.shutdown_update_intent.take()
-            && let Err(error) = destination.write(&status, visible)
+            && let Err(error) = destination.write(
+                &status,
+                visible,
+                self.options
+                    .native_update_install_session
+                    .filter(|_| self.install_update_requested),
+            )
         {
             // Quit remains a normal Quit. Without a complete record the helper
             // cannot use this handoff; never substitute inferred visibility.
@@ -1677,6 +1696,11 @@ impl eframe::App for Workbench {
             self.options.scene == Scene::Preferences
         });
         self.preferences_state.receive(ctx);
+        if self.preferences_state.take_install_request() {
+            self.install_update_requested = true;
+            self.quit(ctx);
+            return;
+        }
         let onboarding_complete = self.preferences_state.onboarding_complete();
         if self.options.live && !self.preferences_state.onboarding_pending() {
             let window = if onboarding_complete {
