@@ -122,6 +122,8 @@ enum Job {
     CapturePortal {
         root: PathBuf,
         generation: u64,
+        mode: captures_capture::CaptureMode,
+        include_cursor: bool,
     },
     PrepareRegion {
         display_id: String,
@@ -1655,6 +1657,8 @@ pub(crate) fn request_hidden_root_ui(ctx: &egui::Context) {
 #[cfg(target_os = "linux")]
 struct PortalScreenshot {
     flow: captures_app::capture_flow::PortalCapture,
+    mode: captures_capture::CaptureMode,
+    include_cursor: bool,
     hidden: Vec<egui::ViewportId>,
     restore_root: bool,
     recording: bool,
@@ -1934,11 +1938,21 @@ impl Live {
                         }
                     }
                     #[cfg(target_os = "linux")]
-                    Job::CapturePortal { root, generation } => Reply::PortalCaptured {
+                    Job::CapturePortal {
+                        root,
                         generation,
-                        result: captures_app::capture_portal_screenshot(&root, generation)
-                            .map(|artifact| artifact.map(Box::new))
-                            .map_err(|error| error.to_string()),
+                        mode,
+                        include_cursor,
+                    } => Reply::PortalCaptured {
+                        generation,
+                        result: captures_app::capture_portal_screenshot(
+                            &root,
+                            generation,
+                            mode,
+                            include_cursor,
+                        )
+                        .map(|artifact| artifact.map(Box::new))
+                        .map_err(|error| error.to_string()),
                     },
                     Job::Execute {
                         request,
@@ -3246,14 +3260,17 @@ impl Live {
             self.capture_failed("Capture is unavailable until the current action finishes.".into());
             return;
         }
-        if !matches!(
-            request,
-            CaptureRequest::NewCapture | CaptureRequest::Display | CaptureRequest::DisplayMenu
-        ) {
-            self.capture_failed("Wayland supports desktop-portal screenshots and display recording here; native region/window selection is not available yet.".into());
-            self.history_requested = true;
-            return;
-        }
+        let mode = match request {
+            CaptureRequest::NewCapture | CaptureRequest::Display | CaptureRequest::DisplayMenu => {
+                captures_capture::CaptureMode::Display
+            }
+            CaptureRequest::Window => captures_capture::CaptureMode::Window,
+            _ => {
+                self.capture_failed("Wayland region capture is not available yet. Use a desktop-portal display or window screenshot.".into());
+                self.history_requested = true;
+                return;
+            }
+        };
         let settings = match settings {
             Ok(settings) => settings,
             Err(error) => {
@@ -3316,6 +3333,8 @@ impl Live {
         });
         self.portal_screenshot = Some(PortalScreenshot {
             flow,
+            mode,
+            include_cursor: settings.show_cursor_in_screenshots,
             hidden,
             restore_root: self.root_shown
                 || frame.winit_window().and_then(|window| window.is_visible()) == Some(true),
@@ -3417,8 +3436,15 @@ impl Live {
             let _ = self.tx.send(Job::CapturePortal {
                 root: self.root.clone(),
                 generation: portal.flow.generation(),
+                mode: portal.mode,
+                include_cursor: portal.include_cursor,
             });
-            self.status = "Waiting for the desktop screenshot portal…".into();
+            self.status = if portal.mode == captures_capture::CaptureMode::Window {
+                "Waiting for the desktop window-sharing portal…"
+            } else {
+                "Waiting for the desktop screenshot portal…"
+            }
+            .into();
         } else if portal.started.elapsed() > Duration::from_secs(2) {
             let recording = portal.recording;
             self.finish_portal_screenshot(ctx, false);
@@ -8944,7 +8970,7 @@ impl Live {
                     self.request_capture(CaptureRequest::Recording(capture_controls::TargetMode::Window));
                     ui.ctx().request_repaint();
                 }
-                let notice = ui.label(RichText::new("Desktop portal • Window recording needs portal support. Region capture, window screenshots and floating previews are unavailable.")
+                let notice = ui.label(RichText::new("Desktop portal • Window screenshots and recording need window-sharing support. Region capture and floating previews are unavailable.")
                     .size(t.number("text-sm")).color(t.color("text-subtle")));
                 if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
                     let clip = ui.clip_rect();
@@ -10657,6 +10683,8 @@ mod tests {
         for captured in [false, true] {
             live.portal_screenshot = Some(PortalScreenshot {
                 flow: captures_app::capture_flow::PortalCapture::begin().unwrap(),
+                mode: captures_capture::CaptureMode::Window,
+                include_cursor: true,
                 hidden: vec![egui::ViewportId::from_hash_of("recording-controls")],
                 restore_root: false,
                 recording: true,
@@ -10719,6 +10747,8 @@ mod tests {
         }
         live.portal_screenshot = Some(PortalScreenshot {
             flow: captures_app::capture_flow::PortalCapture::begin().unwrap(),
+            mode: captures_capture::CaptureMode::Window,
+            include_cursor: false,
             hidden: Vec::new(),
             restore_root: false,
             recording: true,

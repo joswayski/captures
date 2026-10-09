@@ -209,8 +209,13 @@ hidden for the still; cancellation or failure preserves the recording. Screensho
 commands honor the configured countdown in a compact, compositor-placed window;
 focused Escape or closing it cancels before consent. The countdown is excluded
 from the still, but can appear in an ongoing Wayland display recording, like the HUD.
-Region capture and window screenshots remain unavailable.
-Portal policy controls consent and cursor inclusion. Separate no-window diagnostics
+Window screenshot shortcuts and **Screenshot Window** in the tray request a
+window-only ScreenCast grant, capture one bounded frame, and close the stream
+before adding it to History. This requires portal v3+ with window-sharing support;
+unsupported backends fail without substituting a display. Successful GNOME/KDE
+window pixels and physical acceptance remain unverified. Region capture remains unavailable.
+Portal policy controls consent; window screenshots require the configured cursor
+mode, while display stills keep backend-controlled cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
 Native Wayland global shortcuts use the desktop's GlobalShortcuts portal. The
 desktop chooses the available actions and keys; Preferences shows its returned
@@ -917,7 +922,7 @@ denied capture opens the native permission recovery: Restart & Retry on macOS, o
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.
-Wayland region capture and window screenshots remain unavailable. Physical
+Wayland window screenshots require a window-sharing portal; region capture remains unavailable. Physical
 permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
 physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,

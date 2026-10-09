@@ -131,7 +131,7 @@ def fixture(mode, log, target):
             if mode == "legacy":
                 assert "cursor_mode" not in options
             else:
-                assert int(options["cursor_mode"]) == 1
+                assert int(options["cursor_mode"]) == (2 if mode == "embedded-cursor" else 1)
             assert "restore_token" not in options and "persist_mode" not in options
             return self.response("SelectSources", sender, options, {})
 
@@ -165,13 +165,15 @@ def fixture(mode, log, target):
     GLib.MainLoop().run()
 
 
-def protocols(binary, root, env, recording=False, target="display"):
+def protocols(binary, root, env, recording=False, target="display", screenshot=False):
     modes = ("fd-error", "legacy", "cancel", "denied", "multiple", "missing-streams", "invalid-serial",
              "wrong-source", "no-display", "no-cursor", "wait", "method-error")
     if target == "window":
         modes += ("missing-source",)
+    if screenshot:
+        modes += ("embedded-cursor",)
     for mode in modes:
-        suffix = f"{'recording' if recording else 'source'}-{target}"
+        suffix = f"{'screenshot' if screenshot else 'recording' if recording else 'source'}-{target}"
         log = root / f"{mode}-{suffix}.jsonl"
         output = root / f"{mode}-{suffix}"
         service = subprocess.Popen([sys.executable, __file__, "--fixture", mode, "--log", str(log),
@@ -181,11 +183,14 @@ def protocols(binary, root, env, recording=False, target="display"):
             arguments = [binary, "--output", str(output), "--target", target]
             if mode == "wait":
                 arguments += ["--cancel-after-ms", "150"]
-            elif mode == "no-cursor":
+            elif mode in ("no-cursor", "embedded-cursor"):
                 arguments += ["--show-cursor", "true"]
             started = time.monotonic()
             result = subprocess.run(arguments, env=env, capture_output=True, text=True, timeout=8)
-            assert result.returncode == 1, (mode, result.stdout, result.stderr)
+            cancelled = screenshot and mode in ("cancel", "wait")
+            assert result.returncode == (0 if cancelled else 1), (mode, result.stdout, result.stderr)
+            if cancelled:
+                assert json.loads(result.stdout)["event"] == "cancelled", result.stdout
             if recording:
                 assert not list(output.rglob("*.mp4")) and not (output / "history").exists(), (mode, result.stderr)
             else:
@@ -199,7 +204,7 @@ def protocols(binary, root, env, recording=False, target="display"):
                 expected += ["SelectSources"]
             if not unsupported and mode != "denied":
                 expected += ["Start"]
-            if mode == "fd-error" or (mode == "legacy" and target == "display"):
+            if mode in ("fd-error", "embedded-cursor") or (mode == "legacy" and target == "display"):
                 expected += ["OpenPipeWireRemote"]
             assert calls == expected, (mode, calls, result.stderr)
             if mode == "wrong-source":
@@ -214,11 +219,16 @@ def protocols(binary, root, env, recording=False, target="display"):
             stop(service)
     bus = dbus.bus.BusConnection(env["DBUS_SESSION_BUS_ADDRESS"])
     assert not bus.name_has_owner(DESKTOP)
-    result = subprocess.run([binary, "--output", str(root / f"pre-cancel-{recording}-{target}"),
+    output = root / f"pre-cancel-{recording}-{screenshot}-{target}"
+    result = subprocess.run([binary, "--output", str(output),
                              "--target", target, "--cancel-after-ms", "0"], env=env, capture_output=True, text=True, timeout=3)
-    assert result.returncode == 1 and "cancelled" in result.stderr and not bus.name_has_owner(DESKTOP)
+    assert result.returncode == (0 if screenshot else 1) and not bus.name_has_owner(DESKTOP)
+    if not recording:
+        assert not output.exists()
+    assert "cancelled" in (result.stdout if screenshot else result.stderr)
     bus.close()
     print(json.dumps({"protocols": len(modes) + 1, "recording": recording, "target": target,
+                      "screenshot": screenshot,
                       "peer_spoofs_ignored": True, "failed_sessions_closed": True, "fallback": False}), flush=True)
 
 
@@ -292,7 +302,7 @@ def recording_sessions(binary, root, env):
     return phases
 
 
-def real_video(binary, backend, root, env, recording_binary=None):
+def real_video(binary, backend, root, env, recording_binary=None, screenshot_binary=None):
     width, height = 320, 200
     pixels = bytes(channel for y in range(height) for x in range(width)
                    for channel in ((35, 69, 103, 255) if x < 117 and y < 73 else
@@ -372,6 +382,21 @@ def real_video(binary, backend, root, env, recording_binary=None):
             assert rgba(output) in (pixels, alternate_pixels), "Portal pixels differ from both independently specified video frames"
 
         collect(root / "video.png")
+        if screenshot_binary:
+            # This real wlr backend advertises display-only capture. It cannot
+            # provide selected window pixels: require its genuine unsupported
+            # result instead of relabeling a monitor stream as a window.
+            proxy = bus.get_object(DESKTOP, DESKTOP_PATH)
+            sources = proxy.Get(SCREENCAST, "AvailableSourceTypes",
+                                dbus_interface="org.freedesktop.DBus.Properties")
+            assert int(sources) & 2 == 0, "Fixture changed: add selected-window pixel assertions"
+            output = root / "unsupported-window.png"
+            result = subprocess.run([screenshot_binary, "--output", str(output), "--target", "window"],
+                                    env=env, capture_output=True, text=True, timeout=8)
+            assert result.returncode == 1 and "cannot share a window" in result.stderr, result.stderr
+            assert not output.exists(), "unsupported window substituted display pixels"
+            print(json.dumps({"real_window_screenshot": "unsupported", "available_source_types": int(sources),
+                              "error": result.stderr.strip(), "published_images": 0, "fallback": False}), flush=True)
         cancelled = root / "cancelled.png"
         result = subprocess.run([binary, "--output", str(cancelled), "--frames", "120", "--cancel-after-ms", "700"],
                                 env=env, capture_output=True, text=True, timeout=4)
@@ -447,6 +472,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path)
     parser.add_argument("--recording-binary", type=Path, help="Also exercise real MP4/GIF recording sessions")
+    parser.add_argument("--screenshot-binary", type=Path, help="Also exercise window screenshot admission and real backend limits")
     parser.add_argument("--wlr-backend", type=Path, default=Path("/usr/libexec/xdg-desktop-portal-wlr"),
                         help="Private ScreenCast backend; use build_wayland_portal_fixture.sh for SHM-only desktops")
     parser.add_argument("--fixture", help=argparse.SUPPRESS)
@@ -465,11 +491,12 @@ def main():
         parser.error("--binary is required")
     binary = str(args.binary.resolve())
     recording_binary = str(args.recording_binary.resolve()) if args.recording_binary else None
+    screenshot_binary = str(args.screenshot_binary.resolve()) if args.screenshot_binary else None
     backend = str(args.wlr_backend.resolve())
     if not args.isolated:
         subprocess.run(["sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
-                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"}',
-                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or ""], check=True)
+                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"} ${9:+--screenshot-binary "$9"}',
+                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or "", screenshot_binary or ""], check=True)
         return
     with tempfile.TemporaryDirectory(prefix="captures-wayland-video-") as temporary:
         root = Path(temporary)
@@ -490,7 +517,9 @@ def main():
             if recording_binary:
                 protocols(recording_binary, root, env, recording=True)
                 protocols(recording_binary, root, env, recording=True, target="window")
-            real_video(binary, backend, root, env, recording_binary)
+            if screenshot_binary:
+                protocols(screenshot_binary, root, env, target="window", screenshot=True)
+            real_video(binary, backend, root, env, recording_binary, screenshot_binary)
         finally:
             stop(daemon)
             subprocess.run(["fusermount3", "-uz", str(runtime / "doc")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

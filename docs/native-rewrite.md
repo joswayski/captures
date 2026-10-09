@@ -34,7 +34,8 @@ load immediately; otherwise a quiet launch could consume the notice's one-shot
 paint request without creating it. Private-Sway lifecycle and real dark/light
 recording regressions pass. Isolated capture/recording smokes preserve the selected
 compositor PATH after dropping privileges instead of silently using old system Sway.
-Unsupported region/window screenshot modes remain unsupported even when granted.
+Region screenshots remain unsupported even when granted; Window screenshots now
+use the window-only ScreenCast source described below, requiring backend support.
 Capture completion now requests a child-declaration UI pass, so Preferences returns
 even when the Wayland History root remains hidden. The shortcut-host fixture waits
 for a portal screenshot's intentional History presentation before launching its next
@@ -237,7 +238,8 @@ ask afresh; the chooser can select a different window for each segment.
 Denied/cancelled, wrong/missing source, legacy and unsupported-backend requests
 retain the existing cleanup/recovery semantics without fallback or publication.
 The HUD distinguishes selected-window capture from display capture's included
-controls. Region capture and window screenshots remain unavailable on Wayland.
+controls. Region capture remains unavailable on Wayland; window screenshots are
+connected in the follow-up below.
 
 | Platform | Window-recording follow-up implementation / verification |
 | --- | --- |
@@ -245,6 +247,22 @@ controls. Region capture and window screenshots remain unavailable on Wayland.
 | Windows | Existing native-window recorder unchanged; portal targets explicitly rejected; physical execution unverified in this orb |
 | X11 | Existing direct-window recorder retained; shared model/session tests cover the new target without changing direct acquisition; physical acceptance open |
 | Wayland | Portal-window route implemented; scripted grants cover protocol admission/cleanup, while dark/light Sway checks the actual wlr unsupported-window error and normal/minimum UI without display fallback; successful GNOME/KDE window capture and physical acceptance unverified |
+
+The window-screenshot follow-up reuses that authoritative window-only grant and
+CPU-frame lifecycle. The host carries the requested mode and cursor setting
+through its existing unmap/countdown gate. One frame has a five-second deadline
+after bounded consent; the worker stops/joins and releases the remote/session
+before the current generation and desktop session may commit it to window-mode
+History. Cancelled/stale work, loss, unsupported windows/cursor modes and ambiguous
+grants publish no image. No monitor crop, unrestricted PipeWire remote or geometry
+is introduced. Screenshots beside a recording retain its parent ownership.
+
+| Platform | Window-screenshot follow-up implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing direct-window screenshots unchanged; new acquisition is Linux-gated; no macOS runtime verification in this orb |
+| Windows | Existing direct-window screenshots unchanged; new acquisition is Linux-gated; no Windows runtime verification in this orb |
+| X11 | Existing direct-window screenshots retained; shared History/generation tests cover both display/window modes; physical acceptance remains open |
+| Wayland | Window-only one-frame route implemented; 15 protocol cases cover admission, cancellation, cursor requirements and cleanup. Dark/light Sway verifies the real display-only wlr unsupported-window error, no publication, workspace restoration and subsequent display capture. Successful GNOME/KDE selected-window pixels and physical acceptance remain unverified |
 
 The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
 when a tray exists. Preferences, Feedback and media bootstrap independently;
