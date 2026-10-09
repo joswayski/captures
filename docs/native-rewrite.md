@@ -1715,7 +1715,9 @@ logical pixels of movement and keeps at least one millisecond selected. Far-out
 pointer glitches retain the last accepted sample; valid motion recovers from the
 original origin. Release, Escape, lost pointer/focus and layout changes end the
 gesture without rolling back staged values. Handles accept focused arrow keys
-(1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second). Paused handles
+(1 ms under 60 seconds, otherwise 10 ms) and Page Up/Down (1 second), including
+modified keys with the same step as shipping and AppKit. Numeric fields retain
+their cursor/selection keys instead of adjusting a previously focused handle. Paused handles
 now preview their edge on press, during thresholded dragging and after keyboard
 nudges. One active decode and only the latest waiting full edit/export/position
 replace a pointer-event backlog. The additive V2 `update_preview_at` accepts that
@@ -1736,6 +1738,21 @@ Recording-editor acceptance stays open.
 The private-X11 `--timeline` check samples held green/blue/green pixels before
 release, end preview, missing-source gesture teardown/fresh retry, keyboard and
 minimum-size input, MP4/GIF duration/colors, unchanged source/History and clean Quit.
+The keyboard regression includes modified start/end Arrow and Page input, repeated
+Shift presses across decoding and numeric-field focus guards. The existing
+`--playing-trim` check also verifies an exact Shift+PageUp change and resumed decoded
+pixels without another Play press. Host tests cover the
+59,999/60,000 ms step boundary, modifier combinations, distinct adjacent grips,
+unfocused input and one-pass consumption without weakening the 1 ms minimum span.
+
+| Platform | Trim keyboard parity implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing modifier-independent handle routing retained; source inspected, compilation/runtime and physical input unverified in this Linux orb |
+| Windows | Fixed in the shared wgpu editor; host tests pass, Windows input/physical acceptance unverified |
+| X11 | Rebuilt host passes paused/playing modified keys, focus guards, failure/retry and MP4/GIF duration/pixels on disposable software-rendered X11 in dark/light; physical input and screen-reader acceptance open |
+| Wayland | Fixed in the shared wgpu editor; host tests pass, compositor input and physical acceptance unverified |
+
+No recording-editor, accessibility or cross-platform acceptance gate closes.
 The source-crop fixture identifies unfiltered source-seek commands rather than
 the old output basename, preserving cancellation coverage with atomic PNG output.
 Shared tests cover final-frame pixels for MP4 and a sparse GIF with a 2.5-second
