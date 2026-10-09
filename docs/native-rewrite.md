@@ -1840,6 +1840,27 @@ the cached source frame; **Done cropping** shows the accepted (edited) preview, 
 playback is gated during adjustment. This host path
 is shared by Windows/X11/Wayland; automated real-media interaction is exercised on
 X11, not physical Windows/Wayland acceptance. The AppKit host path is described below.
+The bounded crop-accessibility slice names wgpu's painted recording preview viewport
+and decoded image and exposes all eight crop handles as numeric sliders on both
+hosts. Values describe the source-pixel edge plus the full staged crop. Corners use
+their horizontal edge; north/south use their vertical edge, while keyboard arrows
+retain both axes. Bounds come from the shared aspect-constrained drag geometry,
+including opposite-axis clipping, rather than advertising unreachable source edges.
+Increment/decrement nudge one source pixel through that same geometry. Saturated,
+clipped, hidden, busy and pending-text controls do not mutate stale crop input.
+Exact entry remains in the existing numeric fields; no duplicate SetValue surface
+or artificial slider stops are added. Accepted pixels/edits remain unchanged until
+the existing live apply accepts the staged crop, which remains unsaved until Save.
+
+| Platform | Recording crop accessibility implementation / verification |
+| --- | --- |
+| AppKit/macOS | NSAccessibility numeric values/bounds and increment/decrement implemented; observable editor-control XCTest regression added; compilation/runtime and VoiceOver unavailable in the Linux orb |
+| Windows | Shared wgpu/AccessKit implementation and Linux-hosted regressions; Windows runtime/Narrator acceptance unverified |
+| X11 | AccessKit tree/action regressions plus disposable private-X11 crop and preview-scale input/render smokes; physical Orca acceptance unverified |
+| Wayland | Shared wgpu implementation/regressions; compositor/AT-SPI and physical acceptance unverified |
+
+This slice closes no platform or recording-editor parity gate and changes no
+update/install orchestration, installed profile, release channel or renderer cutover.
 Typed dimensions commit on Enter/focus loss so partial input does not change the
 ratio. The lock is an input preference, not an export edit. Custom output width/height
 remain independent (no output aspect lock). Original, 1080p maximum and 720p maximum presets

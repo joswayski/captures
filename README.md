@@ -398,6 +398,11 @@ Numeric seek and other edit/export controls remain gated during playback or deco
 interior move. Crop handles follow the aspect lock; arrows move one source pixel,
 or ten with Shift. Crop changes apply when each gesture ends, and **Done cropping**
 shows the edited preview. Loading this source frame can be canceled or retried.
+Both native hosts expose crop-handle values and reachable bounds in source pixels,
+with assistive increment/decrement actions using the same aspect-constrained geometry.
+Corners announce their horizontal edge; top/bottom handles announce their vertical edge.
+Exact entry remains in the existing numeric crop fields. Physical screen-reader acceptance
+is still unverified on all platforms.
 Both native recording editors provide **Fit / 100%**, which changes only the
 displayed scale. At 100%, one decoded image pixel occupies one screen point; larger
 previews scroll within the preview area. Playback

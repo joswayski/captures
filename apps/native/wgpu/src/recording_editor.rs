@@ -217,6 +217,8 @@ struct View {
     preview_actual_size: bool,
     adjusting_crop: bool,
     crop_gesture: Option<CropGesture>,
+    /// AccessKit can transfer focus before this pass commits a numeric field.
+    text_focus: Option<egui::Id>,
     loading_source: bool,
     thumbnails: Option<egui::TextureHandle>,
     loading_thumbnails: bool,
@@ -1882,7 +1884,28 @@ impl Drop for Editor {
     }
 }
 
+// A corner announces its horizontal edge; north/south announce their vertical
+// edge. Keyboard input still supports both axes. Exact entry stays in the fields.
+fn crop_handle_value(crop: CropRect, handle: CropDragHandle) -> f64 {
+    f64::from(match handle {
+        CropDragHandle::North => crop.y,
+        CropDragHandle::South => crop.y + crop.height,
+        CropDragHandle::West | CropDragHandle::NorthWest | CropDragHandle::SouthWest => crop.x,
+        _ => crop.x + crop.width,
+    })
+}
+
+fn crop_handle_delta(handle: CropDragHandle, delta: f64) -> (f64, f64) {
+    if matches!(handle, CropDragHandle::North | CropDragHandle::South) {
+        (0., delta)
+    } else {
+        (delta, 0.)
+    }
+}
+
 fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image: egui::Rect) {
+    use egui::accesskit::{Action, TreeId};
+
     let Some(initial) = view.crop else {
         view.crop_gesture = None;
         return;
@@ -1961,7 +1984,11 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
     let pending_text = ui
         .ctx()
         .memory(|memory| memory.focused())
-        .filter(|id| egui::TextEdit::load_state(ui.ctx(), *id).is_some());
+        .filter(|id| egui::TextEdit::load_state(ui.ctx(), *id).is_some())
+        .or_else(|| {
+            view.text_focus
+                .filter(|id| ui.memory(|memory| memory.had_focus_last_frame(*id)))
+        });
     let mut responses = vec![(
         CropDragHandle::Move,
         ui.interact(to_view(initial), ui.scope_id().with("Move crop"), sense)
@@ -1981,8 +2008,6 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
             .on_hover_text(format!(
                 "{label}: drag or use arrows; Shift moves 10 source pixels."
             ));
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
         responses.push((handle, response));
     }
     if enabled && ui.ctx().current_pass_index() == 0 {
@@ -2057,6 +2082,43 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
                     pressed: true,
                     ..
                 } => view.crop_gesture = None,
+                egui::Event::AccessKitActionRequest(request)
+                    if request.target_tree == TreeId::ROOT
+                        && matches!(request.action, Action::Increment | Action::Decrement) =>
+                {
+                    let Some((handle, _)) = responses.iter().find(|(handle, response)| {
+                        *handle != CropDragHandle::Move
+                            && response.id.accesskit_id() == request.target_node
+                            && response.rect.intersect(ui.clip_rect()).is_positive()
+                    }) else {
+                        continue;
+                    };
+                    if let Some(id) = pending_text {
+                        ui.memory_mut(|memory| memory.surrender_focus(id));
+                        continue;
+                    }
+                    let delta = crop_handle_delta(
+                        *handle,
+                        if request.action == Action::Increment {
+                            1.
+                        } else {
+                            -1.
+                        },
+                    );
+                    view.crop_gesture = None;
+                    let previous = view.crop.unwrap();
+                    if let Some(crop) = previous.after_drag(
+                        width,
+                        height,
+                        *handle,
+                        delta.0,
+                        delta.1,
+                        !view.crop_aspect_unlocked,
+                    ) && crop_handle_value(crop, *handle) != crop_handle_value(previous, *handle)
+                    {
+                        view.crop = Some(crop);
+                    }
+                }
                 egui::Event::Key {
                     key,
                     pressed: true,
@@ -2091,6 +2153,74 @@ fn show_crop_overlay(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, image:
                 _ => {}
             }
         }
+    }
+    for (handle, response) in &responses {
+        if *handle == CropDragHandle::Move {
+            continue;
+        }
+        let crop = view.crop.unwrap();
+        let value = crop_handle_value(crop, *handle);
+        let bound = |direction| {
+            let delta = crop_handle_delta(*handle, direction * f64::from(width.max(height)));
+            crop_handle_value(
+                crop.after_drag(
+                    width,
+                    height,
+                    *handle,
+                    delta.0,
+                    delta.1,
+                    !view.crop_aspect_unlocked,
+                )
+                .unwrap(),
+                *handle,
+            )
+        };
+        let (min, max) = (bound(-1.), bound(1.));
+        let (_, center, label) = handle_positions(crop)
+            .into_iter()
+            .find(|(kind, _, _)| kind == handle)
+            .unwrap();
+        let handle_rect = egui::Rect::from_center_size(center, egui::Vec2::splat(hit_size));
+        let axis = if matches!(handle, CropDragHandle::North | CropDragHandle::South) {
+            "Y"
+        } else {
+            "X"
+        };
+        response.widget_info(|| {
+            let mut info = egui::WidgetInfo::slider(enabled, value, label);
+            info.current_text_value = Some(format!(
+                "{axis} edge {value} source pixels; X {}, Y {}, width {}, height {}",
+                crop.x, crop.y, crop.width, crop.height,
+            ));
+            info
+        });
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_min_numeric_value(min);
+            node.set_max_numeric_value(max);
+            node.set_numeric_value_step(1.);
+            // Custom handles support nudges, not a second exact-value input.
+            node.clear_actions();
+            let visible = handle_rect.intersect(ui.clip_rect());
+            if visible.is_positive() {
+                node.set_bounds(egui::accesskit::Rect {
+                    x0: visible.min.x.into(),
+                    y0: visible.min.y.into(),
+                    x1: visible.max.x.into(),
+                    y1: visible.max.y.into(),
+                });
+                if enabled {
+                    node.add_action(Action::Focus);
+                    if value < max {
+                        node.add_action(Action::Increment);
+                    }
+                    if value > min {
+                        node.add_action(Action::Decrement);
+                    }
+                }
+            } else {
+                node.set_hidden();
+            }
+        });
     }
     let selected = to_view(view.crop.unwrap()).intersect(image);
     for dim in [
@@ -3052,6 +3182,10 @@ fn show(
                 },
             );
         });
+    view.text_focus = ui
+        .ctx()
+        .memory(|memory| memory.focused())
+        .filter(|id| egui::TextEdit::load_state(ui.ctx(), *id).is_some());
     view.drop_comparison_if_unapplied();
     if probe_env() {
         let controls = PROBE.with_borrow(Clone::clone);
@@ -3616,6 +3750,11 @@ fn show_preview_card(
                 .max_rect(inner),
         );
         viewport.shrink_clip_rect(inner);
+        crate::accessibility::set_group(
+            &viewport,
+            egui::accesskit::Role::Group,
+            "Recording preview viewport",
+        );
         let mut image_rect_out = None;
         let mut image_frame_out = None;
         let mut paint = |ui: &mut egui::Ui, image_rect: egui::Rect| {
@@ -3637,6 +3776,21 @@ fn show_preview_card(
                 egui::StrokeKind::Outside,
             );
             probe(ui, "Preview image", image_rect);
+            let visible = image_rect.intersect(ui.clip_rect());
+            if visible.is_positive() {
+                let decoded = ui.interact(
+                    visible,
+                    ui.scope_id().with("decoded-recording-frame"),
+                    egui::Sense::hover(),
+                );
+                decoded.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Image,
+                        true,
+                        "Decoded recording frame",
+                    )
+                });
+            }
             image_rect_out = Some(image_rect.intersect(ui.clip_rect()));
             image_frame_out = Some((image_rect, ui.clip_rect()));
             if let Some(comparison) = &view.comparison {
@@ -6016,6 +6170,274 @@ mod tests {
     }
 
     #[test]
+    fn crop_accessibility_announces_reachable_edges_and_stages_ordered_source_pixel_actions() {
+        use crate::accessibility::tests::find_role;
+        use egui::accesskit::{Action, ActionRequest, Role, TreeId};
+
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let image = egui::Rect::from_min_size(egui::pos2(50., 75.), egui::vec2(400., 225.));
+        let initial = CropRect {
+            x: 40,
+            y: 20,
+            width: 160,
+            height: 80,
+        };
+        let mut view = opened();
+        view.presented.as_mut().unwrap().source.width = 320;
+        view.presented.as_mut().unwrap().source.height = 180;
+        view.presented.as_mut().unwrap().edit.crop = Some(initial);
+        view.saved_edit.crop = Some(initial);
+        view.crop = Some(initial);
+        let accepted = view.presented.as_ref().unwrap().clone();
+        let run = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    show_crop_overlay(ui, &tokens, view, image);
+                    if ctx.current_pass_index() == 0 {
+                        ctx.request_discard("assistive input must run once");
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            output.platform_output.accesskit_update.unwrap()
+        };
+        for unlocked in [false, true] {
+            view.crop_aspect_unlocked = unlocked;
+            let tree = run(&mut view, vec![]);
+            for (label, value, locked_max, min, free_max) in [
+                ("Crop top left", 40., 198., 0., 198.),
+                ("Crop top right", 200., 240., 42., 320.),
+                ("Crop bottom right", 200., 320., 42., 320.),
+                ("Crop bottom left", 40., 198., 0., 198.),
+                ("Crop top", 20., 98., 0., 98.),
+                ("Crop right", 200., 280., 42., 320.),
+                ("Crop bottom", 100., 140., 22., 180.),
+                ("Crop left", 40., 198., 0., 198.),
+            ] {
+                let (id, node) = find_role(&tree, Role::Slider, label).expect(label);
+                assert_eq!(node.numeric_value(), Some(value), "{label}");
+                assert_eq!(node.min_numeric_value(), Some(min), "{label}");
+                assert_eq!(
+                    node.max_numeric_value(),
+                    Some(if unlocked { free_max } else { locked_max }),
+                    "{label}"
+                );
+                assert_eq!(node.numeric_value_step(), Some(1.));
+                assert!(
+                    node.value()
+                        .unwrap()
+                        .contains("source pixels; X 40, Y 20, width 160, height 80")
+                );
+                assert!(
+                    node.supports_action(Action::Increment)
+                        && node.supports_action(Action::Decrement)
+                );
+                assert!(
+                    !node.supports_action(Action::SetValue),
+                    "exact input stays in the existing fields"
+                );
+                let action = |action| {
+                    egui::Event::AccessKitActionRequest(ActionRequest {
+                        action,
+                        target_tree: TreeId::ROOT,
+                        target_node: id,
+                        data: None,
+                    })
+                };
+                let changed = run(&mut view, vec![action(Action::Increment)]);
+                assert_eq!(
+                    find_role(&changed, Role::Slider, label)
+                        .unwrap()
+                        .1
+                        .numeric_value(),
+                    Some(value + 1.),
+                    "{label}"
+                );
+                let changed = run(&mut view, vec![action(Action::Decrement)]);
+                assert_eq!(
+                    find_role(&changed, Role::Slider, label)
+                        .unwrap()
+                        .1
+                        .numeric_value(),
+                    Some(value),
+                    "{label}"
+                );
+                view.crop = Some(initial);
+            }
+        }
+        view.crop_aspect_unlocked = false;
+        let tree = run(&mut view, vec![]);
+        let id = find_role(&tree, Role::Slider, "Crop right").unwrap().0;
+        let action = |action| {
+            egui::Event::AccessKitActionRequest(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            })
+        };
+        run(&mut view, vec![action(Action::Focus)]);
+        let tree = run(
+            &mut view,
+            vec![
+                action(Action::Increment),
+                trim_key(egui::Key::ArrowRight),
+                action(Action::Decrement),
+            ],
+        );
+        assert_eq!(
+            view.crop,
+            Some(CropRect {
+                x: 40,
+                y: 21,
+                width: 161,
+                height: 81
+            })
+        );
+        assert_eq!(
+            find_role(&tree, Role::Slider, "Crop right")
+                .unwrap()
+                .1
+                .numeric_value(),
+            Some(201.)
+        );
+        assert!(view.dirty() && view.unapplied());
+        assert_eq!(view.presented.as_ref().unwrap().edit, accepted.edit);
+        assert!(Arc::ptr_eq(
+            &accepted.frame,
+            &view.presented.as_ref().unwrap().frame
+        ));
+        assert_eq!(view.position_ms, accepted.position_ms);
+
+        // The height boundary limits a locked east edge before the source's X
+        // boundary. No inert stops or action beyond that edge are advertised.
+        view.crop = Some(CropRect {
+            x: 40,
+            y: 0,
+            width: 240,
+            height: 120,
+        });
+        let tree = run(&mut view, vec![]);
+        let node = find_role(&tree, Role::Slider, "Crop right").unwrap().1;
+        assert_eq!(node.max_numeric_value(), Some(280.));
+        assert!(!node.supports_action(Action::Increment));
+        run(&mut view, vec![action(Action::Increment)]);
+        assert_eq!(view.crop.unwrap().width, 240);
+        run(&mut view, vec![action(Action::Decrement)]);
+        assert_eq!(
+            view.crop,
+            Some(CropRect {
+                x: 40,
+                y: 0,
+                width: 239,
+                height: 120
+            })
+        );
+        for gate in 0..5 {
+            let staged = view.crop;
+            view.busy = gate == 0;
+            view.picker = gate == 1;
+            view.confirm_close = gate == 2;
+            let tree = if gate >= 3 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events: vec![action(Action::Decrement)],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.set_clip_rect(if gate == 3 {
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(20., 20.))
+                        } else {
+                            // Nested scrolling can produce an inverted clip.
+                            egui::Rect::from_min_max(egui::pos2(350., 150.), egui::pos2(450., 100.))
+                        });
+                        show_crop_overlay(ui, &tokens, &mut view, image);
+                    },
+                );
+                output.textures_delta.clear();
+                output.platform_output.accesskit_update.unwrap()
+            } else {
+                run(&mut view, vec![action(Action::Decrement)])
+            };
+            assert_eq!(view.crop, staged);
+            let node = find_role(&tree, Role::Slider, "Crop right").unwrap().1;
+            assert!(
+                !node.supports_action(Action::Increment)
+                    && !node.supports_action(Action::Decrement)
+            );
+        }
+    }
+
+    #[test]
+    fn recording_preview_publishes_named_viewport_and_clipped_decoded_image() {
+        use crate::accessibility::tests::{contains, find_role};
+        use egui::accesskit::Role;
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut view = opened();
+        for actual in [false, true] {
+            view.preview_actual_size = actual;
+            view.texture = Some(ctx.load_texture(
+                "large recording frame",
+                egui::ColorImage::filled([1200, 800], egui::Color32::RED),
+                egui::TextureOptions::LINEAR,
+            ));
+            probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 580.), vec![]);
+            let (output, controls) =
+                probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 580.), vec![]);
+            let tree = output.platform_output.accesskit_update.unwrap();
+            let (viewport, _) =
+                find_role(&tree, Role::Group, "Recording preview viewport").unwrap();
+            let (image, node) = find_role(&tree, Role::Image, "Decoded recording frame").unwrap();
+            assert!(contains(&tree, viewport, image));
+            let bounds = node.bounds().unwrap();
+            let visible = probed(&controls, "Preview image");
+            assert!((bounds.width() - f64::from(visible.width())).abs() <= 2.);
+            assert!((bounds.height() - f64::from(visible.height())).abs() <= 2.);
+            assert!(bounds.width() > 0. && bounds.height() > 0.);
+            assert!(!node.supports_action(egui::accesskit::Action::Click));
+        }
+        let (_, controls) = probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 580.), vec![]);
+        let page = probed(&controls, "Page");
+        // Scroll the page gutter, not the nested 100% image viewport.
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            egui::vec2(760., 580.),
+            vec![
+                egui::Event::PointerMoved(egui::pos2(page.left() + 6., page.center().y)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0., -2000.),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        for _ in 0..30 {
+            probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 580.), vec![]);
+        }
+        let (output, controls) =
+            probe_frame(&ctx, &tokens, &mut view, egui::vec2(760., 580.), vec![]);
+        assert!(!probed(&controls, "Preview image").is_positive());
+        let tree = output.platform_output.accesskit_update.unwrap();
+        assert!(
+            find_role(&tree, Role::Image, "Decoded recording frame").is_none(),
+            "a fully scrolled-away image must not publish inverted clipped bounds: {:?}, probe {:?}",
+            find_role(&tree, Role::Image, "Decoded recording frame").map(|(_, node)| node.bounds()),
+            controls.get("Preview image")
+        );
+    }
+
+    #[test]
     fn crop_gesture_ends_on_escape_focus_layout_and_busy_and_keys_use_source_pixels() {
         let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
         let ctx = egui::Context::default();
@@ -6154,6 +6576,7 @@ mod tests {
     fn crop_pointer_finishes_pending_text_before_starting_a_new_gesture() {
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         tokens.apply(&ctx, true);
         let mut view = opened();
         view.presented.as_mut().unwrap().source.width = 320;
@@ -6199,6 +6622,157 @@ mod tests {
         assert!(view.crop_gesture.is_none());
         assert_eq!(pending, "200");
         assert_ne!(ctx.memory(|memory| memory.focused()), Some(id));
+
+        use crate::accessibility::tests::find_role;
+        use egui::accesskit::{Action, ActionRequest, Role, TreeId};
+        let handle = find_role(
+            &output.platform_output.accesskit_update.unwrap(),
+            Role::Slider,
+            "Crop right",
+        )
+        .unwrap()
+        .0;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut pending).id(id))
+                .request_focus();
+        });
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Increment,
+                    target_tree: TreeId::ROOT,
+                    target_node: handle,
+                    data: None,
+                })],
+                ..Default::default()
+            },
+            |ui| {
+                show_crop_overlay(ui, &tokens, &mut view, image);
+                ui.add(egui::TextEdit::singleline(&mut pending).id(id));
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            view.crop,
+            Some(initial),
+            "assistive actions also finish text before nudging"
+        );
+        assert_eq!(pending, "200");
+        assert_ne!(ctx.memory(|memory| memory.focused()), Some(id));
+    }
+
+    #[test]
+    fn assistive_crop_focus_and_nudge_commit_pending_width_without_using_a_stale_ratio() {
+        use crate::accessibility::tests::find_role;
+        use egui::accesskit::{Action, ActionRequest, Role, TreeId};
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut view = opened();
+        view.presented.as_mut().unwrap().source.width = 320;
+        view.presented.as_mut().unwrap().source.height = 180;
+        view.crop = Some(CropRect {
+            x: 40,
+            y: 20,
+            width: 160,
+            height: 80,
+        });
+        view.adjusting_crop = true;
+        view.source_texture = Some(ctx.load_texture(
+            "source crop",
+            egui::ColorImage::filled([320, 180], egui::Color32::GREEN),
+            egui::TextureOptions::LINEAR,
+        ));
+        let size = egui::vec2(960., 1800.);
+        probe_frame(&ctx, &tokens, &mut view, size, vec![]);
+        let (_, controls) = probe_frame(&ctx, &tokens, &mut view, size, vec![]);
+        let field = probed(&controls, "Crop width");
+        let at = egui::pos2(field.left() + 16., field.center().y);
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![
+                egui::Event::PointerMoved(at),
+                trim_pointer(at, true),
+                trim_pointer(at, false),
+            ],
+        );
+        let select_all = egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                command: true,
+                ..egui::Modifiers::NONE
+            },
+        };
+        let (output, _) = probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![select_all, egui::Event::Text("170".into())],
+        );
+        assert_eq!(
+            view.crop.unwrap().width,
+            160,
+            "active width text is not committed"
+        );
+        let tree = output.platform_output.accesskit_update.unwrap();
+        assert_eq!(
+            find_role(&tree, Role::TextInput, "Crop width")
+                .unwrap()
+                .1
+                .value(),
+            Some("170")
+        );
+        let id = find_role(&tree, Role::Slider, "Crop right").unwrap().0;
+        let events = [Action::Focus, Action::Increment].map(|action| {
+            egui::Event::AccessKitActionRequest(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            })
+        });
+        probe_frame(&ctx, &tokens, &mut view, size, events.to_vec());
+        assert_eq!(
+            view.crop,
+            Some(CropRect {
+                x: 40,
+                y: 20,
+                width: 170,
+                height: 85
+            }),
+            "the field commits at its original 2:1 ratio; the same input batch must not first resize stale geometry"
+        );
+        probe_frame(
+            &ctx,
+            &tokens,
+            &mut view,
+            size,
+            vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                action: Action::Increment,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            })],
+        );
+        assert_eq!(
+            view.crop,
+            Some(CropRect {
+                x: 40,
+                y: 20,
+                width: 171,
+                height: 86
+            }),
+            "a subsequent action nudges the committed crop normally"
+        );
     }
 
     fn timeline_frame(
