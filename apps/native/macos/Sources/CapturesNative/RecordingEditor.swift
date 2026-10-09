@@ -494,6 +494,51 @@ final class RecordingCropHandle: NSView {
         let accepted = super.resignFirstResponder(); needsDisplay = true; return accepted
     }
 
+    // Corners announce their horizontal edge; north/south announce Y. Arrow
+    // keys retain both axes, and exact entry remains in the numeric fields.
+    private var vertical: Bool { kind == .north || kind == .south }
+    private func edgeValue(_ crop: NativeRecordingCropRect) -> Double {
+        switch kind {
+        case .north: Double(crop.y)
+        case .south: Double(crop.y + crop.height)
+        case .west, .northWest, .southWest: Double(crop.x)
+        default: Double(crop.x + crop.width)
+        }
+    }
+
+    func updateAccessibility() {
+        guard let overlay else { return }
+        let crop = overlay.crop
+        let extent = Double(max(overlay.sourceSize.width, overlay.sourceSize.height))
+        func bound(_ direction: Double) -> Double {
+            guard let value = NativeRecordingGeometry.afterDrag(crop, source: overlay.sourceSize,
+                handle: kind, deltaX: vertical ? 0 : direction * extent,
+                deltaY: vertical ? direction * extent : 0,
+                lockAspect: overlay.lockAspect) else { return edgeValue(crop) }
+            return edgeValue(value)
+        }
+        setAccessibilityMinValue(NSNumber(value: bound(-1)))
+        setAccessibilityMaxValue(NSNumber(value: bound(1)))
+        setAccessibilityValue(NSNumber(value: edgeValue(crop)))
+        setAccessibilityValueDescription(
+            "\(vertical ? "Y" : "X") edge \(Int(edgeValue(crop))) source pixels; X \(crop.x), Y \(crop.y), width \(crop.width), height \(crop.height)")
+    }
+
+    override func accessibilityPerformIncrement() -> Bool { adjustAccessibleEdge(1) }
+    override func accessibilityPerformDecrement() -> Bool { adjustAccessibleEdge(-1) }
+
+    private func adjustAccessibleEdge(_ delta: Double) -> Bool {
+        guard enabled, !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty,
+              let overlay, overlay.editingEnabled,
+              let value = NativeRecordingGeometry.afterDrag(overlay.crop, source: overlay.sourceSize,
+                handle: kind, deltaX: vertical ? 0 : delta, deltaY: vertical ? delta : 0,
+                lockAspect: overlay.lockAspect),
+              edgeValue(value) != edgeValue(overlay.crop) else { return false }
+        overlay.endDrag()
+        overlay.nudge(kind, deltaX: vertical ? 0 : delta, deltaY: vertical ? delta : 0)
+        return true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let overlay else { return }
         let focused = window?.firstResponder === self
@@ -515,12 +560,12 @@ final class RecordingCropOverlay: NSView {
         }
     }
     var sourceSize = NativeRecordingDimensions(width: 2, height: 2) {
-        didSet { endDrag(); updateHandles(); needsDisplay = true }
+        didSet { endDrag(); updateHandles(); updateAccessibility(); needsDisplay = true }
     }
     var crop = NativeRecordingCropRect(x: 0, y: 0, width: 2, height: 2) {
         didSet { updateHandles(); updateAccessibility(); needsDisplay = true }
     }
-    var lockAspect = true
+    var lockAspect = true { didSet { updateAccessibility() } }
     var onStage: ((NativeRecordingCropRect) -> Void)?
     var onCommitPendingInput: (() -> Void)?
     private(set) var editingEnabled = false
@@ -630,10 +675,7 @@ final class RecordingCropOverlay: NSView {
     private func updateAccessibility() {
         setAccessibilityValueDescription(
             "X \(crop.x), Y \(crop.y), width \(crop.width), height \(crop.height)")
-        for (kind, handle) in handles {
-            handle.setAccessibilityValueDescription(
-                "\(kind.accessibilityName), X \(crop.x), Y \(crop.y), width \(crop.width), height \(crop.height)")
-        }
+        handles.values.forEach { $0.updateAccessibility() }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {

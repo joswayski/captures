@@ -2319,6 +2319,113 @@ final class RecordingEditorTests: XCTestCase {
                        "layout changes end the gesture while retaining staged geometry")
     }
 
+    func testCropAccessibilityReportsReachableSourceEdgesAndStagesThroughEditorControls() throws {
+        _ = NSApplication.shared
+        let initial = NativeRecordingCropRect(x: 40, y: 20, width: 160, height: 80)
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 400, crop: initial))
+        worker.sourceResult = .success(RecordingSourceImage(positionMilliseconds: 400,
+            image: try solidImage(width: 320, height: 180, red: 18, green: 90, blue: 170)))
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        try button("Adjust crop", in: controller.root).performClick(nil)
+        let overlay = try XCTUnwrap(descendants(in: controller.root)
+            .compactMap { $0 as? RecordingCropOverlay }.first)
+        let handles = descendants(in: overlay).compactMap { $0 as? RecordingCropHandle }
+        let east = try XCTUnwrap(handles.first { $0.kind == .east })
+        let lock = try checkbox("Lock recording crop aspect ratio", in: controller.root)
+        let ranges: [(NativeRecordingCropDragHandle, Double, Double, Double, Double)] = [
+            (.northWest, 40, 0, 198, 198), (.northEast, 200, 42, 240, 320),
+            (.southEast, 200, 42, 320, 320), (.southWest, 40, 0, 198, 198),
+            (.north, 20, 0, 98, 98), (.east, 200, 42, 280, 320),
+            (.south, 100, 22, 140, 180), (.west, 40, 0, 198, 198),
+        ]
+        for unlocked in [false, true] {
+            lock.state = unlocked ? .off : .on
+            _ = lock.sendAction(lock.action, to: lock.target)
+            for (kind, value, minimum, lockedMaximum, freeMaximum) in ranges {
+                let handle = try XCTUnwrap(handles.first { $0.kind == kind })
+                XCTAssertEqual(handle.accessibilityRole(), .slider)
+                XCTAssertEqual((handle.accessibilityValue() as? NSNumber)?.doubleValue, value)
+                XCTAssertEqual((handle.accessibilityMinValue() as? NSNumber)?.doubleValue, minimum)
+                XCTAssertEqual((handle.accessibilityMaxValue() as? NSNumber)?.doubleValue,
+                               unlocked ? freeMaximum : lockedMaximum)
+                XCTAssertTrue(handle.accessibilityValueDescription()?.contains(
+                    "source pixels; X 40, Y 20, width 160, height 80") == true)
+            }
+        }
+        let south = try XCTUnwrap(handles.first { $0.kind == .south })
+        XCTAssertTrue(south.accessibilityPerformIncrement())
+        XCTAssertEqual(try field("Recording crop height", in: controller.root).stringValue, "81")
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue, "160")
+        XCTAssertTrue(south.accessibilityPerformDecrement())
+        lock.state = .on; _ = lock.sendAction(lock.action, to: lock.target)
+        let northEast = try XCTUnwrap(handles.first { $0.kind == .northEast })
+        XCTAssertTrue(northEast.accessibilityPerformIncrement())
+        XCTAssertEqual(try field("Recording crop Y", in: controller.root).stringValue, "19")
+        XCTAssertEqual(try field("Recording crop height", in: controller.root).stringValue, "81")
+        XCTAssertTrue(northEast.accessibilityPerformDecrement())
+        XCTAssertFalse(controller.dirty)
+        let decoded = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSImageView }
+            .first { $0.accessibilityLabel() == "Decoded recording frame" })
+        let sourceImage = decoded.image
+        XCTAssertTrue(east.accessibilityPerformIncrement())
+        XCTAssertTrue(controller.window.makeFirstResponder(east))
+        try dispatchCropKey(124, to: east, in: controller)
+        XCTAssertTrue(east.accessibilityPerformDecrement())
+        XCTAssertEqual(try field("Recording crop width", in: controller.root).stringValue, "161")
+        XCTAssertEqual(try field("Recording crop height", in: controller.root).stringValue, "81")
+        XCTAssertEqual(try field("Recording crop Y", in: controller.root).stringValue, "21")
+        XCTAssertEqual((east.accessibilityValue() as? NSNumber)?.intValue, 201)
+        XCTAssertTrue(controller.dirty)
+        XCTAssertTrue(decoded.image === sourceImage)
+        XCTAssertTrue(worker.requests.isEmpty, "assistive edits stage, rather than publish, the crop")
+
+        let width = try field("Recording crop width", in: controller.root)
+        width.selectText(nil)
+        let editor = try XCTUnwrap(controller.window.fieldEditor(false, for: width) as? NSTextView)
+        editor.insertText("170", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertTrue(overlay.interceptsPendingInput)
+        XCTAssertFalse(east.accessibilityPerformIncrement(), "pending text must not nudge stale geometry")
+        XCTAssertEqual(editor.string, "170")
+        controller.window.makeFirstResponder(nil)
+        _ = width.sendAction(width.action, to: width.target)
+
+        // A locked edge centered near the source's top is limited by height,
+        // not by the remaining horizontal source extent.
+        lock.state = .off; _ = lock.sendAction(lock.action, to: lock.target)
+        for (label, value) in [("Recording crop Y", "0"), ("Recording crop width", "240"),
+                               ("Recording crop height", "120")] {
+            let input = try field(label, in: controller.root)
+            input.stringValue = value; _ = input.sendAction(input.action, to: input.target)
+        }
+        lock.state = .on; _ = lock.sendAction(lock.action, to: lock.target)
+        XCTAssertEqual((east.accessibilityMaxValue() as? NSNumber)?.intValue, 280)
+        XCTAssertFalse(east.accessibilityPerformIncrement())
+        XCTAssertTrue(east.accessibilityPerformDecrement())
+        XCTAssertEqual(width.stringValue, "239")
+        XCTAssertEqual(try field("Recording crop height", in: controller.root).stringValue, "120")
+        overlay.presentedImageRect = NSRect(x: -2_000, y: 0, width: 320, height: 180)
+        XCTAssertFalse(east.accessibilityPerformDecrement(), "clipped handles cannot act")
+        overlay.presentedImageRect = nil
+        worker.deferRequest = true
+        controller.applyPendingEdits()
+        let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
+        let sentCrop = try XCTUnwrap(edit["crop"] as? [String: Any])
+        XCTAssertEqual((sentCrop["width"] as? NSNumber)?.intValue, 239)
+        XCTAssertFalse(east.accessibilityPerformDecrement(), "pending decode controls cannot act")
+        XCTAssertEqual(width.stringValue, "239")
+        worker.completeRequest(.failure(AppBridgeError.backend("injected crop apply failure")))
+        XCTAssertTrue(controller.dirty)
+        XCTAssertEqual(width.stringValue, "239", "failed preview retains assistive corrections")
+        XCTAssertTrue(decoded.image === sourceImage)
+        try button("Done cropping", in: controller.root).performClick(nil)
+        XCTAssertFalse(east.accessibilityPerformDecrement(), "retained hidden handles cannot act")
+        XCTAssertTrue(controller.dirty, "Done keeps staged edits unsaved")
+    }
+
     func testTimelineBridgeThresholdWildSampleRecoveryAndFractionalTime() throws {
         XCTAssertEqual(try XCTUnwrap(NativeRecordingTimeline.ratio(milliseconds: 4_375,
             durationMilliseconds: 8_750)), 0.5, accuracy: 0.000_001)
