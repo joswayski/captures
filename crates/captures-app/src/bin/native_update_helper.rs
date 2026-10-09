@@ -3,12 +3,12 @@ use std::{fs, path::PathBuf, time::Duration};
 
 use captures_app::{
     profile_import::{prepare_development_profile, validate_development_profile},
-    updater::{Renderer, Target, UpdateClient, recover_installation},
+    updater::{Renderer, ShutdownIntent, Target, UpdateClient, recover_installation},
 };
 use captures_media::CancelToken;
 use serde_json::json;
 
-const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped | --existing-development-profile ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false] [--base-archive ABSOLUTE_PATH]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
+const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped | --existing-development-profile ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false | --shutdown-intent-file ABSOLUTE_PATH (existing profile only)] [--base-archive ABSOLUTE_PATH]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1)) {
@@ -54,6 +54,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let mut source_data = None;
     let mut stopped = false;
     let mut restore_preferences = None;
+    let mut shutdown_intent = None;
     let mut base_archive = None;
     let mut timeout = Duration::from_secs(60);
     while let Some(argument) = arguments.next() {
@@ -93,6 +94,9 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
             "--restore-preferences" if restore_preferences.is_none() => {
                 restore_preferences = Some(value.parse::<bool>().map_err(|_| USAGE)?);
             }
+            "--shutdown-intent-file" if shutdown_intent.is_none() => {
+                shutdown_intent = Some(PathBuf::from(value));
+            }
             "--base-archive" if base_archive.is_none() => base_archive = Some(PathBuf::from(value)),
             "--health-timeout-seconds" => {
                 let seconds: u64 = value.parse().map_err(|_| USAGE)?;
@@ -124,6 +128,9 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         (None, None, Some(profile), None, None, true) => (profile, None, true),
         _ => return Err(USAGE.into()),
     };
+    if shutdown_intent.is_some() && (!reuse || restore_preferences.is_some()) {
+        return Err("Shutdown intent requires an existing enrolled development profile and cannot override --restore-preferences.".into());
+    }
     if !destination.is_absolute() || !profile.is_absolute() {
         return Err("Package and development profile must be explicit absolute paths.".into());
     }
@@ -203,6 +210,15 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         println!("{}", json!({"state":"up_to_date","replaced":false}));
         return Ok(());
     };
+    if let Some(path) = &shutdown_intent {
+        // A GUI record is only visibility intent, never an authenticated update
+        // or proof of stopped writers. Reauthenticate and bind the exact target
+        // before any package download, profile snapshot, replacement or launch.
+        restore_preferences = Some(
+            ShutdownIntent::take_matching(path, &profile, &update)
+                .map_err(|error| error.to_string())?,
+        );
+    }
     let scratch = tempfile::tempdir_in(destination.parent().ok_or(USAGE)?)
         .map_err(|error| error.to_string())?;
     let staged = update

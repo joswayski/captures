@@ -1,6 +1,23 @@
 import Foundation
 import CCapturesSettings
 
+/// Bounded shared development-profile validation/publication, with no updater
+/// handle, network request or package execution. Publish only after host drain.
+@discardableResult func updateShutdownIntent(_ object: [String: Any]) throws -> Bool {
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let pointer = String(decoding: data, as: UTF8.self).withCString {
+        captures_update_shutdown_intent_v1($0)
+    }
+    guard let pointer else { throw AppBridgeError.invalidResponse }
+    defer { captures_settings_free_v1(pointer) }
+    guard let response = try JSONSerialization.jsonObject(with: Data(String(cString: pointer).utf8)) as? [String: Any],
+          let ok = response["ok"] as? Bool else { throw AppBridgeError.invalidResponse }
+    guard ok else { throw AppBridgeError.backend(response.string("error", "Shutdown intent was not published.")) }
+    guard let result = response["result"] as? [String: Any], let written = result["written"] as? Bool
+    else { throw AppBridgeError.invalidResponse }
+    return written
+}
+
 protocol UpdateCheckTransport: AnyObject {
     func request(_ object: [String: Any]) throws -> [String: Any]
     func shutdown(completion: @escaping () -> Void)
@@ -96,6 +113,15 @@ final class UpdateCheckModel {
         case .cancelDownload: return command("cancel_download")
         default: return false
         }
+    }
+
+    /// Snapshot while the handle still owns the verified stage, before shutdown
+    /// drops it. The external helper authenticates these bytes again later.
+    func stagedShutdownStatus() -> [String: Any]? {
+        guard !closed, let reply = try? transport.request(["operation": "poll"]),
+              let status = reply["status"] as? [String: Any], status["state"] as? String == "staged"
+        else { return nil }
+        return status
     }
 
     private func command(_ operation: String) -> Bool {

@@ -6,17 +6,20 @@
 //! until all checks succeed. Staging validates packages in private temporary
 //! directories. Explicit replacement retains the previous development package
 //! until confirmation, with interruption recovery. An opt-in external helper can
-//! launch it with a new empty or explicitly imported disposable profile and
-//! confirm its private readiness. No GUI calls replacement, discovers installed
-//! data, registers it or activates a channel.
+//! launch it with a new empty, explicitly imported or enrolled development profile
+//! and confirm its private readiness. Opt-in GUI shutdown intent carries visibility
+//! and the exact selected target, not installation authority. No GUI calls
+//! replacement, discovers installed data, registers it or activates a channel.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
 pub mod checks;
 mod delta;
 mod health;
 mod installation;
+mod shutdown_intent;
 mod staging;
 pub use health::{HealthAcknowledgement, take_restart_preferences};
 pub use installation::{LaunchFailure, PackageUse, PendingInstallation, recover_installation};
+pub use shutdown_intent::{ShutdownIntent, ShutdownIntentDestination};
 pub use staging::StagedUpdate;
 
 use std::{
@@ -157,7 +160,8 @@ struct Artifact {
     delta: Option<serde_json::Value>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReleaseInfo {
     pub renderer: Renderer,
     pub target: Target,
@@ -349,6 +353,11 @@ impl UpdateClient {
 impl PendingUpdate {
     pub fn info(&self) -> &ReleaseInfo {
         &self.info
+    }
+
+    /// Full artifact digest authenticated by the manifest, including delta use.
+    pub fn sha256(&self) -> String {
+        self.hash.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
     /// Retrying uses the same authenticated metadata and a fresh private file.

@@ -39,6 +39,17 @@ CapturesUpdateChecks *captures_update_checks_create_v1(const char *configuration
 char *captures_update_checks_request_v1(CapturesUpdateChecks *handle, const char *request_json);
 void captures_update_checks_free_v1(CapturesUpdateChecks *handle);
 
+/* Development-only shutdown intent. {path,history_root,settings_file} validates
+ * a new absolute output outside an enrolled profile, without creating anything.
+ * Adding both {status,preferences_visible} publishes only a captured staged status,
+ * after accepted work/settings and update scratch drain, before profile release.
+ * Snapshot actual visibility after the editor veto and before hiding windows.
+ * Atomic no-clobber; no install/launch/authentication, no HTTP or settings writes.
+ * Replies/free rules match other JSON ABIs. Result {written:bool}; failures must
+ * not substitute inferred intent. Explicit external helper reauthenticates target
+ * and still requires the all-writers-stopped operator assertion. */
+char *captures_update_shutdown_intent_v1(const char *request_json);
+
 /* Retained account/sharing worker. Construct only after explicit Share, using
  * the elected native profile root. No vault/network I/O until a command.
  * Serialize nonblocking request calls on the owning UI thread. open takes

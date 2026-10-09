@@ -129,6 +129,7 @@ pub struct Options {
     pub native_update_restore_preferences: bool,
     pub native_update_checks: Option<captures_app::updater::UpdateClient>,
     pub native_update_staging_directory: Option<PathBuf>,
+    pub native_update_shutdown_intent: Option<captures_app::updater::ShutdownIntentDestination>,
 }
 
 impl Options {
@@ -161,6 +162,7 @@ impl Options {
             native_update_restore_preferences: false,
             native_update_checks: None,
             native_update_staging_directory: None,
+            native_update_shutdown_intent: None,
         };
         let mut native_update_ready_file = None;
         let mut native_update_ready_token = None;
@@ -168,9 +170,14 @@ impl Options {
         let mut update_key_file = None;
         let mut update_current_version = None;
         let mut update_base_archive: Option<PathBuf> = None;
+        let mut update_shutdown_intent: Option<PathBuf> = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--native-update-shutdown-intent-file" if update_shutdown_intent.is_none() => {
+                    update_shutdown_intent =
+                        Some(args.next().ok_or("Missing shutdown intent path")?.into());
+                }
                 "--" => {
                     for path in args.by_ref() {
                         if path.is_empty() {
@@ -461,6 +468,25 @@ impl Options {
             }
             captures_app::updater::checks::validate_staging_directory(path)
                 .map_err(|e| e.to_string())?;
+        }
+        if let Some(path) = update_shutdown_intent {
+            if options.native_update_staging_directory.is_none() {
+                return Err("Shutdown intent requires explicit native update staging".into());
+            }
+            options.native_update_shutdown_intent = Some(
+                captures_app::updater::ShutdownIntentDestination::new(
+                    &path,
+                    options
+                        .history_root
+                        .as_deref()
+                        .ok_or("Missing development History root")?,
+                    options
+                        .settings_file
+                        .as_deref()
+                        .ok_or("Missing development settings file")?,
+                )
+                .map_err(|error| error.to_string())?,
+            );
         }
         if let Some(path) = update_base_archive {
             if options.native_update_staging_directory.is_none() {

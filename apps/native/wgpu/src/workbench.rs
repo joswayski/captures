@@ -118,6 +118,7 @@ pub struct Workbench {
     action_rx: Receiver<Result<(), String>>,
     action_error: Option<String>,
     quitting: bool,
+    shutdown_update_intent: Option<(captures_app::updater::checks::CheckStatus, bool)>,
     update_notice: crate::update_notice::Host,
     crash: Option<Arc<captures_app::crash::Session>>,
     crash_review_pending: bool,
@@ -408,6 +409,7 @@ impl Workbench {
             action_rx,
             action_error: update_error,
             quitting: false,
+            shutdown_update_intent: None,
             update_notice,
             crash,
             crash_review_pending,
@@ -834,6 +836,15 @@ impl Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
+        // Editor failure vetoes Quit above. Snapshot the native window before
+        // capture drain/hide can change it; focus and update-click origin do not
+        // establish visibility. Publish only after every accepted worker drains.
+        if self.options.native_update_shutdown_intent.is_some() {
+            self.shutdown_update_intent = self
+                .preferences_state
+                .update_check_status()
+                .zip(self.preferences.shutdown_visibility(ctx));
+        }
         #[cfg(target_os = "linux")]
         self.primary_selection.shutdown();
         self.quitting = true;
@@ -864,6 +875,14 @@ impl Workbench {
             return;
         }
         self.preferences_state.flush();
+        if let Some(destination) = &self.options.native_update_shutdown_intent
+            && let Some((status, visible)) = self.shutdown_update_intent.take()
+            && let Err(error) = destination.write(&status, visible)
+        {
+            // Quit remains a normal Quit. Without a complete record the helper
+            // cannot use this handoff; never substitute inferred visibility.
+            eprintln!("Development shutdown intent was not published: {error}");
+        }
         self.tray.take();
         if let Some(session) = &self.crash
             && let Err(error) = session.clean_exit()

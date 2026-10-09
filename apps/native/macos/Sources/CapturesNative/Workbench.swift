@@ -909,6 +909,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var captureBusy = false
     private var terminating = false
     private var terminationPending = false
+    private var shutdownUpdateIntent: [String: Any]?
     private var updateHealth: UpdateHealthCoordinator?
     private var onboardingReady = false
     private var onboardingWasPresented = false
@@ -1118,6 +1119,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.terminating = false; self.terminationPending = false
                     sender.reply(toApplicationShouldTerminate: false); return
                 }
+                // Snapshot only after the editor veto, before capture/window
+                // teardown can change visibility. A non-key window still counts.
+                if var intent = self.options.nativeUpdateShutdownIntent,
+                   let status = self.options.nativeUpdateChecks?.stagedShutdownStatus() {
+                    intent["status"] = status
+                    intent["preferences_visible"] = self.appWindows.window(.preferences)?.isVisible == true
+                    self.shutdownUpdateIntent = intent
+                }
                 self.nativeInstance?.stopAccepting()
                 var remaining = 2
                 let drained = { [weak self] in
@@ -1153,6 +1162,15 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     try? FileManager.default.removeItem(at: directory)
                 }
             })
+        if let intent = shutdownUpdateIntent {
+            shutdownUpdateIntent = nil
+            do { try updateShutdownIntent(intent) }
+            catch {
+                // Normal Quit still finishes. A failed record cannot authorize
+                // helper handoff, and must not be replaced by guessed intent.
+                fputs("Development shutdown intent was not published: \(error.localizedDescription)\n", stderr)
+            }
+        }
         do { try crashDiagnostics?.markClean() }
         catch { presentHostError(title: "Diagnostics Couldn’t Close", message: "Capture data is safe, but the previous-session marker could not be updated.") }
         if let instanceWakeObserver {

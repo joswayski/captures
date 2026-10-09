@@ -83,6 +83,22 @@ impl PreferencesWindow {
         self.open && !self.hidden
     }
 
+    /// Sample the actual native window, not focus, click origin or occlusion.
+    /// Unknown backend visibility must not invent a restart snapshot.
+    pub(crate) fn shutdown_visibility(&self, ctx: &egui::Context) -> Option<bool> {
+        if !self.presented() {
+            return Some(false);
+        }
+        ctx.data(|data| {
+            data.get_temp::<std::sync::Weak<winit::window::Window>>(egui::Id::unique((
+                "eframe-winit-window",
+                viewport(),
+            )))
+        })
+        .and_then(|window| window.upgrade())
+        .and_then(|window| window.is_visible())
+    }
+
     pub(crate) fn focused(&self) -> bool {
         self.presented()
             && self.focused

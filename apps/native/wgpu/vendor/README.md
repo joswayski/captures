@@ -68,6 +68,12 @@ order when a hidden root does not paint. This queue is shared on every host;
 extra mapping and surface-reset behavior is gated to actual Linux Wayland window
 handles. Glow is unused by this workbench and unchanged.
 
+The wgpu integration also publishes weak native-window references in temporary
+context data, keyed by `("eframe-winit-window", ViewportId)`. Development shutdown
+intent queries the actual Preferences window's `is_visible`, independently of
+focus/occlusion. Missing/unknown visibility does not fabricate an intent; weak
+references do not keep retired windows alive. No painting or mapping policy changes.
+
 To update, vendor the new locked Git package into a temporary directory, copy
 only eframe, retain its licenses/README, repin all egui siblings to the same
 revision, and reapply this one-file patch against upstream. Do not retain vendor

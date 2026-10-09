@@ -37,6 +37,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("helper", "importer", "signing-test", "base-package", "target-package", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--gui", type=Path,
+        help="Capture real post-verification GUI shutdown visibility instead of operator intent")
     args = parser.parse_args()
     assert sys.platform == "linux", "This real-host fixture is private X11 only"
     # Adopt the GUI after its helper exits so real Ctrl+Q can assert exit status,
@@ -46,6 +48,7 @@ def main():
     assert libc.prctl(pr_set_child_subreaper, 1, 0, 0, 0) == 0, os.strerror(ctypes.get_errno())
     helper, importer, signer = (path.resolve(strict=True) for path in
         (args.helper, args.importer, args.signing_test))
+    gui = args.gui.resolve(strict=True) if args.gui else None
     base, target = (path.resolve(strict=True) for path in (args.base_package, args.target_package))
     output = args.output.resolve()
     output.mkdir(parents=True, mode=0o700, exist_ok=False)
@@ -56,6 +59,8 @@ def main():
         for path in root.rglob("*") if path.is_file()} for root in (base, target)}
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1",
            "XDG_SESSION_TYPE": "x11", "CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER": "1"}
+    if gui:
+        env["CAPTURES_NATIVE_LAYOUT_PROBE"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
     for key, directory in (("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"),
                            ("XDG_CACHE_HOME", "cache"), ("XDG_RUNTIME_DIR", "runtime")):
@@ -157,6 +162,76 @@ def main():
                     retained = profile / root / ".retained"
                     retained.mkdir(parents=True)
                     (retained / "opaque-bytes.bin").write_bytes(b"retain\0\xff" + root.encode())
+                intent = directory / "shutdown-intent.json"
+                if gui:
+                    scratch = directory / "gui-scratch"
+                    scratch.mkdir()
+                    event_path = directory / "gui-events.jsonl"
+                    with event_path.open("w") as events:
+                        app = subprocess.Popen(list(map(str, [gui, "--live", "--open-preferences", "--open-history",
+                            "--history-root", profile / "history", "--settings-file", settings,
+                            "--native-update-manifest-url", url + "/manifest.json",
+                            "--native-update-public-key-file", output / "public.key",
+                            "--native-update-current-version", "2026.9.99",
+                            "--native-update-staging-directory", scratch,
+                            "--native-update-shutdown-intent-file", intent])), env=env, stdout=events, stderr=log)
+                    children.append(app)
+                    preferences = wait(lambda: windows(app.pid, "^Captures Preferences$"), "source Preferences")[0]
+                    history = wait(lambda: windows(app.pid, "^Capture History$"), "source History")[0]
+
+                    def reports():
+                        values = {}
+                        for line in event_path.read_text().splitlines():
+                            try:
+                                value = json.loads(line)
+                                values[value["event"]] = value["detail"]
+                            except (ValueError, KeyError):
+                                pass
+                        return values
+
+                    def click(x, y):
+                        run("xdotool", "windowactivate", "--sync", preferences,
+                            "mousemove", "--window", preferences, str(x - 1), str(y),
+                            "mousemove_relative", "1", "0", "sleep", ".15", "click", "1")
+
+                    def activate(name):
+                        previous = {"rect": None, "since": time.monotonic()}
+                        def stable():
+                            detail = reports().get("preferences-shortcuts-layout", {})
+                            rect = detail.get("controls", {}).get(name)
+                            page = detail.get("page")
+                            if rect != previous["rect"]:
+                                previous.update(rect=rect, since=time.monotonic())
+                            return rect if (rect and page and page[1] <= rect[1] and rect[3] <= page[3]
+                                and time.monotonic() - previous["since"] >= .6) else None
+                        rect = wait(stable, f"{name} visible and settled")
+                        click(round((rect[0] + rect[2]) / 2), round((rect[1] + rect[3]) / 2))
+
+                    click(90, 289)  # Established Updates sidebar row; actions use the real layout probe.
+                    activate("Check for updates")
+                    wait(lambda: (reports().get("update-notice") or {}).get("visualState") == "available", "signed available")
+                    activate("Package verification")
+                    wait(lambda: "verified" in (reports().get("preferences-shortcuts-layout", {}).get("update_checks") or {}).get("status", "").lower(),
+                         "real GUI package verified", timeout=90)
+                    assert not intent.exists(), "intent published before an accepted shutdown"
+                    if not visible:
+                        # Normal WM close, not windowclose's forced XDestroyWindow.
+                        run("xdotool", "windowactivate", "--sync", preferences,
+                            "key", "--clearmodifiers", "alt+F4")
+                        wait(lambda: not windows(app.pid, "^Captures Preferences$"), "source Preferences closed")
+                    # Quit from History, not the update action or Preferences focus.
+                    run("xdotool", "windowactivate", "--sync", history, "windowfocus", "--sync", history,
+                        "sleep", ".4")
+                    assert run("xdotool", "getwindowfocus").decode().strip() != preferences
+                    run("import", "-window", "root", directory / "before-shutdown.png")
+                    run("xdotool", "key", "--clearmodifiers", "ctrl+q")
+                    assert app.wait(timeout=30) == 0, "source GUI Quit failed"
+                    assert not list(scratch.iterdir()), "GUI scratch survived shutdown"
+                    record = json.loads(intent.read_text())
+                    assert record["preferences_visible"] == visible, record
+                    assert record["sha256"] == digest(archive) and record["profile"] == str(profile), record
+                    for root in ("editor-drafts", "recording-recovery"):
+                        assert (profile / root / ".retained/opaque-bytes.bin").read_bytes() == b"retain\0\xff" + root.encode()
                 saved = {str(path.relative_to(profile)): path.read_bytes()
                     for name in ("settings.json", "history", "editor-drafts", "recording-recovery",
                                  ".captures-native-development-profile.json")
@@ -167,7 +242,22 @@ def main():
                     "--public-key-file", output / "public.key", "--current-version", "2026.9.99",
                     "--renderer", "wgpu", "--stopped-development-package", package,
                     "--existing-development-profile", profile, "--all-app-processes-stopped",
-                    "--health-timeout-seconds", "60", "--restore-preferences", str(visible).lower()]
+                    "--health-timeout-seconds", "60"]
+                command += ["--shutdown-intent-file", intent] if gui else ["--restore-preferences", str(visible).lower()]
+                if gui:
+                    original_intent = intent.read_bytes()
+                    altered = json.loads(original_intent)
+                    altered["sha256"] = "01" * 32
+                    intent.write_text(json.dumps(altered))
+                    rejected = subprocess.run(list(map(str, command)), env=env,
+                        stdout=subprocess.PIPE, stderr=log, timeout=30)
+                    assert rejected.returncode != 0 and intent.exists(), "mismatched target accepted/consumed"
+                    assert requests[before_requests:] == ["/manifest.json", "/manifest.json.minisig"], "mismatch downloaded a package"
+                    assert not list(directory.glob(".captures-native-pre-update-*")), "mismatch created a profile snapshot"
+                    for name, expected in saved.items():
+                        assert (profile / name).read_bytes() == expected, "mismatch changed profile data"
+                    intent.write_bytes(original_intent)
+                    before_requests = len(requests)
                 handoff = subprocess.Popen(list(map(str, command)), env=env, stdout=subprocess.PIPE, stderr=log)
                 children.append(handoff)
                 # Inspect presentation while confirmation rehashes the whole
@@ -178,7 +268,10 @@ def main():
                         "^Captures is running$"], env=env, capture_output=True, text=True, timeout=5)
                     assert result.returncode in (0, 1), result.stderr
                     return result.stdout.splitlines()
-                notice = wait(ready_notice, "ready notice", timeout=120)[0]
+                # Debug helpers rehash/re-extract the real ~200 MiB package more
+                # than once before activation. This is not the post-spawn health
+                # deadline; preserve that separate bounded startup assertion.
+                notice = wait(ready_notice, "ready notice", timeout=300)[0]
                 pid = int(run("xdotool", "getwindowpid", notice))
                 handle = os.pidfd_open(pid)
                 app_handles.append(handle)
@@ -188,15 +281,21 @@ def main():
                 if visible:
                     preferences = wait(lambda: windows(pid, "^Captures Preferences$"), "restored Preferences")[0]
                     # Keep the whole native frame within this small private desktop.
-                    run("xdotool", "windowmove", "--sync", preferences, "180", "150")
+                    # The notice expires; do not block its review capture on a
+                    # window-manager placement acknowledgement.
+                    run("xdotool", "windowmove", preferences, "180", "150")
                 else:
                     assert not windows(pid, "^Captures Preferences$"), "closed intent restored Preferences"
                 time.sleep(.6)
+                assert windows(pid, "^Captures is running$") == [notice], "notice expired before review capture"
                 run("import", "-window", "root" if visible else notice, directory / "restart.png")
+                assert windows(pid, "^Captures is running$") == [notice], "notice expired during review capture"
                 stdout, _ = handoff.communicate(timeout=120)
                 assert handoff.returncode == 0, "helper failed; inspect processes.log"
                 reply = json.loads(stdout)
                 assert reply["state"] == "confirmed" and reply["process_id"] == pid, reply
+                if gui:
+                    assert not intent.exists(), "helper did not consume intent once"
                 snapshot = Path(reply["profile_snapshot"])
                 assert snapshot.is_dir() and snapshot.parent == profile.parent
                 for name, expected in saved.items():

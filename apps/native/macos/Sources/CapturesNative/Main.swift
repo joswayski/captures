@@ -18,6 +18,7 @@ struct Options {
     var nativeUpdateReadyToken: String?
     var nativeUpdateRestorePreferences = false
     var nativeUpdateChecks: UpdateCheckModel?
+    var nativeUpdateShutdownIntent: [String: Any]?
     var screenshot: String?
     /// Workbench update notice fixture (stub status source; no updater).
     var updateState: String?
@@ -33,6 +34,7 @@ struct Options {
         var updateCurrentVersion: String?
         var updateStagingDirectory: String?
         var updateBaseArchive: String?
+        var updateShutdownIntentFile: String?
         var iterator = arguments.makeIterator()
         while let argument = iterator.next() {
             switch argument {
@@ -81,6 +83,9 @@ struct Options {
             case "--native-update-base-archive":
                 guard updateBaseArchive == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 updateBaseArchive = value
+            case "--native-update-shutdown-intent-file":
+                guard updateShutdownIntentFile == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
+                updateShutdownIntentFile = value
             case "--screenshot":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 screenshot = value
@@ -115,7 +120,7 @@ struct Options {
                   updateState == nil, updateTray == nil, scene == "preferences", screenshot == nil
             else { throw Usage.invalid }
         }
-        if updateEndpoint != nil || updateKeyFile != nil || updateCurrentVersion != nil || updateStagingDirectory != nil || updateBaseArchive != nil {
+        if updateEndpoint != nil || updateKeyFile != nil || updateCurrentVersion != nil || updateStagingDirectory != nil || updateBaseArchive != nil || updateShutdownIntentFile != nil {
             guard explicitLive, let endpoint = updateEndpoint, let keyFile = updateKeyFile,
                   let version = updateCurrentVersion, !hasHealth, scene == "preferences",
                   let historyRoot, historyRoot.hasPrefix("/"),
@@ -128,6 +133,13 @@ struct Options {
             if let updateBaseArchive {
                 guard updateStagingDirectory != nil else { throw Usage.invalid }
                 configuration["base_archive"] = updateBaseArchive
+            }
+            if let updateShutdownIntentFile {
+                guard updateStagingDirectory != nil else { throw Usage.invalid }
+                let intent: [String: Any] = ["path": updateShutdownIntentFile,
+                    "history_root": historyRoot, "settings_file": settingsFile]
+                try updateShutdownIntent(intent)
+                nativeUpdateShutdownIntent = intent
             }
             nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(configuration: configuration))
         }

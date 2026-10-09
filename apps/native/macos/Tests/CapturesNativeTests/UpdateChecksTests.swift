@@ -10,6 +10,7 @@ final class UpdateChecksTests: XCTestCase {
         var pollError = false
         var shutdowns = 0
         var acquisition: [String: Any]?
+        var rawStatus: [String: Any] = ["state": "idle"]
         func request(_ object: [String: Any]) throws -> [String: Any] {
             let operation = object.string("operation")
             operations.append(operation)
@@ -22,13 +23,28 @@ final class UpdateChecksTests: XCTestCase {
             if operation == "cancel_download" {
                 acquisition?["enabled"] = false
             }
-            return ["accepted": operation != "poll", "checking": checking,
+            return ["accepted": operation != "poll", "checking": checking, "status": rawStatus,
                 "presentation": ["version": "Native development 2026.9.99",
                     "channel": "Explicit development endpoint · Check only", "status": status,
                     "action": checking ? "Checking…" : "Check Now", "enabled": !checking,
                     "detail": "No installation or update channel is enabled.", "acquisition": acquisition ?? [:]]]
         }
         func shutdown(completion: @escaping () -> Void) { shutdowns += 1; completion() }
+    }
+
+    func testShutdownSnapshotRequiresAStagedPackageAndSurvivesWorkerCleanup() throws {
+        let transport = Transport(), model = try UpdateCheckModel(transport: transport)
+        for state in ["idle", "available", "downloading", "verifying", "cancelling", "download_error"] {
+            transport.rawStatus = ["state": state]
+            XCTAssertNil(model.stagedShutdownStatus())
+        }
+        transport.rawStatus = ["state": "staged", "sha256": "exact selected artifact",
+            "release": ["version": "2026.10.50"]]
+        let snapshot = try XCTUnwrap(model.stagedShutdownStatus())
+        model.shutdown {}
+        transport.rawStatus = ["state": "idle"]
+        XCTAssertEqual(snapshot.string("sha256"), "exact selected artifact")
+        XCTAssertNil(model.stagedShutdownStatus(), "a closed checker cannot prepare another handoff")
     }
 
     func testAcquisitionRoutesExplicitInputAndKeepsCancellationBusyUntilAcknowledged() throws {
@@ -147,6 +163,9 @@ final class UpdateChecksTests: XCTestCase {
         XCTAssertNotNil(delta.nativeUpdateChecks)
         XCTAssertFalse(FileManager.default.fileExists(atPath: retained))
         XCTAssertThrowsError(try Options(base + flags + ["--native-update-base-archive", retained]))
+        let shutdownFlags = ["--native-update-shutdown-intent-file", directory.appendingPathComponent("intent.json").path]
+        XCTAssertThrowsError(try Options(base + flags + shutdownFlags), "requires staging")
+        XCTAssertThrowsError(try Options(base + flags + deltaFlags + shutdownFlags), "must not enroll an arbitrary profile")
         XCTAssertThrowsError(try Options(base + flags + ["--native-update-staging-directory", directory.path,
             "--native-update-base-archive", "relative"]))
         XCTAssertThrowsError(try Options(base + flags + deltaFlags + ["--native-update-base-archive", retained]))
