@@ -1,6 +1,6 @@
-//! Development-only GUI shutdown intent, not permission to install or launch.
-//! The external stopped-package helper must authenticate the selected artifact
-//! again. No package paths, credentials or executable capabilities cross this file.
+//! Development-only post-drain GUI intent. A supervised installation request
+//! additionally binds its parent's private per-launch nonce. Ordinary Quit never
+//! authorizes replacement; the external helper authenticates the artifact again.
 use super::{
     DEVELOPMENT_IDENTITY, Error, PendingUpdate, ReleaseInfo, checks::CheckStatus, decode_hash,
 };
@@ -66,7 +66,12 @@ impl ShutdownIntentDestination {
     /// before releasing profile election. The host snapshots visibility/status
     /// after an accepted editor drain and before hiding/cancelling its windows.
     /// Non-staged states publish nothing. Atomic no-clobber, private on Unix.
-    pub fn write(&self, status: &CheckStatus, preferences_visible: bool) -> Result<bool, Error> {
+    pub fn write(
+        &self,
+        status: &CheckStatus,
+        preferences_visible: bool,
+        install_session: Option<uuid::Uuid>,
+    ) -> Result<bool, Error> {
         let CheckStatus::Staged { release, sha256 } = status else {
             return Ok(false);
         };
@@ -86,6 +91,7 @@ impl ShutdownIntentDestination {
             release: release.clone(),
             sha256: sha256.clone(),
             preferences_visible,
+            install_session,
         };
         let bytes = serde_json::to_vec(&record).map_err(std::io::Error::other)?;
         if bytes.len() as u64 > LIMIT {
@@ -110,9 +116,34 @@ pub struct ShutdownIntent {
     release: ReleaseInfo,
     sha256: String,
     preferences_visible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    install_session: Option<uuid::Uuid>,
 }
 
 impl ShutdownIntent {
+    /// An ordinary Quit, legacy record or missing record makes no installation
+    /// request. This checks only private operator intent, never authenticates it.
+    pub fn install_requested(
+        path: &Path,
+        profile: &Path,
+        session: uuid::Uuid,
+    ) -> Result<bool, Error> {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            result => {
+                result?;
+            }
+        }
+        let record = Self::read(path, profile)?;
+        match record.install_session {
+            None => Ok(false),
+            Some(actual) if actual == session => Ok(true),
+            Some(_) => Err(Error::Configuration(
+                "installation request belongs to another GUI launch",
+            )),
+        }
+    }
+
     /// Consume once, only for the explicitly selected enrolled profile and the
     /// freshly AUTHENTICATED full target digest/size/version/renderer/host target.
     /// The file is operator intent, NOT authentication or proof of stopped writers.
@@ -122,10 +153,46 @@ impl ShutdownIntent {
         profile: &Path,
         update: &PendingUpdate,
     ) -> Result<bool, Error> {
+        Self::take(path, profile, update, None)
+    }
+
+    /// The actual supervising parent calls only after a successful root wait
+    /// and a complete installation drain. A normal visibility record is rejected.
+    pub fn take_install_matching(
+        path: &Path,
+        profile: &Path,
+        update: &PendingUpdate,
+        session: uuid::Uuid,
+    ) -> Result<bool, Error> {
+        Self::take(path, profile, update, Some(session))
+    }
+
+    fn take(
+        path: &Path,
+        profile: &Path,
+        update: &PendingUpdate,
+        session: Option<uuid::Uuid>,
+    ) -> Result<bool, Error> {
+        let record = Self::read(path, profile)?;
+        let info = update.info();
+        if session.is_some_and(|expected| record.install_session != Some(expected))
+            || record.release.renderer != info.renderer
+            || record.release.target != info.target
+            || record.release.version != info.version
+            || record.release.size != info.size
+            || decode_hash(&record.sha256)? != update.hash
+        {
+            return Err(Error::Configuration(
+                "shutdown intent does not match this authenticated update and GUI launch",
+            ));
+        }
+        fs::remove_file(path)?;
+        Ok(record.preferences_visible)
+    }
+
+    fn read(path: &Path, profile: &Path) -> Result<Self, Error> {
         let invalid = || {
-            Error::Configuration(
-                "shutdown intent does not match this enrolled profile and authenticated update",
-            )
+            Error::Configuration("shutdown intent does not match this enrolled development profile")
         };
         if !path.is_absolute() {
             return Err(invalid());
@@ -142,20 +209,13 @@ impl ShutdownIntent {
             return Err(invalid());
         }
         let record: Self = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-        let info = update.info();
         if record.schema != 1
             || record.identity != DEVELOPMENT_IDENTITY
             || record.profile != validate_development_profile(profile).map_err(|_| invalid())?
-            || record.release.renderer != info.renderer
-            || record.release.target != info.target
-            || record.release.version != info.version
-            || record.release.size != info.size
-            || decode_hash(&record.sha256)? != update.hash
         {
             return Err(invalid());
         }
-        fs::remove_file(path)?;
-        Ok(record.preferences_visible)
+        Ok(record)
     }
 }
 
@@ -222,14 +282,24 @@ mod tests {
                 message: "failed".into(),
             },
         ] {
-            assert!(!destination.write(&status, true).unwrap());
+            assert!(!destination.write(&status, true, None).unwrap());
             assert!(!output.exists());
         }
         for visible in [true, false] {
-            assert!(destination.write(&status, visible).unwrap());
+            assert!(destination.write(&status, visible, None).unwrap());
             let original = fs::read(&output).unwrap();
-            assert!(destination.write(&status, !visible).is_err());
+            assert!(destination.write(&status, !visible, None).is_err());
             assert_eq!(fs::read(&output).unwrap(), original);
+            let session = uuid::Uuid::new_v4();
+            assert!(!ShutdownIntent::install_requested(&output, &profile, session).unwrap());
+            assert!(
+                ShutdownIntent::take_install_matching(&output, &profile, &update, session).is_err()
+            );
+            assert_eq!(
+                fs::read(&output).unwrap(),
+                original,
+                "ordinary Quit cannot authorize installation"
+            );
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -264,6 +334,27 @@ mod tests {
             );
             assert!(ShutdownIntent::take_matching(&output, &profile, &update).is_err());
         }
+        let session = uuid::Uuid::new_v4();
+        assert!(!ShutdownIntent::install_requested(&output, &profile, session).unwrap());
+        assert!(destination.write(&status, false, Some(session)).unwrap());
+        let original = fs::read(&output).unwrap();
+        let other = uuid::Uuid::new_v4();
+        assert!(ShutdownIntent::install_requested(&output, &profile, other).is_err());
+        assert!(ShutdownIntent::take_install_matching(&output, &profile, &update, other).is_err());
+        assert_eq!(fs::read(&output).unwrap(), original);
+        assert!(ShutdownIntent::install_requested(&output, &profile, session).unwrap());
+        let mut altered: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        altered["sha256"] = serde_json::json!("02".repeat(32));
+        fs::write(&output, serde_json::to_vec(&altered).unwrap()).unwrap();
+        assert!(
+            ShutdownIntent::take_install_matching(&output, &profile, &update, session).is_err()
+        );
+        assert!(output.exists());
+        fs::write(&output, original).unwrap();
+        assert!(
+            !ShutdownIntent::take_install_matching(&output, &profile, &update, session).unwrap()
+        );
+        assert!(!output.exists());
         assert!(
             ShutdownIntentDestination::new(
                 &profile.join("intent"),

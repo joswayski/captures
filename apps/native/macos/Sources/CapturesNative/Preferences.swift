@@ -1847,7 +1847,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         var y = layout.row.maxY
         if let acquisition = updateChecks?.acquisition {
             y = divider(y, card)
-            y = utilityRow("Package verification", detail: "Temporary storage only; nothing is installed or executed.",
+            let detail = acquisition.action == .install
+                ? "Restart after capture work and drafts finish; update this development package only."
+                : "Temporary storage only; nothing is installed or executed."
+            y = utilityRow("Package verification", detail: detail,
                 action: acquisition.label, y: y, card: card, enabled: acquisition.enabled,
                 identifier: "updates.acquisition") { [weak self] in self?.updateChecks?.acquire(acquisition.action) }
         }

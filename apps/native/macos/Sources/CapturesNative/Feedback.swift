@@ -24,6 +24,8 @@ enum FeedbackBridge {
             DispatchQueue.main.async { completion(result) }
         }
     }
+
+    static func flush() { queue.sync {} }
 }
 
 /// Shipping `Feedback.tsx` copy, placeholders and limits, shared with the wgpu

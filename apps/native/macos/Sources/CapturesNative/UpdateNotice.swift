@@ -307,6 +307,7 @@ final class UpdateNoticeModel {
         case .install, .check:
             if checkedPresentation != nil {
                 if action == .check { checkAgain() }
+                else { acquire(action) }
                 break
             }
             if action == .install, status?["state"] as? String == "available",

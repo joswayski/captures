@@ -119,6 +119,7 @@ pub struct CheckWorker {
     status: CheckStatus,
     generation: u64,
     staging_enabled: bool,
+    install_request_enabled: bool,
     jobs: mpsc::Sender<Job>,
     results: mpsc::Receiver<Event>,
     operation_cancel: Option<CancelToken>,
@@ -229,12 +230,19 @@ impl CheckWorker {
             status: CheckStatus::Idle,
             generation: 0,
             staging_enabled,
+            install_request_enabled: false,
             jobs,
             results,
             operation_cancel: None,
             cancel,
             thread: Some(thread),
         })
+    }
+
+    /// Only a GUI launched by the explicit development supervisor enables this
+    /// presentation route. The worker itself cannot replace or execute a package.
+    pub fn enable_install_request(&mut self) {
+        self.install_request_enabled = self.staging_enabled;
     }
 
     /// Repeated input during any operation cannot enqueue duplicate requests.
@@ -431,6 +439,9 @@ impl CheckWorker {
         }
         .into();
         p.description = match &self.status {
+            CheckStatus::Staged { release, .. } if self.install_request_enabled => {
+                format!("{} · Supervised development update", release.version)
+            }
             CheckStatus::Available { release }
             | CheckStatus::Downloading { release, .. }
             | CheckStatus::Verifying { release }
@@ -483,12 +494,16 @@ impl CheckWorker {
         p.status_message = match self.status {
             CheckStatus::Verifying { .. } => Some("Validating the signed package in temporary storage…".into()),
             CheckStatus::Cancelling { .. } => Some("Waiting for pending I/O and temporary cleanup…".into()),
+            CheckStatus::Staged { .. } if self.install_request_enabled => Some("Restart installs this development update after capture work and drafts finish. The previous package and a data snapshot stay available until startup is confirmed.".into()),
             CheckStatus::Staged { .. } => Some("Package verified in temporary storage. Nothing installed or executed. Recheck or quit removes it.".into()),
             _ => p.status_message,
         };
         if matches!(self.status, CheckStatus::Staged { .. }) {
             p.icon = notice::Icon::Check;
             p.icon_tone = notice::IconTone::Positive;
+            if self.install_request_enabled {
+                p.close_warning = Some(notice::OPEN_CAPTURES_WARNING.into());
+            }
         }
         Some(p)
     }
@@ -505,6 +520,9 @@ impl CheckWorker {
                 ("Cancel download", true, Action::CancelDownload)
             }
             CheckStatus::Cancelling { .. } => ("Cancelling…", false, Action::CancelDownload),
+            CheckStatus::Staged { .. } if self.install_request_enabled => {
+                ("Restart and install", true, Action::Install)
+            }
             _ => return None,
         };
         Some(Button {
@@ -536,7 +554,9 @@ impl CheckWorker {
         };
         Presentation {
             version: format!("Native development {}", self.current_version),
-            channel: if self.staging_enabled {
+            channel: if self.install_request_enabled {
+                "Explicit development endpoint · Supervised restart"
+            } else if self.staging_enabled {
                 "Explicit development endpoint · Temporary verification"
             } else {
                 "Explicit development endpoint · Check only"
@@ -552,7 +572,9 @@ impl CheckWorker {
                 self.status,
                 CheckStatus::Error { .. } | CheckStatus::DownloadError { .. }
             ),
-            detail: if self.staging_enabled {
+            detail: if self.install_request_enabled {
+                "Only Restart and install requests replacement of the selected development package. Ordinary Quit does not install. Installed Previews and release channels are unchanged."
+            } else if self.staging_enabled {
                 "Explicit downloads validate a temporary package. No installation, execution or update channel is enabled."
             } else {
                 "Verifies signed native development metadata. No download, installation or update channel is enabled."
@@ -778,8 +800,23 @@ mod tests {
             !worker.download(),
             "staged ownership cannot be overwritten by another download"
         );
+        assert!(worker.presentation().acquisition.is_none());
+        worker.enable_install_request();
+        let install = worker.presentation().acquisition.unwrap();
+        assert!(install.enabled);
+        assert_eq!(install.action, crate::update_notice::Action::Install);
+        let notice = worker.notice(true).unwrap();
+        assert_eq!(notice.footer.unwrap().primary.unwrap(), install);
+        assert_eq!(
+            notice.close_warning.as_deref(),
+            Some(crate::update_notice::OPEN_CAPTURES_WARNING)
+        );
         assert!(worker.check());
         wait_idle(&mut worker);
+        assert_eq!(
+            worker.presentation().acquisition.unwrap().action,
+            crate::update_notice::Action::DownloadVerify
+        );
         assert_eq!(
             std::fs::read_dir(scratch.path()).unwrap().count(),
             1,

@@ -1,14 +1,21 @@
 //! Explicit stopped-development-package replacement, never a shipping updater.
-use std::{fs, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Stdio},
+    time::Duration,
+};
 
 use captures_app::{
     profile_import::{prepare_development_profile, validate_development_profile},
-    updater::{Renderer, ShutdownIntent, Target, UpdateClient, recover_installation},
+    updater::{
+        Renderer, ShutdownIntent, Target, checks::client_from_key_file, recover_installation,
+    },
 };
 use captures_media::CancelToken;
 use serde_json::json;
 
-const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped | --existing-development-profile ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false | --shutdown-intent-file ABSOLUTE_PATH (existing profile only)] [--base-archive ABSOLUTE_PATH]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
+const USAGE: &str = "usage: native_update_helper --manifest-url URL --public-key-file PATH --current-version VERSION --renderer appkit|wgpu --stopped-development-package ABSOLUTE_PATH (--empty-test-profile ABSOLUTE_PATH | --new-development-profile ABSOLUTE_PATH --source-settings-file ABSOLUTE_PATH --source-data-directory ABSOLUTE_PATH --all-app-processes-stopped | --existing-development-profile ABSOLUTE_PATH --all-app-processes-stopped) [--health-timeout-seconds 1..120] [--restore-preferences true|false | --shutdown-intent-file ABSOLUTE_PATH (existing profile only)] [--base-archive ABSOLUTE_PATH] [--supervise-gui (existing profile only; exclude other app launches throughout)]\nor: native_update_helper --recover-stopped-development-package ABSOLUTE_PATH --all-app-processes-stopped";
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1)) {
@@ -53,11 +60,19 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let mut source_settings = None;
     let mut source_data = None;
     let mut stopped = false;
+    let mut supervise = false;
     let mut restore_preferences = None;
     let mut shutdown_intent = None;
     let mut base_archive = None;
     let mut timeout = Duration::from_secs(60);
     while let Some(argument) = arguments.next() {
+        if argument == "--supervise-gui" {
+            if supervise {
+                return Err(USAGE.into());
+            }
+            supervise = true;
+            continue;
+        }
         if argument == "--all-app-processes-stopped" {
             if stopped {
                 return Err(USAGE.into());
@@ -131,6 +146,9 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     if shutdown_intent.is_some() && (!reuse || restore_preferences.is_some()) {
         return Err("Shutdown intent requires an existing enrolled development profile and cannot override --restore-preferences.".into());
     }
+    if supervise && (!reuse || restore_preferences.is_some() || shutdown_intent.is_some()) {
+        return Err("GUI supervision requires an existing enrolled development profile and owns its shutdown intent/visibility; no overrides are accepted.".into());
+    }
     if !destination.is_absolute() || !profile.is_absolute() {
         return Err("Package and development profile must be explicit absolute paths.".into());
     }
@@ -196,17 +214,107 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         return Err("The test profile must stay outside the development package.".into());
     }
     let target = Target::current_host().ok_or("This native update target is not supported.")?;
-    let key = fs::read_to_string(key).map_err(|error| error.to_string())?;
-    let client = UpdateClient::new(&endpoint, &key, renderer, target, &version)
+    let key_file = key.canonicalize().map_err(|error| error.to_string())?;
+    let client = client_from_key_file(&endpoint, &key_file, renderer, &version)
         .map_err(|error| error.to_string())?;
-    let client = match base_archive {
+    let client = match &base_archive {
         Some(path) => client
-            .with_base_archive(path)
+            .with_base_archive(path.clone())
             .map_err(|error| error.to_string())?,
         None => client,
     };
     let cancel = CancelToken::default();
+    let supervised = if supervise {
+        if std::env::current_exe()
+            .and_then(fs::canonicalize)
+            .map_err(|error| error.to_string())?
+            .starts_with(&destination)
+        {
+            return Err("The supervisor must run outside the development package.".into());
+        }
+        // Retain this private directory on failure for inspection. It is not an
+        // installed profile, executable capability or a retained authenticated stage.
+        let directory = tempfile::Builder::new()
+            .prefix(".captures-native-supervisor-")
+            .tempdir_in(destination.parent().ok_or(USAGE)?)
+            .map_err(|error| error.to_string())?
+            .keep();
+        let intent = directory.join("shutdown-intent.json");
+        let scratch = directory.join("gui-scratch");
+        fs::create_dir(&scratch).map_err(|error| error.to_string())?;
+        let session = uuid::Uuid::new_v4();
+        let log_path = profile.join(format!("supervised-startup-{}.log", uuid::Uuid::new_v4()));
+        let log = fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&log_path)
+            .map_err(|error| error.to_string())?;
+        let mut command = Command::new(destination.join(target.package_executable()));
+        command
+            .arg("--live")
+            .arg("--history-root")
+            .arg(profile.join("history"))
+            .arg("--settings-file")
+            .arg(profile.join("settings.json"))
+            .arg("--native-update-manifest-url")
+            .arg(&endpoint)
+            .arg("--native-update-public-key-file")
+            .arg(&key_file)
+            .arg("--native-update-current-version")
+            .arg(&version)
+            .arg("--native-update-staging-directory")
+            .arg(&scratch)
+            .arg("--native-update-shutdown-intent-file")
+            .arg(&intent)
+            .arg("--native-update-install-session")
+            .arg(session.to_string())
+            .env_remove("CAPTURES_FFMPEG")
+            .env_remove("CAPTURES_FFPROBE")
+            .env("CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER", "1")
+            .current_dir(&profile)
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().map_err(|error| error.to_string())?)
+            .stderr(log);
+        if let Some(base) = &base_archive {
+            command.arg("--native-update-base-archive").arg(base);
+        }
+        if renderer == Renderer::Wgpu {
+            command.arg("--open-preferences");
+        }
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        println!(
+            "{}",
+            json!({"state":"gui_running","process_id":child.id(),"gui_log":log_path,"supervision_directory":directory})
+        );
+        use std::io::Write;
+        std::io::stdout()
+            .flush()
+            .map_err(|error| error.to_string())?;
+        // This is our actual child, not a PID liveness guess. Root exit alone
+        // still cannot authorize replacement: require its exact post-drain nonce.
+        if !child.wait().map_err(|error| error.to_string())?.success() {
+            return Err(format!(
+                "The supervised GUI did not exit successfully. No update was installed. Inspect {} and {}.",
+                log_path.display(),
+                directory.display()
+            ));
+        }
+        if !ShutdownIntent::install_requested(&intent, &profile, session)
+            .map_err(|error| error.to_string())?
+        {
+            fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+            println!("{}", json!({"state":"gui_exited","replaced":false}));
+            return Ok(());
+        }
+        shutdown_intent = Some(intent);
+        Some((directory, session))
+    } else {
+        None
+    };
     let Some(update) = client.check(&cancel).map_err(|error| error.to_string())? else {
+        if supervised.is_some() {
+            return Err("The selected GUI update is no longer available. No package was replaced; supervision diagnostics were retained.".into());
+        }
         println!("{}", json!({"state":"up_to_date","replaced":false}));
         return Ok(());
     };
@@ -215,8 +323,13 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         // or proof of stopped writers. Reauthenticate and bind the exact target
         // before any package download, profile snapshot, replacement or launch.
         restore_preferences = Some(
-            ShutdownIntent::take_matching(path, &profile, &update)
-                .map_err(|error| error.to_string())?,
+            (match &supervised {
+                Some((_, session)) => {
+                    ShutdownIntent::take_install_matching(path, &profile, &update, *session)
+                }
+                None => ShutdownIntent::take_matching(path, &profile, &update),
+            })
+            .map_err(|error| error.to_string())?,
         );
     }
     let scratch = tempfile::tempdir_in(destination.parent().ok_or(USAGE)?)
@@ -262,6 +375,13 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     };
     match launched {
         Ok(child) => {
+            if let Some((directory, _)) = &supervised
+                && let Err(error) = fs::remove_dir_all(directory)
+            {
+                eprintln!(
+                    "Update confirmed; private supervision diagnostics could not be removed: {error}"
+                );
+            }
             println!(
                 "{}",
                 json!({"state":"confirmed","release":release,"process_id":child.id(),
@@ -389,6 +509,12 @@ mod tests {
                 "/other",
                 "--all-app-processes-stopped",
             ],
+            vec![
+                "--existing-development-profile",
+                "/existing",
+                "--supervise-gui",
+            ],
+            vec!["--supervise-gui", "--supervise-gui"],
             vec!["--all-app-processes-stopped", "--all-app-processes-stopped"],
         ] {
             assert!(
@@ -396,6 +522,50 @@ mod tests {
                     .unwrap_err()
                     .contains(USAGE)
             );
+        }
+    }
+
+    #[test]
+    fn supervision_rejects_unenrolled_modes_and_operator_intent_overrides() {
+        let base = [
+            "--manifest-url",
+            "https://example.invalid/manifest",
+            "--public-key-file",
+            "/key",
+            "--current-version",
+            "1.0.0",
+            "--renderer",
+            "wgpu",
+            "--stopped-development-package",
+            "/package",
+            "--all-app-processes-stopped",
+            "--supervise-gui",
+        ];
+        for flags in [
+            vec!["--empty-test-profile", "/empty"],
+            vec![
+                "--new-development-profile",
+                "/new",
+                "--source-settings-file",
+                "/settings",
+                "--source-data-directory",
+                "/data",
+            ],
+            vec![
+                "--existing-development-profile",
+                "/existing",
+                "--restore-preferences",
+                "true",
+            ],
+            vec![
+                "--existing-development-profile",
+                "/existing",
+                "--shutdown-intent-file",
+                "/intent",
+            ],
+        ] {
+            let error = run(base.into_iter().chain(flags).map(String::from)).unwrap_err();
+            assert!(error.contains("GUI supervision"), "{error}");
         }
     }
 

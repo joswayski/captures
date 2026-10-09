@@ -2,7 +2,7 @@
 """Signed helper restarts of enrolled development profiles on private software X11.
 
 Copies explicit built packages; all profile/config/export data is disposable.
-No installed profile, GUI installer, OS permission or release-channel acceptance.
+No installed profile, OS permission or release-channel acceptance.
 The signing-test executable is native_update_patch's Cargo test binary.
 """
 import argparse
@@ -39,7 +39,10 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--gui", type=Path,
         help="Capture real post-verification GUI shutdown visibility instead of operator intent")
+    parser.add_argument("--supervised", action="store_true",
+        help="Launch the base package through the real GUI supervisor; exercise installation and ordinary Quit")
     args = parser.parse_args()
+    assert not (args.gui and args.supervised), "Choose manual GUI intent or supervised installation"
     assert sys.platform == "linux", "This real-host fixture is private X11 only"
     # Adopt the GUI after its helper exits so real Ctrl+Q can assert exit status,
     # not merely PID disappearance. This affects only this disposable test process.
@@ -59,7 +62,7 @@ def main():
         for path in root.rglob("*") if path.is_file()} for root in (base, target)}
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1",
            "XDG_SESSION_TYPE": "x11", "CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER": "1"}
-    if gui:
+    if gui or args.supervised:
         env["CAPTURES_NATIVE_LAYOUT_PROBE"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
     for key, directory in (("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"),
@@ -137,8 +140,13 @@ def main():
             spawn(["openbox", "--sm-disable"])
             wait(lambda: b"window id" in run("xprop", "-root", "_NET_SUPPORTING_WM_CHECK"), "window manager ready")
             start_tray(output, env, spawn, wait)
-            for appearance, visible in (("dark", True), ("light", True), ("dark", False)):
+            cases = [("dark", True, True), ("light", True, True), ("dark", False, True)]
+            if args.supervised:
+                cases.append(("dark", True, False))
+            for appearance, visible, install in cases:
                 label = f"{appearance}-{'visible' if visible else 'closed'}"
+                if not install:
+                    label += "-ordinary-quit"
                 directory = output / label
                 directory.mkdir()
                 package = directory / "package"
@@ -163,21 +171,48 @@ def main():
                     retained.mkdir(parents=True)
                     (retained / "opaque-bytes.bin").write_bytes(b"retain\0\xff" + root.encode())
                 intent = directory / "shutdown-intent.json"
-                if gui:
-                    scratch = directory / "gui-scratch"
-                    scratch.mkdir()
-                    event_path = directory / "gui-events.jsonl"
-                    with event_path.open("w") as events:
-                        app = subprocess.Popen(list(map(str, [gui, "--live", "--open-preferences", "--open-history",
-                            "--history-root", profile / "history", "--settings-file", settings,
-                            "--native-update-manifest-url", url + "/manifest.json",
-                            "--native-update-public-key-file", output / "public.key",
-                            "--native-update-current-version", "2026.9.99",
-                            "--native-update-staging-directory", scratch,
-                            "--native-update-shutdown-intent-file", intent])), env=env, stdout=events, stderr=log)
-                    children.append(app)
-                    preferences = wait(lambda: windows(app.pid, "^Captures Preferences$"), "source Preferences")[0]
-                    history = wait(lambda: windows(app.pid, "^Capture History$"), "source History")[0]
+                command = [helper, "--manifest-url", url + "/manifest.json",
+                    "--public-key-file", output / "public.key", "--current-version", "2026.9.99",
+                    "--renderer", "wgpu", "--stopped-development-package", package,
+                    "--existing-development-profile", profile, "--all-app-processes-stopped",
+                    "--health-timeout-seconds", "60"]
+
+                def saved_data():
+                    # Normal Quit removes this live-session marker; it is not
+                    # retained user data, and the replacement owns a new marker.
+                    return {str(path.relative_to(profile)): path.read_bytes()
+                        for name in ("settings.json", "history", "editor-drafts", "recording-recovery",
+                                     ".captures-native-development-profile.json")
+                        for path in ([profile / name] if (profile / name).is_file() else (profile / name).rglob("*"))
+                        if path.is_file() and path != profile / "history/.crash-diagnostics/current-session"}
+
+                if gui or args.supervised:
+                    if args.supervised:
+                        handoff = spawn(list(map(str, command + ["--supervise-gui"])), True)
+                        announced = json.loads(handoff.stdout.readline())
+                        assert announced["state"] == "gui_running", announced
+                        source_pid = announced["process_id"]
+                        session_directory = Path(announced["supervision_directory"])
+                        event_path = Path(announced["gui_log"])
+                        scratch, intent = (session_directory / name for name in ("gui-scratch", "shutdown-intent.json"))
+                        source_handle = os.pidfd_open(source_pid)
+                        app_handles.append(source_handle)
+                    else:
+                        scratch = directory / "gui-scratch"
+                        scratch.mkdir()
+                        event_path = directory / "gui-events.jsonl"
+                        with event_path.open("w") as events:
+                            app = subprocess.Popen(list(map(str, [gui, "--live", "--open-preferences", "--open-history",
+                                "--history-root", profile / "history", "--settings-file", settings,
+                                "--native-update-manifest-url", url + "/manifest.json",
+                                "--native-update-public-key-file", output / "public.key",
+                                "--native-update-current-version", "2026.9.99",
+                                "--native-update-staging-directory", scratch,
+                                "--native-update-shutdown-intent-file", intent])), env=env, stdout=events, stderr=log)
+                        children.append(app)
+                        source_pid = app.pid
+                    preferences = wait(lambda: windows(source_pid, "^Captures Preferences$"), "source Preferences")[0]
+                    history = None if args.supervised else wait(lambda: windows(source_pid, "^Capture History$"), "source History")[0]
 
                     def reports():
                         values = {}
@@ -214,36 +249,58 @@ def main():
                     wait(lambda: "verified" in (reports().get("preferences-shortcuts-layout", {}).get("update_checks") or {}).get("status", "").lower(),
                          "real GUI package verified", timeout=90)
                     assert not intent.exists(), "intent published before an accepted shutdown"
+                    if args.supervised:
+                        wait(lambda: ((reports().get("update-notice") or {}).get("footer") or {}).get("primary") == "Restart and install",
+                            "real supervised install action")
                     if not visible:
                         # Normal WM close, not windowclose's forced XDestroyWindow.
                         run("xdotool", "windowactivate", "--sync", preferences,
                             "key", "--clearmodifiers", "alt+F4")
-                        wait(lambda: not windows(app.pid, "^Captures Preferences$"), "source Preferences closed")
-                    # Quit from History, not the update action or Preferences focus.
-                    run("xdotool", "windowactivate", "--sync", history, "windowfocus", "--sync", history,
-                        "sleep", ".4")
-                    assert run("xdotool", "getwindowfocus").decode().strip() != preferences
+                        wait(lambda: not windows(source_pid, "^Captures Preferences$"), "source Preferences closed")
+                    # Layout probes emit during a draw, before native presentation.
+                    time.sleep(.6)
                     run("import", "-window", "root", directory / "before-shutdown.png")
-                    run("xdotool", "key", "--clearmodifiers", "ctrl+q")
-                    assert app.wait(timeout=30) == 0, "source GUI Quit failed"
-                    assert not list(scratch.iterdir()), "GUI scratch survived shutdown"
-                    record = json.loads(intent.read_text())
-                    assert record["preferences_visible"] == visible, record
-                    assert record["sha256"] == digest(archive) and record["profile"] == str(profile), record
+                    if args.supervised:
+                        saved = saved_data()
+                        before_requests = len(requests)
+                        if not install:
+                            run("xdotool", "windowactivate", "--sync", preferences,
+                                "key", "--clearmodifiers", "ctrl+q")
+                            reply = json.loads(handoff.communicate(timeout=30)[0])
+                            assert handoff.returncode == 0 and reply == {"state": "gui_exited", "replaced": False}, reply
+                            assert requests[before_requests:] == [], "ordinary Quit started update HTTP"
+                            assert not session_directory.exists(), "ordinary Quit retained owned scratch"
+                            assert not list(directory.glob(".captures-native-pre-update-*")), "ordinary Quit created a snapshot"
+                            assert {str(path.relative_to(package)): digest(path) for path in package.rglob("*") if path.is_file()} == original_packages[str(base)]
+                            assert saved_data() == saved, "ordinary Quit changed accepted profile data"
+                            results.append({"case": label, "passed": True, "checks": ["verified ordinary Quit never installs"]})
+                            continue
+                        if visible:
+                            activate("Package verification")
+                        else:
+                            notice = wait(lambda: windows(source_pid, "^Captures Update$"), "install notice")[0]
+                            geometry = dict(line.split("=", 1) for line in run("xdotool", "getwindowgeometry", "--shell", notice).decode().split())
+                            # Shipping footer placement, as exercised by the existing notice smoke.
+                            run("xdotool", "windowactivate", "--sync", notice, "mousemove", "--window", notice,
+                                str(int(geometry["WIDTH"]) - 118), str(int(geometry["HEIGHT"]) - 48), "sleep", ".2", "click", "1")
+                        wait(lambda: select.select([source_handle], [], [], 0)[0], "supervised source GUI drained")
+                        assert not scratch.exists() or not list(scratch.iterdir()), "GUI scratch survived installation drain"
+                    else:
+                        # Quit from History, not the update action or Preferences focus.
+                        run("xdotool", "windowactivate", "--sync", history, "windowfocus", "--sync", history, "sleep", ".4")
+                        assert run("xdotool", "getwindowfocus").decode().strip() != preferences
+                        run("xdotool", "key", "--clearmodifiers", "ctrl+q")
+                        assert app.wait(timeout=30) == 0, "source GUI Quit failed"
+                        assert not list(scratch.iterdir()), "GUI scratch survived shutdown"
+                        record = json.loads(intent.read_text())
+                        assert record["preferences_visible"] == visible, record
+                        assert record["sha256"] == digest(archive) and record["profile"] == str(profile), record
                     for root in ("editor-drafts", "recording-recovery"):
                         assert (profile / root / ".retained/opaque-bytes.bin").read_bytes() == b"retain\0\xff" + root.encode()
-                saved = {str(path.relative_to(profile)): path.read_bytes()
-                    for name in ("settings.json", "history", "editor-drafts", "recording-recovery",
-                                 ".captures-native-development-profile.json")
-                    for path in ([profile / name] if (profile / name).is_file() else (profile / name).rglob("*"))
-                    if path.is_file()}
-                before_requests = len(requests)
-                command = [helper, "--manifest-url", url + "/manifest.json",
-                    "--public-key-file", output / "public.key", "--current-version", "2026.9.99",
-                    "--renderer", "wgpu", "--stopped-development-package", package,
-                    "--existing-development-profile", profile, "--all-app-processes-stopped",
-                    "--health-timeout-seconds", "60"]
-                command += ["--shutdown-intent-file", intent] if gui else ["--restore-preferences", str(visible).lower()]
+                if not args.supervised:
+                    saved = saved_data()
+                    before_requests = len(requests)
+                    command += ["--shutdown-intent-file", intent] if gui else ["--restore-preferences", str(visible).lower()]
                 if gui:
                     original_intent = intent.read_bytes()
                     altered = json.loads(original_intent)
@@ -258,8 +315,9 @@ def main():
                         assert (profile / name).read_bytes() == expected, "mismatch changed profile data"
                     intent.write_bytes(original_intent)
                     before_requests = len(requests)
-                handoff = subprocess.Popen(list(map(str, command)), env=env, stdout=subprocess.PIPE, stderr=log)
-                children.append(handoff)
+                if not args.supervised:
+                    handoff = subprocess.Popen(list(map(str, command)), env=env, stdout=subprocess.PIPE, stderr=log)
+                    children.append(handoff)
                 # Inspect presentation while confirmation rehashes the whole
                 # package; the five-second notice may expire before CLI reply.
                 def ready_notice():
@@ -294,6 +352,8 @@ def main():
                 assert handoff.returncode == 0, "helper failed; inspect processes.log"
                 reply = json.loads(stdout)
                 assert reply["state"] == "confirmed" and reply["process_id"] == pid, reply
+                assert {str(path.relative_to(package)): digest(path) for path in package.rglob("*")
+                    if path.is_file()} == original_packages[str(target)], "confirmed replacement differs from the signed full target"
                 if gui:
                     assert not intent.exists(), "helper did not consume intent once"
                 snapshot = Path(reply["profile_snapshot"])
@@ -320,7 +380,7 @@ def main():
                 for name, expected in saved.items():
                     assert (snapshot / name).read_bytes() == expected, f"snapshot lost after exit: {name}"
                 results.append({"case": label, "passed": True, "profile_snapshot": str(snapshot),
-                    "checks": ["signed real-host health", "byte-exact data snapshot", "settings preserved",
+                    "checks": ["signed real-host health", "byte-exact target package", "byte-exact data snapshot", "settings preserved",
                                "old log preserved", "completed-profile window routing", "snapshot retained after exit"]})
             for root in (base, target):
                 assert original_packages[str(root)] == {str(path.relative_to(root)): digest(path)

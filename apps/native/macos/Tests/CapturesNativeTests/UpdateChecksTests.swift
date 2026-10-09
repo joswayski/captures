@@ -65,8 +65,22 @@ final class UpdateChecksTests: XCTestCase {
         XCTAssertFalse(model.busy)
         XCTAssertEqual(transport.operations.filter { $0 == "download_verify" }.count, 1)
         XCTAssertEqual(transport.operations.filter { $0 == "cancel_download" }.count, 1)
+        transport.acquisition = ["label": "Restart and install", "enabled": true, "action": ["action": "install"]]
+        XCTAssertTrue(model.check())
+        transport.checking = false; model.poll()
+        var requested = false
+        model.requestInstallation = { requested = true; return true }
+        XCTAssertFalse(model.acquire(.install), "a visible action alone is not a verified stage")
+        XCTAssertFalse(requested)
+        transport.rawStatus = ["state": "staged"]
+        model.requestInstallation = { false }
+        XCTAssertFalse(model.acquire(.install), "host admission can veto installation")
+        model.requestInstallation = { requested = true; return true }
+        XCTAssertTrue(model.acquire(.install))
+        XCTAssertTrue(requested)
         model.shutdown {}
         XCTAssertFalse(model.acquire(.downloadVerify))
+        XCTAssertFalse(model.acquire(.install))
     }
 
     func testIdleBusyRetryClosedAndHiddenPresentationNeverStartAutomaticChecks() throws {

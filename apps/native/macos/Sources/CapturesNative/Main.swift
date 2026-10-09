@@ -19,6 +19,7 @@ struct Options {
     var nativeUpdateRestorePreferences = false
     var nativeUpdateChecks: UpdateCheckModel?
     var nativeUpdateShutdownIntent: [String: Any]?
+    var nativeUpdateInstallSession: String?
     var screenshot: String?
     /// Workbench update notice fixture (stub status source; no updater).
     var updateState: String?
@@ -86,6 +87,12 @@ struct Options {
             case "--native-update-shutdown-intent-file":
                 guard updateShutdownIntentFile == nil, let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 updateShutdownIntentFile = value
+            case "--native-update-install-session":
+                guard nativeUpdateInstallSession == nil, let value = iterator.next(),
+                      value.range(of: #"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"#,
+                          options: .regularExpression) == (value.startIndex..<value.endIndex)
+                else { throw Usage.invalid }
+                nativeUpdateInstallSession = value
             case "--screenshot":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 screenshot = value
@@ -120,7 +127,7 @@ struct Options {
                   updateState == nil, updateTray == nil, scene == "preferences", screenshot == nil
             else { throw Usage.invalid }
         }
-        if updateEndpoint != nil || updateKeyFile != nil || updateCurrentVersion != nil || updateStagingDirectory != nil || updateBaseArchive != nil || updateShutdownIntentFile != nil {
+        if updateEndpoint != nil || updateKeyFile != nil || updateCurrentVersion != nil || updateStagingDirectory != nil || updateBaseArchive != nil || updateShutdownIntentFile != nil || nativeUpdateInstallSession != nil {
             guard explicitLive, let endpoint = updateEndpoint, let keyFile = updateKeyFile,
                   let version = updateCurrentVersion, !hasHealth, scene == "preferences",
                   let historyRoot, historyRoot.hasPrefix("/"),
@@ -140,6 +147,10 @@ struct Options {
                     "history_root": historyRoot, "settings_file": settingsFile]
                 try updateShutdownIntent(intent)
                 nativeUpdateShutdownIntent = intent
+            }
+            if nativeUpdateInstallSession != nil {
+                guard nativeUpdateShutdownIntent != nil else { throw Usage.invalid }
+                configuration["install_request"] = true
             }
             nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(configuration: configuration))
         }

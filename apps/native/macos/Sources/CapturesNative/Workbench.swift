@@ -910,6 +910,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var terminating = false
     private var terminationPending = false
     private var shutdownUpdateIntent: [String: Any]?
+    private var installUpdateRequested = false
     private var updateHealth: UpdateHealthCoordinator?
     private var onboardingReady = false
     private var onboardingWasPresented = false
@@ -954,6 +955,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         options.nativeUpdateChecks?.didChange = { [weak self] in
             self?.preferencesController?.refreshUpdateChecks()
             self?.refreshLiveUpdateNotice()
+        }
+        options.nativeUpdateChecks?.requestInstallation = { [weak self] in
+            guard let self, self.options.nativeUpdateInstallSession != nil,
+                  !self.terminationPending, !self.terminating, !self.installUpdateRequested
+            else { return false }
+            self.installUpdateRequested = true
+            requestApplicationTermination()
+            return true
         }
         if let file = options.nativeUpdateReadyFile, let token = options.nativeUpdateReadyToken,
            let acknowledgement = try? UpdateHealthAcknowledgement(file: file, token: token) {
@@ -1116,6 +1125,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             let finished: (Bool) -> Void = { [weak self] accepted in
                 guard let self, self.terminationPending else { return }
                 guard accepted else {
+                    self.installUpdateRequested = false
                     self.terminating = false; self.terminationPending = false
                     sender.reply(toApplicationShouldTerminate: false); return
                 }
@@ -1125,7 +1135,17 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                    let status = self.options.nativeUpdateChecks?.stagedShutdownStatus() {
                     intent["status"] = status
                     intent["preferences_visible"] = self.appWindows.window(.preferences)?.isVisible == true
+                    if self.installUpdateRequested, let session = self.options.nativeUpdateInstallSession {
+                        intent["install_session"] = session
+                    }
                     self.shutdownUpdateIntent = intent
+                }
+                if self.installUpdateRequested && self.shutdownUpdateIntent == nil {
+                    self.installUpdateRequested = false
+                    self.terminating = false; self.terminationPending = false
+                    sender.reply(toApplicationShouldTerminate: false)
+                    self.presentHostError(title: "Couldn’t Restart Captures", message: "The verified update is no longer available. Check again before requesting installation.")
+                    return
                 }
                 self.nativeInstance?.stopAccepting()
                 var remaining = 2
@@ -1156,7 +1176,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
             closeShortcuts: { [weak self] in self?.closeCaptureShortcuts() },
             closePreviews: { [weak self] in self?.miniPreviews?.close() },
-            drainActions: { LiveCaptureController.flush() },
+            drainActions: {
+                LiveCaptureController.flush(includeThumbnails: self.installUpdateRequested)
+                if self.installUpdateRequested { FeedbackBridge.flush() }
+            },
             removeExerciseDirectory: { [weak self] in
                 if let directory = self?.exerciseDirectory {
                     try? FileManager.default.removeItem(at: directory)
@@ -1476,6 +1499,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     /// Starts a fresh live host with the same profile and quits this one.
     /// `failed` runs when spawning fails and this process kept its instance lock.
     private func relaunch(failed: @escaping (String) -> Void) {
+        // Permission restarts are ordinary exits, never an installation request.
+        installUpdateRequested = false
         if let sharing = sharingController {
             // Never release profile ownership while accepted sharing can write.
             terminating = true

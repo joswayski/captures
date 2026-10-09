@@ -86,8 +86,10 @@ the current crash marker until owned temporary storage is cleaned up, then finis
 This does not make a blocked request immediately cancellable or change editor
 save/draft failure guards; an unsuccessful editor drain still refuses Quit.
 
-**Verified is not installed.** No package code is executed, existing app/profile is
-replaced or channel activated. Closing the notice does not cancel acquisition or
+**Verified is not installed.** Ordinary explicit check/staging launches execute no
+package code, replace no app/profile and activate no channel. Only the separately
+opted-in [development supervisor](#supervised-development-gui-installation) offers
+an installation request. Closing the notice does not cancel acquisition or
 reveal its later result; a new explicit check/download reveals again. Retained
 temporary storage is removed on recheck or normal quit. Forced termination or
 filesystem cleanup failure may leave owned scratch for manual removal.
@@ -121,16 +123,60 @@ is consumed for that attempt before acquisition; later failure requires a new GU
 record or explicit operator intent. The helper reacquires/verifies package bytes
 with its existing full/delta path; this does not transfer GUI scratch or bypass
 Minisign. It retains the old package until real startup health and retains the
-pre-update data snapshot on success/failure. No GUI installs/launches an update;
-the record is neither authentication nor proof that other processes stopped.
+pre-update data snapshot on success/failure. This manual-intent mode never requests
+installation from the GUI; the record is neither authentication nor proof that
+other processes stopped.
 Installed updating, OS signing identity and cutover remain open.
+
+### Supervised development GUI installation
+
+The external helper can instead launch and supervise the selected development
+package with an **already enrolled isolated development profile**. Stop every app
+process first, then exclude **other** app launches and profile/package writers
+throughout the session. This remains an operator assertion, not process-tree
+detection; package-use locks alone do not establish that children have stopped.
+
+```sh
+target/debug/native_update_helper \
+  --manifest-url "$NATIVE_TEST_MANIFEST_URL" --public-key-file "$NATIVE_TEST_PUBLIC_KEY_FILE" \
+  --renderer wgpu --current-version 2026.10.51 \
+  --stopped-development-package "$ABSOLUTE_NATIVE_PACKAGE_ROOT" \
+  --existing-development-profile "$ABSOLUTE_ENROLLED_NATIVE_PROFILE" \
+  --all-app-processes-stopped --supervise-gui --health-timeout-seconds 60
+```
+
+The supervisor owns private per-launch scratch, a UUID and the shutdown record;
+`--restore-preferences` and `--shutdown-intent-file` overrides are rejected.
+It reports `gui_running` and a startup-log path. Check and **Download and verify**
+remain explicit GUI actions. Only a successfully staged package enables
+**Restart and install** in Preferences and the real update notice. The accepted
+action preserves editor shutdown vetoes, snapshots actual Preferences visibility
+and the exact target, drains owned work/media processes, then publishes its nonce.
+The parent requires both successful child exit and that exact one-shot request;
+ordinary Quit reports `gui_exited` without installing or making further HTTP
+requests. Failed exits or mismatches never replace and retain private diagnostics.
+
+The parent authenticates fresh metadata and requires the GUI's exact full target
+before reacquiring/verifying full or incremental bytes. GUI scratch is not reused,
+so installation downloads again. The existing retained profile snapshot, backup,
+startup-health and explicit recovery contracts still apply. Fresh/incomplete setup
+keeps priority over restored Preferences. Forced termination cannot request an
+installation. This does not supervise older uncontrolled hosts or grant installed
+update, registration, OS signing or permission-migration authority.
+
+Use the real-host fixture below with `--supervised` for dark/light visible and
+closed-Preferences installation plus verified ordinary Quit. Linux private X11 is
+the runnable smoke target here; AppKit and Windows have corresponding routing and
+shutdown code but still require host execution. Wayland runtime and all physical,
+screen-reader and mixed-DPI acceptance remain unverified for this slice.
 
 ## Native update acquisition diagnostic
 
 `captures_app::updater` implements shared signed-manifest checks and bounded,
 streamed downloads and temporary package staging without Tauri. It is **not an
-enabled installed-app updater**: only the explicit metadata checks above connect
-to native UI, plus opt-in temporary acquisition with the scratch-directory flag.
+enabled installed-app updater**: explicit metadata checks and opt-in temporary
+acquisition connect to native UI; the separate supervisor can accept a development
+installation request after shutdown.
 There is no bundled native
 signing key, release endpoint or installed-app
 updater. The explicit development-package helper below can replace and launch only

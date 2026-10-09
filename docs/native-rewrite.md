@@ -2492,7 +2492,8 @@ empty/imported profiles need setup, which wins over restoration. Explicit reuse
 of enrolled development profiles can retain completed setup. Development shutdown
 now snapshots actual Preferences visibility, not focus or update-click origin,
 matching shipping PR #1025; it enables neither GUI installation nor installed-profile
-writes. Installed updating still needs its successful-update shutdown boundary.
+writes by itself. The separately opted-in development supervisor below connects
+an installation request; installed updating still needs its shutdown boundary.
 
 | Platform | Restart-intent implementation / verification |
 | --- | --- |
@@ -2515,8 +2516,10 @@ This is not automated admission: old binaries and orphaned media children are no
 represented, and executable loading precedes host code. The helper still requires
 the operator to stop every process and exclude new launches. Metadata is only
 layout detection, not proof of process participation. GUI installation remains
-disabled until crash-safe subprocess supervision and versioned package enrollment
-are implemented; root-PID exit or an apparently free lock cannot enable it.
+disabled by this guard. The bounded development supervisor below requires actual
+child wait and post-drain intent under an operator's launch-exclusion assertion;
+root-PID exit or an apparently free lock cannot enable it. Installed admission and
+crash-safe process-tree containment remain open.
 
 | Platform | Package-use implementation / verification |
 | --- | --- |
@@ -2679,6 +2682,37 @@ builds with packaged pinned media tools, not untouched CI archives or installed 
 No GUI installer, installed-profile writes, production channel, signing/permission
 identity, process-tree containment or renderer cutover is enabled. No acceptance gate
 closes; the external helper still requires an operator to stop/exclude every writer.
+
+### Supervised development GUI installation, not installed updating
+
+The external helper's `--supervise-gui` launches an explicitly selected package and
+already enrolled isolated profile with private per-launch scratch and a UUID. It
+still requires all app processes stopped initially and excludes other launches and
+writers throughout; it neither detects older hosts nor contains crash-orphaned trees.
+Only the staged **Restart and install** action requests replacement. Ordinary Quit
+publishes no installation nonce and starts no further HTTP or package operation.
+
+Both hosts preserve editor vetoes, snapshot actual Preferences visibility and the
+exact full target, strongly drain owned work/processes, then publish the nonce before
+releasing election. Linux PRIMARY selection now retains/joins its supervisor outside
+the state mutex; installation also joins an idle selector's recording/tool worker.
+AppKit drains thumbnail and feedback queues. Permission relaunch never requests an
+installation. The actual external parent requires successful `Child::wait` and the
+exact one-shot nonce before authenticating fresh metadata and matching the target.
+
+GUI scratch is discarded. The helper reacquires full/delta bytes, verifies/stages
+privately and uses the existing retained data snapshot, old-package backup and exact
+startup-health protocol. This deliberately downloads again rather than transferring
+unauthenticated scratch ownership. Failed exits and target/session mismatches do not
+replace. Installed-profile discovery/writes, production keys/channel, OS signing and
+permission identity remain out of scope; no acceptance gate closes.
+
+| Platform | Supervised development-install implementation / verification |
+| --- | --- |
+| AppKit/macOS | Shared helper/FFI, staged action, actual visibility, editor veto and queue drain implemented; Swift model regressions extended; compilation/runtime not available in this Linux orb |
+| Windows | Shared helper/wgpu routing, strong shutdown and health implemented; shared tests run on Linux; Windows runtime/signing/installed acceptance unverified |
+| X11 | Real packaged-host `native_profile_restart_smoke.py --supervised` covers signed dark/light visible and closed-Preferences installation, exact retained data/logs and verified ordinary Quit; private X11/software GL only |
+| Wayland | Shared wgpu/supervisor path implemented; installation/restart runtime and physical compositor acceptance unverified |
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

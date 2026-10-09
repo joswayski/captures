@@ -89,6 +89,7 @@ final class UpdateCheckModel {
     private(set) var showChangelog = true
     private(set) var busy = false
     var didChange: (() -> Void)?
+    var requestInstallation: (() -> Bool)?
 
     init(transport: UpdateCheckTransport) throws {
         self.transport = transport
@@ -111,6 +112,9 @@ final class UpdateCheckModel {
         switch action {
         case .downloadVerify: return command("download_verify")
         case .cancelDownload: return command("cancel_download")
+        case .install:
+            guard !busy, stagedShutdownStatus() != nil else { return false }
+            return requestInstallation?() ?? false
         default: return false
         }
     }
