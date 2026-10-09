@@ -49,6 +49,8 @@ def windows(env):
 
 
 def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots):
+    from wayland_lifecycle_smoke import menu_action, watcher
+
     def click(x, y):
         pointer.stdin.write(f"{x} {y} {WIDTH} {HEIGHT}\n".encode())
         pointer.stdin.flush()
@@ -226,6 +228,33 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                 history = focus_history()
                 wait(button, "capture released the busy gate at the restored size")
             if mode == "real":
+                # The actual wlr portal advertises no window source. Exercise
+                # the live Window request, not a scripted backend's diagnosis.
+                sources = bus.get_object(DESKTOP, "/org/freedesktop/portal/desktop").Get(
+                    "org.freedesktop.portal.ScreenCast", "AvailableSourceTypes",
+                    dbus_interface="org.freedesktop.DBus.Properties")
+                assert int(sources) & 2 == 0, "Fixture changed: require selected-window content assertions"
+                wait(lambda: watcher(bus) and watcher(bus).Get(
+                    "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"), "native tray registered")
+                window_before = set((profile / "history").glob("*/metadata.json"))
+                menu_action(bus, "Screenshot Window")
+                wait(lambda: any(node["name"] == "Captures Screenshot Countdown" for node in windows(env)),
+                     "window screenshot honors countdown")
+                dialog = wait(lambda: next((node for node in windows(env) if node["name"] == "Captures"), None),
+                              "genuine unsupported window screenshot dialog")
+                wait(shown, "unsupported window restored workspace")
+                assert set((profile / "history").glob("*/metadata.json")) == window_before, \
+                    "unsupported window published a display substitute"
+                focus_history()
+                subprocess.run(["swaymsg", f'[con_id={dialog["id"]}] move position 450 180, focus'],
+                               env=env, check=True, stdout=subprocess.DEVNULL)
+                time.sleep(.5)
+                shot("unsupported-window")
+                rect = next(node for node in windows(env) if node["id"] == dialog["id"])["rect"]
+                click(rect["x"] + rect["width"] - 60, rect["y"] + rect["height"] - 36)
+                wait(lambda: not any(node["name"] == "Captures" for node in windows(env)), "unsupported window OK")
+                print(json.dumps({"native_window_screenshot": appearance, "available_source_types": int(sources),
+                                  "genuine_unsupported": True, "new_artifacts": 0, "workspace_restored": True}), flush=True)
                 # Exercise the restored surfaces again, not merely their map state.
                 before_repeat = set((profile / "history").glob("*/metadata.json"))
                 (x1, y1, x2, y2), rect = wait(button, "enabled repeated screenshot")
@@ -374,6 +403,9 @@ def main():
                           # Disable idle hiding: exact pixels must hold immediately
                           # after each real click, not only when its timer expires.
                           'seat seat0 hide_cursor 0\n'
+                          # A real SNI host makes the existing Window tray action
+                          # reachable. Invisible mode keeps exact desktop pixels.
+                          'bar {\n id captures-test\n mode invisible\n workspace_buttons no\n}\n'
                           'for_window [title="Capture History"] floating enable, resize set 880 640, move position 20 20\n'
                           'for_window [title="Preferences"] floating enable, resize set 600 560, move position 650 300\n'
                           'for_window [title="Captures Screenshot Countdown"] floating enable\n'

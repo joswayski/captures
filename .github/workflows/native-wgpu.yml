@@ -103,7 +103,7 @@ jobs:
           backend="$(apps/native/build_wayland_portal_fixture.sh "$RUNNER_TEMP/wayland-portal-fixture")"
           cargo +1.95.0 test --locked --target-dir apps/native/wgpu/target -p captures-recording -p captures-recording-xcap -p captures-recording-platform --lib
           cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin wayland_video_probe --bin wayland_recording_probe
-          /usr/bin/python3 apps/native/wayland_video_smoke.py --binary apps/native/wgpu/target/debug/wayland_video_probe --recording-binary apps/native/wgpu/target/debug/wayland_recording_probe --wlr-backend "$backend"
+          /usr/bin/python3 apps/native/wayland_video_smoke.py --binary apps/native/wgpu/target/debug/wayland_video_probe --recording-binary apps/native/wgpu/target/debug/wayland_recording_probe --screenshot-binary apps/native/wgpu/target/debug/wayland_screenshot_probe --wlr-backend "$backend"
       - name: Transfer original files to an independent Wayland client
         if: runner.os == 'Linux'
         run: |

@@ -31,6 +31,8 @@ fn run() -> Result<(), String> {
     let mut output = None;
     let mut timeout = Duration::from_secs(120);
     let mut cancel_after = None;
+    let mut window = false;
+    let mut show_cursor = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -38,6 +40,16 @@ fn run() -> Result<(), String> {
             .ok_or_else(|| format!("Missing value for {argument}"))?;
         match argument.as_str() {
             "--output" => output = Some(PathBuf::from(value)),
+            "--target" => {
+                window = match value.as_str() {
+                    "display" => false,
+                    "window" => true,
+                    _ => return Err("Target must be display or window.".into()),
+                }
+            }
+            "--show-cursor" => {
+                show_cursor = value.parse().map_err(|_| "Cursor must be true or false")?
+            }
             "--timeout-ms" | "--cancel-after-ms" => {
                 let duration =
                     Duration::from_millis(value.parse().map_err(|_| "Invalid milliseconds")?);
@@ -51,13 +63,17 @@ fn run() -> Result<(), String> {
         }
     }
     let output = output.ok_or(
-        "usage: wayland_screenshot_probe --output NEW.png [--timeout-ms N] [--cancel-after-ms N]",
+        "usage: wayland_screenshot_probe --output NEW.png [--target display|window] [--show-cursor true|false] [--timeout-ms N] [--cancel-after-ms N]",
     )?;
     let started = Instant::now();
-    let image = captures_capture::portal_screenshot(timeout, || {
-        cancel_after.is_some_and(|duration| started.elapsed() >= duration)
-    })
-    .map_err(|error| error.to_string())?;
+    let cancelled = || cancel_after.is_some_and(|duration| started.elapsed() >= duration);
+    let image = if window {
+        captures_recording_xcap::PortalVideoSource::window_screenshot(show_cursor, &cancelled)
+            .map_err(|error| error.to_string())?
+    } else {
+        captures_capture::portal_screenshot(timeout, cancelled)
+            .map_err(|error| error.to_string())?
+    };
     match image {
         Some(image) => {
             let mut file = OpenOptions::new()

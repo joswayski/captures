@@ -481,6 +481,59 @@ impl PortalVideoSource {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// Acquire one window-only grant and CPU-mapped frame on a worker. Consent
+    /// is bounded by CONSENT_TIMEOUT; the first frame has a five-second limit.
+    /// Stop/join and close the session before returning any accepted pixels.
+    pub fn window_screenshot(
+        show_cursor: bool,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<RgbaImage>, PortalVideoError> {
+        let (mut source, frames) =
+            match Self::start(&RecordingTarget::PortalWindow, show_cursor, 30, cancelled) {
+                Ok(source) => source,
+                Err(PortalVideoError::Cancelled) => return Ok(None),
+                Err(problem) => return Err(problem),
+            };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = loop {
+            if cancelled() {
+                break Ok(None);
+            }
+            if let Some(problem) = source.warning() {
+                break Err(PortalVideoError::Failed(problem));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break Err(error("timed out waiting for a window screenshot frame").into());
+            }
+            match frames.recv_timeout(POLL.min(remaining)) {
+                Ok(frame) => {
+                    break RgbaImage::from_raw(frame.width, frame.height, frame.raw)
+                        .map(Some)
+                        .ok_or_else(|| error("invalid window screenshot frame").into());
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break Err(source
+                        .warning()
+                        .unwrap_or_else(|| error("the window screenshot stream ended"))
+                        .into());
+                }
+            }
+        };
+        source.finish()?;
+        // Include errors reported during disconnect/join, and cancellation that
+        // raced the accepted frame or session close. Never publish either.
+        if cancelled() {
+            return Ok(None);
+        }
+        let image = result?;
+        if let Some(problem) = source.warning() {
+            return Err(problem.into());
+        }
+        Ok(image)
+    }
+
     pub fn stop(mut self) -> Result<(), String> {
         self.finish()
     }
@@ -819,6 +872,17 @@ fn decode_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_window_screenshot_returns_no_pixels_without_a_desktop() {
+        for show_cursor in [false, true] {
+            assert!(
+                PortalVideoSource::window_screenshot(show_cursor, &|| true)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
 
     #[test]
     fn padded_offset_rows_keep_channel_order_alpha_and_dimensions() {

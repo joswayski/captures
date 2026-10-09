@@ -415,7 +415,7 @@ Preferences displays returned `trigger_description` strings and unbound rows,
 without local recorders or writes to saved chords. Configure uses portal v2;
 v1 keeps bindings read-only. Denial, session closure or owner loss needs explicit
 Retry. Configure failure keeps the current grant. There is no OS-key takeover,
-X11 fallback or automatic consent retry. Region/window screenshot and region
+X11 fallback or automatic consent retry. Region screenshot and region
 recording limitations still apply even if their IDs are granted.
 
 The worker activates and pins the portal owner, subscribes before requesting,
@@ -639,8 +639,26 @@ first placing a preview. **Restore** is disabled with a platform limitation tool
 Screenshot commands honor the configured delay in the shared fixed-glass,
 compositor-placed countdown. Focused Escape/close cancels before consent. The host
 keeps its hidden viewport alive until the native unmap acknowledgement, then
-removes it after portal completion. Region/window screenshots fail explicitly;
+removes it after portal completion. Region screenshots fail explicitly;
 display/window recording uses the controls path above.
+
+The granted Window screenshot shortcut and tray **Screenshot Window** request
+only ScreenCast source type 2, with portal v3+ and an explicit matching
+`source_type`. The shared recording source enforces the cursor setting and reads
+one CPU-mapped RGB frame (128 MiB maximum, one queued frame). Consent has a
+120-second limit; after consent the first frame has a five-second limit.
+The worker stops/joins, releases the granted PipeWire remote and closes the
+session before returning accepted pixels to the normal generation/session gate
+and window-mode History publication. Cancellation, stream loss, worker failure
+or unsupported window/cursor sharing publishes nothing; there is no display crop,
+unrestricted remote or guessed window geometry. The same child path works beside
+a recording without replacing its take.
+The existing protocol smoke accepts `--screenshot-binary` for window admission,
+cancellation and cleanup cases. The real wlr fixture has no window source, so the
+native dark/light smoke verifies its genuine unsupported dialog, no new History
+artifact, restored workspace and a subsequent successful display still. This
+does not establish successful selected-window pixels on GNOME/KDE or physical
+compositor/cursor acceptance.
 
 The recording HUD's Screenshot action (or a granted display screenshot shortcut)
 can request a separate desktop-portal still while the take runs or is paused.

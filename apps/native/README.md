@@ -1071,7 +1071,12 @@ The recording HUD's Screenshot action and display screenshot shortcut can reques
 a desktop-portal still while running or paused, with screenshot countdown off.
 It hides the HUD for the still, retains the take and its clock, and restores only
 the controls afterward; cancellation/failure leaves the recording intact.
-Region/window selectors remain unavailable; recording controls are included in
+Window screenshot shortcuts and the tray use a window-only ScreenCast grant,
+with a bounded first frame and stream/session cleanup before History publication.
+Portal v3+ must identify the selected window and support the requested cursor mode;
+unsupported sharing fails without display fallback. GNOME/KDE selected-window
+pixels and physical acceptance remain unverified. Region/window native selectors
+remain unavailable; recording controls are included in
 video output and Hide needs a working tray.
 Consent and cursor inclusion are portal-controlled. Remapping may change
 compositor-assigned window positions. Linux X11 needs an
