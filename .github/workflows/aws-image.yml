@@ -16,13 +16,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  route:
+    uses: ./.github/workflows/mac-route.yml
+    secrets: inherit
+
+  # Builds and tests the image on the Mac's arm64 Linux VM when mac-route.yml
+  # picks it, and hands the tested image to the publish job, which runs on
+  # GitHub so the ECR role never reaches a self-hosted machine.
   image-arm64:
     name: linux/arm64 image
-    runs-on: ubuntu-24.04-arm
+    needs: route
+    runs-on: ${{ needs.route.outputs.linux_arm == 'true' && fromJSON('["self-hosted","joselinux-arm"]') || 'ubuntu-24.04-arm' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      # GitHub-hosted runners start empty, so they build in a BuildKit container
+      # backed by GitHub's layer cache. Self-hosted runners use their own Docker
+      # daemon, whose layer cache stays on the machine.
+      - if: runner.environment == 'github-hosted'
+        uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -33,8 +45,8 @@ jobs:
             GIT_COMMIT_SHA=${{ github.sha }}
           secrets: |
             github_token=${{ github.token }}
-          cache-from: type=gha
-          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || '' }}
+          cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max' || '' }}
       - name: Assert linux/arm64 image
         run: |
           os="$(docker image inspect captures:arm64 --format '{{.Os}}')"
@@ -58,6 +70,16 @@ jobs:
 
           docker logs "$container_id"
           exit 1
+      - name: Export the tested image
+        run: |
+          set -euo pipefail
+          docker save captures:arm64 | gzip -1 > "$RUNNER_TEMP/captures-web.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captures-web-image
+          path: ${{ runner.temp }}/captures-web.tar.gz
+          retention-days: 1
+          compression-level: 0
 
   publish-ecr:
     name: Publish immutable ECR image
@@ -78,7 +100,6 @@ jobs:
       ECR_REGISTRY: 395451633568.dkr.ecr.us-east-1.amazonaws.com
       ECR_REPOSITORY: production/captures
     steps:
-      - uses: actions/checkout@v4
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
@@ -100,30 +121,30 @@ jobs:
           else
             printf 'exists=false\n' >> "$GITHUB_OUTPUT"
           fi
+      - uses: actions/download-artifact@v4
+        if: steps.existing.outputs.exists != 'true'
+        with:
+          name: captures-web-image
+          path: ${{ runner.temp }}
+      - name: Load the tested image
+        if: steps.existing.outputs.exists != 'true'
+        run: docker load --input "$RUNNER_TEMP/captures-web.tar.gz"
       - name: Log in to Amazon ECR
         if: steps.existing.outputs.exists != 'true'
         uses: aws-actions/amazon-ecr-login@v2.1.6
-      - if: steps.existing.outputs.exists != 'true'
-        uses: docker/setup-buildx-action@v3
-      - name: Build and push linux/arm64 image
-        id: build
+      - name: Push the tested linux/arm64 image
+        id: push
         if: steps.existing.outputs.exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/arm64
-          push: true
-          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          build-args: |
-            GIT_COMMIT_SHA=${{ github.sha }}
-          secrets: |
-            github_token=${{ github.token }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: |
+          set -euo pipefail
+          docker tag captures:arm64 "$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          digest="$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: Record immutable image
         id: record
         env:
-          DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.digest || steps.existing.outputs.digest }}
         run: |
           image="${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]

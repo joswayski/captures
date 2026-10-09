@@ -1,12 +1,13 @@
 name: Choose self-hosted runners
 
 # Called by workflows with jobs that can run on the self-hosted machines
-# (joswayski/infrastructure: the Mac, label "josemac", see ci/mac-runner; the
+# (joswayski/infrastructure: the Mac, label "josemac" and, for linux/arm64 image
+# builds in its Linux VM, "joselinux-arm", see docs/mac-ci-runner.md; the
 # Windows PC, labels "josewin" and "joselinux", see docs/windows-ci-runner.md).
 # Each output is 'true' only when all of these hold, and jobs use
 # GitHub-hosted runners otherwise:
-#   - the repository variable (SELF_HOSTED_MAC, SELF_HOSTED_WINDOWS or
-#     SELF_HOSTED_LINUX) is "on" (the kill switch),
+#   - the repository variable (SELF_HOSTED_MAC for both of the Mac's outputs,
+#     SELF_HOSTED_WINDOWS or SELF_HOSTED_LINUX) is "on" (the kill switch),
 #   - the run is a push or manual run on main (never a pull request or fork),
 #   - it is the first attempt (re-runs, including the fallback watchdog's,
 #     go to GitHub-hosted runners),
@@ -25,6 +26,9 @@ on:
       linux:
         description: "'true' when Linux jobs should run in the self-hosted Linux VM"
         value: ${{ jobs.route.outputs.linux }}
+      linux_arm:
+        description: "'true' when linux/arm64 jobs should run in the Mac's Linux VM"
+        value: ${{ jobs.route.outputs.linux_arm }}
 
 permissions: {}
 
@@ -37,6 +41,7 @@ jobs:
       mac: ${{ steps.route.outputs.mac }}
       windows: ${{ steps.route.outputs.windows }}
       linux: ${{ steps.route.outputs.linux }}
+      linux_arm: ${{ steps.route.outputs.linux_arm }}
     steps:
       - id: route
         env:
@@ -83,3 +88,4 @@ jobs:
           route mac "$MAC" josemac macOS
           route windows "$WINDOWS" josewin Windows
           route linux "$LINUX" joselinux Linux
+          route linux_arm "$MAC" joselinux-arm "Linux arm64"
