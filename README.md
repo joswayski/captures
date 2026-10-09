@@ -389,7 +389,8 @@ result requires closing and reopening. This is not crash-atomic across the saved
 file and History. Saving with **Save as new file** on remains non-destructive.
 Trim handles preview their edge while held, with one active decode and only the
 latest waiting range and position. Focused handles also accept arrow keys and
-Page Up/Page Down. During playback, changing a handle stops the old decoder,
+Page Up/Page Down; modifiers keep the same trim step, unlike Shift on crop handles.
+During playback, changing a handle stops the old decoder,
 accepts the latest trim and resumes without ending the gesture. The end grip
 pauses with Loop off and wraps to the selected start with Loop on.
 Dragging the trim track continuously seeks on both native hosts, paused or playing.

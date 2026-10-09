@@ -2930,7 +2930,9 @@ fn show_trim_timeline(
                     pressed: true,
                     modifiers,
                     ..
-                } if enabled && modifiers == egui::Modifiers::NONE => {
+                } if enabled => {
+                    // Shipping and AppKit use the same trim step regardless
+                    // of modifiers; focus, not the chord, owns this input.
                     let step = if duration < 60_000 { 1. } else { 10. };
                     let delta = match key {
                         egui::Key::ArrowLeft | egui::Key::ArrowDown => -step,
@@ -7048,53 +7050,68 @@ mod tests {
         let rect =
             egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(400. + 2. * grip, 24.));
         for duration in [59_999, 60_000] {
-            let ctx = egui::Context::default();
-            let mut view = opened();
-            view.end_ms = duration;
-            view.presented.as_mut().unwrap().source.duration_ms = Some(duration);
-            let frame =
-                |view: &mut View, events| timeline_frame(&ctx, &tokens, view, events, rect, true);
-            frame(&mut view, vec![]);
-            frame(&mut view, vec![trim_key(egui::Key::PageDown)]);
-            assert_eq!(view.end_ms, duration, "unfocused keys must not change trim");
-            let down = egui::pos2(rect.right() - grip / 2., 52.);
-            frame(
-                &mut view,
-                vec![trim_pointer(down, true), trim_pointer(down, false)],
-            );
-            frame(
-                &mut view,
-                vec![
-                    trim_key(egui::Key::ArrowLeft),
-                    trim_key(egui::Key::ArrowLeft),
-                ],
-            );
-            assert_eq!(
-                view.end_ms,
-                duration - if duration < 60_000 { 2 } else { 20 }
-            );
-            frame(&mut view, vec![trim_key(egui::Key::PageDown)]);
-            assert_eq!(
-                view.end_ms,
-                duration - if duration < 60_000 { 1002 } else { 1020 }
-            );
-            view.start_ms = view.end_ms - 3;
-            frame(&mut view, vec![trim_key(egui::Key::PageDown)]);
-            assert_eq!(view.end_ms, view.start_ms + 1);
-            let down = egui::pos2(
-                rect.left() + grip + 400. * view.start_ms as f32 / duration as f32 - grip / 2.,
-                52.,
-            );
-            frame(
-                &mut view,
-                vec![trim_pointer(down, true), trim_pointer(down, false)],
-            );
-            frame(&mut view, vec![trim_key(egui::Key::PageUp)]);
-            assert_eq!(
-                view.start_ms,
-                view.end_ms - 1,
-                "adjacent grips keep distinct focus/hit regions"
-            );
+            for modifiers in [
+                egui::Modifiers::NONE,
+                egui::Modifiers::SHIFT,
+                egui::Modifiers::CTRL,
+                egui::Modifiers::ALT,
+                egui::Modifiers::MAC_CMD,
+                egui::Modifiers::CTRL | egui::Modifiers::ALT | egui::Modifiers::SHIFT,
+            ] {
+                let key = |key| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                };
+                let ctx = egui::Context::default();
+                let mut view = opened();
+                view.end_ms = duration;
+                view.presented.as_mut().unwrap().source.duration_ms = Some(duration);
+                let frame = |view: &mut View, events| {
+                    timeline_frame(&ctx, &tokens, view, events, rect, true)
+                };
+                frame(&mut view, vec![]);
+                frame(&mut view, vec![key(egui::Key::PageDown)]);
+                assert_eq!(view.end_ms, duration, "unfocused keys must not change trim");
+                let down = egui::pos2(rect.right() - grip / 2., 52.);
+                frame(
+                    &mut view,
+                    vec![trim_pointer(down, true), trim_pointer(down, false)],
+                );
+                frame(
+                    &mut view,
+                    vec![key(egui::Key::ArrowLeft), key(egui::Key::ArrowLeft)],
+                );
+                assert_eq!(
+                    view.end_ms,
+                    duration - if duration < 60_000 { 2 } else { 20 },
+                    "{duration}ms, {modifiers:?}: modifiers do not change the step"
+                );
+                frame(&mut view, vec![key(egui::Key::PageDown)]);
+                assert_eq!(
+                    view.end_ms,
+                    duration - if duration < 60_000 { 1002 } else { 1020 }
+                );
+                view.start_ms = view.end_ms - 3;
+                frame(&mut view, vec![key(egui::Key::PageDown)]);
+                assert_eq!(view.end_ms, view.start_ms + 1);
+                let down = egui::pos2(
+                    rect.left() + grip + 400. * view.start_ms as f32 / duration as f32 - grip / 2.,
+                    52.,
+                );
+                frame(
+                    &mut view,
+                    vec![trim_pointer(down, true), trim_pointer(down, false)],
+                );
+                frame(&mut view, vec![key(egui::Key::PageUp)]);
+                assert_eq!(
+                    view.start_ms,
+                    view.end_ms - 1,
+                    "adjacent grips keep distinct focus/hit regions"
+                );
+            }
         }
     }
 

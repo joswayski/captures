@@ -1993,6 +1993,16 @@ def main():
             pause()
             end = read_time("End (ms)")
             assert 2900 <= end <= 3100, ("looping end trim", end)
+            # A modified key must also reach the focused handle while playing,
+            # retire the old decoder and resume the accepted range automatically.
+            raw_press(editor, "Play preview")
+            hold("Trim start")
+            run("xdotool", "mouseup", "1", "key", "shift+Prior")
+            decoded("modified-key-resumed-green", 1)
+            pause()
+            assert read_time("Start (ms)") == 1000, "playing Shift+PageUp trims by exactly one second"
+            fill(editor, "Start (ms)", 0)
+            settle(editor)
             movie.send_signal(signal.SIGINT)
             movie.wait(timeout=10)
             assert (output / "playing-trim.mp4").stat().st_size > 0
@@ -2018,7 +2028,7 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "end_ms": end, "checks": ["start-held-resume", "latest-held-range", "end-pauses-without-loop",
-                    "end-wraps-with-loop", "loop-motion-while-held", "explicit-pause", "accepted-export-duration-colors",
+                    "end-wraps-with-loop", "loop-motion-while-held", "modified-key-trim-resumes", "explicit-pause", "accepted-export-duration-colors",
                     "source-history-immutable", "minimum-controls", "clean-close-quit"]}, indent=2) + "\n")
             print("PASS playing trim: held start resume, end pause/loop, latest range, accepted MP4 pixels, minimum controls and immutable source")
             return
@@ -2095,6 +2105,31 @@ def main():
             run("xdotool", "key", "Right", "sleep", ".2")
             start = read_time("Start (ms)")
             assert start == cancelled_start + 1, ("focused keyboard step", start, cancelled_start)
+            # Shipping/AppKit treat modifiers as the same trim command, not
+            # a faster step. Keep repeated presses focused across decoding.
+            keyboard_cases = [
+                ("Trim start", "Start (ms)", ("shift+Right", "shift+Right"), start + 2),
+                ("Trim start", "Start (ms)", ("ctrl+Down",), start + 1),
+                ("Trim start", "Start (ms)", ("shift+Prior",), start + 1001),
+                ("Trim start", "Start (ms)", ("shift+Next",), start + 1),
+                ("Trim start", "Start (ms)", ("ctrl+alt+shift+Left",), start),
+                ("Trim end", "End (ms)", ("shift+Down",), end - 1),
+                ("Trim end", "End (ms)", ("ctrl+Up",), end),
+                ("Trim end", "End (ms)", ("ctrl+shift+Next",), end - 1000),
+                ("Trim end", "End (ms)", ("shift+Prior",), end),
+            ]
+            for handle, field_name, keys, expected in keyboard_cases:
+                press(editor, handle)
+                for key in keys:
+                    run("xdotool", "key", key, "sleep", ".2")
+                assert (actual := read_time(field_name)) == expected, (handle, keys, actual, expected)
+            # Read-back leaves the numeric field focused. Its cursor/selection
+            # keys must not adjust the formerly focused handle behind it.
+            run("xdotool", "key", "ctrl+Left", "shift+Right", "sleep", ".2")
+            assert read_time("End (ms)") == end and read_time("Start (ms)") == start
+            decoded_trim("modified-end", 2)
+            press(editor, "Trim start")
+            decoded_trim("modified-start", 1)
             shot(editor, "timeline-live")
             dominant(output / "timeline-live.png", 1)
             movie.send_signal(signal.SIGINT)
@@ -2144,7 +2179,8 @@ def main():
             (output / "result.json").write_text(json.dumps({"passed": True, "appearance": args.appearance,
                 "trim_start_ms": start, "trim_end_ms": end,
                 "checks": ["subthreshold-click", "start-drag", "end-drag", "escape-retains-last-stage",
-                    "focused-keyboard-step", "held-green-blue-green", "failed-preview-retained",
+                    "focused-keyboard-step", "modified-start-end-arrows", "modified-page-steps",
+                    "repeated-shift-focus", "numeric-field-focus-guard", "held-green-blue-green", "failed-preview-retained",
                     "failure-ends-gesture", "fresh-press-retry", "live-trim", "minimum-edge-preview",
                     "source-relative-seek", "mp4-duration", "mp4-green-blue", "gif-green-blue",
                     "history-publication", "minimum-controls", "immutable-source", "saved-close-quit"]}, indent=2) + "\n")
