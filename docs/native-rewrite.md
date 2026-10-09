@@ -2427,13 +2427,13 @@ recovery. The focused `x11_onboarding_smoke.py --update-restart-only` uses injec
 private markers and real windows, checking both appearances, notice expiry with
 Preferences retained, no repeated restore, setup priority and secondary exclusion.
 
-**Automatic installed restoration remains open.** The helper accepts an operator
-value, not a GUI snapshot; its fresh empty/imported profiles need setup, which wins
-over restoration. Explicit reuse of enrolled development profiles can retain
-completed setup, as described below. A future GUI updater must snapshot actual
-Preferences visibility at successful-update shutdown, not focus or update-click
-origin, matching shipping PR #1025. This slice enables neither GUI installation
-nor installed-profile writes.
+**Automatic installed restoration remains open.** The helper accepts operator
+intent or the opt-in development GUI shutdown snapshot described below. Its fresh
+empty/imported profiles need setup, which wins over restoration. Explicit reuse
+of enrolled development profiles can retain completed setup. Development shutdown
+now snapshots actual Preferences visibility, not focus or update-click origin,
+matching shipping PR #1025; it enables neither GUI installation nor installed-profile
+writes. Installed updating still needs its successful-update shutdown boundary.
 
 | Platform | Restart-intent implementation / verification |
 | --- | --- |
@@ -2560,7 +2560,8 @@ unknown/legacy settings, mutation, marker/path/link rejection, partial health wi
 the lock held, failure/recovery and cancellation. `native_profile_restart_smoke.py`
 provides signed loopback real-host checks of completed-profile settings/History,
 opaque draft/recovery byte retention, dark/light restoration and closed intent.
-Preferences visibility remains operator-supplied, not captured at GUI shutdown.
+Preferences visibility can be operator-supplied or captured by the opt-in development
+GUI shutdown path below.
 
 | Platform | Existing development-profile implementation / verification |
 | --- | --- |
@@ -2571,6 +2572,54 @@ Preferences visibility remains operator-supplied, not captured at GUI shutdown.
 
 This does not establish installed migration, a GUI installer, process-tree containment,
 OS permission/signing identity, distribution or native cutover. Tauri still ships.
+
+### Development GUI shutdown intent for the external helper
+
+Both hosts accept an explicit `--native-update-shutdown-intent-file` alongside
+signed checking/staging, with the exact settings/History paths of an already
+enrolled development profile. Validation reads bounded metadata only and rejects
+existing outputs or outputs inside that profile; it never enrolls installed data.
+The parent must remain trusted and the selected output must remain outside packages
+and exports. No startup file or network request is created.
+
+After the editor accepts normal Quit and before window/capture teardown, the host
+snapshots the staged full-target digest/version/size/renderer/target and actual
+Preferences visibility. Focus and update-click origin do not determine restoration.
+AppKit reads `NSWindow.isVisible`; wgpu uses weak native-window references and
+`winit::Window::is_visible`. Unknown visibility, non-staged states, editor veto and
+forced termination publish nothing. After accepted work/settings and update scratch
+drain, the host publishes a bounded private atomic no-clobber record before election
+release. Publication failure logs an error without blocking ordinary Quit or guessing.
+
+The stopped-package helper accepts `--shutdown-intent-file` only with its existing
+enrolled-profile mode and explicit all-writers-stopped assertion, instead of
+`--restore-preferences`. It authenticates fresh metadata and binds the record to the
+exact full target and enrolled root before consumption, acquisition, snapshot or
+replacement. Mismatches remain inspectable and have no package/data side effects.
+A valid record is consumed once for that attempt; later failure requires a fresh
+GUI record or explicit operator intent. The helper reacquires/verifies package bytes
+through the existing full/delta path, retains the pre-update data snapshot, and keeps
+the old package until real startup health. GUI scratch is not transferred, and the
+record proves neither authentication nor process-tree quiescence.
+
+Shared regressions cover staged-only true/false publication, canonical-path aliases,
+no-clobber/private output, exact profile/target matching and one-shot consumption.
+`native_profile_restart_smoke.py --gui` exercises real signed GUI verification,
+visible-but-unfocused and closed Preferences, normal source Quit/scratch cleanup,
+hash-mismatch rejection before package requests or snapshots, exact retained data,
+live replacement health and normal visible-host exit. Inputs are explicit local
+builds with packaged pinned media tools, not untouched CI archives or installed apps.
+
+| Platform | GUI shutdown-intent implementation / verification |
+| --- | --- |
+| AppKit/macOS | Actual visibility snapshot and late publication implemented through the shared C ABI; staged-only snapshot/options XCTest added, not executed in this Linux orb |
+| Windows | Shared wgpu/native-window snapshot and helper matching implemented; shared tests pass on Linux, Windows execution unverified |
+| X11 | All three private software-X11 signed GUI → helper → real-host cases pass: visible dark/light and closed Preferences, exact data/log preservation, mismatch rejection and one-shot consumption |
+| Wayland | Shared wgpu path implemented; unknown native visibility refuses intent; compositor restart/handoff unverified |
+
+No GUI installer, installed-profile writes, production channel, signing/permission
+identity, process-tree containment or renderer cutover is enabled. No acceptance gate
+closes; the external helper still requires an operator to stop/exclude every writer.
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow

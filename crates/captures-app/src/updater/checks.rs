@@ -8,7 +8,7 @@ use std::{
 };
 
 use captures_media::CancelToken;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Error, ReleaseInfo, Renderer, Target, UpdateClient};
 
@@ -56,8 +56,8 @@ pub fn client_from_key_file(
 }
 
 /// Temporary acquisition is separate from installation; no state can install.
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CheckStatus {
     Idle,
     Checking,
@@ -81,6 +81,7 @@ pub enum CheckStatus {
     },
     Staged {
         release: ReleaseInfo,
+        sha256: String,
     },
     DownloadError {
         release: ReleaseInfo,
@@ -196,7 +197,10 @@ impl CheckWorker {
                             match result {
                                 Ok(package) => {
                                     staged = Some(package);
-                                    CheckStatus::Staged { release }
+                                    CheckStatus::Staged {
+                                        release,
+                                        sha256: update.sha256(),
+                                    }
                                 }
                                 Err(error) => CheckStatus::DownloadError {
                                     release,
@@ -431,7 +435,7 @@ impl CheckWorker {
             | CheckStatus::Downloading { release, .. }
             | CheckStatus::Verifying { release }
             | CheckStatus::Cancelling { release }
-            | CheckStatus::Staged { release }
+            | CheckStatus::Staged { release, .. }
             | CheckStatus::DownloadError { release, .. } => {
                 format!(
                     "{} · {}; no installation",
@@ -523,7 +527,7 @@ impl CheckWorker {
             } => format!("Downloading {downloaded} of {total} bytes"),
             CheckStatus::Verifying { .. } => "Verifying package…".into(),
             CheckStatus::Cancelling { .. } => "Cancelling; waiting for I/O…".into(),
-            CheckStatus::Staged { release } => {
+            CheckStatus::Staged { release, .. } => {
                 format!("Development package {} verified", release.version)
             }
             CheckStatus::Error { message } | CheckStatus::DownloadError { message, .. } => {

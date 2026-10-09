@@ -35,8 +35,8 @@ impl PendingInstallation {
 
     /// Carry an explicit pre-shutdown Preferences VISIBILITY snapshot to the
     /// development health launch. Focus/update-click origin are not substitutes.
-    /// The helper currently accepts an operator-supplied value: no native GUI
-    /// update shutdown/installation boundary exists to supply this automatically.
+    /// The helper accepts operator intent or an opt-in GUI shutdown record bound
+    /// to its freshly authenticated target. Neither enables GUI installation.
     pub fn with_restart_preferences(mut self, visible: bool) -> Self {
         self.restore_preferences = Some(visible);
         self

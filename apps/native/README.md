@@ -92,6 +92,39 @@ reveal its later result; a new explicit check/download reveals again. Retained
 temporary storage is removed on recheck or normal quit. Forced termination or
 filesystem cleanup failure may leave owned scratch for manual removal.
 
+### Development GUI shutdown intent
+
+To capture actual Preferences visibility for a subsequent external-helper update,
+add `--native-update-shutdown-intent-file /absolute/new-restart-intent.json` to an
+explicit check/staging launch. This requires an **already enrolled development
+profile** with exactly `PROFILE/history` and `PROFILE/settings.json`; it never
+enrolls arbitrary or installed data. Choose a trusted output parent outside the
+profile, exports and package, and a file that does not exist. Validation reads
+bounded metadata only; there is no startup request or file creation.
+
+After **Download and verify** succeeds, normal Quit snapshots the staged full-target
+digest/version/size/renderer/target and the actual Preferences visibility, after
+the editor accepts shutdown and before window teardown. Focus and the update
+action's origin do not affect it. Once accepted work, settings and owned scratch
+drain, the host publishes an atomic no-clobber record before releasing profile
+election. Non-staged states, rejected editor Quit, unknown native visibility and
+forced termination publish no record. Publication failure is logged; normal Quit
+still finishes, without substituting guessed intent.
+
+After stopping/excluding **every app/data writer**, invoke the external helper's
+`--existing-development-profile PROFILE --all-app-processes-stopped` mode with
+`--shutdown-intent-file /absolute/new-restart-intent.json`, instead of
+`--restore-preferences`. It authenticates fresh metadata and requires the exact
+recorded full target and enrolled root before consuming the record once. Mismatches
+remain inspectable and never download, snapshot, replace or launch. A valid record
+is consumed for that attempt before acquisition; later failure requires a new GUI
+record or explicit operator intent. The helper reacquires/verifies package bytes
+with its existing full/delta path; this does not transfer GUI scratch or bypass
+Minisign. It retains the old package until real startup health and retains the
+pre-update data snapshot on success/failure. No GUI installs/launches an update;
+the record is neither authentication nor proof that other processes stopped.
+Installed updating, OS signing identity and cutover remain open.
+
 ## Native update acquisition diagnostic
 
 `captures_app::updater` implements shared signed-manifest checks and bounded,
@@ -101,8 +134,8 @@ to native UI, plus opt-in temporary acquisition with the scratch-directory flag.
 There is no bundled native
 signing key, release endpoint or installed-app
 updater. The explicit development-package helper below can replace and launch only
-a selected stopped development package with a new empty or explicitly imported
-development profile; it never reuses an installed profile.
+a selected stopped development package with a new empty, explicitly imported or
+existing enrolled development profile; it never reuses an installed profile.
 `native_update_probe` creates no window, changes no installed/profile data and
 removes its download and staged files on normal exit. It requires an explicit
 endpoint, standard two-line Minisign public key file, renderer and current version:

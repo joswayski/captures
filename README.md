@@ -510,7 +510,9 @@ profile, an explicitly imported isolated copy, or an existing enrolled developme
 profile with a retained pre-update data snapshot. It can also recover a failed
 package replacement after all app processes stop; package recovery does not restore
 profile data. It does not update installed copies or reuse their profiles.
-Its optional Preferences visibility intent is development-only; fresh
+An opt-in development GUI shutdown record can carry actual Preferences visibility
+and the verified target digest to that external helper; it is not a GUI installer
+and still requires all app/data writers stopped. Its optional intent is development-only; fresh
 profiles still require setup, and automatic installed Settings restoration is not
 connected. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
 also available separately, copies explicitly selected shipping settings, retained

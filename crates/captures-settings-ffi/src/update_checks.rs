@@ -7,7 +7,7 @@ use std::{
 };
 
 use captures_app::updater::{
-    Renderer,
+    Renderer, ShutdownIntentDestination,
     checks::{CheckWorker, client_from_key_file},
 };
 use serde::Deserialize;
@@ -35,6 +35,65 @@ enum Request {
     Poll { show_changelog: Option<bool> },
     DownloadVerify { show_changelog: Option<bool> },
     CancelDownload { show_changelog: Option<bool> },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShutdownRequest {
+    path: PathBuf,
+    history_root: PathBuf,
+    settings_file: PathBuf,
+    status: Option<captures_app::updater::checks::CheckStatus>,
+    preferences_visible: Option<bool>,
+}
+
+/// Validate an explicit development-only shutdown destination, or publish a
+/// previously captured staged status/visibility after the host's accepted drain.
+/// No HTTP, replacement, enrollment or settings migration. Not authentication.
+///
+/// # Safety
+/// `request_json` is readable NUL-terminated UTF-8 for this call. Free the owned
+/// response exactly once with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_update_shutdown_intent_v1(
+    request_json: *const c_char,
+) -> *mut c_char {
+    let value = catch_unwind(AssertUnwindSafe(|| {
+        let result = (|| {
+            if request_json.is_null() {
+                return Err("Shutdown intent request is null.".to_owned());
+            }
+            // SAFETY: Caller upholds the documented string lifetime.
+            let bytes = unsafe { CStr::from_ptr(request_json) }.to_bytes();
+            if bytes.len() > 256 * 1024 {
+                return Err("Shutdown intent request exceeds 256 KiB.".to_owned());
+            }
+            let request: ShutdownRequest = serde_json::from_slice(bytes)
+                .map_err(|_| "Invalid shutdown intent command.".to_owned())?;
+            let destination = ShutdownIntentDestination::new(
+                &request.path,
+                &request.history_root,
+                &request.settings_file,
+            )
+            .map_err(|error| error.to_string())?;
+            let written = match (request.status, request.preferences_visible) {
+                (None, None) => false,
+                (Some(status), Some(visible)) => destination
+                    .write(&status, visible)
+                    .map_err(|error| error.to_string())?,
+                _ => return Err("Shutdown intent needs both staged status and visibility.".into()),
+            };
+            Ok(json!({"written":written}))
+        })();
+        match result {
+            Ok(result) => json!({"ok":true,"result":result}),
+            Err(error) => json!({"ok":false,"error":error}),
+        }
+    }))
+    .unwrap_or_else(|_| json!({"ok":false,"error":"Shutdown intent bridge failed."}));
+    CString::new(value.to_string())
+        .expect("JSON contains no NUL")
+        .into_raw()
 }
 
 /// Construct an idle checker from explicit configuration, without HTTP.

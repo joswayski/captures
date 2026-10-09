@@ -668,6 +668,14 @@ impl WgpuWinitRunning<'_> {
             // after every surface was unmapped for a desktop-portal screenshot.
             for (id, viewport) in viewports.iter_mut() {
                 if let Some(window) = viewport.window.as_ref() {
+                    // Read-only native lookup for shutdown visibility snapshots.
+                    // Weak references cannot retain a retired viewport/window.
+                    integration.egui_ctx.data_mut(|data| {
+                        data.insert_temp(
+                            egui::Id::unique(("eframe-winit-window", *id)),
+                            Arc::downgrade(window),
+                        );
+                    });
                     let Some(native_hidden) = wayland_unmapped(window) else {
                         continue;
                     };
@@ -1269,6 +1277,12 @@ fn render_immediate_viewport(
         let (Some(window), Some(egui_winit)) = (&viewport.window, &mut viewport.egui_winit) else {
             return;
         };
+        egui_ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::unique(("eframe-winit-window", ids.this)),
+                Arc::downgrade(window),
+            );
+        });
         egui_winit::update_viewport_info(&mut viewport.info, egui_ctx, window, false);
 
         let mut input = egui_winit.take_egui_input(window);

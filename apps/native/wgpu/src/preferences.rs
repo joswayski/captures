@@ -732,6 +732,12 @@ impl Preferences {
         }
     }
 
+    pub fn update_check_status(&mut self) -> Option<captures_app::updater::checks::CheckStatus> {
+        let checker = self.update_checks.as_mut()?;
+        checker.poll();
+        Some(checker.status().clone())
+    }
+
     pub fn update_notice(&self) -> Option<(u64, captures_app::update_notice::Presentation)> {
         let checker = self.update_checks.as_ref()?;
         Some((
