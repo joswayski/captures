@@ -889,6 +889,42 @@ before Preferences input to avoid occlusion. This is not tray-anchor/focus,
 physical GNOME/KDE, accessibility, installed updating, production signing/channel,
 distribution, delta acquisition or renderer-cutover acceptance.
 
+### Native X11 development updater smoke
+
+`apps/native/x11_update_smoke.py` runs the same real signed loopback acquisition,
+pending-I/O Quit and optional copied-package supervision assertions on private
+Xvfb/Openbox/software GL. Unlike `x11_update_notice_smoke.py`, it does not use the
+stub status source. Window queries use `xwininfo`'s translated client origin;
+`xdotool getwindowgeometry` double-counts Openbox's frame offset. Mouse/wheel input
+uses xdotool and Quit opens the real private XFCE SNI tray popup and presses its
+last row. All geometry, progress, retained-byte and cleanup checks remain shared
+with the Wayland matrix; the X11 run does not substitute for Wayland delivery.
+
+Use the optimized packaged host, pinned media, root importer/helper and uniquely
+selected Cargo signing-test executable from the recipe above. X11 does not need
+the Sway launcher or Wayland injector. In addition to the native build's
+PipeWire/Clang/ALSA/D-Bus requirements, install the private display/tray tools:
+
+```sh
+sudo apt-get install -y xvfb openbox x11-utils xdotool imagemagick xfce4-panel python3-dbus python3-gi
+/usr/bin/python3 apps/native/x11_update_smoke.py \
+  --binary /tmp/captures-updater-package/captures-native \
+  --package /tmp/captures-updater-package \
+  --signing-test "$signer" --importer apps/native/wgpu/target/debug/native_profile_import \
+  --helper apps/native/wgpu/target/debug/native_update_helper \
+  --output /tmp/captures-x11-updater-evidence
+```
+
+Package/output paths must be new. Fresh keys, completed offline-imported profiles,
+isolated XDG/D-Bus/display state and supervisor package copies keep installed data
+untouched. `--helper` runs all eight dark/light cases, including three confirmed
+restarts and ordinary Quit without installation; omitting it runs four acquisition
+cases. Result JSON retains the supplied package's file hashes/build identity,
+signed archive identity, HTTP/byte/state evidence and retained-data equality.
+Normal/minimum error, restart and actual tray-popup captures accompany the logs.
+This is not physical X11/GPU/mixed-DPI, screen-reader, installed updating,
+production signing/channel, release or renderer-cutover acceptance.
+
 ## Validate and collect evidence
 
 ```sh
