@@ -99,7 +99,7 @@ jobs:
         env:
           CARGO_PROFILE_TEST_DEBUG: '0'
         run: |
-          sudo apt-get install -y meson ninja-build pkg-config libinih-dev libdrm-dev libsystemd-dev libevdev-dev libpixman-1-dev libjson-c-dev libpcre2-dev libffi-dev libexpat1-dev libcairo2-dev libpango1.0-dev wayland-protocols wireplumber python3-gi-cairo gir1.2-gtk-3.0
+          sudo apt-get install -y meson ninja-build pkg-config libinih-dev libdrm-dev libsystemd-dev libevdev-dev libinput-dev libpixman-1-dev libjson-c-dev libpcre2-dev libffi-dev libexpat1-dev libcairo2-dev libpango1.0-dev wayland-protocols wireplumber python3-gi-cairo gir1.2-gtk-3.0
           backend="$(apps/native/build_wayland_portal_fixture.sh "$RUNNER_TEMP/wayland-portal-fixture")"
           # wlroots 0.17.1 renders the reflected reference black before Captures runs.
           compositor="$(apps/native/build_wayland_compositor_fixture.sh "$RUNNER_TEMP/wayland-compositor-fixture")"
