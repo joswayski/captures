@@ -2418,7 +2418,7 @@ includes live notices in the Windows tray-click dismissal policy.
 | AppKit/macOS | Rust/C ABI source, AppKit model/controller/tray anchor and lifecycle implemented; XCTest dismissal/source-isolation/link-routing regression added; this slice's host execution/physical acceptance pending. The preceding check slice passes macOS CI (574 XCTest cases, six existing skips, no failures) and development packaging |
 | Windows | Same shared source, wgpu notice/action routing and tray dismissal implemented; portable regressions pass; this slice's Windows execution/physical acceptance pending |
 | X11 | Shared/host regressions and real signed loopback live input pass in dark/normal, dark/minimum with notes collapsed, and light/minimum: held checking, dismissal through completion, explicit recheck reveal, available/up-to-date, signature failure and notice-button retry, accepted pending-check Quit, unchanged settings and no artifact HTTP; renders inspected |
-| Wayland | Same source and wgpu UI; renderer regression asserts no notice viewport while suspended and correct restore/dismissal; actual compositor/physical notice acceptance open |
+| Wayland | Real signed loopback worker and notice pass on private Sway 1.9/software GL in dark/light: idle/no HTTP, held checking, dismissal through completion, explicit recheck reveal, signed available, signature failure and notice-button retry; normal/minimum error renders inspected. Physical compositor/notice acceptance remains open |
 
 No channel, installation, distribution or cutover is enabled by this slice.
 Workbench fixture scenes remain a separate simulated source.
@@ -2446,11 +2446,18 @@ can leave owned scratch, never an installed update.
 | AppKit/macOS | Shared Rust/C ABI, CLI guard, Preferences/notice routing and busy-only polling implemented; XCTest cancellation/source-isolation/configuration regressions and development packaging pass in [macOS CI](https://github.com/joswayski/captures/actions/runs/37407078921); physical acceptance open |
 | Windows | Same worker, CLI and wgpu integration implemented; tests, native-window smoke and development packaging pass in [Windows/Linux CI](https://github.com/joswayski/captures/actions/runs/37407078573); physical acquisition acceptance open |
 | X11 | Signed real-packager fixtures verify altered artifact rejection/retry, incomplete package rejection, partial progress/cancel/quit, stage ownership and cleanup; real dark/normal and light/minimum UI smokes exercise download/notice cancellation, hash failure/notice retry, validation, hidden completion, recheck/quit cleanup and unchanged operator files/settings; renders inspected |
-| Wayland | Same worker/UI and existing notice-suspension policy; no compositor-specific behavior introduced or accepted; physical/live acquisition acceptance remains open |
+| Wayland | Real current host/package and pinned target-suffixed FFmpeg/FFprobe pass `wayland_update_smoke.py` on private Sway 1.9/software GL: dark/light exact 33%/67% received-byte progress, dismissed verified completion, held-I/O cancellation/cleanup, signed-manifest hash failure and explicit authenticated download retry, recheck cleanup, unchanged operator sources and retained development data; normal/minimum error renders inspected. Physical acquisition acceptance remains open |
 
 This connects acquisition/staging to development UI, not an installed updater.
 External helper/process handoff, signed distribution, channel policy, installed-data
 migration and end-to-end acceptance remain separate. Tauri still ships.
+
+[Wayland updater reproduction](../apps/native/wgpu/README.md#native-wayland-development-updater-smoke)
+uses fresh test signing keys, loopback-only packages and offline-imported disposable
+enrolled development profiles. A non-owned scratch sentinel survives every cleanup;
+the recovery worker's empty persistent lock is seeded before retained-data hashing.
+This does not exercise delta acquisition, production signing/channel, installed
+profiles, tray anchoring/focus, physical GNOME/KDE or accessibility acceptance.
 
 ### Native update shutdown drain
 
@@ -2467,7 +2474,7 @@ save/draft failures still refuse Quit before update cancellation starts.
 | AppKit/macOS | Existing off-main drain and `.terminateLater` retained; shared shutdown guards apply; this slice's macOS execution awaits main CI, physical acceptance open |
 | Windows | Shared nonblocking wgpu drain implemented; deterministic host/worker regressions cover held HTTP, repeated Quit and cleanup acknowledgement; runtime/physical acceptance open |
 | X11 | Deterministic worker/host regressions pass; eight real-window dark/light cases cover idle, held metadata, held partial download and verified-stage Quit; all windows hide, the event loop advances, election/marker stay owned until drain, scratch is removed and existing settings/sentinel remain byte-exact; progress renders inspected |
-| Wayland | Same wgpu logic-only drain; no compositor-specific implementation introduced; live compositor/physical shutdown acceptance open |
+| Wayland | Four real-window dark/light cases on private Sway cover accepted tray Quit during held metadata (one byte) and partial download (65,536 bytes): windows hide while the process, election and crash marker remain owned; release drains I/O, exits 0, removes owned scratch/marker and unlocks election without late HTTP or changes to retained development data/operator sources. Physical shutdown acceptance remains open |
 
 ### Native update package staging: temporary validation, no installation
 
@@ -2797,7 +2804,7 @@ permission identity remain out of scope; no acceptance gate closes.
 | AppKit/macOS | Shared helper/FFI, staged action, actual visibility, editor veto and queue drain implemented; Swift model regressions extended; compilation/runtime not available in this Linux orb |
 | Windows | Shared helper/wgpu routing, strong shutdown and health implemented; shared tests run on Linux; Windows runtime/signing/installed acceptance unverified |
 | X11 | Real packaged-host `native_profile_restart_smoke.py --supervised` covers signed dark/light visible and closed-Preferences installation, exact retained data/logs and verified ordinary Quit; private X11/software GL only |
-| Wayland | Shared wgpu/supervisor path implemented; installation/restart runtime and physical compositor acceptance unverified |
+| Wayland | `wayland_update_smoke.py --helper` passes four copied-package/profile cases on private Sway 1.9/software GL: dark/light visible and closed-Preferences restart, byte-exact target replacement and retained data snapshot/logs, startup-health confirmation, replacement tray Quit with exit 0, owned-session cleanup; verified ordinary Quit does not replace, snapshot or make further HTTP. Restart renders inspected. Physical/installed acceptance remains open |
 
 All **19 end-to-end acceptance gates remain open**. The large remaining workstreams
 are screenshot editing, recording editing, Tauri visual/interaction parity, OS/workflow
