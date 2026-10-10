@@ -221,6 +221,10 @@ fn hex(bytes: &[u8]) -> String {
 fn main() {
     let mut args = std::env::args().skip(1);
     let command = args.next();
+    if command.as_deref() == Some("keyboard") {
+        keyboard();
+        return;
+    }
     if command.as_deref() == Some("inject") {
         inject(args.next().as_deref().unwrap_or("reject"), None);
         return;
@@ -388,4 +392,97 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
     } else {
         perform(click, None);
     }
+}
+
+/// Persistent keyboard on the private compositor. Each stdin line is an evdev
+/// keycode and `none` or a `+`-separated set of shift/ctrl/alt modifiers.
+fn keyboard() {
+    use std::{io::Write, os::fd::AsFd};
+    use wayland_client::{
+        delegate_noop,
+        globals::{registry_queue_init, GlobalListContents},
+        protocol::{wl_registry, wl_seat::WlSeat},
+        Connection, Dispatch, QueueHandle,
+    };
+    use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+        zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+        zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+    };
+    use xkbcommon::xkb;
+
+    struct State;
+    impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
+        fn event(
+            _: &mut Self,
+            _: &wl_registry::WlRegistry,
+            _: wl_registry::Event,
+            _: &GlobalListContents,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+        }
+    }
+    delegate_noop!(State: ignore WlSeat);
+    delegate_noop!(State: ignore ZwpVirtualKeyboardManagerV1);
+    delegate_noop!(State: ignore ZwpVirtualKeyboardV1);
+
+    let connection = Connection::connect_to_env().unwrap();
+    let (globals, mut queue) = registry_queue_init::<State>(&connection).unwrap();
+    let qh = queue.handle();
+    let seat = globals.bind::<WlSeat, _, _>(&qh, 1..=1, ()).unwrap();
+    let manager = globals
+        .bind::<ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ())
+        .unwrap();
+    let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
+    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let keymap = xkb::Keymap::new_from_names(
+        &context,
+        "evdev",
+        "pc105",
+        "us",
+        "",
+        None,
+        xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )
+    .unwrap();
+    let bytes = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1) + "\0";
+    let mut file = tempfile::tempfile().unwrap();
+    file.write_all(bytes.as_bytes()).unwrap();
+    keyboard.keymap(1, file.as_fd(), bytes.len().try_into().unwrap());
+    queue.roundtrip(&mut State).unwrap();
+    println!("READY");
+    let clock = std::time::Instant::now();
+    for line in io::stdin().lock().lines() {
+        let line = line.unwrap();
+        let mut words = line.split_whitespace();
+        let code: u32 = words.next().expect("evdev keycode").parse().unwrap();
+        let modifiers = words.next().expect("modifiers");
+        assert!(words.next().is_none(), "unexpected keyboard argument");
+        let mut mask = 0;
+        for modifier in modifiers.split('+') {
+            let name = match modifier {
+                "none" => continue,
+                "shift" => xkb::MOD_NAME_SHIFT,
+                "ctrl" => xkb::MOD_NAME_CTRL,
+                "alt" => xkb::MOD_NAME_ALT,
+                _ => panic!("unknown modifier: {modifier}"),
+            };
+            let index = keymap.mod_get_index(name);
+            assert_ne!(index, xkb::MOD_INVALID);
+            mask |= 1 << index;
+        }
+        // Virtual-keyboard key requests do not update XKB state. Send masks
+        // relative to the exact keymap, not wlroots convenience modifier bits.
+        keyboard.modifiers(mask, 0, 0, 0);
+        keyboard.key(clock.elapsed().as_millis() as u32, code, 1);
+        queue.roundtrip(&mut State).unwrap();
+        thread::sleep(Duration::from_millis(40));
+        keyboard.key(clock.elapsed().as_millis() as u32, code, 0);
+        keyboard.modifiers(0, 0, 0, 0);
+        queue.roundtrip(&mut State).unwrap();
+        thread::sleep(Duration::from_millis(40));
+        println!("KEYED {code} {modifiers}");
+    }
+    keyboard.destroy();
+    queue.roundtrip(&mut State).unwrap();
 }

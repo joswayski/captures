@@ -274,10 +274,11 @@ def cases(binary, pointer, root, env, bus):
                 finally:
                     stop(app)
                     stop(service)
+    return {"host_cases": 14}
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(run_cases=cases, description=__doc__):
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--injector", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -321,8 +322,8 @@ def main():
             pointer = subprocess.Popen([str(args.injector.resolve(strict=True)), "pointer"], env=env,
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             ready(pointer)
-            cases(str(args.binary.resolve(strict=True)), pointer, root, env, bus)
-            print(json.dumps({"host_cases": 14, "display_unset": True,
+            result = run_cases(str(args.binary.resolve(strict=True)), pointer, root, env, bus)
+            print(json.dumps({**result, "display_unset": True,
                               "physical_compositor_acceptance": False}), flush=True)
     finally:
         if pointer:

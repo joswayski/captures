@@ -265,6 +265,40 @@ jobs:
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
             || echo "::warning::Could not cancel the rest of this run"
 
+  wayland-keyboard:
+    needs: [linux-release, route]
+    runs-on: ${{ needs.route.outputs.linux == 'true' && fromJSON('["self-hosted","joselinux"]') || 'ubuntu-24.04' }}
+    # Keep compositor compilation/input checks out of the existing GUI timeout.
+    # Exercise the same built host artifact that the other Linux shards consume.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          cache-workspaces: apps/native/wayland_drag_probe
+      - name: Install private compositor and native-input fixture dependencies
+        run: sudo apt-get update && sudo apt-get install -y meson ninja-build pkg-config libwayland-dev libxkbcommon-dev libdrm-dev libinput-dev libevdev-dev libpixman-1-dev libjson-c-dev libpcre2-dev libffi-dev libexpat1-dev libcairo2-dev libpango1.0-dev libsystemd-dev libgl1-mesa-dri libegl1 dbus python3-dbus python3-gi sway grim ffmpeg imagemagick wl-clipboard
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-wgpu-binary-ubuntu-24.04
+          path: apps/native/wgpu/target/release
+      - name: Deliver native Find, Text and trim keys through pinned private Sway
+        run: |
+          chmod +x apps/native/wgpu/target/release/captures-wgpu-workbench
+          compositor="$(apps/native/build_wayland_compositor_fixture.sh "$RUNNER_TEMP/wayland-compositor-fixture")"
+          cargo +1.95.0 fmt --manifest-path apps/native/wayland_drag_probe/Cargo.toml -- --check
+          cargo +1.95.0 clippy --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked --all-targets -- -D warnings
+          cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked
+          PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_keyboard_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe --output native-wayland-keyboard
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-wayland-keyboard-evidence
+          path: native-wayland-keyboard
+          if-no-files-found: ignore
+
   windows-development-package:
     needs: [windows-release, workbench, route]
     runs-on: ${{ needs.route.outputs.windows == 'true' && fromJSON('["self-hosted","josewin"]') || 'windows-2025' }}
