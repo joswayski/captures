@@ -203,6 +203,9 @@ Display recordings include the controls; Hide requires a working tray restore pa
 Window recording requires a ScreenCast portal v3+ advertising window sources;
 only the chosen window is shared, and every new/resumed segment asks again.
 Unsupported backends report an error without falling back to display capture.
+Portal video frames honor output rotation and reflection, including same-size
+orientation changes during a take. Physical rotated-display and mixed-DPI
+acceptance remain open.
 While a take runs or is paused, the controls' Screenshot action requests a separate
 desktop-portal still without stopping the take. Captures' windows and HUD are
 hidden for the still; cancellation or failure preserves the recording. Screenshot

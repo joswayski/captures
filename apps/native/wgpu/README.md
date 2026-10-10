@@ -555,6 +555,15 @@ DMA-BUF/corruption/format changes, and exposes a bounded one-frame queue, droppe
 frame count and stream warning. Newer portals' `pipewire-serial` selects the node;
 older portals use the granted node ID with reconnection disabled. Stopping or
 dropping joins the worker, releases the remote and closes the portal session.
+It requests SPA video-transform metadata and normalizes each buffer's rotation
+or reflection before publishing dimensions and pixels. Missing metadata means
+identity, preserving producers that already normalize frames; unknown transforms
+fail the source. Reading each buffer also handles a 180° change that leaves the
+negotiated dimensions unchanged. Linux builds require PipeWire/SPA development
+headers 0.3.62+ for this metadata. The safe bindings upgrade to PipeWire/SPA 0.10.1
+also resolves xcap to 0.9.8 in both lockfiles because two `pipewire-sys` versions
+cannot share native library links. xcap's macOS/Windows implementations are
+unchanged by that upstream patch; their runtime acceptance remains unverified.
 Consent has a 120-second deadline; calls take at most five seconds, polling
 50 ms and cleanup calls one second. Cancellation cannot interrupt bus connection
 setup or a blocking call. Compositor-space stream properties are not treated as
@@ -587,7 +596,13 @@ scripted window grant reaches the remote-open call, but intentionally returns an
 error there: it is protocol coverage, not a real captured window. A separate animated Wayland client supplies
 two asymmetric frames. The real portal/PipeWire path must see both phases and
 match every output pixel across repeated sessions, with cancellation during an
-active stream leaving no output. Terminating the backend while the granted stream
+active stream leaving no output. All eight output rotations/reflections must
+retain upright 320×200 logical pixels against independently specified frames
+and `grim` captures, using 200×320 physical modes for quarter-turns. An active
+normal → 180° → normal stream must retain both expected top-left colors and exact
+final pixels; a stale orientation would add the wrong corner colors. These checks
+cover 168 source frames and 640,000 exact final-image pixels, not physical rotation
+or mixed-DPI acceptance. Terminating the backend while the granted stream
 is running must end the source promptly, without output or a frame timeout; this
 checks transport loss, not physical permission revocation. A still desktop can legitimately stop delivering
 new frames until damage occurs. The no-window probe writes a diagnostic PNG only
