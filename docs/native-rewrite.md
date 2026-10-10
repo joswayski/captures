@@ -1962,7 +1962,9 @@ Accepted pixels/edits remain unchanged until
 the existing live apply accepts the staged crop, which remains unsaved until Save.
 
 The private eframe wgpu patch initializes AccessKit for secondary windows as well
-as History, including immediate, deferred and recreated windows. Previously a real
+as History, including immediate, deferred and recreated windows. Creation is hidden
+until the adapter is initialized, then follows the original requested visibility;
+intentionally hidden windows are not shown. Previously a real
 private AT-SPI session registered History but exposed no editor nodes, so tree-only
 tests could not establish runtime accessibility. The adapter uses the existing
 window-specific action/tree routing and adds no separate accessibility backend.

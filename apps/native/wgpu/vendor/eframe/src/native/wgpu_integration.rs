@@ -1184,7 +1184,10 @@ impl Viewport {
 
         let viewport_id = self.ids.this;
 
-        match egui_winit::create_window(egui_ctx, event_loop, &self.builder) {
+        let builder = self.builder.clone();
+        #[cfg(feature = "accesskit")]
+        let builder = builder.with_visible(false);
+        match egui_winit::create_window(egui_ctx, event_loop, &builder) {
             Ok(window) => {
                 windows_id.insert(window.id(), viewport_id);
 
@@ -1209,6 +1212,12 @@ impl Viewport {
                 egui_winit.init_accesskit(event_loop, &window, accesskit_proxy.clone());
                 self.egui_winit = Some(egui_winit);
 
+                // AccessKit must exist before the first show. The creation
+                // override must not change the viewport's intended visibility.
+                #[cfg(feature = "accesskit")]
+                if self.builder.visible.unwrap_or(true) {
+                    window.set_visible(true);
+                }
                 egui_winit::update_viewport_info(&mut self.info, egui_ctx, &window, true);
                 self.window = Some(window);
             }
