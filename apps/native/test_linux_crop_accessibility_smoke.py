@@ -2,7 +2,7 @@
 from copy import deepcopy
 import unittest
 
-from linux_crop_accessibility_smoke import HANDLES, verify_handles, verify_screen_bounds
+from linux_crop_accessibility_smoke import HANDLES, verify_handles, verify_projected_bounds
 
 
 class CropProviderEvidenceTests(unittest.TestCase):
@@ -45,15 +45,25 @@ class CropProviderEvidenceTests(unittest.TestCase):
             ("Crop top left", [194, 125, 12, 1]), ("Crop top right", [514, 125, 12, 1]),
             ("Crop top", [354, 125, 12, 1]), ("Crop right", [514, 194, 12, 12]),
             ("Crop left", [194, 194, 12, 12]))]
-        verify_screen_bounds(handles, self.crop, (320, 180), image, (20, 30))
+        verify_projected_bounds(handles, self.crop, (320, 180), image, (20, 30))
         for index, value in ((0, 204), (3, 12)):
             changed = deepcopy(handles)
             changed[0]["bounds"][index] = value
             with self.subTest(index=index), self.assertRaises(AssertionError):
-                verify_screen_bounds(changed, self.crop, (320, 180), image, (20, 30))
+                verify_projected_bounds(changed, self.crop, (320, 180), image, (20, 30))
         with self.assertRaises(AssertionError):
-            verify_screen_bounds(handles + [{"name": "Crop bottom", "bounds": [354, 274, 12, 12]}],
-                                 self.crop, (320, 180), image, (20, 30))
+            verify_projected_bounds(handles + [{"name": "Crop bottom", "bounds": [354, 274, 12, 12]}],
+                                    self.crop, (320, 180), image, (20, 30))
+        # Wayland WINDOW coordinates keep the same clipping but no global
+        # offset. Equal unsupported SCREEN rectangles must not add Sway's origin.
+        window_handles = deepcopy(handles)
+        for node in window_handles:
+            node["bounds"][0] -= 20
+            node["bounds"][1] -= 30
+            node["screen_bounds_unsupported"] = node["bounds"][:]
+        verify_projected_bounds(window_handles, self.crop, (320, 180), image, (0, 0))
+        with self.assertRaises(AssertionError):
+            verify_projected_bounds(window_handles, self.crop, (320, 180), image, (80, 60))
 
     def test_value_transport_and_source_descriptions_are_required_not_action_interface(self):
         verify_handles(self.nodes, self.crop, self.limits)
