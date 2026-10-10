@@ -207,9 +207,10 @@ def main():
 
     try:
         if args.foreground:
+            print(hwnd, flush=True)  # Win32 GUI initialization must precede the grant.
             assert sys.stdin.readline() == "focus\n", "parent did not grant foreground permission"
             foreground(hwnd)
-            print(hwnd, flush=True)
+            print("focused", flush=True)
             pump(30)
             return
         foreground(hwnd)
@@ -237,10 +238,11 @@ def main():
         # The sink must work while a DIFFERENT PROCESS owns keyboard focus.
         child = subprocess.Popen([sys.executable, __file__, "--allow-input-injection", "--foreground"],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        child_hwnd = int(child.stdout.readline())
         checked(user.AllowSetForegroundWindow(child.pid), "AllowSetForegroundWindow")
         child.stdin.write("focus\n")
         child.stdin.flush()
-        child_hwnd = int(child.stdout.readline())
+        assert child.stdout.readline() == "focused\n"
         assert user.GetForegroundWindow() == child_hwnd
         check_case("background-two-complete-taps", chord() * 2, [7, 7], background=True)
         assert user.GetForegroundWindow() == child_hwnd
