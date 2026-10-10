@@ -833,13 +833,14 @@ target-suffixed FFmpeg/FFprobe pair; do not substitute system media executables.
 The package stays unchanged. The fixture creates its own signed target by copying
 the package and adding one inert marker file; it does not claim a new host version.
 
-Run from the repository root, building the exact host/resources first:
+Run from the repository root, building the optimized host/resources first and
+executing the staged host rather than the source-tree binary:
 
 ```sh
 set -euo pipefail
 node apps/native/prepare.mjs --output apps/native/wgpu/resources
 cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked \
-  --bin captures-wgpu-workbench
+  --release --bin captures-wgpu-workbench
 npm run prepare:media
 cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked \
   --target-dir apps/native/wgpu/target
@@ -850,11 +851,11 @@ signer="$(CARGO_PROFILE_TEST_DEBUG=0 cargo +1.95.0 test --locked \
   --no-run --message-format=json | jq -r \
   'select(.reason == "compiler-artifact" and .target.name == "native_update_patch" and .profile.test) | .executable')"
 python3 apps/native/package.py --platform linux \
-  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
   --media-target x86_64-unknown-linux-gnu --output /tmp/captures-updater-package
 tools="$(apps/native/build_wayland_compositor_fixture.sh)"
 PATH="$tools:$PATH" /usr/bin/python3 apps/native/wayland_update_smoke.py \
-  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --binary /tmp/captures-updater-package/captures-native \
   --injector apps/native/wgpu/target/debug/captures-wayland-drag-probe \
   --signing-test "$signer" --importer apps/native/wgpu/target/debug/native_profile_import \
   --package /tmp/captures-updater-package --helper apps/native/wgpu/target/debug/native_update_helper \
@@ -869,6 +870,14 @@ recheck cleanup, and accepted pending-check/download Quit. Quit retains election
 and the crash marker until held I/O drains, then removes the marker and owned
 scratch. Settings, retained History/draft/recovery bytes and operator sources stay
 unchanged; a non-owned scratch sentinel survives.
+
+The notice retains fixed native limits as states grow or shrink. A late configure
+for an earlier state can overwrite a newer builder size before the surface commits;
+the wgpu callback reconciles actual native dimensions with the current model.
+Physical-pixel comparison avoids fractional-DPI resize churn, and embedded previews
+never resize their containing window. The unchanged smoke requires exact notice
+model/compositor geometry before real footer input; this correction adds no resize
+delay and does not relax that assertion.
 
 Optional supervision operates only on copied disposable packages/profiles: dark/
 light visible and closed-Preferences restart, exact target replacement, retained
