@@ -156,10 +156,31 @@ class Host:
     def notice(self):
         return self.reports().get("update-notice")
 
-    def window(self, title=PREFERENCES):
+    @staticmethod
+    def windows(env):
         from wayland_native_capture_smoke import windows
-        return next((node for node in windows(self.env)
+        return windows(env)
+
+    @staticmethod
+    def capture(env, path):
+        subprocess.run(["grim", str(path)], env=env, check=True, timeout=10)
+
+    def window(self, title=PREFERENCES):
+        return next((node for node in self.windows(self.env)
                      if node["pid"] == self.pid and node["name"] == title), None)
+
+    def focus(self, node):
+        subprocess.run(["swaymsg", f'[con_id={node["id"]}] focus'], env=self.env,
+                       check=True, stdout=subprocess.DEVNULL)
+
+    def move(self, node, x, y):
+        subprocess.run(["swaymsg", f'[con_id={node["id"]}] move position {x} {y}'],
+                       env=self.env, check=True, stdout=subprocess.DEVNULL)
+
+    def close_preferences(self):
+        node = self.window()
+        subprocess.run(["swaymsg", f'[con_id={node["id"]}] kill'], env=self.env,
+                       check=True, stdout=subprocess.DEVNULL)
 
     def arrange(self, width=740, height=660):
         from wayland_native_capture_smoke import wait
@@ -172,8 +193,7 @@ class Host:
         # A newly mapped error notice can take focus after resize acknowledgment.
         # Let presentation settle, then choose the actual input destination.
         time.sleep(.5)
-        subprocess.run(["swaymsg", f'[con_id={node["id"]}] focus'], env=self.env,
-                       check=True, stdout=subprocess.DEVNULL)
+        self.focus(node)
         wait(lambda: self.window()["focused"], "Preferences focus after arrangement")
         time.sleep(.5)
 
@@ -188,9 +208,8 @@ class Host:
         from wayland_native_capture_smoke import wait
         node = wait(self.window, PREFERENCES)
         if notice := self.window(NOTICE):
-            subprocess.run(["swaymsg", f'[con_id={notice["id"]}] move position 770 100; '
-                            f'[con_id={node["id"]}] focus'], env=self.env,
-                           check=True, stdout=subprocess.DEVNULL)
+            self.move(notice, 770, 100)
+            self.focus(node)
             wait(lambda: self.window()["focused"], "Preferences focus before scrolling")
             time.sleep(.5)
         if node["rect"]["width"] > 720:
@@ -223,8 +242,7 @@ class Host:
             self.notice_action()
             wait(self.hidden, "notice dismissed before Preferences input")
         node = self.window()
-        subprocess.run(["swaymsg", f'[con_id={node["id"]}] focus'], env=self.env,
-                       check=True, stdout=subprocess.DEVNULL)
+        self.focus(node)
         time.sleep(.5)
 
         previous = {"rect": None, "since": time.monotonic()}
@@ -251,8 +269,7 @@ class Host:
             return node if (node and detail and [node["rect"]["width"], node["rect"]["height"]]
                             == detail["window"][2:]) else None
         node = wait(settled, "notice mapped at its current state size")
-        subprocess.run(["swaymsg", f'[con_id={node["id"]}] focus'], env=self.env,
-                       check=True, stdout=subprocess.DEVNULL)
+        self.focus(node)
         wait(lambda: self.window(NOTICE)["focused"], "notice raised for real input")
         time.sleep(.5)
         rect = self.window(NOTICE)["rect"]
@@ -269,11 +286,11 @@ class Host:
         # On Wayland placement is compositor-owned; arrange both real windows
         # without changing the app's requested notice dimensions.
         y = 480 if self.window()["rect"]["width"] > 720 else 100
-        subprocess.run(["swaymsg", f'[con_id={notice["id"]}] move position 770 {y}, focus'],
-                       env=self.env, check=True, stdout=subprocess.DEVNULL)
+        self.move(notice, 770, y)
+        self.focus(notice)
         wait(lambda: self.window(NOTICE)["focused"], "notice raised for capture")
         time.sleep(.6)
-        subprocess.run(["grim", str(path)], env=self.env, check=True, timeout=10)
+        self.capture(self.env, path)
         path.with_suffix(".json").write_text(json.dumps({"preferences": self.layout(),
             "notice": self.notice(), "windows": [self.window(), self.window(NOTICE)]}, indent=2))
 
@@ -310,9 +327,9 @@ def enroll(root, importer, appearance, env):
     return profile, source, original
 
 
-def acquisition(args, root, env, bus, pointer, fixture, evidence):
+def acquisition(args, root, env, bus, pointer, fixture, evidence, host_class=Host):
     from wayland_lifecycle_smoke import watcher
-    from wayland_native_capture_smoke import wait, windows
+    from wayland_native_capture_smoke import wait
     from wayland_screenshot_smoke import stop
 
     total = fixture.archive.stat().st_size
@@ -339,7 +356,7 @@ def acquisition(args, root, env, bus, pointer, fixture, evidence):
                     "--native-update-public-key-file", root / "public.key",
                     "--native-update-current-version", "2026.9.99",
                     "--native-update-staging-directory", scratch])), env=env, stdout=log, stderr=log)
-            host = Host(app.pid, log_path, pointer, env, bus)
+            host = host_class(app.pid, log_path, pointer, env, bus)
             facts = {"case": case.name, "progress": []}
 
             def copy_is(status):
@@ -478,7 +495,7 @@ def acquisition(args, root, env, bus, pointer, fixture, evidence):
                 marker = profile / "history/.crash-diagnostics/current-session"
                 assert marker.is_file(), "live profile marker missing"
                 host.quit()
-                wait(lambda: not [node for node in windows(env) if node["pid"] == app.pid], "accepted Quit hides all windows")
+                wait(lambda: not [node for node in host_class.windows(env) if node["pid"] == app.pid], "accepted Quit hides all windows")
                 time.sleep(.4)
                 assert app.poll() is None and marker.is_file(), "Quit released profile before pending I/O drain"
                 assert retained(profile) == saved
@@ -510,8 +527,8 @@ def acquisition(args, root, env, bus, pointer, fixture, evidence):
                 (case / "result.json").write_text(json.dumps(facts, indent=2))
                 print(json.dumps(facts), flush=True)
             except Exception:
-                subprocess.run(["grim", str(case / "failed.png")], env=env, check=True, timeout=10)
-                (case / "failed-windows.json").write_text(json.dumps(windows(env), indent=2))
+                host_class.capture(env, case / "failed.png")
+                (case / "failed-windows.json").write_text(json.dumps(host_class.windows(env), indent=2))
                 print(log_path.read_text()[-10000:])
                 raise
             finally:
@@ -519,9 +536,9 @@ def acquisition(args, root, env, bus, pointer, fixture, evidence):
                 stop(app)
 
 
-def supervision(args, root, env, bus, pointer, fixture, evidence):
+def supervision(args, root, env, bus, pointer, fixture, evidence, host_class=Host):
     from wayland_lifecycle_smoke import watcher
-    from wayland_native_capture_smoke import wait, windows
+    from wayland_native_capture_smoke import wait
     from wayland_screenshot_smoke import stop
 
     # Supervised hosts must verify/use their own copied sibling tools, not the
@@ -559,7 +576,7 @@ def supervision(args, root, env, bus, pointer, fixture, evidence):
             pid = announced["process_id"]
             handle = os.pidfd_open(pid)
             session = Path(announced["supervision_directory"])
-            host = Host(pid, Path(announced["gui_log"]), pointer, env, bus)
+            host = host_class(pid, Path(announced["gui_log"]), pointer, env, bus)
             wait(lambda: watcher(bus) and watcher(bus).Get(
                 "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"), "supervised tray")
             host.arrange()
@@ -574,9 +591,7 @@ def supervision(args, root, env, bus, pointer, fixture, evidence):
             assert retained(profile) == saved
             before_requests = len(fixture.requests)
             if not visible:
-                node = host.window()
-                subprocess.run(["swaymsg", f'[con_id={node["id"]}] kill'], env=env,
-                               check=True, stdout=subprocess.DEVNULL)
+                host.close_preferences()
                 wait(lambda: host.window() is None, "Preferences closed into tray residency")
             if not install:
                 host.quit()
@@ -596,19 +611,19 @@ def supervision(args, root, env, bus, pointer, fixture, evidence):
 
                 def restarted():
                     assert helper.poll() in (None, 0), (case / "helper.log").read_text()
-                    return next((node for node in windows(env) if node["name"] == "Captures is running"
+                    return next((node for node in host_class.windows(env) if node["name"] == "Captures is running"
                                  and node["pid"] != pid), None)
 
                 notice = wait(restarted, "replacement real ready notice", timeout=300)
                 new_pid = notice["pid"]
                 replacement_handle = os.pidfd_open(new_pid)
-                wait(lambda: any(node["pid"] == new_pid and node["name"] == PREFERENCES for node in windows(env)) == visible,
+                wait(lambda: any(node["pid"] == new_pid and node["name"] == PREFERENCES for node in host_class.windows(env)) == visible,
                      "actual Preferences visibility restored")
                 assert not any(node["pid"] == new_pid and node["name"] in ("Captures", "Capture History")
-                               for node in windows(env)), "replacement reopened setup or History"
+                               for node in host_class.windows(env)), "replacement reopened setup or History"
                 time.sleep(.5)
-                subprocess.run(["grim", str(case / "restart.png")], env=env, check=True, timeout=10)
-                (case / "restart-windows.json").write_text(json.dumps(windows(env), indent=2))
+                host_class.capture(env, case / "restart.png")
+                (case / "restart-windows.json").write_text(json.dumps(host_class.windows(env), indent=2))
                 stdout, _ = helper.communicate(timeout=120)
                 reply = json.loads(stdout)
                 assert helper.returncode == 0 and reply["state"] == "confirmed" and reply["process_id"] == new_pid, reply
@@ -618,7 +633,7 @@ def supervision(args, root, env, bus, pointer, fixture, evidence):
                 assert (profile / "startup.log").read_bytes() == b"Original diagnostics must survive.\n"
                 assert len(list(profile.glob("startup-*.log"))) == 1
                 assert fixture.paths()[before_requests:] == ["/manifest.json", "/manifest.json.minisig", "/full"]
-                replacement = Host(new_pid, Path(announced["gui_log"]), pointer, env, bus)
+                replacement = host_class(new_pid, Path(announced["gui_log"]), pointer, env, bus)
                 replacement.quit()
                 wait(lambda: select.select([replacement_handle], [], [], 0)[0], "replacement normal tray Quit")
                 waited, status = os.waitpid(new_pid, 0)
@@ -635,8 +650,8 @@ def supervision(args, root, env, bus, pointer, fixture, evidence):
             (case / "result.json").write_text(json.dumps(evidence[-1], indent=2))
             print(json.dumps(evidence[-1]), flush=True)
         except Exception:
-            subprocess.run(["grim", str(case / "failed.png")], env=env, check=True, timeout=10)
-            (case / "failed-windows.json").write_text(json.dumps(windows(env), indent=2))
+            host_class.capture(env, case / "failed.png")
+            (case / "failed-windows.json").write_text(json.dumps(host_class.windows(env), indent=2))
             if host:
                 print(host.log.read_text()[-10000:])
             raise
