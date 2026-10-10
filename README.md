@@ -203,9 +203,9 @@ Display recordings include the controls; Hide requires a working tray restore pa
 Window recording requires a ScreenCast portal v3+ advertising window sources;
 only the chosen window is shared, and every new/resumed segment asks again.
 Unsupported backends report an error without falling back to display capture.
-Portal video frames honor output rotation and reflection, including same-size
-orientation changes during a take. Physical rotated-display and mixed-DPI
-acceptance remain open.
+Portal video frames honor per-buffer crop metadata before output rotation and
+reflection, including same-size orientation changes during a take. Physical
+rotated-display and mixed-DPI acceptance remain open.
 While a take runs or is paused, the controls' Screenshot action requests a separate
 desktop-portal still without stopping the take. Captures' windows and HUD are
 hidden for the still; cancellation or failure preserves the recording. Screenshot
@@ -215,8 +215,9 @@ from the still, but can appear in an ongoing Wayland display recording, like the
 Window screenshot shortcuts and **Screenshot Window** in the tray request a
 window-only ScreenCast grant, capture one bounded frame, and close the stream
 before adding it to History. This requires portal v3+ with window-sharing support;
-unsupported backends fail without substituting a display. Successful GNOME/KDE
-window pixels and physical acceptance remain unverified. Region capture remains unavailable.
+unsupported backends fail without substituting a display. Window capture through
+the resident native GNOME/KDE UI and physical acceptance remain unverified.
+Region capture remains unavailable.
 Portal policy controls consent; window screenshots require the configured cursor
 mode, while display stills keep backend-controlled cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
