@@ -1973,8 +1973,8 @@ window-specific action/tree routing and adds no separate accessibility backend.
 | --- | --- |
 | AppKit/macOS | NSAccessibility numeric values/bounds and increment/decrement implemented; observable editor-control XCTest regression added; compilation/runtime and VoiceOver unavailable in the Linux orb |
 | Windows | Shared wgpu/AccessKit secondary-window adapter and numeric SetValue implementation; Linux-hosted regressions only, Windows runtime/Narrator acceptance unverified |
-| X11 | AccessKit tree/action regressions plus disposable private-X11 crop and preview-scale input/render smokes; real private AT-SPI exposes editor nodes after adapter initialization, physical Orca acceptance unverified |
-| Wayland | Shared wgpu implementation/regressions; compositor/AT-SPI and physical acceptance unverified |
+| X11 | Real private AT-SPI MP4/GIF/large-source normal/minimum/scrolled matrix passes 36 cases and 218 Value writes with exact staged geometry and unchanged source/History; existing dark/light graphical crop checks pass; physical Orca acceptance unverified |
+| Wayland | Corrected first-show ordering passes six private-Sway resident/secondary-window lifecycle cases, including hidden History and tray recovery; compositor AT-SPI and physical acceptance unverified |
 
 This slice closes no platform or recording-editor parity gate and changes no
 update/install orchestration, installed profile, release channel or renderer cutover.
