@@ -516,6 +516,54 @@ Run `cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml accessibilit
 for shared range bounds/actions, mixed keyboard/assistive event ordering and
 custom-color input semantics. These checks do not replace physical screen-reader
 acceptance on macOS, Windows, X11 or Wayland.
+
+For the **public Linux accessibility provider**, use the distro interpreter:
+
+```sh
+/usr/bin/python3 apps/native/linux_crop_accessibility_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --output /tmp/captures-atspi-new --appearance dark --orca
+```
+
+Use a new output directory; repeat with `--appearance light`. Dependencies are
+`at-spi2-core`, `gir1.2-atspi-2.0`, `python3-dbus`, `python3-gi`, `python3-xlib`,
+Xvfb, Openbox, xdotool, xclip, ImageMagick and FFmpeg. `orca` and
+`speech-dispatcher`, `speech-dispatcher-espeak-ng` and `pulseaudio` are optional:
+omit `--orca` for the provider-only run. Orca uses a private Speech Dispatcher
+and null audio sink, never an installed desktop's speech daemon or sound output.
+The smoke launches actual accessibility bus/registry services on a private
+session D-Bus and X11 desktop, and enables only that bus's screen-reader status.
+It uses completed disposable profiles, a known asymmetric PNG-derived GIF and
+320×180/1600×900 MP4 fixtures. No capture permission, installed profile, save,
+export, release or network-service activation is required.
+
+Raw `*.atspi.json` snapshots contain public names, roles, attributes, numeric
+values/ranges/step, screen bounds and actions. `*.layout.json`, screenshots,
+`atspi-events.jsonl` and `result.json` retain independent graphical/state evidence.
+The oracle checks all eight handles, free and aspect-limited ranges, normal/
+minimum Fit layouts and clipped 100% scrolling. Standard AT-SPI
+`Value.CurrentValue` writes must change staged geometry; successful D-Bus replies
+alone cannot pass. The smoke checks both nudge directions, out-of-range writes
+and asymmetric aspect constraints. Action enumeration remains separate. AT-SPI
+`GrabFocus` plus injected X11 keys is a separate diagnostic, **not** a public
+increment/decrement action. Clipboard field reads used when the editor provider
+is missing are explicitly graphical diagnostics, not runtime AT-SPI evidence.
+Sources and History are checksummed after import and must remain unchanged.
+
+The smoke deliberately exits nonzero for absent editor nodes, descriptions or
+inert Value writes, while collecting the remaining cases. The original baseline
+exposes only History, not secondary editor nodes. With only the separately owned
+secondary-adapter initialization fix, eight sliders expose values/bounds, but
+Value writes are inert and source-pixel descriptions are absent. The separate
+editor fix adds standard Value writes and Description; neither production fix is
+part of this harness. Missing increment/decrement entries in AT-SPI Action are
+not a Value transport failure. Orca debug speech/event output comes from the
+actual reader, but does not establish audible delivery or human acceptance.
+Plant the private-provider fault by adding `--fault-disable-provider` (without
+`--orca`): discovery must fail with
+`ScreenReaderEnabled=false`. Harness oracle tests run in `npm run test:python`.
+All physical macOS/Windows/Linux, Wayland, IME and mixed-DPI gates remain open.
+
 Run `python3 apps/native/primary_selection_smoke.py --binary
 apps/native/wgpu/target/debug/captures-wgpu-workbench` for private X11/Wayland
 PRIMARY transport, UTF-8/64 KiB boundaries, backend rejection, resource ceilings
