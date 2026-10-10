@@ -618,6 +618,28 @@ fn video_loop(
     let state_warning = warning.clone();
     let format_quit = main_loop.clone();
     let process_quit = main_loop.clone();
+    // MAP_BUFFERS requests mapping, not a memory-type restriction. Complete
+    // Format negotiation with our actual CPU-only contract before allocation.
+    let buffer_values = PodSerializer::serialize(
+        Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(spa::pod::Object {
+            type_: SpaTypes::ObjectParamBuffers.as_raw(),
+            id: ParamType::Buffers.as_raw(),
+            properties: vec![spa::pod::Property::new(
+                spa::sys::SPA_PARAM_BUFFERS_dataType,
+                spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
+                    spa::utils::ChoiceFlags::empty(),
+                    spa::utils::ChoiceEnum::Flags {
+                        default: (1 << DataType::MemPtr.as_raw()) | (1 << DataType::MemFd.as_raw()),
+                        flags: vec![],
+                    },
+                ))),
+            )],
+        }),
+    )
+    .map_err(error)?
+    .0
+    .into_inner();
     let _listener = stream
         .add_local_listener_with_user_data(VideoData {
             format: None,
@@ -634,7 +656,7 @@ fn video_loop(
                 quit.quit();
             }
         })
-        .param_changed(move |_, data, id, param| {
+        .param_changed(move |stream, data, id, param| {
             if id != ParamType::Format.as_raw() {
                 return;
             }
@@ -655,6 +677,9 @@ fn video_loop(
                 }) {
                     return Err(error("video format changed during recording"));
                 }
+                let buffers = Pod::from_bytes(&buffer_values)
+                    .ok_or_else(|| error("invalid video buffer parameters"))?;
+                stream.update_params(&mut [buffers]).map_err(error)?;
                 Ok((info.format(), info.size().width, info.size().height))
             })();
             match parsed {
@@ -693,7 +718,10 @@ fn video_loop(
                 }
                 let plane = &mut planes[0];
                 if !matches!(plane.type_(), DataType::MemPtr | DataType::MemFd) {
-                    return Err(error("video is not CPU-mapped; DMA-BUF is unsupported"));
+                    return Err(error(format!(
+                        "video buffer type {:?} is not CPU-mapped; only MemPtr/MemFd are supported",
+                        plane.type_()
+                    )));
                 }
                 if plane.chunk().flags().contains(ChunkFlags::CORRUPTED) {
                     return Err(error("corrupted video frame"));
