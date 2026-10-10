@@ -532,20 +532,52 @@ Xvfb, Openbox, xdotool, xclip, ImageMagick and FFmpeg. `orca` and
 omit `--orca` for the provider-only run. Orca uses a private Speech Dispatcher
 and null audio sink, never an installed desktop's speech daemon or sound output.
 The smoke launches actual accessibility bus/registry services on a private
-session D-Bus and X11 desktop, and enables only that bus's screen-reader status.
+session D-Bus and private desktop, and enables only that bus's screen-reader status.
 It uses completed disposable profiles, a known asymmetric PNG-derived GIF and
 320×180/1600×900 MP4 fixtures. No capture permission, installed profile, save,
 export, release or network-service activation is required.
 
+X11 remains the default. For **Wayland**, reuse the existing compositor and
+persistent virtual-pointer/US virtual-keyboard fixture:
+
+```sh
+cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked
+compositor="$(apps/native/build_wayland_compositor_fixture.sh)"
+PATH="$compositor:$PATH" /usr/bin/python3 apps/native/linux_crop_accessibility_smoke.py \
+  --backend wayland \
+  --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --output /tmp/captures-atspi-wayland-new --appearance dark
+```
+
+Repeat with a fresh output directory and `--appearance light`. Wayland needs
+Sway 1.9+ (the pinned fixture avoids system Sway 1.7), `grim` and `wl-clipboard`;
+it does not need Xvfb, Openbox, xdotool, xclip or python3-xlib. `DISPLAY` is unset.
+The same public Value matrix runs on both backends, including all-handle free
+saturation, asymmetric aspect limits and clipped 100% scrolling. Compositor IPC
+is used only to arrange the test window, inject input and crop its screenshot.
+Optional `--orca` is diagnostic, not required for provider acceptance. Orca 43.1
+requires `DISPLAY` and exits before its AT registry starts on this X11-free
+fixture; retain its stderr/zero speech result, not a screen-reader pass. Do not
+add a dummy X11 display to this Wayland proof.
+
 Raw `*.atspi.json` snapshots contain public names, roles, attributes, numeric
-values/ranges/step, screen bounds and actions. `*.layout.json`, screenshots,
+values/ranges/step, bounds and actions. `*.layout.json`, screenshots,
 `atspi-events.jsonl` and `result.json` retain independent graphical/state evidence.
+X11 compares public `Component.GetExtents(SCREEN)` against fixture geometry
+projected using an independently measured X11 client origin. Wayland compares
+`GetExtents(WINDOW)` with zero projection offset. Raw `screen_bounds_unsupported`
+and the result's separate `screen_diagnostic` retain Wayland SCREEN replies and
+the test window position:
+the current Unix adapter reports SCREEN equal to WINDOW without a global origin.
+These replies are **not accepted global bounds**, never repaired with Sway IPC.
+Global Wayland coordinates and wider compositor acceptance remain open.
 The oracle checks all eight handles, free and aspect-limited ranges, normal/
 minimum Fit layouts and clipped 100% scrolling. Standard AT-SPI
 `Value.CurrentValue` writes must change staged geometry; successful D-Bus replies
 alone cannot pass. The smoke checks both nudge directions, out-of-range writes
 and asymmetric aspect constraints. Action enumeration remains separate. AT-SPI
-`GrabFocus` plus injected X11 keys is a separate diagnostic, **not** a public
+`GrabFocus` plus compositor-delivered keys is a separate diagnostic, **not** a public
 increment/decrement action. Clipboard field reads used when the editor provider
 is missing are explicitly graphical diagnostics, not runtime AT-SPI evidence.
 Sources and History are checksummed after import and must remain unchanged.
@@ -562,7 +594,8 @@ actual reader, but does not establish audible delivery or human acceptance.
 Plant the private-provider fault by adding `--fault-disable-provider` (without
 `--orca`): discovery must fail with
 `ScreenReaderEnabled=false`. Harness oracle tests run in `npm run test:python`.
-All physical macOS/Windows/Linux, Wayland, IME and mixed-DPI gates remain open.
+All physical macOS/Windows/Linux, human screen-reader, Wayland global-bounds/
+broader-compositor, IME and mixed-DPI gates remain open.
 
 Run `python3 apps/native/primary_selection_smoke.py --binary
 apps/native/wgpu/target/debug/captures-wgpu-workbench` for private X11/Wayland
