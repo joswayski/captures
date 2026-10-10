@@ -50,6 +50,10 @@ def fixture(mode, log_path):
     log_path = Path(log_path)
     loop = GLib.MainLoop()
     bus.call_on_disconnection(lambda _: loop.quit())
+    if mode in ("host-owned-commands", "queued-command-revocation"):
+        from x11_capture_smoke import ScreenSaver
+        saver_name = dbus.service.BusName("org.freedesktop.ScreenSaver", bus)
+        saver = ScreenSaver(saver_name, "/org/freedesktop/ScreenSaver")
 
     def record(event, **fields):
         with log_path.open("a") as output:
@@ -399,6 +403,88 @@ def protocols(binary, root, env):
         assert any(x["event"] == "list" for x in read_log(log))
 
     run("success", success)
+
+    def inspect(p, command="inspect"):
+        return p.command(command)[-1]
+
+    def queue(p, ctl, actions):
+        before = inspect(p)["wakes"]
+        for action in actions:
+            ctl.EmitActivated(action); ctl.EmitDeactivated(action)
+        # Observe the public wake callback, not a sleep that merely assumes the
+        # worker received the commands while host dispatch is held.
+        deadline = time.monotonic() + 4
+        while True:
+            state = inspect(p)
+            assert state["capture_current"], state
+            if state["wakes"] >= before + len(actions):
+                return state
+            assert time.monotonic() < deadline, state
+
+    def take(p, action, generation, revision):
+        seen = p.command("take")
+        assert next(x for x in seen if x["event"] == "taken")["action"] == action, seen
+        state = seen[-1]
+        expected = {"generation": generation, "revision": revision}
+        assert state["observed"] == state["applied"] == expected, state
+
+    def host_owned(p, ctl, log):
+        bound(p); p.command("hold")
+        state = inspect(p, "selector")
+        generation = state["observed"]["generation"]
+        actions = ["display", "record_window", "display"]
+        state = queue(p, ctl, actions)
+        expected = {"generation": generation, "revision": 0}
+        assert state["observed"] == state["applied"] == expected, (
+            "portal worker advanced input ownership before host dispatch", state)
+        for revision, action in enumerate(actions, 1):
+            take(p, action, generation, revision)
+        take(p, None, generation, 3)
+
+        # Queued commands may not cross suppression, a capture-generation
+        # change or a cancellation that happens after receipt but before take.
+        for blocked, allowed in (("disable", "enable"), ("suspend", "resume")):
+            queue(p, ctl, ["display"])
+            p.command(blocked); p.command(allowed)
+            take(p, None, generation, 3)
+        queue(p, ctl, ["display"])
+        state = inspect(p, "selector")
+        assert state["observed"]["generation"] != generation, state
+        generation = state["observed"]["generation"]
+        take(p, None, generation, 0)
+        queue(p, ctl, ["new_capture"])
+        take(p, "new_capture", generation, 1)
+        queue(p, ctl, ["display", "record_window"])
+        p.command("cancel")
+        take(p, None, generation, 1)
+        take(p, None, generation, 1)
+
+    run("host-owned-commands", host_owned)
+
+    def queued_revocation(p, ctl, log):
+        bound(p); p.command("hold")
+        generation = inspect(p, "selector")["observed"]["generation"]
+        queue(p, ctl, ["display", "record_window"])
+        ctl.ReplaceSnapshot(["display"], ["Reconciled desktop trigger"])
+        ctl.EmitChanged(["display"], ["partial ignored"])
+        p.until(lambda x: x.get("event") == "status" and
+                x["detail"].get("triggers") == {"display": "Reconciled desktop trigger"})
+        take(p, None, generation, 0)
+        queue(p, ctl, ["display"])
+        take(p, "display", generation, 1)
+        queue(p, ctl, ["display"])
+        ctl.EmitClosed()
+        assert bound(p)["state"] == "unavailable"
+        take(p, None, generation, 1)
+        p.command("retry")
+        assert bound(p)["state"] == "bound"
+        generation = inspect(p, "selector")["observed"]["generation"]
+        take(p, None, generation, 0)
+        queue(p, ctl, ["display"])
+        take(p, "display", generation, 1)
+
+    run("queued-command-revocation", queued_revocation)
+
     def empty(p, ctl, log):
         detail = bound(p)
         assert detail["state"] == "bound" and detail["triggers"] == {} and detail["configurable"]
@@ -553,6 +639,7 @@ def main():
                                   env=env, stdout=subprocess.PIPE)
         try:
             env["DBUS_SESSION_BUS_ADDRESS"] = daemon.stdout.readline().decode().strip()
+            env["DBUS_SYSTEM_BUS_ADDRESS"] = env["DBUS_SESSION_BUS_ADDRESS"]
             protocols(str(args.binary.resolve()), root, env)
         finally:
             stop(daemon)
