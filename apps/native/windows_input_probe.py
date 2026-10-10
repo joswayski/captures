@@ -19,6 +19,7 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allow-input-injection", action="store_true")
+    parser.add_argument("--no-hotkeys", action="store_true", help="also test RIDEV_NOHOTKEYS")
     parser.add_argument("--foreground", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -158,7 +159,9 @@ def main():
     layouts = (w.HANDLE * user.GetKeyboardLayoutList(0, None))()
     user.GetKeyboardLayoutList(len(layouts), layouts)
     loaded_layout = None
-    result = {"passed": False, "checks": [], "cases": [], "physical_acceptance": False}
+    raw_flags = 0x100 | (0x200 if args.no_hotkeys else 0)
+    result = {"passed": False, "checks": [], "cases": [], "failures": [],
+              "raw_flags": raw_flags, "physical_acceptance": False}
 
     def foreground(target):
         user.ShowWindow(target, 5)
@@ -192,11 +195,15 @@ def main():
         observed = list(events)
         result["cases"].append({"name": label, "events": observed})
         raw = [event for event in observed if event["kind"] == "raw"]
-        assert [(event["vk"], event["up"]) for event in raw] == (expected or edges), label
-        assert sorted(event["id"] for event in observed if event["kind"] == "hotkey") == sorted(hotkeys), label
+        matches = [(event["vk"], event["up"]) for event in raw] == (expected or edges)
+        if not matches:
+            result["failures"].append(f"{label}: raw make/break sequence differs from injection")
+        if not args.no_hotkeys:
+            assert sorted(event["id"] for event in observed if event["kind"] == "hotkey") == sorted(hotkeys), label
         if background:
             assert all(event["delivery"] == 1 for event in raw), "not RIM_INPUTSINK delivery"
-        result["checks"].append(label)
+        if matches:
+            result["checks"].append(label)
 
     try:
         if args.foreground:
@@ -209,13 +216,13 @@ def main():
         assert c.sizeof(Input) == (40 if c.sizeof(c.c_void_p) == 8 else 28)
         assert not any(user.GetAsyncKeyState(key) & 0x8000
                        for key in (0x10, 0x11, 0x12, 0x5B, 0x5C, 0x78, 0x59)), "keys already held"
-        device = Device(1, 6, 0x100, hwnd)  # keyboard only, RIDEV_INPUTSINK
+        device = Device(1, 6, raw_flags, hwnd)  # keyboard only, RIDEV_INPUTSINK
         checked(user.RegisterRawInputDevices(c.byref(device), 1, c.sizeof(Device)), "raw registration")
         registered_raw = True
         count = w.UINT(1)
         actual = Device()
         assert user.GetRegisteredRawInputDevices(c.byref(actual), c.byref(count), c.sizeof(Device)) == 1
-        assert (actual.page, actual.usage, actual.flags, actual.target) == (1, 6, 0x100, hwnd)
+        assert (actual.page, actual.usage, actual.flags, actual.target) == (1, 6, raw_flags, hwnd)
         result["checks"].append("background-keyboard-only-subscription")
         check_case("unregistered-control", chord(), [])
         register(7, 2 | 4, 0x78)  # Ctrl+Shift+F9
@@ -243,12 +250,14 @@ def main():
 
         foreground(hwnd)
         loaded_layout = checked(user.LoadKeyboardLayoutW("00000407", 1 | 0x80), "German layout")
-        register(9, 2 | 4, 0x59)  # VK_Y, which is physical US KeyZ on QWERTZ.
         scan_edges = [(0x1D, False), (0x2A, False), (0x2C, False),
                       (0x2C, True), (0x2A, True), (0x1D, True)]
-        check_case("german-vk-y-physical-z", scan_edges, [9], scan_code=True, expected=chord(0x59))
+        check_case("german-unregistered-control", scan_edges, [], scan_code=True, expected=chord(0x59))
         raw_y = [event for event in events if event["kind"] == "raw" and event["vk"] == 0x59]
         assert [event["scan"] for event in raw_y] == [0x2C, 0x2C]
+        register(9, 2 | 4, 0x59)  # VK_Y, which is physical US KeyZ on QWERTZ.
+        check_case("german-vk-y-physical-z", scan_edges, [9], scan_code=True, expected=chord(0x59))
+        assert not result["failures"], result["failures"]
         result["passed"] = True
     except Exception as error:
         result["error"] = repr(error)

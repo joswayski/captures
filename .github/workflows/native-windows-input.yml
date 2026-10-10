@@ -16,6 +16,10 @@ permissions:
 jobs:
   keyboard:
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        flags: ['', '--no-hotkeys']
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +27,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Measure real raw-key and registered-hotkey delivery
-        run: python apps/native/windows_input_probe.py --allow-input-injection --output native-input/result.json
+        run: python apps/native/windows_input_probe.py --allow-input-injection ${{ matrix.flags }} --output native-input/result.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-windows-keyboard-transport
+          name: native-windows-keyboard-transport${{ matrix.flags }}
           path: native-input
           if-no-files-found: error
