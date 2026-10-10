@@ -83,6 +83,8 @@ impl Drop for WgpuWinitRunning<'_> {
 /// Wrapped in an `Rc<RefCell<…>>` so it can be re-entrantly shared via a weak-pointer.
 pub struct SharedState {
     egui_ctx: egui::Context,
+    #[cfg(feature = "accesskit")]
+    accesskit_proxy: EventLoopProxy<UserEvent>,
     viewports: Viewports,
     painter: egui_wgpu::winit::Painter,
     viewport_from_window: HashMap<WindowId, ViewportId>,
@@ -187,6 +189,8 @@ impl<'app> WgpuWinitApp<'app> {
         };
         let mut shared = running.shared.borrow_mut();
         let SharedState {
+            #[cfg(feature = "accesskit")]
+            accesskit_proxy,
             viewports,
             painter,
             viewport_from_window,
@@ -197,6 +201,8 @@ impl<'app> WgpuWinitApp<'app> {
             viewport.initialize_window(
                 event_loop,
                 &running.integration.egui_ctx,
+                #[cfg(feature = "accesskit")]
+                accesskit_proxy,
                 viewport_from_window,
                 painter,
             );
@@ -207,6 +213,8 @@ impl<'app> WgpuWinitApp<'app> {
     fn recreate_window(&self, event_loop: &ActiveEventLoop, running: &WgpuWinitRunning<'app>) {
         let SharedState {
             egui_ctx,
+            #[cfg(feature = "accesskit")]
+            accesskit_proxy,
             viewports,
             viewport_from_window,
             painter,
@@ -221,7 +229,14 @@ impl<'app> WgpuWinitApp<'app> {
             None,
             painter,
         )
-        .initialize_window(event_loop, egui_ctx, viewport_from_window, painter);
+        .initialize_window(
+            event_loop,
+            egui_ctx,
+            #[cfg(feature = "accesskit")]
+            accesskit_proxy,
+            viewport_from_window,
+            painter,
+        );
     }
 
     #[cfg(target_os = "android")]
@@ -385,6 +400,8 @@ impl<'app> WgpuWinitApp<'app> {
 
         let shared = Rc::new(RefCell::new(SharedState {
             egui_ctx,
+            #[cfg(feature = "accesskit")]
+            accesskit_proxy: self.repaint_proxy.lock().clone(),
             viewport_from_window,
             viewports,
             painter,
@@ -1155,6 +1172,7 @@ impl Viewport {
         &mut self,
         event_loop: &ActiveEventLoop,
         egui_ctx: &egui::Context,
+        #[cfg(feature = "accesskit")] accesskit_proxy: &EventLoopProxy<UserEvent>,
         windows_id: &mut HashMap<WindowId, ViewportId>,
         painter: &mut egui_wgpu::winit::Painter,
     ) {
@@ -1178,14 +1196,18 @@ impl Viewport {
                     log::error!("on set_window: viewport_id {viewport_id:?} {err}");
                 }
 
-                self.egui_winit = Some(egui_winit::State::new(
+                #[allow(clippy::allow_attributes, unused_mut)] // used for accesskit
+                let mut egui_winit = egui_winit::State::new(
                     egui_ctx.clone(),
                     viewport_id,
                     event_loop,
                     Some(window.scale_factor() as f32),
                     event_loop.system_theme(),
                     painter.max_texture_side(),
-                ));
+                );
+                #[cfg(feature = "accesskit")]
+                egui_winit.init_accesskit(event_loop, &window, accesskit_proxy.clone());
+                self.egui_winit = Some(egui_winit);
 
                 egui_winit::update_viewport_info(&mut self.info, egui_ctx, &window, true);
                 self.window = Some(window);
@@ -1254,6 +1276,8 @@ fn render_immediate_viewport(
     let input = {
         let SharedState {
             egui_ctx,
+            #[cfg(feature = "accesskit")]
+            accesskit_proxy,
             viewports,
             painter,
             viewport_from_window,
@@ -1270,7 +1294,14 @@ fn render_immediate_viewport(
         );
         if viewport.window.is_none() {
             event_loop_context::with_current_event_loop(|event_loop| {
-                viewport.initialize_window(event_loop, egui_ctx, viewport_from_window, painter);
+                viewport.initialize_window(
+                    event_loop,
+                    egui_ctx,
+                    #[cfg(feature = "accesskit")]
+                    accesskit_proxy,
+                    viewport_from_window,
+                    painter,
+                );
             });
         }
 
@@ -1349,9 +1380,9 @@ fn render_immediate_viewport(
     if can_paint(window)
         && (wayland_unmapped(window) != Some(true)
             || viewport
-            .actions_requested
-            .iter()
-            .any(ActionRequested::wants_paint))
+                .actions_requested
+                .iter()
+                .any(ActionRequested::wants_paint))
     {
         painter.paint_and_update_textures(
             ids.this,
