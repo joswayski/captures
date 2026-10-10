@@ -1951,16 +1951,30 @@ clipped, hidden, busy and pending-text controls do not mutate stale crop input.
 AppKit actions explicitly intersect the handle frame with the visible crop-canvas
 bounds: since macOS 14, a non-clipping view's `visibleRect` may extend outside its
 bounds and cannot by itself establish that the handle is reachable.
-Exact entry remains in the existing numeric fields; no duplicate SetValue surface
-or artificial slider stops are added. Accepted pixels/edits remain unchanged until
+wgpu also handles standard numeric SetValue requests: AT-SPI Value and Windows
+UIA RangeValue use these rather than AccessKit's increment/decrement actions.
+Finite requests round and saturate through the same drag geometry, respecting
+the current aspect lock; invalid values and unavailable controls are inert.
+Source-pixel edge/full-crop text is explicitly published as the node description,
+not only a string value that the Unix numeric provider does not expose.
+The existing numeric fields remain available; no artificial slider stops are added.
+Accepted pixels/edits remain unchanged until
 the existing live apply accepts the staged crop, which remains unsaved until Save.
+
+The private eframe wgpu patch initializes AccessKit for secondary windows as well
+as History, including immediate, deferred and recreated windows. Creation is hidden
+until the adapter is initialized, then follows the original requested visibility;
+intentionally hidden windows are not shown. Previously a real
+private AT-SPI session registered History but exposed no editor nodes, so tree-only
+tests could not establish runtime accessibility. The adapter uses the existing
+window-specific action/tree routing and adds no separate accessibility backend.
 
 | Platform | Recording crop accessibility implementation / verification |
 | --- | --- |
 | AppKit/macOS | NSAccessibility numeric values/bounds and increment/decrement implemented; observable editor-control XCTest regression added; compilation/runtime and VoiceOver unavailable in the Linux orb |
-| Windows | Shared wgpu/AccessKit implementation and Linux-hosted regressions; Windows runtime/Narrator acceptance unverified |
-| X11 | AccessKit tree/action regressions plus disposable private-X11 crop and preview-scale input/render smokes; physical Orca acceptance unverified |
-| Wayland | Shared wgpu implementation/regressions; compositor/AT-SPI and physical acceptance unverified |
+| Windows | Shared wgpu/AccessKit secondary-window adapter and numeric SetValue implementation; Linux-hosted regressions only, Windows runtime/Narrator acceptance unverified |
+| X11 | Real private AT-SPI MP4/GIF/large-source normal/minimum/scrolled matrix passes 36 cases and 218 Value writes with exact staged geometry and unchanged source/History; existing dark/light graphical crop checks pass; physical Orca acceptance unverified |
+| Wayland | Corrected first-show ordering passes six private-Sway resident/secondary-window lifecycle cases, including hidden History and tray recovery; compositor AT-SPI and physical acceptance unverified |
 
 This slice closes no platform or recording-editor parity gate and changes no
 update/install orchestration, installed profile, release channel or renderer cutover.

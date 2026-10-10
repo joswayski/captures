@@ -74,6 +74,15 @@ intent queries the actual Preferences window's `is_visible`, independently of
 focus/occlusion. Missing/unknown visibility does not fabricate an intent; weak
 references do not keep retired windows alive. No painting or mapping policy changes.
 
+Secondary-window initialization now creates the existing AccessKit adapter before
+the window's first show. An initially hidden creation-builder copy preserves
+the retained builder's desired visibility; intentionally hidden windows stay hidden.
+The shared event-loop proxy reaches deferred, immediate and recreated windows;
+action/tree routing remains window-specific.
+This is feature-gated on `accesskit` and shared by Windows, X11 and Wayland.
+Root-only initialization previously left real editor windows absent from AT-SPI
+even though their egui trees were covered by unit tests.
+
 To update, vendor the new locked Git package into a temporary directory, copy
 only eframe, retain its licenses/README, repin all egui siblings to the same
 revision, and reapply this one-file patch against upstream. Do not retain vendor

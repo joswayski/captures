@@ -416,8 +416,10 @@ or ten with Shift. Crop changes apply when each gesture ends, and **Done croppin
 shows the edited preview. Loading this source frame can be canceled or retried.
 Both native hosts expose crop-handle values and reachable bounds in source pixels,
 with assistive increment/decrement actions using the same aspect-constrained geometry.
+The wgpu host also accepts standard assistive numeric value changes and exposes
+secondary-window controls through its platform accessibility provider.
 Corners announce their horizontal edge; top/bottom handles announce their vertical edge.
-Exact entry remains in the existing numeric crop fields. Physical screen-reader acceptance
+The existing numeric crop fields remain available. Physical screen-reader acceptance
 is still unverified on all platforms.
 Both native recording editors provide **Fit / 100%**, which changes only the
 displayed scale. At 100%, one decoded image pixel occupies one screen point; larger
