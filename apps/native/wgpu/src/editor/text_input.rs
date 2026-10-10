@@ -1199,18 +1199,17 @@ mod tests {
             // Arrow's shipping rail position, while Begin is still rendering.
             let pos = egui::pos2(28., 239.);
             for pressed in [true, false] {
-                frame(
-                    &mut view,
-                    vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                    ],
-                );
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if pressed {
+                    events.push(egui::Event::Text(" tail".into()));
+                }
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                frame(&mut view, events);
             }
             assert_eq!(
                 view.draw_shape,
@@ -1221,9 +1220,9 @@ mod tests {
             view.drain_inline(&tx);
             assert!(
                 matches!(rx.try_recv(), Ok(Job::Apply(Request::UpdateTextInput { text, .. }))
-                if text == "original latest")
+                if text == "original latest tail")
             );
-            accept(&ctx, &mut view, "original latest");
+            accept(&ctx, &mut view, "original latest tail");
             view.drain_inline(&tx);
             assert!(matches!(
                 rx.try_recv(),
@@ -1232,7 +1231,7 @@ mod tests {
             if fail {
                 view.receive(&ctx, Err("finish unavailable".into()));
                 assert_eq!(view.draw_shape, DrawShape::Text);
-                assert_eq!(view.inline.as_ref().unwrap().text, "original latest");
+                assert_eq!(view.inline.as_ref().unwrap().text, "original latest tail");
                 view.drain_inline(&tx);
                 assert!(
                     rx.try_recv().is_err(),
@@ -1246,7 +1245,7 @@ mod tests {
                     Ok(Job::Apply(Request::FinishTextInput { .. }))
                 ));
             }
-            view.receive(&ctx, Ok(presented_text("label", "original latest")));
+            view.receive(&ctx, Ok(presented_text("label", "original latest tail")));
             assert!(view.inline.is_none());
             assert_eq!(
                 view.draw_shape,
