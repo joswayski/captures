@@ -1536,6 +1536,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         var requestInFlight = false
         var finishRequested: Bool?
         var finishInFlight = false
+        var nextTool: (section: Int, shape: EditorDrawOverlay.Shape?)?
     }
     private var inlineTextInput: InlineTextInput?
     /// The style last applied to the inline editor's text storage.
@@ -3950,7 +3951,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func chooseRailTool(_ key: String) {
-        guard state.snapshot != nil, !state.busy, !importLoading, window.attachedSheet == nil else { return }
+        guard state.snapshot != nil, !state.busy || inlineTextInput != nil,
+              !draining, !importLoading, window.attachedSheet == nil else { return }
         if key == "shapes" {
             let open = shapeFlyout?.isHidden == false
             activateTool(section: Section.draw, shape: lastGroupedShape)
@@ -3960,7 +3962,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             window.makeFirstResponder(nil)
             _ = activateToolShortcut(key)
         }
-        focusActiveCanvas()
+        if inlineTextInput == nil { focusActiveCanvas() }
     }
 
     private func focusActiveCanvas() {
@@ -3983,8 +3985,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 let shape: EditorDrawOverlay.Shape = key == "t" ? .text : key == "a" ? .arrow : .pen
                 selected = sectionControl?.selectedSegment == Section.draw && drawOverlay.shape == shape
             }
-            button.isEnabled = state.snapshot != nil && !state.busy && inlineTextInput == nil
-                && !importLoading
+            button.isEnabled = state.snapshot != nil && (!state.busy || inlineTextInput != nil)
+                && !draining && !importLoading && window.attachedSheet == nil
             button.selected = selected; button.primary = selected
             button.setAccessibilityValue(selected ? 1 : 0)
             if key == "shapes" {
@@ -4111,11 +4113,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Shipping's grouped-shape picker switches the tool like the flyout.
     private func chooseGroupedShape(_ key: String) {
         guard let shape = EditorDrawOverlay.Shape(rawValue: key), isGroupedShape(shape),
-              state.snapshot != nil, !state.busy, !importLoading, window.attachedSheet == nil else {
+              state.snapshot != nil, !state.busy || inlineTextInput != nil,
+              !draining, !importLoading, window.attachedSheet == nil else {
             shapePicker?.current = drawShape.rawValue; return
         }
         activateTool(section: Section.draw, shape: shape)
-        focusActiveCanvas()
+        if inlineTextInput == nil { focusActiveCanvas() }
     }
 
     /// Shipping `DrawToolPreview`: the new stroke/shape with its colour, fill
@@ -5089,8 +5092,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                       self.state.complete(presentation.snapshot, generation: generation) else {
                     _ = self.state.fail(generation: generation)
                     current.finishRequested = nil
+                    current.nextTool = nil
                     self.inlineTextInput = current
                     self.showError("Couldn’t start inline text input: invalid shared response. Press Escape to retry.")
+                    self.showInlineTextEditor()
                     self.updateControls()
                     return
                 }
@@ -5116,6 +5121,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     return
                 }
                 current.finishRequested = nil
+                current.nextTool = nil
                 self.inlineTextInput = current
                 self.showError("Couldn’t start inline text input: \(error.localizedDescription). Press Escape to retry.")
                 self.showInlineTextEditor()
@@ -5162,6 +5168,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard presentation.snapshot.activeTextInput?.inputID == input.inputID else {
                     guard self.state.fail(generation: generation) else { return }
                     current.finishRequested = nil
+                    current.nextTool = nil
                     self.inlineTextInput = current
                     self.showError("Inline text preview returned a stale token. Press Escape to retry.")
                     self.showInlineTextEditor(); self.updateControls()
@@ -5180,6 +5187,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
                 if current.finishRequested == true { current.finishRequested = nil }
+                current.nextTool = nil
                 self.inlineTextInput = current
                 self.showError("Inline text preview failed: \(error.localizedDescription). Press Escape to retry.")
                 if current.finishRequested == false { self.sendFinishTextInput() }
@@ -5195,7 +5203,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard !commit else { return }
         }
         input.finishRequested = commit
-        if !commit { input.bufferedText = input.acceptedText }
+        if commit { input.bufferedText = inlineTextEditor.string }
+        else { input.bufferedText = input.acceptedText; input.nextTool = nil }
         inlineTextInput = input
         if input.requestInFlight { return }
         if input.layerID == nil {
@@ -5234,6 +5243,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard presentation.snapshot.activeTextInput == nil else {
                     guard self.state.fail(generation: generation) else { return }
                     current.finishRequested = nil
+                    current.nextTool = nil
                     self.inlineTextInput = current
                     self.showError("Inline text finish returned an active token. Press Escape to retry.")
                     self.showInlineTextEditor(); self.updateControls()
@@ -5249,6 +5259,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     ? (presentation.snapshot.unsavedChanges ? "Changes save automatically." : "Text finished.")
                     : "Text input cancelled."
                 self.updateControls()
+                if let tool = current.nextTool {
+                    self.activateTool(section: tool.section, shape: tool.shape)
+                    self.focusActiveCanvas()
+                }
                 if self.closeAfterTextInput {
                     self.closeAfterTextInput = false
                     _ = self.windowShouldClose(self.window)
@@ -5256,6 +5270,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
                 current.finishRequested = nil
+                current.nextTool = nil
                 self.inlineTextInput = current
                 self.showError("Couldn’t finish inline text: \(error.localizedDescription). Press Escape to retry.")
                 self.showInlineTextEditor()
@@ -5265,12 +5280,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func dismissPendingTextInput() {
+        let nextTool = inlineTextInput?.nextTool
         inlineTextInput = nil
         hideInlineTextEditor()
         status.textColor = tokens.color("text-muted")
         status.stringValue = "Text input cancelled."
         closeAfterTextInput = false
         updateControls()
+        if let tool = nextTool {
+            activateTool(section: tool.section, shape: tool.shape)
+            focusActiveCanvas()
+        }
     }
 
     private func textFieldsMatch(_ style: NativeTextStyle) -> Bool {
@@ -5600,12 +5620,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         // Native controls retain letter navigation; these keys belong to the canvas.
         guard !(window.firstResponder is NSControl) else { return false }
-        guard !state.busy, !importLoading else { return true }
+        guard !state.busy || inlineTextInput != nil, !importLoading else { return true }
         activateTool(section: tool.section, shape: tool.shape)
         return true
     }
 
     private func activateTool(section: Int, shape: EditorDrawOverlay.Shape?) {
+        // A rail/flyout choice finishes the latest buffer through the existing
+        // transaction before changing tools, even while a preview is pending.
+        if var input = inlineTextInput {
+            input.nextTool = (section, shape)
+            inlineTextInput = input
+            finishInlineTextInput(commit: true)
+            return
+        }
         // Shipping clears selection even when reactivating the current tool.
         // The table's selection callback also resets its outline and inspector.
         if section != Section.layers { layerTable.deselectAll(nil) }
