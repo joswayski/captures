@@ -2407,8 +2407,13 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(east.accessibilityPerformDecrement())
         XCTAssertEqual(width.stringValue, "239")
         XCTAssertEqual(try field("Recording crop height", in: controller.root).stringValue, "120")
-        overlay.presentedImageRect = NSRect(x: -2_000, y: 0, width: 320, height: 180)
-        XCTAssertFalse(east.accessibilityPerformDecrement(), "clipped handles cannot act")
+        for origin in [NSPoint(x: -2_000, y: 0), NSPoint(x: 2_000, y: 0),
+                       NSPoint(x: 0, y: -2_000), NSPoint(x: 0, y: 2_000)] {
+            overlay.presentedImageRect = NSRect(origin: origin,
+                                               size: NSSize(width: 320, height: 180))
+            XCTAssertFalse(east.accessibilityPerformDecrement(), "clipped handles cannot act")
+            XCTAssertEqual(width.stringValue, "239", "clipping must retain the staged crop")
+        }
         overlay.presentedImageRect = nil
         worker.deferRequest = true
         controller.applyPendingEdits()
