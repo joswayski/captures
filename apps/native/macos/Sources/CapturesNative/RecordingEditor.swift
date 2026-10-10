@@ -530,6 +530,8 @@ final class RecordingCropHandle: NSView {
     private func adjustAccessibleEdge(_ delta: Double) -> Bool {
         guard enabled, !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty,
               let overlay, overlay.editingEnabled,
+              // Non-clipping NSViews can report visibility outside their bounds.
+              frame.intersects(overlay.bounds.intersection(overlay.visibleRect)),
               let value = NativeRecordingGeometry.afterDrag(overlay.crop, source: overlay.sourceSize,
                 handle: kind, deltaX: vertical ? 0 : delta, deltaY: vertical ? delta : 0,
                 lockAspect: overlay.lockAspect),

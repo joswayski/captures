@@ -1920,6 +1920,9 @@ retain both axes. Bounds come from the shared aspect-constrained drag geometry,
 including opposite-axis clipping, rather than advertising unreachable source edges.
 Increment/decrement nudge one source pixel through that same geometry. Saturated,
 clipped, hidden, busy and pending-text controls do not mutate stale crop input.
+AppKit actions explicitly intersect the handle frame with the visible crop-canvas
+bounds: since macOS 14, a non-clipping view's `visibleRect` may extend outside its
+bounds and cannot by itself establish that the handle is reachable.
 Exact entry remains in the existing numeric fields; no duplicate SetValue surface
 or artificial slider stops are added. Accepted pixels/edits remain unchanged until
 the existing live apply accepts the staged crop, which remains unsaved until Save.
