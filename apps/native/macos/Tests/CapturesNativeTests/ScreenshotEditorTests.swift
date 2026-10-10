@@ -5997,6 +5997,58 @@ final class ScreenshotEditorTests: XCTestCase {
                        ["text": "Properties edit"] as NSDictionary)
     }
 
+    func testInlineTextRailChoiceWaitsForLatestBufferAndCancelsOnFailure() throws {
+        _ = NSApplication.shared
+        for fail in [false, true] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            var inputID = ""
+            worker.response = { request in
+                guard request["operation"] as? String == "begin_text_input" else { return nil }
+                inputID = request["input_id"] as! String
+                return self.snapshot(id: "shot", layers: [self.textLayer(id: "fresh", text: "")],
+                    activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true])
+            }
+            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+            defer { controller.window.orderOut(nil) }
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            controller.selectDrawTool(.text)
+            let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+            controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+            let editor = try textView("Edit text on canvas", in: controller.root)
+            worker.deferRequests = true
+            try typeInline("older preview", in: controller)
+            // The rail must read the responder's latest string even before its
+            // next textDidChange arrives, while the older preview is rendering.
+            editor.string = "latest\nΩ🙂"
+            let arrow = try button("Arrow (A)", in: controller.root)
+            XCTAssertTrue(arrow.isEnabled)
+            try press("Arrow (A)", in: controller.root)
+            XCTAssertEqual(controller.drawOverlay.shape, .text, "Finish must accept before switching")
+            XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
+            worker.completePending(with: snapshot(id: "shot", layers: [textLayer(id: "fresh", text: "older preview")],
+                activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
+            XCTAssertEqual(worker.requests.last?["text"] as? String, "latest\nΩ🙂")
+            worker.completePending(with: snapshot(id: "shot", layers: [textLayer(id: "fresh", text: "latest\nΩ🙂")],
+                activeTextInput: ["input_id": inputID, "layer_id": "fresh", "is_new": true]))
+            XCTAssertEqual(controller.drawOverlay.shape, .text)
+            XCTAssertFalse(editor.isEditable)
+            if fail {
+                worker.completePendingFailure("finish unavailable")
+                XCTAssertEqual(controller.drawOverlay.shape, .text)
+                XCTAssertTrue(editor.isEditable && !editor.isHiddenOrHasHiddenAncestor)
+                XCTAssertEqual(editor.string, "latest\nΩ🙂")
+                XCTAssertTrue(controller.window.firstResponder === editor)
+                try finishInlineText(in: controller)
+            }
+            worker.completePending(with: snapshot(id: "shot", unsaved: true,
+                layers: [textLayer(id: "fresh", text: "latest\nΩ🙂")]))
+            XCTAssertEqual(controller.state.snapshot?.layers.first?.textStyle?.text, "latest\nΩ🙂")
+            XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+            XCTAssertEqual(controller.drawOverlay.shape, fail ? .text : .arrow)
+            XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay)
+        }
+    }
+
     func testInlineTextFinishReleasesHiddenResponderWithoutStealingClickAwayFocus() throws {
         _ = NSApplication.shared
         for focusElsewhere in [false, true] {
@@ -6265,8 +6317,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
         // …and clearing the box then finishing discards it.
         try typeInline("", in: controller)
-        try finishInlineText(in: controller)
+        try press("Arrow (A)", in: controller.root)
         XCTAssertTrue(editor.isHiddenOrHasHiddenAncestor)
+        XCTAssertEqual(controller.drawOverlay.shape, .arrow, "blank failed Begin still honors one rail click")
         XCTAssertEqual(worker.requests.count, 2, "discarding a rejected Begin needs no stale shared token")
         XCTAssertFalse(controller.state.snapshot?.unsavedChanges ?? true)
     }

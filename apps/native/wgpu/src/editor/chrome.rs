@@ -1211,8 +1211,14 @@ pub(super) fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View
                 Stroke::new(1., tokens.color("border-subtle")),
             );
             ui.spacing_mut().item_spacing.y = tokens.number("s-1");
-            let enabled =
-                edit_enabled(view) && view.import_picker.is_none() && view.folder_picker.is_none();
+            // Tool selection queues behind inline text, including an in-flight
+            // preview. Other header/inspector actions still require an idle input.
+            let enabled = view.presented.is_some()
+                && (!view.pending || view.inline.is_some())
+                && !view.closed
+                && !view.close_requested
+                && view.import_picker.is_none()
+                && view.folder_picker.is_none();
             let mut tip = None;
             for tool in &model::RAIL_TOOLS {
                 let (section, shape) = match tool.key {

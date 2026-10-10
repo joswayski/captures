@@ -647,7 +647,9 @@ The Windows/Linux candidate and AppKit host separately connect an on-canvas nati
 multiline text box to the same shared transaction, drawn like Tauri's inline editor
 in the layer's own bundled face, size, colour, plate and position. Typing previews text
 without saving or adding undo steps; clicking away or Escape commits one edit, Return
-inserts a line, and clearing the box discards it. AppKit rotates the box with the
+inserts a line, and clearing the box discards it. One tool-rail click finishes the latest
+text and chooses that tool, including while a preview is pending. A failed finish keeps
+the text editable without switching tools. AppKit rotates the box with the
 layer; the Windows/Linux box rotates its glyphs, plate, selection highlights and
 caret. Pointer presses target the rotated text; primary drags select it. Its IME placement
 bounds follow that rotation; the operating system controls the candidate window.

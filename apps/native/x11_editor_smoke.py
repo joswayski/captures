@@ -2776,6 +2776,35 @@ def main():
             blur_click()
             save_layers(lambda values: len(values) == 1, "clicking away from blank text adds no layer")
 
+            # One rail click must both finish text and choose the tool, not
+            # merely blur a disabled button and require a second click.
+            for width, height, name in ((1000, 800, "normal"), (760, 540, "minimum")):
+                run("xdotool", "windowsize", "--sync", editor, str(width), str(height), "sleep", ".3")
+                begin_input((80, 60))
+                if name == "normal":
+                    type_text("Rail latest", 1)
+                    run("xdotool", "key", "Return")
+                    type_text("line two", 1)
+                rail_click("arrow")
+                save_layers(lambda values: len(values) == (2 if name == "normal" else 1),
+                            f"single rail click finishes {'latest' if name == 'normal' else 'blank'} text")
+                if name == "normal":
+                    assert layers()[-1]["text"] == "Rail latest\nline two"
+                drag((360 + 238, 220 + 89), (510 + 238, 280 + 89))
+                switched = save_layers(lambda values: values[-1]["kind"] == "shape"
+                                       and values[-1]["shape"] == "arrow",
+                                       f"single text-to-Arrow click activates Arrow at {name}")
+                assert len(switched) == (3 if name == "normal" else 2)
+                run("xdotool", "mousemove", "--sync", "--window", editor, "28", "400", "sleep", ".3")
+                shot(editor, f"text-input-rail-arrow-{name}")
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                save_layers(lambda values: len(values) == (2 if name == "normal" else 1),
+                            "new tool action has its own undo")
+                if name == "normal":
+                    run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                    save_layers(lambda values: len(values) == 1,
+                                "tool-switch text finish remains one undo step")
+
             for width, height, name in ((1000, 800, "normal"), (760, 540, "minimum")):
                 run("xdotool", "windowsize", "--sync", editor, str(width), str(height), "sleep", ".3")
                 begin_input((80, 60))
@@ -3022,6 +3051,8 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["blank-new-no-layer", "click-away-blank-discards", "error-no-draft",
+                           "single-click-tool-switch-latest-text", "single-click-tool-switch-blank-minimum",
+                           "switched-tool-real-arrow", "switch-text-and-arrow-independent-undo",
                            "error-recovery-one-undo", "preview-no-draft", "multiline-exact", "one-create-undo",
                            "redo-exact", "existing-hit-same-id", "click-away-commits", "existing-one-undo", "minimum-input",
                            "select-double-click-same-id-position", "double-click-one-undo",

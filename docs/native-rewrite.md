@@ -1604,6 +1604,30 @@ shipping nor the native hosts import fonts. Existing inspector styling remains s
 fixtures cover light/dark normal, 760×540 and failure states, but physical macOS
 IME, VoiceOver, keyboard layout and mixed-scale acceptance remain unverified.
 No host text parity gate is closed.
+
+Both native hosts now accept a tool-rail or Shapes-flyout choice during inline
+typing, including while Begin or a preview is rendering. The choice waits for
+the latest buffer's existing update/finish transaction before activating the tool;
+preview callbacks cannot reselect text afterward. Blank composition still discards,
+and text finishing remains one undo step, separate from the next tool's drawing.
+Failure retains the editable text and clears the pending tool choice; Escape retry
+does not revive that failed choice. Save/copy/import and close/quit gates are unchanged.
+The private-X11 Text-input smoke checks one-click Text → Arrow with exact multiline
+text at normal size, blank input at minimum size, real Arrow creation and separate
+undo steps. The rebuilt base fails at the same Arrow-creation assertion. Existing
+outlined/rotated selection, clipboard, blank deletion, draft and quit cases remain
+in that smoke. Host regressions exercise a rail click during pending Begin/update,
+the latest local text and failed Finish recovery; AppKit also checks blank failed Begin.
+
+| Platform | Inline text tool-switch implementation / verification |
+| --- | --- |
+| AppKit/macOS | Implemented through the existing text transaction; XCTest regression added, compilation/runtime and physical input unverified in this Linux orb |
+| Windows | Implemented through the shared wgpu editor; host regression passes, Windows input/physical acceptance unverified |
+| X11 | Rebuilt host exercised on disposable software-rendered X11 in dark/light, normal/minimum; physical input and screen-reader acceptance open |
+| Wayland | Implemented through the shared wgpu editor; host regression passes, this slice's compositor and physical input acceptance unverified |
+
+No editor, text/input or cross-platform acceptance gate closes.
+
 The Windows/Linux candidate now connects a multiline on-canvas composing field
 to the shared transient text transaction. New placement and existing Text-tool hits
 retain a local typing buffer while one worker update fits/renders at a time.

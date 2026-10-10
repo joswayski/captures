@@ -735,6 +735,14 @@ impl View {
     }
 
     fn activate_tool(&mut self, section: Section, shape: Option<DrawShape>) {
+        // The rail can be clicked while typing or rendering a text preview.
+        // Keep the latest buffer on screen until Finish accepts it; changing
+        // tools early would let a later preview reselect the text layer.
+        if let Some(input) = &mut self.inline {
+            input.next_tool = Some((section, shape));
+            self.finish_inline(true);
+            return;
+        }
         // Shipping clears selection even when reactivating the current tool.
         if section != Section::Layers {
             self.select_layer_exact(None);

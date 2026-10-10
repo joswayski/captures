@@ -27,6 +27,7 @@ pub(super) struct InlineText {
     accepted: String,
     phase: Option<Phase>,
     finish: Option<bool>,
+    pub(super) next_tool: Option<(Section, Option<DrawShape>)>,
     blocked: bool,
     focus: bool,
     ime_preedit: bool,
@@ -105,6 +106,7 @@ impl View {
             accepted: text,
             phase: Some(Phase::Begin),
             finish: None,
+            next_tool: None,
             blocked: false,
             focus: true,
             ime_preedit: false,
@@ -141,6 +143,9 @@ impl View {
                 return;
             }
             input.finish = Some(commit);
+            if !commit {
+                input.next_tool = None;
+            }
             input.blocked = false;
         }
     }
@@ -165,6 +170,9 @@ impl View {
             self.output = input.previous_output;
             self.select_layer_exact(input.previous_selection);
             self.error = None;
+            if let Some((section, shape)) = input.next_tool {
+                self.activate_tool(section, shape);
+            }
             return;
         }
         let request = if !input.started {
@@ -233,6 +241,9 @@ impl View {
                 self.output = input.previous_output;
                 self.select_layer_exact(input.previous_selection);
             }
+            if let Some((section, shape)) = input.next_tool {
+                self.activate_tool(section, shape);
+            }
             if input.close_after {
                 self.request_close();
             }
@@ -248,6 +259,7 @@ impl View {
         input.focus |= input.finish.is_some();
         input.phase = None;
         input.finish = None;
+        input.next_tool = None;
         input.blocked = true;
         if std::mem::take(&mut input.close_after) {
             // Keep the failed composition available for retry, including after
@@ -1155,6 +1167,97 @@ mod tests {
         presented.active_text_input =
             Some((view.inline.as_ref().unwrap().id.clone(), "label".into()));
         view.receive(ctx, Ok(presented));
+    }
+
+    #[test]
+    fn rail_click_during_text_preview_finishes_latest_buffer_and_retains_it_on_failure() {
+        for fail in [false, true] {
+            let (ctx, mut view, tx, rx) = setup();
+            crate::ui_fonts::install(&ctx);
+            let tokens = crate::tokens::load()["light-mustard"].clone();
+            tokens.apply(&ctx, true);
+            view.section = Section::Draw;
+            view.draw_shape = DrawShape::Text;
+            let frame = |view: &mut View, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760., 540.),
+                        )),
+                        focused: true,
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| super::super::show(ui, &tokens, view, &tx),
+                );
+                output.textures_delta.clear();
+            };
+            frame(&mut view, vec![]);
+            frame(&mut view, vec![egui::Event::Text(" latest".into())]);
+            assert_eq!(view.inline.as_ref().unwrap().text, "original latest");
+            // Arrow's shipping rail position, while Begin is still rendering.
+            let pos = egui::pos2(28., 239.);
+            for pressed in [true, false] {
+                frame(
+                    &mut view,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(
+                view.draw_shape,
+                DrawShape::Text,
+                "Finish must accept before switching"
+            );
+            accept(&ctx, &mut view, "original");
+            view.drain_inline(&tx);
+            assert!(
+                matches!(rx.try_recv(), Ok(Job::Apply(Request::UpdateTextInput { text, .. }))
+                if text == "original latest")
+            );
+            accept(&ctx, &mut view, "original latest");
+            view.drain_inline(&tx);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(Job::Apply(Request::FinishTextInput { commit: true, .. }))
+            ));
+            if fail {
+                view.receive(&ctx, Err("finish unavailable".into()));
+                assert_eq!(view.draw_shape, DrawShape::Text);
+                assert_eq!(view.inline.as_ref().unwrap().text, "original latest");
+                view.drain_inline(&tx);
+                assert!(
+                    rx.try_recv().is_err(),
+                    "failed Finish must not retry automatically"
+                );
+                // A later explicit text finish must not revive the failed tool choice.
+                view.finish_inline(true);
+                view.drain_inline(&tx);
+                assert!(matches!(
+                    rx.try_recv(),
+                    Ok(Job::Apply(Request::FinishTextInput { .. }))
+                ));
+            }
+            view.receive(&ctx, Ok(presented_text("label", "original latest")));
+            assert!(view.inline.is_none());
+            assert_eq!(
+                view.draw_shape,
+                if fail {
+                    DrawShape::Text
+                } else {
+                    DrawShape::Arrow
+                }
+            );
+            assert_eq!(view.selected_layer.is_none(), !fail);
+        }
     }
 
     #[test]
