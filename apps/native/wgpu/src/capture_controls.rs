@@ -315,7 +315,29 @@ impl CaptureControls {
             // still owns that release, but cannot auto-capture while inactive.
             self.region.settle_release(ui, bounds);
         }
+        // One pointer owner survives target presentations. Source stamps, not
+        // changing egui IDs, distinguish old input from the first fresh click.
+        let response = ui.interact(
+            ui.max_rect(),
+            view.panel_id.with("surface"),
+            egui::Sense::CLICK,
+        );
         let mode_before = self.mode;
+        let eligibility = crate::selector_input::eligibility(ui.ctx());
+        let enter_eligible = ui.input(|input| {
+            input.events.iter().enumerate().any(|(index, event)| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        pressed: true,
+                        ..
+                    }
+                ) && eligibility
+                    .as_ref()
+                    .is_none_or(|batch| batch.get(index).copied().unwrap_or(false))
+            })
+        });
         // Shipping cancels the selector with one Escape even with a menu open.
         let cancel_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
         let menu_mode = self.menu_mode();
@@ -338,6 +360,7 @@ impl CaptureControls {
                         auto_start: view.auto_start,
                     },
                     hit_test,
+                    &response,
                 );
                 if target == Some(SelectionTarget::Display)
                     || self.window.selected() == Some(SelectionTarget::Display)
@@ -363,10 +386,12 @@ impl CaptureControls {
                         (self.action_mode == ActionMode::Recording)
                             .then_some(self.recording.frames_per_second),
                     ),
+                    &response,
                 );
                 (clicked && view.auto_start).then(|| self.action_for_target(Target::Display))
             }
         };
+        let mode_after_surface = self.mode;
 
         let in_flight = self.in_flight;
         let primary = capture_menu::primary_action(
@@ -666,8 +691,14 @@ impl CaptureControls {
         // one pass; confirm the updated target, never the pre-toolbar target.
         if cancel_pressed {
             action = Some(Action::Cancel);
-        } else if ui.input(|input| input.key_pressed(egui::Key::Enter))
-            && let Some(target) = self.current_target()
+        } else if enter_eligible
+            && ui.input(|input| input.key_pressed(egui::Key::Enter))
+            && let Some(target) =
+                if mode_before == TargetMode::Window && self.mode == mode_after_surface {
+                    self.window.enter_target().map(window_target)
+                } else {
+                    self.current_target()
+                }
         {
             action = Some(self.action_for_target(target));
         }

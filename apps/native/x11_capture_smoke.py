@@ -438,6 +438,12 @@ def main():
                     # Release queues the target change; let the compositor
                     # present it before collecting the selection screenshot.
                     time.sleep(.2)
+                    if args.target_shortcuts and mode == "window":
+                        # Recheck at the existing screenshot checkpoint: a
+                        # dropped Window chord can publish Full screen after
+                        # Return and destroy the previously observed X11 ID.
+                        assert windows(title) == [selector], "Window reselection lost its selector"
+                        assert entries() == previous, "Window reselection published before confirmation"
                 return selector
 
             def entries():

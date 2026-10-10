@@ -34,6 +34,7 @@ mod reveal;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod root_repaint;
 mod selector;
+mod selector_input;
 mod sharing;
 mod shortcut_input;
 mod startup_notice;
@@ -77,6 +78,7 @@ struct InputApplication<'a> {
     inner: eframe::EframeWinitApplication<'a>,
     outbound_drag: outbound_drag::Bridge,
     paste_input: clipboard_input::PasteInput,
+    selector_input: selector_input::Input,
     shortcut_input: shortcut_input::Bridge,
     shortcuts: workbench::ShortcutOwner,
     root_state: Option<Rc<RefCell<RootState>>>,
@@ -167,6 +169,7 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         }
         self.outbound_drag.begin_event(window_id, &event);
         self.paste_input.begin_event(window_id, &event);
+        self.selector_input.begin_event(window_id, &event);
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         if matches!(event, WindowEvent::Destroyed)
             && let Some(state) = &self.root_state
@@ -540,6 +543,11 @@ fn main() -> eframe::Result {
     let paste_input = clipboard_input::PasteInput::default();
     let workbench_paste_input = paste_input.clone();
     let shortcuts = workbench::ShortcutOwner::default();
+    #[cfg(target_os = "linux")]
+    let shortcuts = shortcuts
+        .with_native_x11(&event_loop)
+        .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()))?;
+    let selector_input = shortcuts.1.clone();
     let workbench_shortcuts = shortcuts.clone();
     diagnostics::install_eframe_logger();
     let native_state = Rc::new(RefCell::new(RootState::default()));
@@ -583,6 +591,7 @@ fn main() -> eframe::Result {
         inner,
         outbound_drag,
         paste_input,
+        selector_input,
         shortcut_input,
         shortcuts,
         root_state,

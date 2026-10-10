@@ -41,6 +41,7 @@ mod atoms;
 mod dnd;
 mod event_processor;
 pub mod ffi;
+pub(crate) mod hotkeys;
 mod ime;
 mod monitor;
 mod util;
@@ -131,6 +132,7 @@ impl<T> PeekableReceiver<T> {
 
 pub struct ActiveEventLoop {
     outbound_drag: RefCell<Option<outbound_drag::OutboundDrag>>,
+    hotkeys: RefCell<Option<Weak<hotkeys::State>>>,
     xconn: Arc<XConnection>,
     wm_delete_window: xproto::Atom,
     net_wm_ping: xproto::Atom,
@@ -179,6 +181,10 @@ impl<T: 'static> Clone for EventLoopProxy<T> {
 }
 
 impl<T: 'static> EventLoop<T> {
+    pub fn hotkey_manager(&self, handler: hotkeys::Handler) -> Result<hotkeys::HotKeyManager, String> {
+        EventProcessor::window_target(&self.event_processor.target).hotkey_manager(handler)
+    }
+
     pub(crate) fn new(xconn: Arc<XConnection>) -> EventLoop<T> {
         let root = xconn.default_root().root;
         let atoms = xconn.atoms();
@@ -294,6 +300,7 @@ impl<T: 'static> EventLoop<T> {
 
         let window_target = ActiveEventLoop {
             outbound_drag: RefCell::new(None),
+            hotkeys: RefCell::new(None),
             ime,
             root,
             control_flow: Cell::new(ControlFlow::default()),
@@ -676,6 +683,21 @@ impl ActiveEventLoop {
     #[inline]
     pub(crate) fn x_connection(&self) -> &Arc<XConnection> {
         &self.xconn
+    }
+
+    fn hotkey_manager(&self, handler: hotkeys::Handler) -> Result<hotkeys::HotKeyManager, String> {
+        let mut owner = self.hotkeys.borrow_mut();
+        if owner.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err("native hotkeys already have an owner".into());
+        }
+        let manager = hotkeys::HotKeyManager::new(self.xconn.clone(), handler);
+        *owner = Some(Arc::downgrade(&manager.0));
+        Ok(manager)
+    }
+
+    fn handle_hotkey_event(&self, event: &ffi::XEvent) -> bool {
+        let owner = self.hotkeys.borrow().as_ref().and_then(Weak::upgrade);
+        owner.is_some_and(|owner| owner.event(event))
     }
 
     pub fn available_monitors(&self) -> impl Iterator<Item = MonitorHandle> {

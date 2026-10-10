@@ -7,6 +7,7 @@ use crate::monitor::MonitorHandle;
 use crate::window::{Window, WindowAttributes};
 
 use crate::dpi::Size;
+pub use crate::platform_impl::x11::hotkeys::HotKeyManager as X11HotKeyManager;
 
 /// X window type. Maps directly to
 /// [`_NET_WM_WINDOW_TYPE`](https://specifications.freedesktop.org/wm-spec/wm-spec-1.5.html).
@@ -121,12 +122,25 @@ impl ActiveEventLoopExtX11 for ActiveEventLoop {
 pub trait EventLoopExtX11 {
     /// True if the [`EventLoop`] uses X11.
     fn is_x11(&self) -> bool;
+
+    /// Own global keys on this loop's native queue, ordered with window input.
+    fn hotkey_manager(
+        &self,
+        handler: std::sync::Arc<dyn Fn(u32, crate::event::ElementState) + Send + Sync>,
+    ) -> Result<X11HotKeyManager, String>;
 }
 
 impl<T: 'static> EventLoopExtX11 for EventLoop<T> {
     #[inline]
     fn is_x11(&self) -> bool {
         !self.event_loop.is_wayland()
+    }
+
+    fn hotkey_manager(
+        &self,
+        handler: std::sync::Arc<dyn Fn(u32, crate::event::ElementState) + Send + Sync>,
+    ) -> Result<X11HotKeyManager, String> {
+        self.event_loop.x11_hotkey_manager(handler)
     }
 }
 

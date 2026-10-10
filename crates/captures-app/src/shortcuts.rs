@@ -8,10 +8,8 @@ pub use recording::{
 };
 
 use captures_settings::AppSettings;
-use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
-    hotkey::{Code, HotKey, Modifiers},
-};
+pub use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     marker::PhantomData,
@@ -74,6 +72,19 @@ struct Binding {
 }
 type Bindings = BTreeMap<u32, Binding>;
 
+/// Input ownership at application receipt, not hardware-event chronology.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectorInputScope {
+    pub generation: u64,
+    pub revision: u64,
+}
+
+pub fn selector_input_scope() -> Option<SelectorInputScope> {
+    let dispatcher = DISPATCHER.lock().unwrap().clone()?;
+    let routes = dispatcher.routes.lock().unwrap();
+    routes.input_scope()
+}
+
 fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
     let mut result = Bindings::new();
     for (text, action) in [
@@ -111,7 +122,9 @@ fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
 struct Routes {
     bindings: Bindings,
     armed: BTreeSet<u32>,
-    pending: VecDeque<CaptureShortcut>,
+    pending: VecDeque<(CaptureShortcut, u64)>,
+    input_revision: u64,
+    applied_input_revision: u64,
     enabled: bool,
     restore_only: bool,
     /// A capture or recording owns the flow. Every chord reaches the host,
@@ -133,7 +146,23 @@ impl Routes {
         if self.selector_generation != generation {
             self.clear();
             self.selector_generation = generation;
+            self.input_revision = 0;
+            self.applied_input_revision = 0;
         }
+    }
+
+    fn input_scope(&self) -> Option<SelectorInputScope> {
+        self.selector_generation
+            .map(|generation| SelectorInputScope {
+                generation,
+                revision: self.input_revision,
+            })
+    }
+
+    fn pop_pending(&mut self) -> Option<CaptureShortcut> {
+        let (action, revision) = self.pending.pop_front()?;
+        self.applied_input_revision = revision;
+        Some(action)
     }
 
     /// Shipping handles every capture shortcut while a capture is open or in
@@ -169,13 +198,19 @@ impl Routes {
             }
             HotKeyState::Released => {
                 if self.armed.remove(&id)
-                    && (self.pending.is_empty() || busy)
-                    && !self.pending.contains(&binding.action)
+                    && (self.pending.is_empty() || busy || self.selector_generation.is_some())
+                    && (self.selector_generation.is_some()
+                        || !self
+                            .pending
+                            .iter()
+                            .any(|(action, _)| *action == binding.action))
                 {
-                    // Busy routes can be ignored by the host. Do not let one
-                    // swallow a later restore/error/screenshot route. One entry
-                    // per action bounds the queue to the seven capture actions.
-                    self.pending.push_back(binding.action);
+                    // Selector commands are ordered, not a set of targets:
+                    // Display -> Window -> Display must retain all releases.
+                    // Outside a selector, preserve the bounded busy backlog.
+                    self.input_revision = self.input_revision.wrapping_add(1);
+                    self.pending
+                        .push_back((binding.action, self.input_revision));
                     !self.suspended
                 } else {
                     false
@@ -261,7 +296,20 @@ fn dispatch(event: GlobalHotKeyEvent) {
     }
 }
 
-trait Registration {
+/// Feed a native key edge on the host's input queue, before render batching.
+pub fn native_key_event(id: u32, pressed: bool) {
+    dispatch(GlobalHotKeyEvent {
+        id,
+        state: if pressed {
+            HotKeyState::Pressed
+        } else {
+            HotKeyState::Released
+        },
+    });
+}
+
+/// The event-loop-owned registration transport. Routing policy stays shared.
+pub trait Registration {
     fn register(&self, key: HotKey) -> Result<(), String>;
     fn unregister(&self, key: HotKey) -> Result<(), String>;
     fn register_all(&self, keys: &[HotKey]) -> Result<(), String> {
@@ -311,7 +359,7 @@ impl Registration for GlobalHotKeyManager {
     }
 }
 
-fn rebind(manager: &impl Registration, old: &Bindings, new: &Bindings) -> Result<(), String> {
+fn rebind(manager: &dyn Registration, old: &Bindings, new: &Bindings) -> Result<(), String> {
     let added: Vec<_> = new
         .iter()
         .filter(|(id, _)| !old.contains_key(id))
@@ -365,7 +413,7 @@ fn rebind(manager: &impl Registration, old: &Bindings, new: &Bindings) -> Result
 }
 
 fn sync_bindings(
-    manager: &impl Registration,
+    manager: &dyn Registration,
     registered: &mut Bindings,
     desired: &Bindings,
     suspended: bool,
@@ -378,7 +426,7 @@ fn sync_bindings(
 }
 
 fn suspend_routes(
-    manager: &impl Registration,
+    manager: &dyn Registration,
     registered: &mut Bindings,
     routes: &Mutex<Routes>,
     suspended: bool,
@@ -427,7 +475,7 @@ pub struct CaptureShortcuts {
 }
 
 enum Backend {
-    Direct(GlobalHotKeyManager),
+    Direct(Box<dyn Registration>),
     #[cfg(target_os = "linux")]
     Portal(portal::Worker),
 }
@@ -467,6 +515,17 @@ impl CaptureShortcuts {
         bindings(settings)?;
         install_dispatcher();
         let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
+        Self::with_registration(settings, Box::new(manager), wake)
+    }
+
+    /// Use the native host's input transport instead of a second event queue.
+    pub fn with_registration(
+        settings: &AppSettings,
+        manager: Box<dyn Registration>,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self, String> {
+        bindings(settings)?;
+        install_dispatcher();
         let dispatcher = Self::claim_dispatcher(wake)?;
         let mut shortcuts = Self {
             backend: Backend::Direct(manager),
@@ -541,7 +600,7 @@ impl CaptureShortcuts {
         };
         // Shipping frees overlapping system keys before claiming the chords.
         self.takeover = crate::system_shortcuts::take_over_current_os(settings);
-        let result = sync_bindings(manager, &mut self.registered, &next, suspended);
+        let result = sync_bindings(manager.as_ref(), &mut self.registered, &next, suspended);
         sync_win_shift_s_takeover(&self.registered);
         let mut routes = self.dispatcher.routes.lock().unwrap();
         if result.is_ok() {
@@ -572,7 +631,7 @@ impl CaptureShortcuts {
             }
         };
         let result = suspend_routes(
-            manager,
+            manager.as_ref(),
             &mut self.registered,
             &self.dispatcher.routes,
             suspended,
@@ -639,10 +698,20 @@ impl CaptureShortcuts {
         std::mem::take(&mut self.takeover)
     }
 
+    pub fn applied_selector_input_scope(&self) -> Option<SelectorInputScope> {
+        let routes = self.dispatcher.routes.lock().unwrap();
+        routes
+            .selector_generation
+            .map(|generation| SelectorInputScope {
+                generation,
+                revision: routes.applied_input_revision,
+            })
+    }
+
     pub fn next_action(&self) -> Option<CaptureShortcut> {
         let (action, remaining) = {
             let mut routes = self.dispatcher.routes.lock().unwrap();
-            let pending = routes.pending.pop_front();
+            let pending = routes.pop_pending();
             let busy = pending.is_some() && routes.routes_busy();
             let action = (routes.enabled
                 && !routes.suspended
@@ -765,7 +834,7 @@ mod tests {
                 assert!(!routes.event(key, HotKeyState::Released, false));
                 assert!(!routes.event(key, HotKeyState::Pressed, false));
                 assert!(routes.event(key, HotKeyState::Released, false));
-                assert_eq!(routes.pending.pop_front(), Some(action));
+                assert_eq!(routes.pop_pending(), Some(action));
                 routes.event(key, HotKeyState::Pressed, false);
                 assert!(!routes.event(key, HotKeyState::Released, true));
                 assert!(routes.pending.is_empty());
@@ -812,7 +881,7 @@ mod tests {
                 routes.event(id, HotKeyState::Released, false),
                 expected.is_some()
             );
-            assert_eq!(routes.pending.pop_front(), expected);
+            assert_eq!(routes.pop_pending(), expected);
         }
     }
 
@@ -848,7 +917,7 @@ mod tests {
             for (chord, action) in routed {
                 assert!(!routes.event(id(chord), HotKeyState::Pressed, true));
                 assert!(routes.event(id(chord), HotKeyState::Released, true));
-                assert_eq!(routes.pending.pop_front(), Some(action), "{chord}");
+                assert_eq!(routes.pop_pending(), Some(action), "{chord}");
             }
         }
         routes.restore_only = false;
@@ -912,12 +981,9 @@ mod tests {
                     assert!(!routes.event(key, HotKeyState::Released, false));
                 }
             }
+            assert_eq!(routes.pop_pending(), Some(CaptureShortcut::RecordRegion));
             assert_eq!(
-                routes.pending.pop_front(),
-                Some(CaptureShortcut::RecordRegion)
-            );
-            assert_eq!(
-                routes.pending.pop_front(),
+                routes.pop_pending(),
                 busy.then_some(CaptureShortcut::NewCapture)
             );
             assert!(routes.pending.is_empty());
@@ -942,7 +1008,7 @@ mod tests {
         assert!(!routes.event(region, HotKeyState::Pressed, false));
         assert!(!routes.event(region, HotKeyState::Pressed, false));
         assert!(routes.event(region, HotKeyState::Released, false));
-        assert_eq!(routes.pending.pop_front(), Some(CaptureShortcut::Region));
+        assert_eq!(routes.pop_pending(), Some(CaptureShortcut::Region));
         assert!(!routes.event(region, HotKeyState::Released, false));
         routes.event(region, HotKeyState::Pressed, false);
         assert!(!routes.event(region, HotKeyState::Released, true));
@@ -985,18 +1051,31 @@ mod tests {
             assert!(!routes.event(key, HotKeyState::Pressed, false));
             routes.set_selector_generation(Some(2));
             assert!(routes.event(key, HotKeyState::Released, false));
-            assert_eq!(routes.pending.pop_front(), Some(action));
+            assert_eq!(routes.pop_pending(), Some(action));
         }
+        // A repeated target after an intervening command is not a duplicate.
+        for key in [display, window, display] {
+            assert!(!routes.event(key, HotKeyState::Pressed, false));
+            routes.set_selector_generation(Some(2));
+            assert!(routes.event(key, HotKeyState::Released, false));
+        }
+        let latest = routes.input_scope().unwrap();
+        assert_eq!(routes.pop_pending(), Some(CaptureShortcut::Display));
+        assert_ne!(routes.applied_input_revision, latest.revision);
+        assert_eq!(routes.pop_pending(), Some(CaptureShortcut::Window));
+        assert_ne!(routes.applied_input_revision, latest.revision);
+        assert_eq!(routes.pop_pending(), Some(CaptureShortcut::Display));
+        assert_eq!(routes.applied_input_revision, latest.revision);
+        assert!(routes.pending.is_empty());
         // New Capture reaches the open menu too, which switches to Screenshot
         // on Region or recaptures itself there (`capture_error::busy_route`).
         assert!(!routes.event(new_capture, HotKeyState::Pressed, false));
         assert!(routes.event(new_capture, HotKeyState::Released, false));
-        assert_eq!(
-            routes.pending.pop_front(),
-            Some(CaptureShortcut::NewCapture)
-        );
+        assert_eq!(routes.pop_pending(), Some(CaptureShortcut::NewCapture));
         routes.event(window, HotKeyState::Pressed, false);
         routes.event(window, HotKeyState::Released, false);
+        routes.event(display, HotKeyState::Pressed, false);
+        routes.event(display, HotKeyState::Released, false);
         routes.set_selector_generation(None);
         assert!(routes.pending.is_empty());
         routes.set_selector_generation(Some(4));
@@ -1005,10 +1084,7 @@ mod tests {
         assert!(!routes.event(display, HotKeyState::Released, false));
         routes.event(new_capture, HotKeyState::Pressed, false);
         assert!(routes.event(new_capture, HotKeyState::Released, false));
-        assert_eq!(
-            routes.pending.pop_front(),
-            Some(CaptureShortcut::NewCapture)
-        );
+        assert_eq!(routes.pop_pending(), Some(CaptureShortcut::NewCapture));
     }
 
     #[derive(Default)]
@@ -1057,7 +1133,7 @@ mod tests {
             assert!(!state.event(old_key, HotKeyState::Released, false));
             assert!(!state.event(old_key, HotKeyState::Pressed, false));
             assert!(state.event(old_key, HotKeyState::Released, false));
-            assert_eq!(state.pending.pop_front(), Some(CaptureShortcut::NewCapture));
+            assert_eq!(state.pop_pending(), Some(CaptureShortcut::NewCapture));
         }
         assert_eq!(
             serde_json::to_value(CaptureShortcut::NewCapture).unwrap(),
@@ -1084,7 +1160,7 @@ mod tests {
         assert!(!state.event(new_key, HotKeyState::Released, false));
         assert!(!state.event(new_key, HotKeyState::Pressed, false));
         assert!(state.event(new_key, HotKeyState::Released, false));
-        assert_eq!(state.pending.pop_front(), Some(CaptureShortcut::NewCapture));
+        assert_eq!(state.pop_pending(), Some(CaptureShortcut::NewCapture));
     }
 
     #[test]
@@ -1206,7 +1282,7 @@ mod tests {
                     if !release {
                         assert!(state.event(chord, HotKeyState::Released, false));
                     }
-                    assert_eq!(state.pending.pop_front(), Some(CaptureShortcut::Region));
+                    assert_eq!(state.pop_pending(), Some(CaptureShortcut::Region));
                 }
             }
         }

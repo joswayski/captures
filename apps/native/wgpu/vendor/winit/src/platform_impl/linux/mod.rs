@@ -814,6 +814,18 @@ impl<T: 'static> EventLoop<T> {
         }
     }
 
+    #[cfg(x11_platform)]
+    pub fn x11_hotkey_manager(
+        &self,
+        handler: x11::hotkeys::Handler,
+    ) -> Result<x11::hotkeys::HotKeyManager, String> {
+        match self {
+            Self::X(event_loop) => event_loop.hotkey_manager(handler),
+            #[cfg(wayland_platform)]
+            Self::Wayland(_) => Err("native X11 hotkeys are unavailable on Wayland".into()),
+        }
+    }
+
     pub fn create_proxy(&self) -> EventLoopProxy<T> {
         x11_or_wayland!(match self; EventLoop(evlp) => evlp.create_proxy(); as EventLoopProxy)
     }

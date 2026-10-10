@@ -43,6 +43,18 @@ Visibility also changes Wayland window/state and redraw/frame dispatch.
 Other package files are upstream copies; `.cargo-ok` is a Cargo cache marker,
 not part of the published archive.
 
+X11 capture-key registration now uses `EventLoopExtX11::hotkey_manager` on
+winit's existing X connection. Root passive-grab key edges dispatch before
+IME conversion on the same native queue as pointer input, rather than a
+second global-hotkey worker. Checked registration rolls back its successful
+lock-key variants on conflict; unregister/Drop remove only owned grabs.
+Detectable autorepeat suppresses duplicate presses without losing releases
+after modifiers lift. The host retains this manager across settings changes
+and recorder suspension. This is X11-specific: Windows still uses its existing
+transport, and Wayland retains desktop-portal shortcut consent and ownership.
+The additional patch surface is `platform_impl/linux/x11/hotkeys.rs` and the
+X11 manager owner/factory/event dispatch in the files listed above.
+
 ## Private eframe patch
 
 `eframe/` is the **0.36.2** Git package at
