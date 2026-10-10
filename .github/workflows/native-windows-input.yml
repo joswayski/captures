@@ -1,4 +1,4 @@
-name: Native Windows keyboard transport
+name: Native Windows shortcut ownership
 
 # Synthetic global input belongs on a disposable hosted desktop, NEVER on the
 # maintainer's self-hosted Windows runner. No release/cutover authority here.
@@ -6,31 +6,45 @@ on:
   push:
     branches: [main, native/windows-shortcut-release]
     paths:
+      - 'crates/captures-app/src/shortcuts.rs'
       - 'apps/native/windows_input_probe.py'
       - '.github/workflows/native-windows-input.yml'
   workflow_dispatch:
+    inputs:
+      probe_raw_input:
+        description: 'Run the experimental raw-input prerequisite (currently expected to FAIL)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  keyboard:
+  ownership:
     runs-on: windows-2025
-    strategy:
-      fail-fast: false
-      matrix:
-        flags: ['', '--no-hotkeys']
-    timeout-minutes: 5
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Measure real raw-key and registered-hotkey delivery
-        run: python apps/native/windows_input_probe.py --allow-input-injection ${{ matrix.flags }} --output native-input/result.json
-      - uses: actions/upload-artifact@v4
-        if: always()
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          name: native-windows-keyboard-transport${{ matrix.flags }}
+          toolchain: 1.95.0
+          cache-workspaces: apps/native/wgpu
+      - name: Verify Windows shortcut command ownership
+        env:
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: cargo +1.95.0 test --locked --target-dir apps/native/wgpu/target -p captures-app --lib shortcuts::
+      - name: Investigate raw-input delivery with registered hotkeys
+        if: inputs.probe_raw_input
+        run: python apps/native/windows_input_probe.py --allow-input-injection --output native-input/default.json
+      - name: Investigate the NOHOTKEYS foreground-only alternative
+        if: always() && inputs.probe_raw_input
+        run: python apps/native/windows_input_probe.py --allow-input-injection --no-hotkeys --output native-input/no-hotkeys.json
+      - uses: actions/upload-artifact@v4
+        if: always() && inputs.probe_raw_input
+        with:
+          name: native-windows-keyboard-transport
           path: native-input
           if-no-files-found: error
