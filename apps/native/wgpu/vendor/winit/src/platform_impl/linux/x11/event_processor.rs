@@ -149,6 +149,10 @@ impl EventProcessor {
     {
         let event_type = xev.get_type();
 
+        if Self::window_target(&self.target).handle_hotkey_event(xev) {
+            return;
+        }
+
         if Self::window_target(&self.target).handle_outbound_drag_event(xev, |window_id, event| {
             callback(&self.target, Event::WindowEvent { window_id, event });
         }) {

@@ -34,15 +34,64 @@ use crate::{
 // All state below is disposable fixture/UI state, not a second implementation
 // of capture, settings persistence, history retention, or editor documents.
 #[derive(Clone, Default)]
-pub(crate) struct ShortcutOwner(Rc<RefCell<Option<CaptureShortcuts>>>);
+pub(crate) struct ShortcutOwner(
+    Rc<RefCell<Option<CaptureShortcuts>>>,
+    pub crate::selector_input::Input,
+    #[cfg(target_os = "linux")] Option<Rc<winit::platform::x11::X11HotKeyManager>>,
+);
 
 impl ShortcutOwner {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_native_x11(
+        mut self,
+        event_loop: &winit::event_loop::EventLoop<eframe::UserEvent>,
+    ) -> Result<Self, String> {
+        use winit::platform::x11::EventLoopExtX11;
+        if event_loop.is_x11() {
+            self.2 = Some(Rc::new(event_loop.hotkey_manager(Arc::new(
+                |id, state| {
+                    captures_app::shortcuts::native_key_event(
+                        id,
+                        state == winit::event::ElementState::Pressed,
+                    );
+                },
+            ))?));
+        }
+        Ok(self)
+    }
+
     pub(crate) fn resume_after_root_blur(&self) {
         if let Some(shortcuts) = self.0.borrow_mut().as_mut() {
             // The next UI pass retries and reports a failed restore. Doing this
             // on the native focus event closes the gap before that repaint.
             let _ = shortcuts.set_suspended(false);
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct X11Registration(Rc<winit::platform::x11::X11HotKeyManager>);
+
+#[cfg(target_os = "linux")]
+impl captures_app::shortcuts::Registration for X11Registration {
+    fn register(&self, key: captures_app::shortcuts::HotKey) -> Result<(), String> {
+        use captures_app::shortcuts::Modifiers;
+        let mut mask = 0;
+        for (modifier, bit) in [
+            (Modifiers::SHIFT, 1),
+            (Modifiers::CONTROL, 4),
+            (Modifiers::ALT, 8),
+            (Modifiers::SUPER, 64),
+        ] {
+            if key.mods.contains(modifier) {
+                mask |= bit;
+            }
+        }
+        self.0.register(key.id(), &key.key.to_string(), mask)
+    }
+
+    fn unregister(&self, key: captures_app::shortcuts::HotKey) -> Result<(), String> {
+        self.0.unregister(key.id())
     }
 }
 
@@ -112,6 +161,7 @@ pub struct Workbench {
     shortcut_error: Option<String>,
     shortcut_suspension_error: Option<String>,
     paste_input: crate::clipboard_input::PasteInput,
+    selector_input: crate::selector_input::Input,
     #[cfg(target_os = "linux")]
     primary_selection: crate::primary_selection::Reader,
     action_tx: Sender<Result<(), String>>,
@@ -157,6 +207,7 @@ impl Workbench {
         instance: Option<captures_app::instance::Instance>,
         crash: Option<Arc<captures_app::crash::Session>>,
     ) -> Self {
+        let selector_input = shortcuts.1.clone();
         crate::ui_fonts::install(&cc.egui_ctx);
         crate::primitives::install_focus_ring(&cc.egui_ctx);
         #[cfg(target_os = "linux")]
@@ -405,6 +456,7 @@ impl Workbench {
             shortcut_error: None,
             shortcut_suspension_error: None,
             paste_input,
+            selector_input,
             #[cfg(target_os = "linux")]
             primary_selection,
             action_tx,
@@ -974,17 +1026,25 @@ impl Workbench {
             shortcuts.update(&settings)
         } else {
             let wake = ctx.clone();
+            #[cfg(not(target_os = "linux"))]
             let create = CaptureShortcuts::new;
             #[cfg(target_os = "linux")]
-            let create = if ctx
-                .data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface")))
-                == Some(true)
-            {
-                CaptureShortcuts::new_wayland
-            } else {
-                create
+            let create = |settings: &captures_settings::AppSettings, wake: egui::Context| {
+                if let Some(manager) = &self.shortcuts.2 {
+                    CaptureShortcuts::with_registration(
+                        settings,
+                        Box::new(X11Registration(manager.clone())),
+                        move || wake_shortcut_host(&wake),
+                    )
+                } else {
+                    CaptureShortcuts::new_wayland(settings, move || wake_shortcut_host(&wake))
+                }
             };
-            create(&settings, move || wake_shortcut_host(&wake)).map(|shortcuts| {
+            #[cfg(target_os = "linux")]
+            let result = create(&settings, wake);
+            #[cfg(not(target_os = "linux"))]
+            let result = create(&settings, move || wake_shortcut_host(&wake));
+            result.map(|shortcuts| {
                 *owner = Some(shortcuts);
             })
         };
@@ -1091,6 +1151,31 @@ impl Workbench {
             shortcuts.set_restore_only(restore_only);
             shortcuts.set_capture_busy(capture_busy);
             shortcuts.set_enabled(enabled);
+        }
+        self.selector_input.set_generation(selector_generation);
+    }
+
+    fn route_capture_shortcuts(&mut self, ctx: &egui::Context) {
+        self.sync_shortcut_routing();
+        while let Some(action) = self
+            .shortcuts
+            .0
+            .borrow()
+            .as_ref()
+            .and_then(CaptureShortcuts::next_action)
+        {
+            if self.preferences_state.onboarding_complete()
+                && !self.preferences_state.permission_recovery_open()
+                && let Some(live) = &mut self.live
+            {
+                live.capture_action(action.action(), ctx);
+            }
+            if let Some(shortcuts) = self.shortcuts.0.borrow().as_ref() {
+                self.selector_input
+                    .set_scope(shortcuts.applied_selector_input_scope());
+            }
+            // Recapture/commit invalidates the scope before the next chord.
+            self.sync_shortcut_routing();
         }
     }
 
@@ -1654,6 +1739,17 @@ fn permission_recovery_ui(preferences: &mut Preferences, ctx: &egui::Context, t:
 
 impl eframe::App for Workbench {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        if input.viewport_id != egui::ViewportId::ROOT
+            && self
+                .live
+                .as_ref()
+                .is_some_and(|live| live.selector_generation().is_some())
+        {
+            // A deferred selector can receive input before the hidden root's
+            // next logic pass. Apply queued target switches before egui owns
+            // that batch's click or Return, not on a later root repaint.
+            self.route_capture_shortcuts(ctx);
+        }
         crate::outbound_drag::append(ctx, input);
         crate::diagnostics::event("raw-input", || {
             json!({
@@ -1662,6 +1758,15 @@ impl eframe::App for Workbench {
             })
         });
         self.paste_input.append(input);
+        let window = ctx.data(|data| {
+            data.get_temp::<std::sync::Weak<winit::window::Window>>(egui::Id::unique((
+                "eframe-winit-window",
+                input.viewport_id,
+            )))
+            .and_then(|window| window.upgrade())
+        });
+        self.selector_input
+            .publish(ctx, input, window.map(|window| window.id()));
         #[cfg(target_os = "linux")]
         ctx.data_mut(|data| {
             data.insert_temp(
@@ -1857,21 +1962,7 @@ impl eframe::App for Workbench {
             self.preferences_state.is_recording_shortcut(),
         );
         self.sync_shortcut_suspension(shortcuts_suspended);
-        self.sync_shortcut_routing();
-        let shortcut_action = self
-            .shortcuts
-            .0
-            .borrow()
-            .as_ref()
-            .and_then(CaptureShortcuts::next_action);
-        if onboarding_complete
-            && !self.preferences_state.permission_recovery_open()
-            && let (Some(action), Some(live)) = (shortcut_action, &mut self.live)
-        {
-            // Shipping routes the shortcuts and the tray items alike, also
-            // while a capture is open (`capture_error::busy_route`).
-            live.capture_action(action.action(), ctx);
-        }
+        self.route_capture_shortcuts(ctx);
         let persisted = self.preferences_state.persisted_generation();
         if let Some(tray) = &mut self.tray
             && self.tray_shortcuts_generation != persisted

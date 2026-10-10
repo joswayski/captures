@@ -982,11 +982,23 @@ sudo apt-get install xvfb dbus python3-dbus python3-gi openbox picom hsetroot xd
 /usr/bin/python3 apps/native/x11_capture_smoke.py --controls \
   --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
   --output /tmp/native-x11-controls
+/usr/bin/python3 apps/native/x11_capture_smoke.py --controls --target-shortcuts \
+  --binary apps/native/wgpu/target/release/captures-wgpu-workbench \
+  --output /tmp/native-x11-target-shortcuts
 ```
 
 The `--controls` run uses New Capture instead of the direct selectors. It checks
 the same exact saved pixels, target switching/retention, blank-toolbar drag and
 empty-region confirmation guard. Both runs are part of Linux CI.
+
+`--target-shortcuts` uses the configured global capture keys for target switches.
+It checks Region/Window reselection, Return after Window selection was cleared,
+the first fresh click, countdown, live/frozen pixels, occlusion, auto-start and
+owned-session cancellation. X11 keys now share winit's native input queue;
+stamping callbacks from independent key/mouse queues cannot establish their
+relative order. Raw batches use their actual viewport's native window, not an
+enclosing redraw. This bounded X11 proof does not establish Windows hook ordering
+or Wayland portal/input chronology; both remain separate acceptance gates.
 
 Use system Python for the distro's D-Bus/GLib bindings. The test owns its display
 and D-Bus daemon; it never uses the caller's desktop/session or installed Captures

@@ -30,6 +30,7 @@ pub struct View<'a> {
 pub struct WindowSelector {
     hovered: Option<SelectionTarget>,
     selected: Option<SelectionTarget>,
+    enter_target: Option<SelectionTarget>,
     scripted: bool,
     guidance: crate::capture_controls::GuidanceState,
 }
@@ -68,6 +69,10 @@ impl WindowSelector {
         self.clear_hover();
     }
 
+    pub fn enter_target(&self) -> Option<SelectionTarget> {
+        self.enter_target
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -80,7 +85,7 @@ impl WindowSelector {
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             action = Some(Action::Cancel);
         } else if ui.input(|input| input.key_pressed(egui::Key::Enter))
-            && let Some(target) = self.selected
+            && let Some(target) = self.enter_target
         {
             action = Some(Action::Confirm(target));
         }
@@ -137,7 +142,7 @@ impl WindowSelector {
         view: &View<'_>,
         hit_test: impl Fn(Point) -> Option<usize>,
     ) -> Option<SelectionTarget> {
-        self.show_surface_with(ui, tokens, view, hit_test, false)
+        self.show_surface_with(ui, tokens, view, hit_test, None)
     }
 
     /// New Capture's window surface: the shipping guidance chip shows until a
@@ -149,8 +154,9 @@ impl WindowSelector {
         tokens: &Tokens,
         view: &View<'_>,
         hit_test: impl Fn(Point) -> Option<usize>,
+        response: &egui::Response,
     ) -> Option<SelectionTarget> {
-        self.show_surface_with(ui, tokens, view, hit_test, true)
+        self.show_surface_with(ui, tokens, view, hit_test, Some(response))
     }
 
     fn show_surface_with(
@@ -159,8 +165,9 @@ impl WindowSelector {
         tokens: &Tokens,
         view: &View<'_>,
         hit_test: impl Fn(Point) -> Option<usize>,
-        menu: bool,
+        menu_response: Option<&egui::Response>,
     ) -> Option<SelectionTarget> {
+        let menu = menu_response.is_some();
         let surface = ui.max_rect();
         let ui = &mut crate::accessibility::group(
             ui,
@@ -169,7 +176,14 @@ impl WindowSelector {
             capture_menu::WINDOW_SELECTOR_LABEL,
         );
         let coordinates = CoordinateMap::new(surface, view.display);
-        let response = ui.allocate_rect(surface, Sense::click());
+        let target_at = |position| match hit_test(coordinates.point(position)) {
+            Some(index) if index < view.windows.len() => SelectionTarget::Window(index),
+            _ => SelectionTarget::Display,
+        };
+        ui.advance_cursor_after_rect(surface);
+        let response = menu_response
+            .cloned()
+            .unwrap_or_else(|| ui.interact(surface, ui.scope_id().with("surface"), Sense::CLICK));
         if self.scripted
             && ui.input(|input| {
                 input.events.iter().any(|event| {
@@ -184,14 +198,49 @@ impl WindowSelector {
         }
         if !self.scripted {
             if let Some(position) = response.hover_pos() {
-                self.hovered = Some(match hit_test(coordinates.point(position)) {
-                    Some(index) if index < view.windows.len() => SelectionTarget::Window(index),
-                    _ => SelectionTarget::Display,
-                });
+                self.hovered = Some(target_at(position));
             } else if ui.input(|input| input.pointer.latest_pos()).is_none() {
                 self.hovered = None;
             }
         }
+
+        self.enter_target = None;
+        let eligibility = menu
+            .then(|| crate::selector_input::eligibility(ui.ctx()))
+            .flatten();
+        let clicked = response.clicked_by(egui::PointerButton::Primary);
+        let confirmed = ui.input(|input| {
+            for (index, event) in input.events.iter().enumerate() {
+                let eligible = eligibility
+                    .as_ref()
+                    .is_none_or(|batch| batch.get(index).copied().unwrap_or(false));
+                match event {
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        ..
+                    } if eligible && clicked => {
+                        // Later motion changes hover, not the clicked target.
+                        let target = target_at(*pos);
+                        if view.auto_start {
+                            return Some(target);
+                        }
+                        self.selected = Some(target);
+                    }
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        pressed: true,
+                        ..
+                    } if eligible => {
+                        // Enter cannot confirm a click later in the same batch.
+                        self.enter_target = self.selected;
+                    }
+                    _ => {}
+                }
+            }
+            None
+        });
 
         // AppKit names the hovered target, or the display over the desktop.
         let target = selection_label(
@@ -228,16 +277,7 @@ impl WindowSelector {
             &mut self.guidance,
         );
 
-        if response.clicked()
-            && let Some(target) = self.hovered
-        {
-            if view.auto_start {
-                return Some(target);
-            } else {
-                self.selected = Some(target);
-            }
-        }
-        None
+        confirmed
     }
 
     pub fn exercise(&mut self, cycle: usize, hit_test: impl Fn(Point) -> Option<usize>) {
@@ -269,10 +309,11 @@ pub fn show_display_surface(
     tokens: &Tokens,
     view: &View<'_>,
     identity: &DisplayIdentity,
+    response: &egui::Response,
 ) -> bool {
     let surface = ui.max_rect();
     let coordinates = CoordinateMap::new(surface, view.display);
-    let response = ui.allocate_rect(surface, Sense::click());
+    ui.advance_cursor_after_rect(surface);
     paint_surface(
         ui,
         tokens,
@@ -283,7 +324,22 @@ pub fn show_display_surface(
         &mut crate::capture_controls::GuidanceState::default(),
     );
     paint_display_identity(ui.painter(), tokens, surface, identity);
-    response.clicked()
+    let eligibility = crate::selector_input::eligibility(ui.ctx());
+    response.clicked_by(egui::PointerButton::Primary)
+        && ui.input(|input| {
+            input.events.iter().enumerate().any(|(index, event)| {
+                matches!(
+                    event,
+                    egui::Event::PointerButton {
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        ..
+                    }
+                ) && eligibility
+                    .as_ref()
+                    .is_none_or(|batch| batch.get(index).copied().unwrap_or(false))
+            })
+        })
 }
 
 fn paint_display_identity(
@@ -1042,21 +1098,27 @@ mod tests {
         let ctx = egui::Context::default();
         let mut selector = WindowSelector::default();
         run_input(&ctx, &mut selector, vec![], false);
+        // Front starts at overlay x=480 (world x=380, display origin -100).
+        // Last motion is in Back, release crosses into Front by two pixels,
+        // then later motion returns to Back in the same input batch.
         run_input(
             &ctx,
             &mut selector,
             vec![
-                egui::Event::PointerMoved(egui::pos2(520., 230.)),
-                pointer(egui::pos2(520., 230.), true),
+                egui::Event::PointerMoved(egui::pos2(479., 230.)),
+                pointer(egui::pos2(479., 230.), true),
             ],
             false,
         );
-        assert_eq!(selector.hovered(), Some(SelectionTarget::Window(1)));
+        assert_eq!(selector.hovered(), Some(SelectionTarget::Window(0)));
         assert_eq!(
             run_input(
                 &ctx,
                 &mut selector,
-                vec![pointer(egui::pos2(520., 230.), false)],
+                vec![
+                    pointer(egui::pos2(481., 230.), false),
+                    egui::Event::PointerMoved(egui::pos2(200., 130.)),
+                ],
                 false,
             ),
             None
@@ -1078,6 +1140,53 @@ mod tests {
             run_input(&ctx, &mut selector, vec![key(egui::Key::Enter)], false,),
             Some(Action::Confirm(SelectionTarget::Window(1))),
             "Enter must confirm the clicked target, not the later hover"
+        );
+
+        // Clearing must not lose the first fresh click, even when its complete
+        // gesture and Enter arrive in one frame. Source-stamped stale input is
+        // covered through the capture-controls contract in selector_input.
+        selector.clear_selection_and_hover();
+        assert_eq!(
+            run_input(
+                &ctx,
+                &mut selector,
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(520., 230.)),
+                    pointer(egui::pos2(520., 230.), true),
+                    pointer(egui::pos2(520., 230.), false),
+                    key(egui::Key::Enter),
+                ],
+                false,
+            ),
+            Some(Action::Confirm(SelectionTarget::Window(1))),
+            "the first fresh click after clearing must remain confirmable"
+        );
+        assert_eq!(selector.selected(), Some(SelectionTarget::Window(1)));
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(200., 130.)),
+                pointer(egui::pos2(200., 130.), true),
+            ],
+            false,
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![pointer(egui::pos2(200., 130.), false)],
+            false,
+        );
+        run_input(
+            &ctx,
+            &mut selector,
+            vec![egui::Event::PointerMoved(egui::pos2(920., 680.))],
+            false,
+        );
+        assert_eq!(
+            run_input(&ctx, &mut selector, vec![key(egui::Key::Enter)], false),
+            Some(Action::Confirm(SelectionTarget::Window(0))),
+            "fresh reselection, not the old window or later desktop hover"
         );
 
         let ctx = egui::Context::default();
@@ -1122,7 +1231,7 @@ mod tests {
                         frozen: None,
                         display: &display,
                         windows: &windows,
-                        auto_start: true,
+                        auto_start: false,
                     },
                     |point| {
                         target_index_at_point(
@@ -1152,6 +1261,15 @@ mod tests {
         let (_, node) = find(&hovered, "Capture window selector").expect("selector group");
         assert_eq!(node.value(), Some("front"));
         assert!(find_value(&hovered, "Target: front").is_some());
+
+        frame(vec![pointer(egui::pos2(600., 300.), true)]);
+        let selected = frame(vec![
+            pointer(egui::pos2(600., 300.), false),
+            egui::Event::PointerGone,
+        ]);
+        let (_, node) = find(&selected, "Capture window selector").expect("selector group");
+        assert_eq!(node.value(), Some("front"));
+        assert!(find_value(&selected, "Target: front").is_some());
     }
 
     #[test]

@@ -4393,6 +4393,31 @@ selection clears held/pending target keys before preparation or countdown. Recor
 platform input/display acceptance and full capture-menu visual/accessibility
 parity remain open.
 
+The X11 Window-reselection correction places capture-key grabs and mouse input
+on winit's existing X connection/event queue. A presentation revision rejects
+earlier gestures after target changes; separate worker receipt times could not
+recover this ordering. Raw-input ownership comes from the actual viewport's weak
+native-window reference, not the window whose redraw dispatched the pass. The
+shared target queue preserves Display → Window → Display instead of deduplicating
+targets. Window confirmation follows release position and ordered Return input;
+Region's inactive release/Shift settlement remains unchanged. The unchanged
+seven-scenario private-X11 smoke reproduced a Window Return failure on the base;
+the corrected transport passed all seven with 15 exact-pixel/History captures.
+A separate native-queue probe covered repeated presses, modifier-first release,
+four lock-key variants, duplicate registration, partial-grab rollback and cleanup.
+Same-target/direct recapture and countdown refusal passed separately. Selection
+is reduced before target painting/naming; an extended AccessKit regression fails
+with the previous-frame target and passes restored. Some fixed-time software-GL
+screenshots still caught an earlier presentation; a fresh uninstrumented Window
+rerun rendered the correct outline/title, but atomic visual transitions are not
+proven. Heavy concurrent Rust builds also reproduced a toolbar-drag checkpoint
+failure on both base and candidate; quiet runs passed without changing timing.
+This is an X11 transport fix, not Windows input-order, Wayland portal chronology,
+macOS, physical hardware, mixed-DPI or accessibility acceptance. Windows needs
+its own ordered observation path; Wayland must retain portal authority rather
+than invent comparable global key/pointer timestamps. No native cutover follows
+from these development-host results.
+
 The capture-menu parity slice moves shipping `RecordingSelector` copy and small
 policies into `captures-app::capture_menu`, exposed to AppKit through
 `captures_capture_menu_v1` (JSON, freed with `captures_settings_free_v1`) and an
