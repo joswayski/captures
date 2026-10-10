@@ -271,6 +271,14 @@ Scripted window grants test protocol admission/cleanup; the live wlr fixture tes
 its unsupported-window UI, not successful GNOME/KDE window capture. Physical consent,
 audio/cursor and GNOME/KDE acceptance remain open.
 
+The opt-in [stock GNOME window diagnostic](apps/native/gnome-window-verification.md)
+uses disposable buses/profiles and software Mutter with the real window chooser.
+It records window-only pixels, MP4/History metadata and cancellation/source-loss
+controls. Its current verdict fails: GNOME window frames retain monitor-sized
+padding, pending Request.Close crashes the stock GNOME 43 portal, and missing
+real session state prevents successful native screenshot/History verification.
+Do not substitute a display or treat this diagnostic as a completed parity gate.
+
 The [native Wayland desktop-shortcut checks](apps/native/wgpu/README.md#native-wayland-desktop-shortcuts)
 exercise private-bus adversarial grants and real native Preferences/routing on
 private Sway. Build all native binaries plus `apps/native/wayland_drag_probe`, then

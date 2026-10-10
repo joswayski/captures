@@ -215,8 +215,11 @@ from the still, but can appear in an ongoing Wayland display recording, like the
 Window screenshot shortcuts and **Screenshot Window** in the tray request a
 window-only ScreenCast grant, capture one bounded frame, and close the stream
 before adding it to History. This requires portal v3+ with window-sharing support;
-unsupported backends fail without substituting a display. Successful GNOME/KDE
-window pixels and physical acceptance remain unverified. Region capture remains unavailable.
+unsupported backends fail without substituting a display. A stock GNOME 43
+diagnostic receives chosen-window pixels but currently retains monitor-sized black
+padding. Successful native window screenshots and physical GNOME/KDE acceptance
+remain unverified; see [verification limits](apps/native/gnome-window-verification.md).
+Region capture remains unavailable.
 Portal policy controls consent; window screenshots require the configured cursor
 mode, while display stills keep backend-controlled cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
