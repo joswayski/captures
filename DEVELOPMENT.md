@@ -295,7 +295,10 @@ headless-only Sway 1.9 fixture in the cache. Select it only for a smoke command:
 `PATH="$(apps/native/build_wayland_compositor_fixture.sh):$PATH" python3
 apps/native/wayland_visibility_smoke.py`. The helper's returned launch directory
 also works for the native capture, recording, shortcuts and lifecycle smokes;
-it never replaces the system compositor. Keep review output outside `/tmp` for
+it never replaces the system compositor. The video source smoke also selects
+this fixture's wlroots 0.17.4 Pixman renderer: with 0.17.1, the independent `grim`
+reference is black on reflected outputs before Captures runs. Pixel expectations
+and production capture code remain unchanged. Keep review output outside `/tmp` for
 smokes that isolate `/tmp` in a private mount namespace.
 
 ### Native exploratory test archives
