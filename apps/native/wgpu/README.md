@@ -740,6 +740,64 @@ Linux and Windows GPUs. The countdown fades in and out with the shipping
 keyframes; complete visual parity remains open. Cancellation and timing are
 shared Rust behavior.
 
+### Native Wayland development updater smoke
+
+`apps/native/wayland_update_smoke.py` drives the actual signed check, bounded
+download, verification worker and update notice on private Sway 1.9/software GL.
+It uses system Python for D-Bus, a real Swaybar tray, fresh disposable signing keys,
+loopback-only HTTP and offline-imported enrolled development profiles. Supply an
+exact current host and a package staged from that host with the prepared pinned
+target-suffixed FFmpeg/FFprobe pair; do not substitute system media executables.
+The package stays unchanged. The fixture creates its own signed target by copying
+the package and adding one inert marker file; it does not claim a new host version.
+
+Run from the repository root, building the exact host/resources first:
+
+```sh
+set -euo pipefail
+node apps/native/prepare.mjs --output apps/native/wgpu/resources
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked \
+  --bin captures-wgpu-workbench
+npm run prepare:media
+cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked \
+  --target-dir apps/native/wgpu/target
+CARGO_PROFILE_DEV_DEBUG=0 cargo +1.95.0 build --locked --target-dir apps/native/wgpu/target \
+  -p captures-app --bin native_profile_import --bin native_update_helper
+signer="$(CARGO_PROFILE_TEST_DEBUG=0 cargo +1.95.0 test --locked \
+  --target-dir apps/native/wgpu/target -p captures-app --bin native_update_patch \
+  --no-run --message-format=json | jq -r \
+  'select(.reason == "compiler-artifact" and .target.name == "native_update_patch" and .profile.test) | .executable')"
+python3 apps/native/package.py --platform linux \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --media-target x86_64-unknown-linux-gnu --output /tmp/captures-updater-package
+tools="$(apps/native/build_wayland_compositor_fixture.sh)"
+PATH="$tools:$PATH" /usr/bin/python3 apps/native/wayland_update_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --injector apps/native/wgpu/target/debug/captures-wayland-drag-probe \
+  --signing-test "$signer" --importer apps/native/wgpu/target/debug/native_profile_import \
+  --package /tmp/captures-updater-package --helper apps/native/wgpu/target/debug/native_update_helper \
+  --output /tmp/captures-wayland-updater-evidence
+```
+
+Output/package paths must be new. Omit `--helper` for acquisition-only validation.
+Dark/light cases cover idle/no HTTP, held metadata, dismissal through completion,
+signed availability, two exact byte/percentage progress boundaries, cancellation
+and owned-scratch cleanup, signature/hash errors and explicit notice retry,
+recheck cleanup, and accepted pending-check/download Quit. Quit retains election
+and the crash marker until held I/O drains, then removes the marker and owned
+scratch. Settings, retained History/draft/recovery bytes and operator sources stay
+unchanged; a non-owned scratch sentinel survives.
+
+Optional supervision operates only on copied disposable packages/profiles: dark/
+light visible and closed-Preferences restart, exact target replacement, retained
+pre-update data snapshot and startup-health confirmation; verified ordinary Quit
+does not install, snapshot or make further HTTP. Real notice and Preferences
+captures plus JSON state/HTTP/byte/cleanup evidence remain under the output path.
+Sway owns placement; the fixture arranges review captures and dismisses notices
+before Preferences input to avoid occlusion. This is not tray-anchor/focus,
+physical GNOME/KDE, accessibility, installed updating, production signing/channel,
+distribution, delta acquisition or renderer-cutover acceptance.
+
 ## Validate and collect evidence
 
 ```sh
