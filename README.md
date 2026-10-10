@@ -216,7 +216,8 @@ Window screenshot shortcuts and **Screenshot Window** in the tray request a
 window-only ScreenCast grant, capture one bounded frame, and close the stream
 before adding it to History. This requires portal v3+ with window-sharing support;
 unsupported backends fail without substituting a display. Window capture through
-the resident native GNOME/KDE UI and physical acceptance remain unverified.
+the resident native GNOME/KDE UI and physical acceptance remain unverified;
+see [verification limits](apps/native/gnome-window-verification.md).
 Region capture remains unavailable.
 Portal policy controls consent; window screenshots require the configured cursor
 mode, while display stills keep backend-controlled cursor inclusion. Separate no-window diagnostics

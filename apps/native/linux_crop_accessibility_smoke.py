@@ -57,8 +57,8 @@ def verify_handles(nodes, crop, limits, require_all=True):
     return handles
 
 
-def verify_screen_bounds(handles, crop, source_size, image, origin):
-    """Project fixture edges independently; compare clipped public screen bounds."""
+def verify_projected_bounds(handles, crop, source_size, image, origin):
+    """Project fixture edges; origin is X11 SCREEN's client offset or WINDOW's zero."""
     x, y, w, h = crop
     width, height = source_size
     x0, y0, x1, y1, cx0, cy0, cx1, cy1 = image
@@ -87,8 +87,9 @@ def fingerprints(root):
 class Provider:
     """Only public org.a11y.atspi interfaces; no app-side tree/probe values."""
 
-    def __init__(self, bus, destination):
+    def __init__(self, bus, destination, window_coordinates=False):
         self.bus, self.destination = bus, destination
+        self.window_coordinates = window_coordinates
 
     def interface(self, path, name):
         import dbus
@@ -138,8 +139,12 @@ class Provider:
             if PREFIX + "Text" in interfaces:
                 node["text"] = str(self.interface(path, "Text").GetText(0, -1))
             if PREFIX + "Component" in interfaces:
-                # ATSPI_COORD_TYPE_SCREEN = 0. Absolute X11 screen pixels.
-                node["bounds"] = [int(v) for v in self.interface(path, "Component").GetExtents(dbus.UInt32(0))]
+                # SCREEN=0, WINDOW=1. Wayland SCREEN lacks a global origin:
+                # retain it only as a diagnostic, never repair it with Sway IPC.
+                component = self.interface(path, "Component")
+                node["bounds"] = [int(v) for v in component.GetExtents(dbus.UInt32(int(self.window_coordinates)))]
+                if self.window_coordinates:
+                    node["screen_bounds_unsupported"] = [int(v) for v in component.GetExtents(dbus.UInt32(0))]
             if PREFIX + "Action" in interfaces:
                 action = self.interface(path, "Action")
                 entries = action.GetActions()
@@ -156,23 +161,28 @@ def main():
     import dbus
     from dbus.mainloop.glib import DBusGMainLoop
     from gi.repository import GLib
-    from Xlib import display
     import threading
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--backend", choices=("x11", "wayland"), default="x11")
+    parser.add_argument("--injector", type=Path, help="Wayland's existing captures-wayland-drag-probe")
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
     parser.add_argument("--orca", action="store_true", help="Retain real Orca debug speech/event output; not human acceptance")
     parser.add_argument("--fault-disable-provider", action="store_true", help="Negative control: disable private ScreenReaderEnabled; must fail discovery")
     args = parser.parse_args()
     if args.orca and args.fault_disable_provider:
         parser.error("--orca would re-enable the provider; omit it for the negative control")
+    wayland = args.backend == "wayland"
+    if wayland and not args.injector:
+        parser.error("--backend wayland requires --injector")
+    injector = args.injector.resolve(strict=True) if wayland else None
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
-    for key in ("WAYLAND_DISPLAY", "AT_SPI_BUS_ADDRESS", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS"):
+    for key in ("DISPLAY", "WAYLAND_DISPLAY", "SWAYSOCK", "AT_SPI_BUS_ADDRESS", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS"):
         env.pop(key, None)
     for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"):
         directory = output / key.lower()
@@ -181,24 +191,35 @@ def main():
     env.update(WGPU_BACKEND="gl", WINIT_X11_SCALE_FACTOR="1", XDG_SESSION_TYPE="x11",
                LP_NUM_THREADS="2", CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER="1",
                CAPTURES_NATIVE_LAYOUT_PROBE="1", NO_AT_BRIDGE="0")
+    if wayland:
+        env.update(XDG_SESSION_TYPE="wayland", XDG_CURRENT_DESKTOP="sway", GDK_BACKEND="wayland",
+                   WLR_BACKENDS="headless", WLR_HEADLESS_OUTPUTS="1", WLR_LIBINPUT_NO_DEVICES="1",
+                   WLR_RENDERER="pixman")
     children, logs, cases = [], [], []
     result = {"passed": False, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-              "appearance": args.appearance, "transport": "private session + accessibility D-Bus; real X11 wgpu host",
+              "appearance": args.appearance, "backend": args.backend,
+              "accepted_bound_coordinates": "WINDOW" if wayland else "SCREEN",
+              "global_screen_bounds_accepted": not wayland,
+              "transport": f"private session + accessibility D-Bus; real {args.backend} wgpu host",
               "cases": cases, "physical_acceptance": False}
     loop = None
 
-    def spawn(name, command, announce=False):
-        stdout = subprocess.PIPE if announce else (output / f"{name}.stdout.txt").open("w")
+    def spawn(name, command, announce=False, interactive=False):
+        stdout = subprocess.PIPE if announce or interactive else (output / f"{name}.stdout.txt").open("w")
         stderr = (output / f"{name}.stderr.txt").open("w")
         logs.append(stderr)
-        if not announce:
+        if not announce and not interactive:
             logs.append(stdout)
-        child = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+        child = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr,
+                                 stdin=subprocess.PIPE if interactive else None, start_new_session=True)
         children.append(child)
         if announce:
             assert select.select([child.stdout], [], [], 60)[0], f"{name}: no readiness address"
             return child.stdout.readline().decode().strip()
+        if interactive:
+            assert select.select([child.stdout], [], [], 5)[0], f"{name}: no readiness"
+            assert child.stdout.readline().strip() == b"READY", f"{name}: invalid readiness"
         return child
 
     def run(*command):
@@ -222,10 +243,60 @@ def main():
             print(f"FAIL {name}: {error}", flush=True)
 
     def windows():
+        if wayland:
+            from wayland_native_capture_smoke import windows as sway_windows
+            return [str(node["id"]) for node in sway_windows(env)
+                    if node.get("name", "").startswith("Captures Editor")]
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Captures Editor"],
                                env=env, capture_output=True, text=True, timeout=5)
         assert found.returncode in (0, 1), found.stderr
         return found.stdout.split()
+
+    def sway_editor():
+        from wayland_native_capture_smoke import windows as sway_windows
+        return next(node for node in sway_windows(env) if str(node["id"]) == editor)
+
+    def arrange(width, height, initial=False):
+        if wayland:
+            run("swaymsg", f"[con_id={editor}] floating enable, resize set {width} {height}, move position 80 60, focus")
+            wait(lambda: sway_editor()["rect"]["width"] == width
+                 and sway_editor()["rect"]["height"] == height and sway_editor()["focused"], "editor resize/focus")
+            time.sleep(1 if initial else .6)
+        elif initial:
+            run("xdotool", "windowmove", "--sync", editor, "80", "60", "windowsize", "--sync", editor, str(width), str(height),
+                "windowactivate", "--sync", editor, "windowfocus", "--sync", editor, "sleep", "1")
+        else:
+            run("xdotool", "windowsize", "--sync", editor, str(width), str(height), "sleep", ".6")
+
+    def inject(child, command, reply):
+        child.stdin.write((command + "\n").encode())
+        child.stdin.flush()
+        assert select.select([child.stdout], [], [], 5)[0], "Wayland input stalled"
+        assert child.stdout.readline().strip() == reply.encode(), "Wayland input acknowledgement"
+
+    def key(name):
+        if wayland:
+            from wayland_keyboard_smoke import KEYS
+            words = name.lower().split("+")
+            code = KEYS["enter" if words[-1] == "return" else words[-1]]
+            modifiers = "+".join(words[:-1]) or "none"
+            inject(keyboard, f"{code} {modifiers}", f"KEYED {code} {modifiers}")
+        else:
+            run("xdotool", "key", name)
+
+    def point(x, y, scroll=None):
+        # Compositor coordinates are used for test input only, not AT-SPI bounds.
+        rect = sway_editor()["rect"]
+        suffix = f" {scroll}" if scroll is not None else ""
+        inject(pointer, f'{round(rect["x"] + x)} {round(rect["y"] + y)} 1280 1200{suffix}',
+               "SCROLLED" if scroll is not None else "CLICKED")
+
+    def wheel(x, y, direction):
+        if wayland:
+            point(x, y, 78 if direction == "5" else -78)
+            time.sleep(.35)
+        else:
+            run("xdotool", "mousemove", "--window", editor, str(x), str(y), "click", direction, "sleep", ".35")
 
     def save_snapshot(provider, name):
         nodes = provider.snapshot()
@@ -233,8 +304,9 @@ def main():
         return nodes
 
     try:
-        env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1200x24", "-dpi", "96", "-nolisten", "tcp"], True)
-        result["display"] = env["DISPLAY"]
+        if not wayland:
+            env["DISPLAY"] = ":" + spawn("xvfb", ["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1200x24", "-dpi", "96", "-nolisten", "tcp"], True)
+            result["display"] = env["DISPLAY"]
         address = spawn("session-bus", ["dbus-daemon", "--session", "--nofork", "--print-address=1"], True)
         env["DBUS_SESSION_BUS_ADDRESS"] = env["DBUS_SYSTEM_BUS_ADDRESS"] = address
         DBusGMainLoop(set_as_default=True)
@@ -262,7 +334,26 @@ def main():
         loop = GLib.MainLoop()
         event_thread = threading.Thread(target=loop.run, daemon=True)
         event_thread.start()
-        spawn("openbox", ["openbox", "--sm-disable"])
+        if wayland:
+            version = run("sway", "--version").decode().strip()
+            match = re.search(r"version (\d+)\.(\d+)", version)
+            assert match and tuple(map(int, match.groups())) >= (1, 9), f"Sway 1.9+ required: {version}"
+            config = output / "sway.conf"
+            config.write_text('output HEADLESS-1 resolution 1280x1200\noutput * bg #234567 solid_color\n'
+                              'seat seat0 fallback true\ndefault_border none\ndefault_floating_border none\n'
+                              'for_window [title=".*"] floating enable\n')
+            spawn("sway", ["sway", "--unsupported-gpu", "-c", str(config)])
+            runtime = Path(env["XDG_RUNTIME_DIR"])
+            socket = wait(lambda: next((p for p in runtime.glob("wayland-*") if p.is_socket()), None), "Wayland socket")
+            env["WAYLAND_DISPLAY"] = socket.name
+            env["SWAYSOCK"] = str(wait(lambda: next(iter(runtime.glob("sway-ipc.*.sock")), None), "Sway IPC"))
+            run("dbus-update-activation-environment", "WAYLAND_DISPLAY", "SWAYSOCK")
+            pointer = spawn("pointer", [str(injector), "pointer"], interactive=True)
+            keyboard = spawn("keyboard", [str(injector), "keyboard"], interactive=True)
+            result.update(sway=version, display_unset="DISPLAY" not in env,
+                          injector_sha256=hashlib.sha256(injector.read_bytes()).hexdigest())
+        else:
+            spawn("openbox", ["openbox", "--sm-disable"])
         result["bus_status"] = {str(k): bool(v) for k, v in status.GetAll("org.a11y.Status").items()}
         # Static asymmetric PNG from the existing native fixture, then a known
         # GIF and small/large video. All are local FFmpeg-generated sources.
@@ -290,21 +381,20 @@ def main():
             app = spawn(label, [str(binary), "--live", "--open-media", str(source), "--history-root", str(history),
                                 "--settings-file", str(settings), "--quit-after", "900"])
             editor = wait(windows, "native editor window")[0]
-            run("xdotool", "windowmove", "--sync", editor, "80", "60", "windowsize", "--sync", editor, "960", "1100",
-                "windowactivate", "--sync", editor, "windowfocus", "--sync", editor, "sleep", "1")
+            arrange(960, 1100, initial=True)
 
             def destination():
                 daemon = dbus.Interface(bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus"), "org.freedesktop.DBus")
                 for name in bus.list_names():
                     if str(name).startswith(":") and daemon.GetConnectionUnixProcessID(name) == app.pid:
-                        candidate = Provider(bus, str(name))
+                        candidate = Provider(bus, str(name), wayland)
                         # GTK's file picker can register a second, empty root in
                         # the same host PID. Select the actual editor provider.
                         if candidate.interface("/org/a11y/atspi/accessible/root", "Accessible").GetChildren():
                             return str(name)
                 return None
 
-            provider = Provider(bus, wait(destination, "real host did not register on private AT-SPI bus", 10 if args.fault_disable_provider else 30))
+            provider = Provider(bus, wait(destination, "real host did not register on private AT-SPI bus", 10 if args.fault_disable_provider else 30), wayland)
             result.setdefault("providers", []).append({"fixture": label, "pid": app.pid, "destination": provider.destination})
             save_snapshot(provider, f"{label}-initial")
             def editor_tree():
@@ -337,9 +427,8 @@ def main():
                         whole = y0 >= cy0 and y1 <= cy1
                         if right - left > 2 and bottom - top > 2 and (whole or not fits):
                             return left, top, right, bottom
-                        wheel = "5" if (y1 > cy1 if fits else (y0 + y1) / 2 > cy1) else "4"
-                        run("xdotool", "mousemove", "--window", editor, str(page[0] + 6), str((page[1] + page[3]) // 2),
-                            "click", wheel, "sleep", ".35")
+                        direction = "5" if (y1 > cy1 if fits else (y0 + y1) / 2 > cy1) else "4"
+                        wheel(page[0] + 6, (page[1] + page[3]) // 2, direction)
                     else:
                         time.sleep(.15)
                 raise AssertionError(f"control never visible: {name}")
@@ -348,7 +437,8 @@ def main():
                 since = None
                 def idle():
                     nonlocal since
-                    if "Working…" in run("xdotool", "getwindowname", editor).decode():
+                    title = sway_editor()["name"] if wayland else run("xdotool", "getwindowname", editor).decode()
+                    if "Working…" in title:
                         since = None
                     elif since is None:
                         since = time.monotonic()
@@ -364,16 +454,30 @@ def main():
                 # Automatic preview/comparison work can reflow the page after
                 # the first idle title. Never click a stale or partial target.
                 left, top, right, bottom = wait(stable, f"{name} visible and layout settled")
-                run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor, "sleep", ".2",
-                    "mousemove", "--window", editor, str((left + right) // 2), str((top + bottom) // 2),
-                    "sleep", ".2", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
+                if wayland:
+                    run("swaymsg", f"[con_id={editor}] focus")
+                    point((left + right) // 2, (top + bottom) // 2)
+                    time.sleep(.3)
+                else:
+                    run("xdotool", "windowactivate", "--sync", editor, "windowfocus", "--sync", editor, "sleep", ".2",
+                        "mousemove", "--window", editor, str((left + right) // 2), str((top + bottom) // 2),
+                        "sleep", ".2", "mousedown", "1", "sleep", ".15", "mouseup", "1", "sleep", ".3")
 
             def copied_field(expected=None):
-                subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
-                               input=b"waiting", check=True, timeout=5)
+                if wayland:
+                    run("wl-copy", "--clear")
+                else:
+                    subprocess.run(["xclip", "-selection", "clipboard", "-i"], env=env,
+                                   input=b"waiting", check=True, timeout=5)
                 def accepted():
-                    run("xdotool", "key", "ctrl+a", "ctrl+c")
-                    read = subprocess.run(["xclip", "-selection", "clipboard", "-o"], env=env, capture_output=True, timeout=5)
+                    if wayland:
+                        key("ctrl+a")
+                        time.sleep(.2)
+                        key("ctrl+c")
+                    else:
+                        run("xdotool", "key", "ctrl+a", "ctrl+c")
+                    command = ["wl-paste", "--no-newline"] if wayland else ["xclip", "-selection", "clipboard", "-o"]
+                    read = subprocess.run(command, env=env, capture_output=True, timeout=5)
                     value = read.stdout.strip()
                     if read.returncode == 0 and value.isdigit() and (expected is None or value == str(expected).encode()):
                         return value
@@ -382,9 +486,15 @@ def main():
 
             def fill(name, value):
                 press(name)
-                run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35", str(value))
+                if wayland:
+                    key("ctrl+a")
+                    for digit in str(value):
+                        key(digit)
+                else:
+                    run("xdotool", "key", "ctrl+a", "type", "--clearmodifiers", "--delay", "35", str(value))
                 copied_field(value)
-                run("xdotool", "key", "Return", "sleep", ".3")
+                key("Return")
+                time.sleep(.3)
 
             def geometry():
                 nodes = provider.snapshot()
@@ -398,7 +508,8 @@ def main():
                 for name in FIELDS:
                     press(name)
                     values.append(copied_field())
-                    run("xdotool", "key", "Return", "sleep", ".3")
+                    key("Return")
+                    time.sleep(.3)
                 return tuple(values)
 
             def stage(crop):
@@ -421,7 +532,11 @@ def main():
 
             def render(name):
                 time.sleep(.6)
-                run("import", "-window", editor, str(output / f"{name}.png"))
+                if wayland:
+                    rect = sway_editor()["rect"]
+                    run("grim", "-g", f'{rect["x"]},{rect["y"]} {rect["width"]}x{rect["height"]}', str(output / f"{name}.png"))
+                else:
+                    run("import", "-window", editor, str(output / f"{name}.png"))
 
             def inspect(name, current, require_all=True, limits=None):
                 layout, since = {}, time.monotonic()
@@ -443,6 +558,17 @@ def main():
                 # injector's image/clip rectangles, never its accessibility nodes.
                 image = layout["Preview image"]
                 clip = layout["Preview viewport"]
+                if wayland:
+                    # WINDOW projection never uses compositor/global offsets.
+                    expected = verify_projected_bounds(handles, current, (width, height), image, (0, 0))
+                    rect = sway_editor()["rect"]
+                    return {"crop": current, "handles": len(handles), "clip": clip,
+                            "expected_window_bounds": expected,
+                            "screen_diagnostic": {"accepted": False, "sway_test_client_origin": [rect["x"], rect["y"]],
+                                "reason": "Unix adapter has no compositor-independent Wayland global origin",
+                                "handles": [{"name": node["name"], "window": node["bounds"],
+                                             "screen": node["screen_bounds_unsupported"]} for node in handles]}}
+                from Xlib import display
                 connection = display.Display(env["DISPLAY"])
                 try:
                     client = connection.create_resource_object("window", int(editor))
@@ -451,7 +577,7 @@ def main():
                     origin = connection.screen().root.translate_coords(client, 0, 0)
                 finally:
                     connection.close()
-                expected = verify_screen_bounds(handles, current, (width, height), image, (origin.x, origin.y))
+                expected = verify_projected_bounds(handles, current, (width, height), image, (origin.x, origin.y))
                 return {"crop": current, "handles": len(handles), "client_origin": [origin.x, origin.y],
                         "expected_screen_bounds": expected, "clip": clip}
 
@@ -566,20 +692,21 @@ def main():
                                "--enable", "speech", "--disable", "braille"])
                 time.sleep(2)
 
-            def focus_keyboard(name, key, expected):
+            def focus_keyboard(name, key_name, expected):
                 node = next((n for n in provider.snapshot() if n["name"] == name), None)
                 assert node, f"{name} absent from public provider; GrabFocus + keyboard blocked"
                 assert provider.interface(node["path"], "Component").GrabFocus(), f"GrabFocus {name} rejected"
                 time.sleep(.4)
-                run("xdotool", "key", key, "sleep", ".6")
-                wait(lambda: geometry() == expected, f"{name} + {key}: expected {expected}, got {geometry()}")
-                return {"input": "public AT-SPI GrabFocus + injected X11 key (NOT public adjustment)", "crop": geometry()}
+                key(key_name)
+                time.sleep(.6)
+                wait(lambda: geometry() == expected, f"{name} + {key_name}: expected {expected}, got {geometry()}")
+                return {"input": f"public AT-SPI GrabFocus + injected {args.backend} key (NOT public adjustment)", "crop": geometry()}
 
             changed = (crop[0], crop[1], crop[2] + 1, crop[3])
             check(f"{label}/focus-keyboard-control", lambda: focus_keyboard("Crop right", "Right", changed))
             crop = geometry()
             visible("Preview image")
-            run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".6")
+            arrange(760, 580)
             visible("Preview image")
             check(f"{label}/minimum-values-bounds", lambda: inspect(f"{label}-minimum", crop))
             check(f"{label}/minimum-public-value-nudges", public_nudges)
@@ -592,8 +719,12 @@ def main():
             if label == "scroll-video":
                 press("100%")
                 viewport = visible("Preview viewport")
-                run("xdotool", "mousemove", "--window", editor, str((viewport[0] + viewport[2]) // 2), str((viewport[1] + viewport[3]) // 2),
-                    "click", "--repeat", "3", "--delay", "150", "5", "sleep", ".6")
+                if wayland:
+                    point((viewport[0] + viewport[2]) // 2, (viewport[1] + viewport[3]) // 2, 234)
+                    time.sleep(.6)
+                else:
+                    run("xdotool", "mousemove", "--window", editor, str((viewport[0] + viewport[2]) // 2), str((viewport[1] + viewport[3]) // 2),
+                        "click", "--repeat", "3", "--delay", "150", "5", "sleep", ".6")
                 check(f"{label}/scrolled-clipped-bounds", lambda: inspect(f"{label}-scrolled", crop, False))
                 visible_handles = [n for n in provider.snapshot() if n["name"] in HANDLES]
                 node = next((n for n in visible_handles if n["name"] in ("Crop left", "Crop top left", "Crop bottom left")), None)
@@ -625,6 +756,8 @@ def main():
         (output / "failure.txt").write_text(traceback.format_exc())
         if "DISPLAY" in env:
             subprocess.run(["import", "-window", "root", str(output / "failure-desktop.png")], env=env, timeout=10)
+        elif "WAYLAND_DISPLAY" in env:
+            subprocess.run(["grim", str(output / "failure-desktop.png")], env=env, timeout=10)
     finally:
         if loop:
             loop.quit()
