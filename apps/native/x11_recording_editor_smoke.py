@@ -498,7 +498,7 @@ def main():
                              "and '-vf' not in sys.argv[1:] and sys.argv[-1].endswith('.png')")
             if args.maximum_size or args.comparison or args.replace_original:
                 allowed.touch()
-            ffmpeg = shutil.which("ffmpeg")
+            ffmpeg = env.get("CAPTURES_FFMPEG") or shutil.which("ffmpeg")
             assert ffmpeg
             wrapper = tools / "ffmpeg"
             wrapper.write_text(
@@ -508,6 +508,8 @@ def main():
                 f"    while not Path({str(allowed)!r}).exists(): time.sleep(.05)\n"
                 f"os.execv({ffmpeg!r}, [{ffmpeg!r}, *sys.argv[1:]])\n")
             wrapper.chmod(0o755)
+            # Packaged/checkout sidecars precede PATH; hold the actual host tool.
+            env["CAPTURES_FFMPEG"] = str(wrapper)
             env["PATH"] = str(tools) + os.pathsep + env["PATH"]
         app_command = [str(binary), "--live", "--open-history", "--history-root", str(history),
                        "--settings-file", str(settings), "--quit-after", "900"]

@@ -406,6 +406,34 @@ re-hides the root after eframe's automatic first paint and verifies visibility a
 the quit deadline. A transient startup map remains possible. Resolving this is a
 renderer gate.
 
+### Packaged Linux recording-editor verification
+
+With the existing private-X11 smoke dependencies, use a current Linux development
+package and fresh output directories to exercise its pinned media tools:
+
+```sh
+package=/absolute/native-package
+target=x86_64-unknown-linux-gnu
+for appearance in dark light; do
+  LP_NUM_THREADS=2 \
+  CAPTURES_FFMPEG="$package/binaries/ffmpeg-$target" \
+  CAPTURES_FFPROBE="$package/binaries/ffprobe-$target" \
+  /usr/bin/python3 apps/native/x11_recording_editor_smoke.py \
+    --binary "$package/captures-native" --maximum-size \
+    --appearance "$appearance" --output "/tmp/native-packaged-editor-$appearance"
+done
+```
+
+The smoke generates fixtures with system FFmpeg, but host decoding/encoding and
+held export attempts use the explicit package tools. Its temporary hold wrapper
+overrides native tool lookup so package/checkout sidecars cannot bypass cancellation
+checks. The same routing applies to thumbnail, graphical-crop, comparison and
+replace-original holds. It asserts capped MP4/GIF bytes, actual retry dimensions,
+retained preview/source/History, cancellation cleanup and unattainable-cap refusal.
+Profiles and exports are disposable; no installed data or update channel is used.
+This is private-X11/software-renderer evidence, not macOS/Windows/Wayland runtime,
+physical input/GPU, accessibility, signing or installed-migration acceptance.
+
 ### Native Wayland desktop shortcuts
 
 An actual Wayland window uses `org.freedesktop.portal.GlobalShortcuts`; macOS,
