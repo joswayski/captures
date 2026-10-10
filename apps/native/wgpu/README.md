@@ -452,6 +452,10 @@ directed signals). Bind runs once per session; a partial ShortcutsChanged clears
 held/queued routes, then ListShortcuts replaces complete membership. Cancellation
 is terminal and closes owned resources. Native Quit cannot launch a queued
 capture after worker drain.
+Portal commands advance selector-input ownership only when accepted by the host's
+`next_action`, never on the D-Bus worker. The portal's undefined-base timestamps
+are not compared with native key or pointer events. Direct hosts retain receipt
+stamping; this does not add Wayland region selection or prove hardware chronology.
 
 ```sh
 cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bins
@@ -464,7 +468,11 @@ cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --
   --output /tmp/native-wayland-shortcuts-new
 ```
 
-The protocol suite has 24 private-bus cases. The host suite owns Sway, Swaybar,
+The protocol suite has 26 private-bus cases, including host-held command dispatch,
+repeated target order, cancellation after receipt, capture-generation replacement,
+suppression, membership/session revocation and fresh commands after explicit Retry.
+Its no-window selector-scope checks use a real capture guard with a scripted unlocked
+session, not a compositor selector UI. The host suite owns Sway, Swaybar,
 a private bus and disposable profiles; it checks 14 dark/light Pending, Bound,
 Unavailable, v1 and configuration-error cases at 880×660 and minimum 560×440,
 long descriptions, Configure/Retry, screenshot pixels/source retention, a

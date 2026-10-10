@@ -22,10 +22,10 @@ desktop-authoritative membership and trigger descriptions. Preferences exposes
 Pending/Bound/Unavailable, read-only rows, v2 Configure and explicit Retry.
 Denied/lost sessions do not fall back to X11 or restart consent automatically.
 Partial changes invalidate queued/held routing before ListShortcuts reconciliation.
-The 24-case private-bus suite includes directed spoof signals and failed/cancelled
-List requests. The 14-case private-Sway host suite covers dark/light normal/minimum
-UI, Configure/Retry, screenshot pixels, window-only failed recording cleanup and
-pending/event-heavy Quit. The same-role remap patch now rejects stale configures
+The 26-case private-bus suite includes directed spoof signals, failed/cancelled
+List requests and held host dispatch. The 14-case private-Sway host suite covers
+dark/light normal/minimum UI, Configure/Retry, screenshot pixels, window-only failed
+recording cleanup and pending/event-heavy Quit. The same-role remap patch now rejects stale configures
 before SCTK ACK and stops rendering during drain; its immediate-hide/cancelled-remap
 pixel regression needs the fresh-configure compositor fix (Sway 1.9+).
 Sway 1.7 is unsupported; the pinned headless test fixture is not a desktop install.
@@ -44,6 +44,21 @@ Compositor focus is checked before pointer/scroll input; stale layout geometry a
 does not establish that Preferences is the input target. Window-tree and full-desktop
 failure captures retain evidence for restoration failures. macOS is unchanged;
 Windows/X11 share the completion request but physical acceptance remains open.
+
+Portal commands now acquire selector-input ownership only when the native host
+accepts them, not when the D-Bus worker receives a release. The portal's timestamps
+have an undefined base and are not merged with native pointer/key chronology.
+Direct shortcut receipt stamping is retained, including the ordered X11 transport.
+The no-window public-API diagnostic holds host dispatch while the real private-bus
+worker receives Display → Record Window → Display. The base advanced the observed
+revision to 3 while the host remained at 0; the correction keeps both at 0, then
+advances them once per accepted command in order. Suppression, capture replacement,
+cancellation, membership reconciliation, session closure and explicit Retry cannot
+replay discarded commands or advance ownership for rejected commands. This tests
+command ownership under a real capture gate, not a Wayland region selector: that
+feature, native/portal hardware chronology and physical compositor acceptance remain
+open. macOS and Windows transports are unchanged and unverified in this Linux orb;
+shared routing tests cover their unchanged direct-receipt policy.
 
 | Platform | Desktop-shortcuts slice implementation / verification |
 | --- | --- |
