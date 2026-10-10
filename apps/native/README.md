@@ -959,7 +959,11 @@ Configured Region/Window/Full screen global shortcuts switch the open selector's
 target without replacing its session. Like the shipping keyboard path, every
 target key clears hover; Region/Full screen clear the selected window, while
 Window retains it. Settled region/aspect remain. Keyboard Full screen does not
-auto-start; pointer selection still follows that preference. New Capture cannot
+auto-start; pointer selection still follows that preference. The wgpu region
+selector also owns its button release while Window/Full screen is rendered:
+it settles at the release position with the release's Shift and selected aspect,
+without auto-capturing either target. Returning to Region enables confirmation
+of that retained selection. New Capture cannot
 re-enter an open selector. Shared generation checks reject queued/held keys when
 selection ends or display preparation starts; countdown and capture stay blocked.
 

@@ -310,6 +310,11 @@ impl CaptureControls {
             width: overlay_width,
             height: overlay_height,
         };
+        if self.mode != TargetMode::Region {
+            // Target shortcuts can overtake a queued pointer-up. The region
+            // still owns that release, but cannot auto-capture while inactive.
+            self.region.settle_release(ui, bounds);
+        }
         let mode_before = self.mode;
         // Shipping cancels the selector with one Escape even with a menu open.
         let cancel_pressed = ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -2029,6 +2034,129 @@ mod tests {
         assert_eq!(controls.window(), None);
         assert_eq!(controls.window.hovered(), None);
         assert_eq!(controls.region(), settled_region);
+    }
+
+    #[test]
+    fn inactive_region_release_settles_at_pointer_up_without_auto_capture() {
+        for shortcut in [CaptureShortcut::Display, CaptureShortcut::Window] {
+            for auto_start in [false, true] {
+                for (aspect, modifiers, width, height) in [
+                    ("Free", egui::Modifiers::NONE, 310., 170.),
+                    ("16 : 9", egui::Modifiers::NONE, 310., 174.375),
+                    ("16 : 9", egui::Modifiers::SHIFT, 310., 310.),
+                ] {
+                    let ctx = egui::Context::default();
+                    crate::motion::set_reduced(&ctx, true);
+                    let panel_id = egui::Id::unique("inactive-region-release");
+                    let size = egui::vec2(1000., 720.);
+                    let mut controls = CaptureControls::default();
+                    for _ in 0..4 {
+                        render(
+                            &ctx,
+                            &mut controls,
+                            size,
+                            vec![],
+                            panel_id,
+                            auto_start,
+                            None,
+                        );
+                    }
+                    if aspect != "Free" {
+                        let texts = render(
+                            &ctx,
+                            &mut controls,
+                            size,
+                            vec![],
+                            panel_id,
+                            auto_start,
+                            None,
+                        )
+                        .1;
+                        click(
+                            &ctx,
+                            &mut controls,
+                            painted(&texts, "Free").unwrap().center(),
+                            panel_id,
+                        );
+                        let texts = render(
+                            &ctx,
+                            &mut controls,
+                            size,
+                            vec![],
+                            panel_id,
+                            auto_start,
+                            None,
+                        )
+                        .1;
+                        click(
+                            &ctx,
+                            &mut controls,
+                            painted(&texts, aspect).unwrap().center(),
+                            panel_id,
+                        );
+                    }
+                    let frame = |controls: &mut CaptureControls, events| {
+                        run_frame_with_auto_start(
+                            &ctx, controls, size, events, panel_id, auto_start,
+                        )
+                    };
+                    assert_eq!(
+                        frame(
+                            &mut controls,
+                            vec![
+                                egui::Event::PointerMoved(egui::pos2(140., 180.)),
+                                pointer_button(egui::pos2(140., 180.), true),
+                            ],
+                        ),
+                        None
+                    );
+                    assert_eq!(
+                        frame(
+                            &mut controls,
+                            vec![egui::Event::PointerMoved(egui::pos2(380., 300.))],
+                        ),
+                        None
+                    );
+                    controls.apply_target_shortcut(shortcut);
+                    // A shortcut can switch the rendered surface before pointer-up
+                    // is consumed. Neither the last drag motion nor subsequent
+                    // motion/modifier changes are the release's geometry.
+                    assert_eq!(
+                        frame(
+                            &mut controls,
+                            vec![
+                                egui::Event::PointerButton {
+                                    pos: egui::pos2(450., 350.),
+                                    button: egui::PointerButton::Primary,
+                                    pressed: false,
+                                    modifiers,
+                                },
+                                egui::Event::PointerMoved(egui::pos2(700., 470.)),
+                                egui::Event::ModifiersChanged(if modifiers.shift {
+                                    egui::Modifiers::NONE
+                                } else {
+                                    egui::Modifiers::SHIFT
+                                }),
+                            ],
+                        ),
+                        None,
+                        "inactive region release must never start the active target"
+                    );
+                    controls.apply_target_shortcut(CaptureShortcut::Region);
+                    assert_eq!(frame(&mut controls, vec![]), None);
+                    assert_eq!(
+                        frame(&mut controls, vec![key(egui::Key::Enter)]),
+                        Some(Action::Capture(Target::Region(Rect {
+                            x: 140.,
+                            y: 180.,
+                            width,
+                            height,
+                        }))),
+                        "{shortcut:?}, auto_start={auto_start}, aspect={aspect}, {modifiers:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

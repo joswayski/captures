@@ -4378,7 +4378,17 @@ now honors auto-start like shipping and wgpu, while tray/shortcut Record Full Sc
 never auto-starts. Guidance uses the shipping copy and chip placement, stays until a
 window is selected, hides while dragging a region and fades within 28 points of the
 pointer (12-point leave slack). The wgpu region drag also settles at the release
-point when a slow frame batches the release with later motion. The segmented
+point when a slow frame batches the release with later motion, including when a
+target shortcut changes the rendered surface to Window/Full screen before that
+release is consumed. The owned drag uses pointer-up position and Shift with the
+retained aspect; inactive settlement emits no capture action. Returning to Region
+keeps the selection confirmable rather than leaving Capture/Enter disabled.
+The controls/input regression forces that interleaving with distinct last-motion,
+release and later-motion positions, Free/16:9/Shift geometry and both auto-start
+settings. AppKit's separate input path is unchanged; Windows shares this wgpu fix
+but host execution is unverified, and Wayland region capture remains gated.
+Private-X11/software-GL checks do not close physical input, compositor, mixed-DPI
+or accessibility acceptance on any platform. The segmented
 indicators slide and the Record row arrives as shipped (see the motion slice below);
 both hosts draw the shared segment icons (wgpu `SegmentGlyph::Icon`), and Full screen
 now shows shipping's `.recording-display-icon` above the display identity: a 68 × 50

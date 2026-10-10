@@ -250,7 +250,10 @@ and cursor inclusion preferences. Cursor rendering matches the shipping app:
 system cursor pixels on macOS, a synthetic arrow on Windows/X11. Escape cancels
 a pending capture even with another app focused. Both the macOS workspace and
 Windows/X11 candidate connect region draw/move/resize, aspect constraints, freeze,
-and auto-start to shared Rust capture logic. Window selection uses the same Rust
+and auto-start to shared Rust capture logic. The Windows/Linux candidate settles
+a region at pointer release even if New Capture has switched to another target;
+returning to Region retains that choice without auto-capturing the other target.
+Window selection uses the same Rust
 targeting and pixel-source policy, with window/desktop confirmation, freeze/live
 selection, countdown and cancellation. Real desktop, mixed-DPI and accessibility
 acceptance is still open; private-X11 tests check saved region/window pixels and

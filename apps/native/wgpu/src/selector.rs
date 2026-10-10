@@ -107,6 +107,37 @@ impl Selector {
         }
     }
 
+    /// Settle an owned drag even when another target surface is rendered.
+    /// This only updates selection state; auto-capture belongs to the active surface.
+    pub fn settle_release(&mut self, ui: &egui::Ui, bounds: Bounds) -> bool {
+        if self.drag.is_none() {
+            return false;
+        }
+        let release = ui.input(|input| {
+            input.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers,
+                } => Some((*pos, modifiers.shift)),
+                _ => None,
+            })
+        });
+        let Some((position, shift)) = release else {
+            return false;
+        };
+        // Button-up owns both position and Shift, not the last drag motion or
+        // later pointer/shortcut events batched into this frame.
+        let coordinates = CoordinateMap {
+            surface: ui.max_rect(),
+            bounds,
+        };
+        self.update(coordinates.point(position), bounds, shift);
+        self.end();
+        true
+    }
+
     /// The shipping direct region overlay: no toolbar, a completed drag
     /// commits immediately, and a click without a region shows feedback.
     pub fn show(
@@ -169,26 +200,8 @@ impl Selector {
         });
         let coordinates = CoordinateMap { surface, bounds };
         let response = ui.allocate_rect(surface, Sense::click_and_drag());
-        // A release batched with later pointer motion (a slow frame) must
-        // settle where the button came up, not at the newest position.
-        let release = response
-            .drag_stopped()
-            .then(|| {
-                ui.input(|input| {
-                    input.events.iter().rev().find_map(|event| match event {
-                        egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed: false,
-                            ..
-                        } => Some(*pos),
-                        _ => None,
-                    })
-                })
-            })
-            .flatten();
-        let pointer = release
-            .or_else(|| response.interact_pointer_pos())
+        let pointer = response
+            .interact_pointer_pos()
             .map(|position| coordinates.point(position));
 
         if response.drag_started()
@@ -198,15 +211,15 @@ impl Selector {
         {
             self.begin(point);
         }
-        if (response.dragged() || response.drag_stopped())
+        if response.dragged()
             && let Some(point) = pointer
         {
-            let shift = ui.input(|input| drag_shift(input, response.drag_stopped()));
+            let shift = ui.input(|input| input.modifiers.shift);
             self.update(point, bounds, shift);
         }
-        let drag_stopped = response.drag_stopped();
         let created = self.drag_creates_selection();
-        let capturable = drag_stopped && self.end();
+        let drag_stopped = self.settle_release(ui, bounds);
+        let capturable = self.can_confirm();
         let auto_confirm = drag_stopped && created && capturable && auto_start;
         if auto_start && (response.clicked() || (drag_stopped && created && !capturable)) {
             let now = ui.input(|input| input.time);
@@ -394,23 +407,6 @@ impl Selector {
             _ => {}
         }
     }
-}
-
-fn drag_shift(input: &egui::InputState, drag_stopped: bool) -> bool {
-    if drag_stopped
-        && let Some(shift) = input.events.iter().rev().find_map(|event| match event {
-            egui::Event::PointerButton {
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers,
-                ..
-            } => Some(modifiers.shift),
-            _ => None,
-        })
-    {
-        return shift;
-    }
-    input.modifiers.shift
 }
 
 #[derive(Clone, Copy)]
