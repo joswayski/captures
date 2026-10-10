@@ -378,10 +378,56 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
             assert result.returncode == 0, result.stderr
             event = json.loads(result.stdout)
             assert (event["frames"], event["width"], event["height"]) == (12, width, height), event
-            assert sorted(event["corner_colors"]) == [[35, 69, 103, 255], [181, 23, 57, 255]], event
-            assert rgba(output) in (pixels, alternate_pixels), "Portal pixels differ from both independently specified video frames"
+            assert sorted(event["corner_colors"]) == [[35, 69, 103, 255], [181, 23, 57, 255]], (output.name, event)
+            assert rgba(output) in (pixels, alternate_pixels), f"{output.name}: portal pixels differ from both independently specified video frames"
 
         collect(root / "video.png")
+        transforms = ("180", "90", "270", "flipped", "flipped-90", "flipped-180", "flipped-270")
+        for transform in transforms:
+            quarter_turn = transform in ("90", "270", "flipped-90", "flipped-270")
+            mode = f"{height}x{width}" if quarter_turn else f"{width}x{height}"
+            subprocess.run(["swaymsg", "output", "HEADLESS-1", "resolution", mode, "transform", transform],
+                           env=env, check=True, capture_output=True, timeout=3)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                subprocess.run(["grim", str(reference)], env=env, check=True, timeout=3)
+                if rgba(reference) in (pixels, alternate_pixels):
+                    break
+                time.sleep(.1)
+            else:
+                raise AssertionError(f"The independently captured {transform} desktop was not upright")
+            collect(root / f"video-{transform}.png")
+        subprocess.run(["swaymsg", "output", "HEADLESS-1", "resolution", f"{width}x{height}", "transform", "normal"],
+                       env=env, check=True, capture_output=True, timeout=3)
+        changed = root / "video-transform-changed.png"
+        probe = subprocess.Popen([binary, "--output", str(changed), "--frames", "60"], env=env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                assert probe.poll() is None, "Transform-change probe ended before streaming"
+                objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                if any(item.get("info", {}).get("state") == "running" and
+                       item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
+                    break
+                time.sleep(.05)
+            else:
+                raise AssertionError("No active stream to change orientation")
+            time.sleep(.35)
+            for transform in ("180", "normal"):
+                subprocess.run(["swaymsg", "output", "HEADLESS-1", "transform", transform],
+                               env=env, check=True, capture_output=True, timeout=3)
+                time.sleep(.4)
+                assert probe.poll() is None, "Transform changes must be observed by an active stream"
+            # The damage-driven fixture changes at ~8 FPS, not the 30 FPS cap.
+            stdout, stderr = probe.communicate(timeout=12)
+            assert probe.returncode == 0, stderr
+            event = json.loads(stdout)
+            assert (event["frames"], event["width"], event["height"]) == (60, width, height), event
+            assert sorted(event["corner_colors"]) == [[35, 69, 103, 255], [181, 23, 57, 255]], event
+            assert rgba(changed) in (pixels, alternate_pixels), "Changed-orientation stream pixels differ"
+        finally:
+            stop(probe)
         if screenshot_binary:
             # This real wlr backend advertises display-only capture. It cannot
             # provide selected window pixels: require its genuine unsupported
@@ -454,7 +500,9 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
                                   "elapsed_after_loss_seconds": round(time.monotonic() - lost_at, 2)}), flush=True)
             finally:
                 stop(probe)
-        print(json.dumps({"real_video": "ScreenCast + portal-granted PipeWire remote", "frames": 24, "exact_pixels": width * height * 2,
+        print(json.dumps({"real_video": "ScreenCast + portal-granted PipeWire remote", "frames": 60 + 12 * (len(transforms) + 2),
+                          "exact_pixels": width * height * (len(transforms) + 3), "transforms": ["normal", *transforms],
+                          "same_size_transform_changes": True,
                           "changing_frames": True, "stream_cancelled": True, "grant_revoked": True,
                           "repeat_session": True, "display_unset": True}), flush=True)
     except Exception:
@@ -494,9 +542,9 @@ def main():
     screenshot_binary = str(args.screenshot_binary.resolve()) if args.screenshot_binary else None
     backend = str(args.wlr_backend.resolve())
     if not args.isolated:
-        subprocess.run(["sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
-                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"} ${9:+--screenshot-binary "$9"}',
-                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or "", screenshot_binary or ""], check=True)
+        subprocess.run(["sudo", "--preserve-env=CAPTURES_FFMPEG,CAPTURES_FFPROBE", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
+                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"} ${9:+--screenshot-binary "$9"}',
+                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or "", screenshot_binary or "", os.environ["PATH"]], check=True)
         return
     with tempfile.TemporaryDirectory(prefix="captures-wayland-video-") as temporary:
         root = Path(temporary)

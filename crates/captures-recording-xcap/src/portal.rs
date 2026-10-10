@@ -20,6 +20,7 @@ use dbus::{
     message::MatchRule,
 };
 use image::RgbaImage;
+use libspa::buffer::meta::MetaVideoTransform;
 use parking_lot::Mutex;
 use pipewire as pw;
 use pw::{
@@ -672,6 +673,12 @@ fn video_loop(
                 return;
             };
             let decoded = (|| {
+                // Read each buffer: a 180° change need not renegotiate dimensions.
+                // Like OBS, absent metadata preserves already-normalized producers.
+                let transform = buffer
+                    .find_meta::<MetaVideoTransform>()
+                    .map(|meta| meta.transform().as_raw())
+                    .unwrap_or(0);
                 let planes = buffer.datas_mut();
                 if planes.len() != 1 {
                     return Err(error("video is not a single CPU-mapped plane"));
@@ -692,7 +699,8 @@ fn video_loop(
                 let bytes = plane
                     .data()
                     .ok_or_else(|| error("video buffer has no CPU mapping"))?;
-                decode_frame(bytes, format, width, height, offset, size, stride).map(Some)
+                let frame = decode_frame(bytes, format, width, height, offset, size, stride)?;
+                orient_frame(frame, transform).map(Some)
             })();
             match decoded {
                 Ok(Some(frame)) => match data.frames.try_send(Frame {
@@ -789,8 +797,32 @@ fn video_loop(
     .map_err(error)?
     .0
     .into_inner();
-    let mut params =
-        [Pod::from_bytes(&values).ok_or_else(|| error("invalid video format parameters"))?];
+    let transform: Vec<u8> = PodSerializer::serialize(
+        Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(spa::pod::Object {
+            type_: SpaTypes::ObjectParamMeta.as_raw(),
+            id: ParamType::Meta.as_raw(),
+            properties: vec![
+                spa::pod::Property::new(
+                    spa::sys::SPA_PARAM_META_type,
+                    spa::pod::Value::Id(spa::utils::Id(spa::sys::SPA_META_VideoTransform)),
+                ),
+                spa::pod::Property::new(
+                    spa::sys::SPA_PARAM_META_size,
+                    spa::pod::Value::Int(
+                        std::mem::size_of::<spa::sys::spa_meta_videotransform>() as i32
+                    ),
+                ),
+            ],
+        }),
+    )
+    .map_err(error)?
+    .0
+    .into_inner();
+    let mut params = [
+        Pod::from_bytes(&values).ok_or_else(|| error("invalid video format parameters"))?,
+        Pod::from_bytes(&transform).ok_or_else(|| error("invalid video transform parameters"))?,
+    ];
     stream
         .connect(
             Direction::Input,
@@ -867,6 +899,28 @@ fn decode_frame(
         }
     }
     RgbaImage::from_raw(width, height, output).ok_or_else(|| error("invalid decoded video frame"))
+}
+
+fn orient_frame(mut frame: RgbaImage, transform: u32) -> Result<RgbaImage, String> {
+    // Undo the transform applied to the raw buffer before publishing its pixels.
+    // Reflected rotations are self-inverse; plain rotations reverse direction.
+    if transform > 7 {
+        return Err(error("unsupported video orientation"));
+    }
+    if transform >= 4 {
+        image::imageops::flip_horizontal_in_place(&mut frame);
+    }
+    match transform % 4 {
+        0 => Ok(frame),
+        1 if transform < 4 => Ok(image::imageops::rotate90(&frame)),
+        1 => Ok(image::imageops::rotate270(&frame)),
+        2 => {
+            image::imageops::rotate180_in_place(&mut frame);
+            Ok(frame)
+        }
+        3 if transform < 4 => Ok(image::imageops::rotate270(&frame)),
+        _ => Ok(image::imageops::rotate90(&frame)),
+    }
 }
 
 #[cfg(test)]

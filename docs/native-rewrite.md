@@ -163,6 +163,34 @@ remain open; the resident Wayland recording gate is unchanged.
 | X11 | Existing acquisition and pointer path retained; shared encoder/lifecycle refactored; diagnostics reject DISPLAY and cannot fall back to X11 |
 | Wayland | Portal/PipeWire source and real MP4/GIF sessions exercised on private Sway with the disclosed fixture patch; resident UI, audio/cursor and physical GNOME/KDE acceptance remain open |
 
+The orientation follow-up requests SPA video-transform metadata and normalizes
+every raw buffer before publishing pixels and dimensions. Missing metadata keeps
+identity for already-normalized producers; unknown transforms fail rather than
+guessing. Plain rotations are undone, while reflected rotations are self-inverse.
+An actual 180° Sway output reproduced inverted pixels before the fix; an initial
+wrong 90° direction also failed the independent fixture. All eight transforms now
+pass, plus normal → 180° → normal within one active same-size stream: 168 frames,
+640,000 exact final-image pixels. The 69 protocol cases (including 15
+window-screenshot cases), seven MP4/GIF sessions and stream-loss recovery remain
+green. The private wlr SHM-only backport limitation above still applies. The
+unchanged X11 New Capture controls smoke also passes seven scenarios and 15 exact
+pixel/metadata captures with the upgraded dependency. Its additional
+`--target-shortcuts` variant leaves a settled region disabled on both the published
+#1048 baseline and this build; that input-ownership follow-up remains open.
+
+Safe metadata access requires PipeWire/SPA Rust bindings 0.10.1 and Linux
+development headers 0.3.62+. Their shared native library links resolve xcap to
+0.9.8 in root/native lockfiles; the upstream patch changes Linux connection reuse
+and dependencies, not macOS/Windows implementations or the public API. No
+recording target, portal consent, shutdown or fallback policy changes here.
+
+| Platform | Orientation slice implementation / verification |
+| --- | --- |
+| AppKit/macOS | Portal implementation remains Linux-gated; xcap patch implementation unchanged; runtime and physical acceptance unverified |
+| Windows | Direct recorder unchanged; resolved xcap dependency updated; runtime and physical acceptance unverified |
+| X11 | Acquisition/targeting unchanged; shared locked tests/Clippy and seven real private-X11 controls cases (15 exact captures) pass; pre-existing target-shortcut release failure tracked separately; physical acceptance unverified |
+| Wayland | All eight transforms and same-size changes checked through real private-Sway/PipeWire frames; physical rotation, GNOME/KDE, mixed-DPI and GPU acceptance remain open |
+
 The recording-controls follow-up connects **Record display…** in Wayland History
 to MP4 recording using preferences, a geometry-free native countdown and the normal
 HUD. The recording worker verifies FFmpeg/ffprobe before preparing the take;
