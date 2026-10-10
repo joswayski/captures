@@ -901,8 +901,19 @@ impl Host {
             .with_active(false);
         let tokens = tokens.clone();
         let sender = self.tx.clone();
-        ctx.show_viewport_deferred(viewport, builder, move |ui, _| {
+        ctx.show_viewport_deferred(viewport, builder, move |ui, class| {
             let ctx = ui.ctx().clone();
+            // A late configure can overwrite a newer builder size. Reconcile
+            // the native viewport; an unchanged builder emits no new command.
+            // The framebuffer extent needs no screen position, unlike inner_rect.
+            // Compare physical pixels to avoid fractional-DPI resize churn.
+            let scale = ctx.pixels_per_point();
+            let actual = ui.input(|input| input.viewport_rect().size());
+            if class != egui::ViewportClass::EmbeddedWindow
+                && (actual * scale).round() != (window * scale).round()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(window));
+            }
             let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
             let close = ui.input(|input| input.viewport().close_requested());
             if close && (presentation.dismiss_blocked || !interactive) {
@@ -1013,6 +1024,100 @@ mod tests {
                     vec![]
                 }
             );
+        }
+    }
+
+    #[test]
+    fn native_notice_reconciles_growth_and_shrink_without_resize_churn() {
+        use captures_app::update_notice::{ViewState, fixture, present};
+        let tokens = crate::tokens::load().remove("dark-mustard").unwrap();
+        let notice = egui::ViewportId::from_hash_of("update-notice");
+        for (state, height, actual, scale, resize) in [
+            ("error", 320., egui::vec2(456., 280.), 1., true),
+            ("checking", 280., egui::vec2(456., 320.), 1., true),
+            ("error", 320., egui::vec2(456., 320.), 1., false),
+            // 456 points rounds to 593 physical pixels at 1.3x. A native
+            // 593-pixel width must settle; 594 pixels still needs correction.
+            ("error", 320., egui::vec2(593. / 1.3, 320.), 1.3, false),
+            ("error", 320., egui::vec2(594. / 1.3, 320.), 1.3, true),
+        ] {
+            let wanted = egui::vec2(456., height);
+            for class in [
+                egui::ViewportClass::Deferred,
+                egui::ViewportClass::EmbeddedWindow,
+            ] {
+                let ctx = egui::Context::default();
+                ctx.set_embed_viewports(class == egui::ViewportClass::EmbeddedWindow);
+                let root = tempfile::tempdir().unwrap();
+                let mut preferences = crate::preferences::Preferences::new(
+                    ctx.clone(),
+                    root.path().join("settings.json"),
+                    None,
+                    None,
+                );
+                let mut host = Host::live();
+                host.receive_check(1, present(fixture(state).as_ref(), &ViewState::default()));
+                let id = if class == egui::ViewportClass::EmbeddedWindow {
+                    egui::ViewportId::ROOT
+                } else {
+                    notice
+                };
+                let mut input = egui::RawInput {
+                    viewport_id: id,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual)),
+                    ..Default::default()
+                };
+                input.viewports.insert(
+                    id,
+                    egui::ViewportInfo {
+                        parent: (id != egui::ViewportId::ROOT).then_some(egui::ViewportId::ROOT),
+                        // Wayland cannot query screen positions: inner_rect
+                        // stays None even though screen_rect has the real size.
+                        inner_rect: None,
+                        native_pixels_per_point: Some(scale),
+                        ..Default::default()
+                    },
+                );
+                let mut declaration = ctx.run_ui(
+                    if class == egui::ViewportClass::EmbeddedWindow {
+                        input.clone()
+                    } else {
+                        Default::default()
+                    },
+                    |ui| host.show_check(ui.ctx(), &tokens, &mut preferences, false, true),
+                );
+                declaration.textures_delta.clear();
+                let mut painted = if class == egui::ViewportClass::EmbeddedWindow {
+                    declaration
+                } else {
+                    let viewport = &declaration.viewport_output[&notice];
+                    assert_eq!(viewport.builder.inner_size, Some(wanted));
+                    assert_eq!(viewport.builder.min_inner_size, Some(wanted));
+                    assert_eq!(viewport.builder.max_inner_size, Some(wanted));
+                    assert_eq!(viewport.builder.resizable, Some(false));
+                    let callback = viewport.viewport_ui_cb.as_ref().unwrap();
+                    ctx.run_ui(input, |ui| callback(ui))
+                };
+                painted.textures_delta.clear();
+                let requests: Vec<_> = painted.viewport_output[&id]
+                    .commands
+                    .iter()
+                    .filter_map(|command| match command {
+                        egui::ViewportCommand::InnerSize(size) => Some(*size),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    requests,
+                    if resize && class != egui::ViewportClass::EmbeddedWindow {
+                        vec![wanted]
+                    } else {
+                        vec![]
+                    },
+                    "{state}: {actual:?} at {scale}x, embedded={}",
+                    class == egui::ViewportClass::EmbeddedWindow,
+                );
+            }
         }
     }
 
