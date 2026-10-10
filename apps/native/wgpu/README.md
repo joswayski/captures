@@ -458,6 +458,45 @@ events before SCTK auto-ACK, and distinguishes render readiness from acknowledge
 visibility. Decoration objects retain their mode rather than replaying set_mode
 during remap. Physical GNOME/KDE, accessibility and mixed-DPI gates stay open.
 
+### Native Wayland keyboard and focus
+
+```sh
+node apps/native/prepare.mjs --output apps/native/wgpu/resources
+cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin captures-wgpu-workbench
+cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked
+compositor="$(apps/native/build_wayland_compositor_fixture.sh)"
+PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_keyboard_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe \
+  --output /tmp/native-wayland-keyboard-new
+```
+
+Requires the compositor fixture's dependencies above, FFmpeg, ImageMagick, grim,
+wl-clipboard and distro Python D-Bus/GI bindings. Use a new output directory.
+The smoke reuses the shortcut host's private bus, SNI tray, Sway and persistent
+pointer. The same injector's `keyboard` mode publishes a US XKB keymap and sends
+balanced evdev press/release requests with keymap-relative modifiers through
+`zwp_virtual_keyboard_v1`. Sway delivers them to the real native windows; DISPLAY
+is unset. The smoke rejects Sway older than 1.9, and CI selects the SHA-256-pinned
+1.9 compositor explicitly. No installed compositor, portal or profile is changed.
+
+In light/dark and normal/minimum windows, it checks five Wayland Find matches,
+repeated Enter/Shift+Enter, direction/wrap, unrelated-modifier rejection, button
+versus field focus, typing after navigation, no results and clear/reopen. Inline
+Text must produce exact `Alpha\nBeta\nGamma`, copy `Gamma` and `ma` from Shift
+selections, leave no draft during typing, commit once and Undo/Redo exactly.
+Recording grips must retain focus across repeated modified Arrows (1 ms) and Page
+keys (1000 ms), while numeric-field cursor keys cannot adjust a former grip.
+Read-back uses the real Wayland clipboard, not inferred egui test results.
+
+Each appearance retains normal/minimum PNGs, host logs, before/after History
+artifact hashes and exact observations in `result.json`. The external sources,
+settings, History metadata, original images and previews must remain byte-identical;
+only editor drafts and the clean-Quit crash marker may change. These are
+headless-compositor/software-GL checks, not physical keyboard/layout, IME,
+screen-reader, GNOME/KDE, mixed-DPI or GPU acceptance. macOS/Windows/X11 are not
+exercised by this Wayland-only slice, and no migration parity gate closes.
+
 ### Wayland screenshot acquisition diagnostic
 
 `captures_capture::portal_screenshot` acquires a still through the public

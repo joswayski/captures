@@ -8,6 +8,9 @@ publish = false
 
 [dependencies]
 softbuffer = "0.4.8"
+tempfile = "3"
 wayland-client = "0.31.15"
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 winit = { path = "../wgpu/vendor/winit", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen"] }
+xkbcommon = "0.8"

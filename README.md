@@ -231,6 +231,10 @@ setup screen before capture or opening queued media. macOS offers explicit Scree
 Recording and optional Microphone access, Settings links, and a permission restart;
 Windows/X11 show screen capture as ready and do not require upfront screen access.
 Wayland screenshot permission is handled by the desktop portal at capture time.
+Private, software-rendered Sway 1.9 checks exercise compositor-delivered native
+Preferences Find, multiline Text selection/Undo/Redo and modified recording trim
+keys in both appearances at normal/minimum sizes, preserving source, settings and
+History artifact bytes. These checks are not physical keyboard, IME or screen-reader acceptance.
 Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
 "Captures is ready to use" notice with the New Capture shortcut on direct hosts;
 Wayland names the tray without advertising ungranted keys. Without a tray icon's
