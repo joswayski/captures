@@ -1969,12 +1969,25 @@ private AT-SPI session registered History but exposed no editor nodes, so tree-o
 tests could not establish runtime accessibility. The adapter uses the existing
 window-specific action/tree routing and adds no separate accessibility backend.
 
+The public Wayland follow-up drives the real private-Sway host with X11 unset.
+All eight handles expose names, source-pixel descriptions, values and ranges;
+64 standard Value writes across dark/light and normal/minimum layouts produce the
+independently expected staged crops without changing source or History bytes.
+The unchanged pre-fix host fails the same procedure because editor nodes are absent.
+Window-relative bounds match the painted handles, but screen-relative bounds do
+not: AccessKit's current Unix adapter uses a zero window origin when Wayland cannot
+provide one. For a client at (80, 83), Crop right reports screen coordinates
+(549, 234) rather than (629, 317). Standard Wayland provides no compositor-independent
+global window position; do not substitute Sway test IPC coordinates in production.
+This leaves global bounds, physical screen-reader and broader compositor acceptance
+open despite working numeric Value transport.
+
 | Platform | Recording crop accessibility implementation / verification |
 | --- | --- |
 | AppKit/macOS | NSAccessibility numeric values/bounds and increment/decrement implemented; observable editor-control XCTest regression added; compilation/runtime and VoiceOver unavailable in the Linux orb |
 | Windows | Shared wgpu/AccessKit secondary-window adapter and numeric SetValue implementation; Linux-hosted regressions only, Windows runtime/Narrator acceptance unverified |
 | X11 | Real private AT-SPI MP4/GIF/large-source normal/minimum/scrolled matrix passes 36 cases and 218 Value writes with exact staged geometry and unchanged source/History; existing dark/light graphical crop checks pass; physical Orca acceptance unverified |
-| Wayland | Corrected first-show ordering passes six private-Sway resident/secondary-window lifecycle cases, including hidden History and tray recovery; compositor AT-SPI and physical acceptance unverified |
+| Wayland | Six private-Sway lifecycle cases and 64 public AT-SPI Value writes pass; window-relative handle bounds verified, global screen bounds unsupported by the current adapter; physical Orca, GNOME/KDE and mixed-DPI acceptance open |
 
 This slice closes no platform or recording-editor parity gate and changes no
 update/install orchestration, installed profile, release channel or renderer cutover.
