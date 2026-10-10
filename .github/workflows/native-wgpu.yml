@@ -402,6 +402,83 @@ jobs:
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
             || echo "::warning::Could not cancel the rest of this run"
 
+  wayland-development-updater:
+    needs: [linux-development-package, route]
+    runs-on: ${{ needs.route.outputs.linux == 'true' && fromJSON('["self-hosted","joselinux"]') || 'ubuntu-24.04' }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          cache-workspaces: . -> apps/native/wgpu/target
+      - name: Install native helper headers and private compositor dependencies
+        run: sudo apt-get update && sudo apt-get install -y meson ninja-build pkg-config libpipewire-0.3-dev libclang-dev libasound2-dev libdbus-1-dev libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libxcb1-dev libegl-dev libgbm-dev libdrm-dev libinput-dev libevdev-dev libpixman-1-dev libjson-c-dev libpcre2-dev libffi-dev libexpat1-dev libcairo2-dev libpango1.0-dev libsystemd-dev libgl1-mesa-dri dbus python3-dbus python3-gi sway grim jq
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-development-linux-${{ runner.arch }}
+          path: ${{ runner.temp }}/native-updater-download
+      - name: Unpack the same-commit development host and pinned media tools
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/native-updater-unpacked"
+          tar -xzf "$RUNNER_TEMP/native-updater-download/native-development-linux-x64.tar.gz" -C "$RUNNER_TEMP/native-updater-unpacked"
+          package="$RUNNER_TEMP/native-updater-unpacked/native-package"
+          jq -e --arg commit "$GITHUB_SHA" '.development == true and .platform == "linux" and .media_target == "x86_64-unknown-linux-gnu" and .binary == "captures-native" and .source_commit == $commit' "$package/BUILD_INFO.json"
+          test -x "$package/captures-native"
+          test -x "$package/binaries/ffmpeg-x86_64-unknown-linux-gnu"
+          test -x "$package/binaries/ffprobe-x86_64-unknown-linux-gnu"
+      - name: Build locked injector, importer, supervisor and signing-test executable
+        run: |
+          set -euo pipefail
+          cargo +1.95.0 build --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked --target-dir apps/native/wgpu/target
+          CARGO_PROFILE_DEV_DEBUG=0 cargo +1.95.0 build --locked --target-dir apps/native/wgpu/target -p captures-app --bin native_profile_import --bin native_update_helper
+          CARGO_PROFILE_TEST_DEBUG=0 cargo +1.95.0 test --locked --target-dir apps/native/wgpu/target -p captures-app --bin native_update_patch --no-run --message-format=json > "$RUNNER_TEMP/native-updater-signer.jsonl"
+      - name: Exercise all eight live-updater cases with system Python on pinned Sway
+        run: |
+          set -euo pipefail
+          signer="$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "native_update_patch" and .profile.test) | .executable] | if length == 1 and .[0] != null then .[0] else error("expected one signing-test executable") end' "$RUNNER_TEMP/native-updater-signer.jsonl")"
+          test -x "$signer"
+          compositor="$(apps/native/build_wayland_compositor_fixture.sh "$RUNNER_TEMP/wayland-compositor-fixture")"
+          package="$RUNNER_TEMP/native-updater-unpacked/native-package"
+          # Distro D-Bus/GI bindings require system Python. No host/media rebuild.
+          PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_update_smoke.py \
+            --binary "$package/captures-native" --package "$package" \
+            --injector apps/native/wgpu/target/debug/captures-wayland-drag-probe \
+            --importer apps/native/wgpu/target/debug/native_profile_import \
+            --signing-test "$signer" --helper apps/native/wgpu/target/debug/native_update_helper \
+            --output native-wayland-updater 2>&1 | tee native-wayland-updater-run.log
+          jq -e '.passed and .display_unset and .input_package_unchanged and (.cases | length == 8) and all(.cases[]; .passed)' native-wayland-updater/result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-wayland-updater-evidence
+          # Direct review files only: exclude keys, package copies and caches.
+          path: |
+            native-wayland-updater-run.log
+            native-wayland-updater/result.json
+            native-wayland-updater/services.log
+            native-wayland-updater/dark-*/*.png
+            native-wayland-updater/dark-*/*.json
+            native-wayland-updater/dark-*/host.jsonl
+            native-wayland-updater/light-*/*.png
+            native-wayland-updater/light-*/*.json
+            native-wayland-updater/light-*/host.jsonl
+            native-wayland-updater/supervised-*/*.png
+            native-wayland-updater/supervised-*/*.json
+            native-wayland-updater/supervised-*/helper.log
+          if-no-files-found: ignore
+      - name: Stop the rest of this run after a failure
+        if: failure()
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
+            || echo "::warning::Could not cancel the rest of this run"
+
   linux-smoke:
     needs: [linux-release, route]
     runs-on: ${{ needs.route.outputs.linux == 'true' && fromJSON('["self-hosted","joselinux"]') || 'ubuntu-24.04' }}
