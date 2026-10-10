@@ -28,7 +28,9 @@ mkdir -p .amp/in/artifacts
 The output directory must not exist. This command currently **exits 1** while
 retaining `result.json`, logs, unmodified capture files, chooser screenshots,
 recording History metadata and recursive `SHA256SUMS`. Do not mask that exit as
-a passing gate. The optional recording/native binaries add their respective
+a passing gate. The source-size defect below is fixed by the VideoCrop follow-up;
+the backend pending-close crash and native-session limits remain open.
+The optional recording/native binaries add their respective
 cases; omitting them does not verify native screenshot/History behavior.
 
 The harness launches the stock compositor with:
@@ -105,12 +107,22 @@ Mutter intentionally negotiates a monitor-sized window stream because its stream
 cannot resize with the window, and supplies window bounds through VideoCrop:
 [window stream sizing](https://github.com/GNOME/mutter/blob/43.8/src/backends/meta-screen-cast-window-stream.c#L248-L255),
 [VideoCrop calculation](https://github.com/GNOME/mutter/blob/43.8/src/backends/meta-screen-cast-window-stream-src.c#L313-L330).
-The [current adapter](../../crates/captures-recording-xcap/src/portal.rs) requests
-and reads VideoTransform, not VideoCrop, and decodes the full negotiated extent.
+The baseline adapter requested and read VideoTransform, not VideoCrop, and
+decoded the full negotiated extent.
 This explains a likely integration defect, not proof of crop metadata delivered
 to this client: this slice did not negotiate or inspect the actual VideoCrop.
-It never crops the published evidence to make the contract pass. A separate
-implementation slice should first inspect real buffer metadata.
+It never crops the published evidence to make the contract pass.
+
+The [VideoCrop follow-up](../../docs/native-rewrite.md) inspected authentic
+per-buffer metadata and changed the [decoder](../../crates/captures-recording-xcap/src/portal.rs)
+to crop before orientation. On matched builds with this unchanged harness,
+window video PNG, one-frame screenshot, fresh repeat and MP4 now publish 320×200;
+each saved PNG matches all 64,000 independent fixture pixels. The explicit display
+control remains 1280×900 with desktop and teal decoy. Cancellation and source-loss
+controls still publish nothing and release sessions/nodes. Both full runs retain
+exit 1 because stock pending Request.Close crashes the backend; post-crash
+recovery reliability is unestablished. These source/probe results do not verify
+resident native screenshot/History, real session state or physical acceptance.
 
 The native route additionally requires a known active/unlocked session. GNOME
 43 creates ScreenShield only when

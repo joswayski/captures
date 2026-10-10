@@ -274,9 +274,10 @@ audio/cursor and GNOME/KDE acceptance remain open.
 The opt-in [stock GNOME window diagnostic](apps/native/gnome-window-verification.md)
 uses disposable buses/profiles and software Mutter with the real window chooser.
 It records window-only pixels, MP4/History metadata and cancellation/source-loss
-controls. Its current verdict fails: GNOME window frames retain monitor-sized
-padding, pending Request.Close crashes the stock GNOME 43 portal, and missing
-real session state prevents successful native screenshot/History verification.
+controls. The decoder now honors authentic VideoCrop metadata, and the selected
+window's bounded source/MP4 output passes. The full diagnostic still fails:
+pending Request.Close crashes the stock GNOME 43 portal, and missing real session
+state prevents successful resident native screenshot/History verification.
 Do not substitute a display or treat this diagnostic as a completed parity gate.
 
 The [native Wayland desktop-shortcut checks](apps/native/wgpu/README.md#native-wayland-desktop-shortcuts)

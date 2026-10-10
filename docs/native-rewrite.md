@@ -274,7 +274,7 @@ connected in the follow-up below.
 | AppKit/macOS | Existing native-window recorder unchanged; portal targets explicitly rejected; physical execution unverified in this orb |
 | Windows | Existing native-window recorder unchanged; portal targets explicitly rejected; physical execution unverified in this orb |
 | X11 | Existing direct-window recorder retained; shared model/session tests cover the new target without changing direct acquisition; physical acceptance open |
-| Wayland | Portal-window route implemented; scripted grants cover protocol admission/cleanup, while dark/light Sway checks the actual wlr unsupported-window error and normal/minimum UI without display fallback; successful GNOME/KDE window capture and physical acceptance unverified |
+| Wayland | Portal-window route implemented; scripted grants cover protocol admission/cleanup, while dark/light Sway checks the actual wlr unsupported-window error and normal/minimum UI without display fallback; stock private GNOME source/MP4 output verified below, resident native GNOME/KDE capture and physical acceptance open |
 
 The window-screenshot follow-up reuses that authoritative window-only grant and
 CPU-frame lifecycle. The host carries the requested mode and cursor setting
@@ -290,7 +290,42 @@ is introduced. Screenshots beside a recording retain its parent ownership.
 | AppKit/macOS | Existing direct-window screenshots unchanged; new acquisition is Linux-gated; no macOS runtime verification in this orb |
 | Windows | Existing direct-window screenshots unchanged; new acquisition is Linux-gated; no Windows runtime verification in this orb |
 | X11 | Existing direct-window screenshots retained; shared History/generation tests cover both display/window modes; physical acceptance remains open |
-| Wayland | Window-only one-frame route implemented; 15 protocol cases cover admission, cancellation, cursor requirements and cleanup. Dark/light Sway verifies the real display-only wlr unsupported-window error, no publication, workspace restoration and subsequent display capture. Successful GNOME/KDE selected-window pixels and physical acceptance remain unverified |
+| Wayland | Window-only one-frame route implemented; 15 protocol cases cover admission, cancellation, cursor requirements and cleanup. Dark/light Sway verifies the real display-only wlr unsupported-window error, no publication, workspace restoration and subsequent display capture. Stock private GNOME one-frame source pixels verified below; resident native screenshot/History and physical acceptance open |
+
+The per-buffer crop follow-up requests SPA `VideoCrop` alongside transform
+metadata. It reads valid rectangles in raw buffer pixels, rejects negative,
+overflowing or out-of-frame bounds, crops before orientation, and publishes the
+resulting dimensions. Missing or zero-extent metadata retains the full frame;
+full-extent metadata avoids another pixel copy. Portal grant selection, session
+policy and the no-display-fallback rule are unchanged. No window geometry is
+guessed and no black-pixel scan is used.
+
+Authentic stock GNOME 43 metadata reports a 320×200 window rectangle inside its
+1280×900 BGRx canvas, versus the full extent for a display. The unchanged public
+GNOME harness on matched baseline/candidate builds reproduces padded window
+video PNG, one-frame screenshot, fresh repeat and MP4, then verifies 320×200
+output for all four with the correction. Each saved PNG matches 64,000 known
+pixels; source video and decoded MP4 contain both changing phases. The explicit
+display control still includes the desktop/decoy at 1280×900. Cancellation and
+window loss publish nothing and release sessions/nodes. Sway display controls
+retain all eight transforms, 168 frames, 640,000 exact pixels, seven MP4/GIF
+sessions and stream-loss recovery.
+
+Both full GNOME runs still exit 1: pending `Request.Close` crashes the stock
+GNOME portal 43.1 with SIGSEGV. Post-crash acquisition also differed between the
+matched runs; neither publishes or falls back, and causal attribution/recovery
+reliability is unestablished. No native host/session override was used: the
+private environment lacks real login1/ScreenShield, so resident native
+screenshot/History acceptance remains open. The recording probe's History is
+not native screenshot History. Resize, physical rotation/mixed-DPI, GPU/DMA-BUF,
+screen-reader and physical GNOME/KDE acceptance remain open.
+
+| Platform | Per-buffer crop implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing direct capture/recorder unchanged; portal decoder Linux-gated; runtime/physical acceptance unverified |
+| Windows | Existing direct capture/recorder unchanged; portal decoder Linux-gated; runtime/physical acceptance unverified |
+| X11 | Direct acquisition unchanged; root/native Linux tests and Clippy pass; no new graphical X11 execution for this slice |
+| Wayland | Real stock software/headless GNOME window-source pixel/dimension contracts and private-Sway display/recording controls pass; full GNOME backend matrix and resident native/physical acceptance remain open |
 
 The resident-lifecycle follow-up keeps Wayland History unmapped on quiet startup
 when a tray exists. Preferences, Feedback and media bootstrap independently;

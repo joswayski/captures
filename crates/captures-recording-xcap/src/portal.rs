@@ -20,7 +20,7 @@ use dbus::{
     message::MatchRule,
 };
 use image::RgbaImage;
-use libspa::buffer::meta::MetaVideoTransform;
+use libspa::buffer::meta::{MetaVideoCrop, MetaVideoTransform};
 use parking_lot::Mutex;
 use pipewire as pw;
 use pw::{
@@ -679,6 +679,14 @@ fn video_loop(
                     .find_meta::<MetaVideoTransform>()
                     .map(|meta| meta.transform().as_raw())
                     .unwrap_or(0);
+                let crop = buffer.find_meta::<MetaVideoCrop>().and_then(|meta| {
+                    let region = meta.meta_region();
+                    let position = region.position();
+                    let size = region.size();
+                    region
+                        .is_valid()
+                        .then_some((position.x, position.y, size.width, size.height))
+                });
                 let planes = buffer.datas_mut();
                 if planes.len() != 1 {
                     return Err(error("video is not a single CPU-mapped plane"));
@@ -700,6 +708,8 @@ fn video_loop(
                     .data()
                     .ok_or_else(|| error("video buffer has no CPU mapping"))?;
                 let frame = decode_frame(bytes, format, width, height, offset, size, stride)?;
+                // VideoCrop uses raw buffer coordinates, before VideoTransform.
+                let frame = crop_frame(frame, crop)?;
                 orient_frame(frame, transform).map(Some)
             })();
             match decoded {
@@ -797,32 +807,46 @@ fn video_loop(
     .map_err(error)?
     .0
     .into_inner();
-    let transform: Vec<u8> = PodSerializer::serialize(
-        Cursor::new(Vec::new()),
-        &spa::pod::Value::Object(spa::pod::Object {
-            type_: SpaTypes::ObjectParamMeta.as_raw(),
-            id: ParamType::Meta.as_raw(),
-            properties: vec![
-                spa::pod::Property::new(
-                    spa::sys::SPA_PARAM_META_type,
-                    spa::pod::Value::Id(spa::utils::Id(spa::sys::SPA_META_VideoTransform)),
-                ),
-                spa::pod::Property::new(
-                    spa::sys::SPA_PARAM_META_size,
-                    spa::pod::Value::Int(
-                        std::mem::size_of::<spa::sys::spa_meta_videotransform>() as i32
+    let mut metadata = Vec::new();
+    for (type_, size) in [
+        (
+            spa::sys::SPA_META_VideoTransform,
+            std::mem::size_of::<spa::sys::spa_meta_videotransform>(),
+        ),
+        (
+            spa::sys::SPA_META_VideoCrop,
+            std::mem::size_of::<spa::sys::spa_meta_region>(),
+        ),
+    ] {
+        let bytes = PodSerializer::serialize(
+            Cursor::new(Vec::new()),
+            &spa::pod::Value::Object(spa::pod::Object {
+                type_: SpaTypes::ObjectParamMeta.as_raw(),
+                id: ParamType::Meta.as_raw(),
+                properties: vec![
+                    spa::pod::Property::new(
+                        spa::sys::SPA_PARAM_META_type,
+                        spa::pod::Value::Id(spa::utils::Id(type_)),
                     ),
-                ),
-            ],
-        }),
-    )
-    .map_err(error)?
-    .0
-    .into_inner();
-    let mut params = [
-        Pod::from_bytes(&values).ok_or_else(|| error("invalid video format parameters"))?,
-        Pod::from_bytes(&transform).ok_or_else(|| error("invalid video transform parameters"))?,
-    ];
+                    spa::pod::Property::new(
+                        spa::sys::SPA_PARAM_META_size,
+                        spa::pod::Value::Int(size as i32),
+                    ),
+                ],
+            }),
+        )
+        .map_err(error)?
+        .0
+        .into_inner();
+        metadata.push(bytes);
+    }
+    let mut params =
+        vec![Pod::from_bytes(&values).ok_or_else(|| error("invalid video format parameters"))?];
+    for bytes in &metadata {
+        params.push(
+            Pod::from_bytes(bytes).ok_or_else(|| error("invalid video metadata parameters"))?,
+        );
+    }
     stream
         .connect(
             Direction::Input,
@@ -899,6 +923,23 @@ fn decode_frame(
         }
     }
     RgbaImage::from_raw(width, height, output).ok_or_else(|| error("invalid decoded video frame"))
+}
+
+fn crop_frame(frame: RgbaImage, crop: Option<(i32, i32, u32, u32)>) -> Result<RgbaImage, String> {
+    let Some((x, y, width, height)) = crop else {
+        return Ok(frame);
+    };
+    let x = u32::try_from(x).map_err(|_| error("negative video crop position"))?;
+    let y = u32::try_from(y).map_err(|_| error("negative video crop position"))?;
+    if x.checked_add(width).is_none_or(|end| end > frame.width())
+        || y.checked_add(height).is_none_or(|end| end > frame.height())
+    {
+        return Err(error("video crop escapes its frame"));
+    }
+    if (x, y, width, height) == (0, 0, frame.width(), frame.height()) {
+        return Ok(frame);
+    }
+    Ok(image::imageops::crop_imm(&frame, x, y, width, height).to_image())
 }
 
 fn orient_frame(mut frame: RgbaImage, transform: u32) -> Result<RgbaImage, String> {
