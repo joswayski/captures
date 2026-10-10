@@ -72,7 +72,8 @@ struct Binding {
 }
 type Bindings = BTreeMap<u32, Binding>;
 
-/// Input ownership at application receipt, not hardware-event chronology.
+/// Input ownership at native receipt, or host dispatch for portal commands.
+/// Portal timestamps have an undefined base, not native-input chronology.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelectorInputScope {
     pub generation: u64,
@@ -118,11 +119,22 @@ fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
     Ok(result)
 }
 
+#[derive(Clone, Copy, Default)]
+enum InputOrder {
+    #[default]
+    NativeReceipt,
+    #[cfg(target_os = "linux")]
+    PortalDispatch,
+}
+
 #[derive(Default)]
 struct Routes {
     bindings: Bindings,
     armed: BTreeSet<u32>,
-    pending: VecDeque<(CaptureShortcut, u64)>,
+    // Only native-queue events have a receipt revision. Portal commands gain
+    // one when the event-loop owner takes them, never on the D-Bus worker.
+    pending: VecDeque<(CaptureShortcut, Option<u64>)>,
+    input_order: InputOrder,
     input_revision: u64,
     applied_input_revision: u64,
     enabled: bool,
@@ -161,8 +173,13 @@ impl Routes {
 
     fn pop_pending(&mut self) -> Option<CaptureShortcut> {
         let (action, revision) = self.pending.pop_front()?;
-        self.applied_input_revision = revision;
+        self.applied_input_revision = revision.unwrap_or_else(|| self.advance_input_revision());
         Some(action)
+    }
+
+    fn advance_input_revision(&mut self) -> u64 {
+        self.input_revision = self.input_revision.wrapping_add(1);
+        self.input_revision
     }
 
     /// Shipping handles every capture shortcut while a capture is open or in
@@ -208,9 +225,13 @@ impl Routes {
                     // Selector commands are ordered, not a set of targets:
                     // Display -> Window -> Display must retain all releases.
                     // Outside a selector, preserve the bounded busy backlog.
-                    self.input_revision = self.input_revision.wrapping_add(1);
-                    self.pending
-                        .push_back((binding.action, self.input_revision));
+                    let action = binding.action;
+                    let revision = match self.input_order {
+                        InputOrder::NativeReceipt => Some(self.advance_input_revision()),
+                        #[cfg(target_os = "linux")]
+                        InputOrder::PortalDispatch => None,
+                    };
+                    self.pending.push_back((action, revision));
                     !self.suspended
                 } else {
                     false
@@ -493,10 +514,14 @@ pub enum PortalShortcutStatus {
 
 impl CaptureShortcuts {
     fn claim_dispatcher(
+        input_order: InputOrder,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<Arc<Dispatcher>, String> {
         let dispatcher = Arc::new(Dispatcher {
-            routes: Mutex::new(Routes::default()),
+            routes: Mutex::new(Routes {
+                input_order,
+                ..Routes::default()
+            }),
             wake: Box::new(wake),
         });
         let mut owner = DISPATCHER.lock().unwrap();
@@ -526,7 +551,7 @@ impl CaptureShortcuts {
     ) -> Result<Self, String> {
         bindings(settings)?;
         install_dispatcher();
-        let dispatcher = Self::claim_dispatcher(wake)?;
+        let dispatcher = Self::claim_dispatcher(InputOrder::NativeReceipt, wake)?;
         let mut shortcuts = Self {
             backend: Backend::Direct(manager),
             dispatcher,
@@ -541,13 +566,15 @@ impl CaptureShortcuts {
 
     /// Start asynchronous portal consent on a worker. Never register X11 keys
     /// or take over OS shortcuts on this path, including denial and failure.
+    /// Validated releases queue commands; only `next_action` advances input
+    /// ownership on the host thread. No portal/native timestamp merge is made.
     #[cfg(target_os = "linux")]
     pub fn new_wayland(
         settings: &AppSettings,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<Self, String> {
         let desired = bindings(settings)?;
-        let dispatcher = Self::claim_dispatcher(wake)?;
+        let dispatcher = Self::claim_dispatcher(InputOrder::PortalDispatch, wake)?;
         let worker = portal::Worker::start(desired.clone(), dispatcher.clone());
         let shortcuts = Self {
             backend: Backend::Portal(worker),
@@ -711,16 +738,22 @@ impl CaptureShortcuts {
     pub fn next_action(&self) -> Option<CaptureShortcut> {
         let (action, remaining) = {
             let mut routes = self.dispatcher.routes.lock().unwrap();
-            let pending = routes.pop_pending();
+            let pending = routes.pending.front().map(|(action, _)| *action);
             let busy = pending.is_some() && routes.routes_busy();
-            let action = (routes.enabled
+            let allowed = routes.enabled
                 && !routes.suspended
                 && (!routes.restore_only || pending == Some(CaptureShortcut::NewCapture) || busy)
                 && (routes.restore_only
                     || busy
-                    || crate::capture_flow::shortcuts_allowed(routes.selector_generation)))
-            .then_some(pending)
-            .flatten();
+                    || crate::capture_flow::shortcuts_allowed(routes.selector_generation));
+            let action = if allowed {
+                routes.pop_pending()
+            } else {
+                // A capture/session can end between portal receipt and host
+                // dispatch. Rejected commands never acquire input ownership.
+                routes.pending.pop_front();
+                None
+            };
             (action, !routes.pending.is_empty())
         };
         if remaining {

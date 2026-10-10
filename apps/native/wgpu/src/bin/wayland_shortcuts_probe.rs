@@ -15,10 +15,19 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn run() -> Result<(), String> {
-    use captures_app::shortcuts::{CaptureShortcuts, PortalShortcutStatus};
+    use captures_app::{
+        capture_flow::PortalCapture,
+        shortcuts::{
+            CaptureShortcuts, PortalShortcutStatus, SelectorInputScope, selector_input_scope,
+        },
+    };
     use std::{
         io::{BufRead, Write},
-        sync::mpsc,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
         thread,
         time::{Duration, Instant},
     };
@@ -46,7 +55,21 @@ fn run() -> Result<(), String> {
             }
         }
     });
-    let mut owner = Some(CaptureShortcuts::new_wayland(&settings, || {})?);
+    let wakes = Arc::new(AtomicU64::new(0));
+    let create = || {
+        let wakes = wakes.clone();
+        CaptureShortcuts::new_wayland(&settings, move || {
+            wakes.fetch_add(1, Ordering::Release);
+        })
+    };
+    let scope_json = |scope: Option<SelectorInputScope>| {
+        scope.map(
+            |scope| serde_json::json!({"generation":scope.generation,"revision":scope.revision}),
+        )
+    };
+    let mut owner = Some(create()?);
+    let mut capture: Option<PortalCapture> = None;
+    let mut hold_actions = false;
     let mut previous = None;
     let started = Instant::now();
     loop {
@@ -65,7 +88,8 @@ fn run() -> Result<(), String> {
                 }
                 "retry" => {
                     owner.take();
-                    owner = Some(CaptureShortcuts::new_wayland(&settings, || {})?);
+                    capture.take();
+                    owner = Some(create()?);
                     previous = None;
                 }
                 "configure" => {
@@ -76,11 +100,30 @@ fn run() -> Result<(), String> {
                 "resume" => shortcuts.set_suspended(false)?,
                 "disable" => shortcuts.set_enabled(false),
                 "enable" => shortcuts.set_enabled(true),
+                "hold" => hold_actions = true,
+                "selector" => {
+                    shortcuts.set_selector_generation(None);
+                    capture.take();
+                    let guard = PortalCapture::begin()?;
+                    shortcuts.set_selector_generation(Some(guard.generation()));
+                    capture = Some(guard);
+                }
+                "cancel" => capture.as_ref().ok_or("No capture to cancel")?.cancel(),
+                "take" => {
+                    let action = shortcuts.next_action();
+                    println!("{}", serde_json::json!({"event":"taken","action":action}));
+                }
+                "inspect" => {}
                 _ => return Err(format!("Unknown command: {command}")),
             }
+            let shortcuts = owner.as_ref().unwrap();
             println!(
                 "{}",
-                serde_json::json!({"event":"command","command":command.trim()})
+                serde_json::json!({"event":"command","command":command.trim(),
+                    "wakes":wakes.load(Ordering::Acquire),
+                    "observed":scope_json(selector_input_scope()),
+                    "applied":scope_json(shortcuts.applied_selector_input_scope()),
+                    "capture_current":capture.as_ref().map(PortalCapture::is_current)})
             );
         }
         let shortcuts = owner.as_ref().unwrap();
@@ -102,7 +145,7 @@ fn run() -> Result<(), String> {
             println!("{}", serde_json::json!({"event":"status","detail":detail}));
             previous = Some(status);
         }
-        if let Some(action) = shortcuts.next_action() {
+        if !hold_actions && let Some(action) = shortcuts.next_action() {
             println!("{}", serde_json::json!({"event":"action","action":action}));
         }
         std::io::stdout()
