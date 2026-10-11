@@ -36,11 +36,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Investigate failure with Amp
-        uses: joswayski/automation@f72d658e625fab32434f3c24f5af79a90952bf49
+        uses: joswayski/automation@c2da73134d8565d67d6c938db5d459465320ece8
         with:
           enabled: ${{ vars.AMP_REPAIR_ENABLED }}
           dry-run: ${{ vars.AMP_REPAIR_DRY_RUN == 'true' }}
-          daily-limit: ${{ vars.AMP_REPAIR_DAILY_LIMIT || '3' }}
           agent-mode: ${{ vars.AMP_REPAIR_MODE || 'high' }}
           github-token: ${{ github.token }}
           amp-api-key: ${{ secrets.AMP_API_KEY }}
