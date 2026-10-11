@@ -92,7 +92,16 @@ fn screenshot_editor_window_label(artifact_id: &str) -> String {
 }
 
 pub(crate) fn show_screenshot_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
-    let label = screenshot_editor_window_label(artifact_id);
+    show_screenshot_editor_with_draft(app, artifact_id, artifact_id)
+}
+
+pub(crate) fn show_screenshot_editor_with_draft(
+    app: &AppHandle,
+    artifact_id: &str,
+    draft_id: &str,
+) -> Result<(), AppError> {
+    crate::updates::ensure_capture_can_open(app).map_err(AppError::Task)?;
+    let label = screenshot_editor_window_label(draft_id);
     // Opening the editor is an intentional focus change; do not hand activation
     // back to whatever app was frontmost before a prior capture shortcut.
     #[cfg(target_os = "macos")]
@@ -107,7 +116,10 @@ pub(crate) fn show_screenshot_editor(app: &AppHandle, artifact_id: &str) -> Resu
         app,
         label,
         WebviewUrl::App(
-            format!("index.html?view=screenshot-editor&artifact_id={artifact_id}").into(),
+            format!(
+                "index.html?view=screenshot-editor&artifact_id={artifact_id}&draft_id={draft_id}"
+            )
+            .into(),
         ),
     )
     .title("Captures Screenshot Editor")

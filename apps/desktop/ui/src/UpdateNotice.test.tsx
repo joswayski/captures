@@ -79,7 +79,7 @@ describe("UpdateNotice", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Version 2026.07.19.2 · 12.6 MB")).toBeInTheDocument();
     expect(
-      screen.queryByText("Open captures will close. Unsaved edits are kept as drafts."),
+      screen.queryByText("Open captures reopen after the update. Screenshot drafts are kept."),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open pull request 1" })).toHaveTextContent("#1");
@@ -103,6 +103,7 @@ describe("UpdateNotice", () => {
     vi.mocked(invoke).mockResolvedValue({
       ...available,
       installable: false,
+      will_close_open_captures: true,
       manual_download_url: "https://captur.es/download",
     } satisfies UpdateStatus);
 
@@ -111,6 +112,10 @@ describe("UpdateNotice", () => {
     expect(await screen.findByText("Version 2026.07.19.2")).toBeInTheDocument();
     expect(screen.queryByText(/12\.6 MB/u)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View release" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Open captures will close. Unsaved edits are kept as drafts."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Open captures reopen/u)).not.toBeInTheDocument();
   });
 
   it("dismisses Later through a native command instead of Window.hide", async () => {
@@ -245,7 +250,7 @@ describe("UpdateNotice", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
   });
 
-  it("warns that open captures will close and still installs", async () => {
+  it("explains that open captures reopen after the update and still installs", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_update_status") {
         return { ...available, will_close_open_captures: true } satisfies UpdateStatus;
@@ -257,7 +262,7 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     const warning = await screen.findByText(
-      "Open captures will close. Unsaved edits are kept as drafts.",
+      "Open captures reopen after the update. Screenshot drafts are kept.",
     );
     const notes = screen.getByRole("region", { name: "What's new" });
     const updateNow = screen.getByRole("button", { name: "Update now" });
@@ -290,7 +295,7 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(
-      await screen.findByText("Open captures will close. Unsaved edits are kept as drafts."),
+      await screen.findByText("Open captures reopen after the update. Screenshot drafts are kept."),
     ).toBeInTheDocument();
     await waitFor(() => expect(updateStatusChanged).toBeDefined());
     await act(async () => {
@@ -301,7 +306,7 @@ describe("UpdateNotice", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByText("Open captures will close. Unsaved edits are kept as drafts."),
+        screen.queryByText("Open captures reopen after the update. Screenshot drafts are kept."),
       ).not.toBeInTheDocument();
     });
   });
