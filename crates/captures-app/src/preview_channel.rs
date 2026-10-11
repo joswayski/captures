@@ -214,6 +214,19 @@ fn ensure_previous_app_stopped() -> Result<(), String> {
     // The installed binary name is deliberately preserved across the cutover.
     // Only the first import needs this additional check: later launches use an
     // isolated profile and the native primary-instance protocol.
+    // Tauri's restart spawns the replacement before exiting. Allow that brief
+    // overlap, but never import while the previous process is still present.
+    let started = std::time::Instant::now();
+    while previous_app_running()? {
+        if started.elapsed() >= std::time::Duration::from_secs(5) {
+            return Err("Quit every other Captures app, then open Captures again to import your captures safely.".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
+}
+
+fn previous_app_running() -> Result<bool, String> {
     #[cfg(windows)]
     let output = std::process::Command::new("powershell.exe")
         .args([
@@ -247,10 +260,10 @@ fn ensure_previous_app_stopped() -> Result<(), String> {
             continue;
         }
         if pid != std::process::id() {
-            return Err("Quit every other Captures app, then open Captures again to import your captures safely.".into());
+            return Ok(true);
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 #[cfg(test)]
