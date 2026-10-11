@@ -586,6 +586,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn unread_acknowledgement_cannot_retain_the_stopped_endpoint() {
+        use interprocess::local_socket::{Stream as SyncStream, traits::Stream as _};
         use std::{
             os::windows::io::{AsHandle, AsRawHandle},
             ptr,
@@ -594,10 +595,11 @@ mod tests {
 
         let (_dir, server, name) = isolated_listener();
         let rt = runtime().unwrap();
-        let mut peer = rt.block_on(Stream::connect(name.clone())).unwrap();
-        rt.block_on(peer.write_all(&encode(&request(&["accepted.png"])).unwrap()))
+        // A synchronous peer does not eagerly drain the reply into Mio's buffer.
+        let mut peer = SyncStream::connect(name.clone()).unwrap();
+        std::io::Write::write_all(&mut peer, &encode(&request(&["accepted.png"])).unwrap())
             .unwrap();
-        let Stream::NamedPipe(pipe) = &peer;
+        let SyncStream::NamedPipe(pipe) = &peer;
         let deadline = Instant::now() + IO_DEADLINE;
         loop {
             let mut available = 0;
