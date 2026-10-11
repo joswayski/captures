@@ -1,6 +1,8 @@
 //! Installed Preview acquisition using the existing Tauri-compatible manifest.
 //! Unlike development manifests, latest.json is not itself signed. Only verified
 //! artifact bytes, including their signed version/target filename, can install.
+pub mod recovery;
+
 use super::*;
 use std::{
     fs,
@@ -107,6 +109,8 @@ struct InstallRequest {
     installation: InstallTarget,
     executable: PathBuf,
     preferences_visible: bool,
+    #[serde(default)]
+    recovery: Option<recovery::InstallationCheck>,
 }
 
 pub fn artifact_name(target: Target, version: &str) -> String {
@@ -290,6 +294,7 @@ impl Pending {
                 installation: self.installation.clone(),
                 executable: std::env::current_exe()?,
                 preferences_visible: false,
+                recovery: None,
             },
         })
     }
@@ -454,6 +459,18 @@ pub fn install(request_path: &Path) -> Result<(), Error> {
         crate::preview_channel::version().ok_or(Error::Configuration("not a Preview helper"))?;
     let key = PublicKey::decode(crate::preview_channel::public_key().ok_or(Error::Signature)?)
         .map_err(|_| Error::Signature)?;
+    install_with(request_path, current, &key, || {
+        crate::preview_channel::package_lock()
+            .map_err(|_| Error::Installation("could not open package lock"))
+    })
+}
+
+fn install_with(
+    request_path: &Path,
+    current: &str,
+    key: &PublicKey,
+    package_lock: impl FnOnce() -> Result<fs::File, Error>,
+) -> Result<(), Error> {
     let bytes = fs::read(request_path)?;
     if bytes.len() > 32 * 1024 {
         return Err(Error::Manifest);
@@ -472,14 +489,13 @@ pub fn install(request_path: &Path) -> Result<(), Error> {
     }
     let payload = fs::read(&artifact)?;
     verify(
-        &key,
+        key,
         &request.signature,
         &payload,
         request.target,
         &request.version,
     )?;
-    let lock = crate::preview_channel::package_lock()
-        .map_err(|_| Error::Installation("could not open package lock"))?;
+    let lock = package_lock()?;
     let start = std::time::Instant::now();
     loop {
         match lock.try_lock() {
@@ -498,6 +514,9 @@ pub fn install(request_path: &Path) -> Result<(), Error> {
     }
     // Use the verified in-memory bytes, not an artifact path that could change
     // between verification and installation.
+    if let Some(recovery) = &request.recovery {
+        recovery.begin(&request.installation, &request.version)?;
+    }
     match &request.installation {
         InstallTarget::Windows { executable } => {
             if request.target != Target::WindowsX64
@@ -643,16 +662,11 @@ fn launch_and_confirm(
         .create_new(true)
         .open(&ready)?;
     let token = uuid::Uuid::new_v4().to_string();
-    let profile = crate::preview_channel::profile_path().map_err(|_| Error::Package)?;
     health::write_restart_preferences(&ready, request.preferences_visible)?;
     let mut child = Command::new(executable)
         .env_remove("APPIMAGE")
         .env_remove("APPDIR")
         .arg("--live")
-        .arg("--history-root")
-        .arg(profile.join("history"))
-        .arg("--settings-file")
-        .arg(profile.join("settings.json"))
         .arg("--native-update-ready-file")
         .arg(&ready)
         .arg("--native-update-ready-token")

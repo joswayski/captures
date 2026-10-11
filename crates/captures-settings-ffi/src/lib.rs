@@ -21,6 +21,7 @@ mod region;
 mod selection;
 mod sharing;
 mod shortcuts;
+mod startup_recovery;
 mod tray_notice;
 mod update_checks;
 mod update_notice;

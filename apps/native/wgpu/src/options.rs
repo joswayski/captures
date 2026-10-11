@@ -433,8 +433,11 @@ impl Options {
                     .is_some_and(|(history, settings)| {
                         history.is_absolute() && settings.is_absolute()
                     });
+                let installed_profile = captures_app::preview_channel::version().is_some()
+                    && options.history_root.is_none()
+                    && options.settings_file.is_none();
                 if !options.live
-                    || !explicit_paths
+                    || !(explicit_paths || installed_profile)
                     || options.exercise
                     || options.floating
                     || options.scene != Scene::Preferences
@@ -443,7 +446,7 @@ impl Options {
                     || options.update_tray.is_some()
                     || options.screenshot.is_some()
                 {
-                    return Err("Native update readiness requires plain --live with explicit absolute --history-root and --settings-file".into());
+                    return Err("Native update readiness requires plain --live with the installed Preview profile or explicit absolute --history-root and --settings-file".into());
                 }
                 options.native_update_health = Some(
                     captures_app::updater::HealthAcknowledgement::new(file, token)

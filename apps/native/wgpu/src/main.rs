@@ -441,6 +441,23 @@ fn main() -> eframe::Result {
         eprintln!("{error}\n{}", options::USAGE);
         std::process::exit(2);
     });
+    // Arm a separate, renderer-free helper before profile import can fail.
+    let recovery = if options.live {
+        match captures_app::updater::preview::recovery::Startup::start(
+            options.native_update_health.clone(),
+        ) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                eprintln!("Startup recovery unavailable: {error}. Continuing launch.");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(recovery) = &recovery {
+        options.native_update_health = Some(recovery.acknowledgement.clone());
+    }
     if options.live && options.history_root.is_none() && options.settings_file.is_none() {
         match captures_app::preview_channel::startup() {
             Ok(Some(startup)) => {
@@ -471,6 +488,9 @@ fn main() -> eframe::Result {
             Ok(Launch::Primary(instance)) => Some(instance),
             Ok(Launch::Forwarded) => {
                 emit("forwarded", json!({"paths": options.open_media.len()}));
+                if let Some(recovery) = &recovery {
+                    recovery.finish();
+                }
                 return Ok(());
             }
             Err(error) => {
@@ -630,5 +650,8 @@ fn main() -> eframe::Result {
         modifiers: ModifiersState::default(),
     };
     event_loop.run_app(&mut application)?;
+    if let Some(recovery) = &recovery {
+        recovery.finish();
+    }
     Ok(())
 }
