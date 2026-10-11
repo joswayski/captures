@@ -335,7 +335,9 @@ hidden, or left out of a screenshot beside the take, New Capture brings them bac
 the screenshot shortcuts and tray items still take a screenshot. On macOS, Windows
 and X11, native Preferences can edit all seven capture and recording shortcuts;
 Wayland uses the desktop chooser described above. Recording keys on direct hosts
-open the selector without starting a take. Linux requires
+open the selector without starting a take. Native Windows shortcuts keep their
+release-triggered behavior; ordering rapid shortcuts against selection input is
+still an acceptance gap. Linux requires
 a StatusNotifier tray host; without one,
 closing the window quits instead of leaving an unreachable background process.
 Native Record creates H.264 MP4 using the stored recording defaults and supported

@@ -57,13 +57,30 @@ cancellation, membership reconciliation, session closure and explicit Retry cann
 replay discarded commands or advance ownership for rejected commands. This tests
 command ownership under a real capture gate, not a Wayland region selector: that
 feature, native/portal hardware chronology and physical compositor acceptance remain
-open. macOS and Windows transports are unchanged and unverified in this Linux orb;
-shared routing tests cover their unchanged direct-receipt policy.
+open. macOS remains unchanged; Windows ownership is refined below.
+
+Windows now assigns selector ownership when the host accepts a shortcut command,
+not when `global-hotkey`'s background release poller fires. Registration conflicts,
+release-triggered activation, suspension and Win+Shift+S takeover remain unchanged.
+This is command order, not physical shortcut-versus-pointer chronology; it does
+not remove polling or guarantee one action per rapid physical tap.
+
+A real hosted-Windows transport experiment rejected a raw-input replacement:
+registered hotkeys suppress their raw make events. `RIDEV_NOHOTKEYS` restores the
+foreground stream, but still loses makes while a different process owns focus.
+The German-layout control also confirms VK_Y and physical KeyZ differ. The
+standalone `apps/native/windows_input_probe.py --allow-input-injection --output
+result.json` diagnostic retains strict failing prerequisites; `--no-hotkeys` tests
+the rejected alternative. Run only on a disposable interactive Windows desktop.
+The dedicated Windows workflow tests command ownership by default; its explicit
+raw-input experiment remains expected to fail, not a green acceptance gate.
+[Recorded Windows counterexamples](https://github.com/joswayski/captures/actions/runs/38094936980)
+are synthetic SendInput evidence, not physical-keyboard or native-host acceptance.
 
 | Platform | Desktop-shortcuts slice implementation / verification |
 | --- | --- |
 | AppKit/macOS | Existing direct manager and local recorder retained; shared Linux adapter gated; no physical verification in this Linux orb |
-| Windows | Existing direct manager and local recorder retained; native Windows CI/physical verification remains separate |
+| Windows | Existing registrations/release transport retained; selector ownership moves to host command dispatch; raw-input replacement disproved on hosted Windows; physical chronology/acceptance remains open |
 | X11 | Existing direct registrations retained; disposable real-key/tray shortcut-editing regression passes; physical acceptance open |
 | Wayland | Portal protocol and native private-Sway input/routing/presentation exercised; physical GNOME/KDE key delivery, consent, accessibility and mixed-DPI acceptance open |
 
