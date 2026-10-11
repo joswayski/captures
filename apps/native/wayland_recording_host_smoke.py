@@ -21,6 +21,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
+from pipewire_state import pipewire_objects
 from wayland_screenshot_smoke import DESKTOP, ready, rgba, stop, wait_owner
 from x11_capture_smoke import ScreenSaver
 
@@ -577,7 +578,7 @@ def isolated(args):
         wireplumber = spawn("wireplumber", ["wireplumber"])
         wait(lambda: wireplumber.poll() is None and any(
             item.get("info", {}).get("props", {}).get("application.name") == "WirePlumber"
-            for item in json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))),
+            for item in pipewire_objects(env)),
             "WirePlumber policy")
 
         backend_config = output / "wlr.ini"

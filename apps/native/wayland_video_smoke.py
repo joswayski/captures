@@ -18,6 +18,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
+from pipewire_state import pipewire_objects
 from wayland_screenshot_smoke import DESKTOP, DESKTOP_PATH, REQUEST, ready, rgba, stop, wait_owner
 
 SCREENCAST = "org.freedesktop.portal.ScreenCast"
@@ -354,7 +355,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             assert policy.poll() is None, "Private WirePlumber exited"
-            objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+            objects = pipewire_objects(env)
             if any(item.get("info", {}).get("props", {}).get("application.name") == "WirePlumber" for item in objects):
                 break
             time.sleep(.1)
@@ -412,7 +413,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 assert probe.poll() is None, "Transform-change probe ended before streaming"
-                objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                objects = pipewire_objects(env)
                 if any(item.get("info", {}).get("state") == "running" and
                        item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
                     break
@@ -463,7 +464,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 assert probe.poll() is None, "Revocation probe ended before the stream became active"
-                objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                objects = pipewire_objects(env)
                 if any(item.get("info", {}).get("state") == "running" and
                        item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
                     break
@@ -487,7 +488,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
                     assert probe.poll() is None, "Recording ended before stream loss"
-                    objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                    objects = pipewire_objects(env)
                     if any(item.get("info", {}).get("state") == "running" and
                            item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
                         break

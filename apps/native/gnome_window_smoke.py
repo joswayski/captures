@@ -22,6 +22,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 import gi
 
+from pipewire_state import pipewire_objects
 from wayland_screenshot_smoke import DESKTOP, DESKTOP_PATH, ready, rgba, stop, wait_owner
 from wayland_video_smoke import SCREENCAST
 
@@ -251,7 +252,7 @@ def run(args, output, root, env, bus, spawn, backend, results):
             False, False, str(output / (name + ".png")), dbus_interface="org.gnome.Shell.Screenshot")
         assert success and Path(path).is_file(), path
     def idle():
-        objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+        objects = pipewire_objects(env)
         return not any(item.get("info", {}).get("props", {}).get("media.name") == "Captures portal video" for item in objects)
     def probe(name, binary, extra=(), consent=True, success=True, revoke=False):
         start = len(traffic(observer_log))
