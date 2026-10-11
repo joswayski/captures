@@ -311,11 +311,10 @@ impl CaptureFlow {
         }
         let generation = GATE.begin()?;
         let registration: Result<_, String> = (|| {
-            crate::shortcuts::install_dispatcher();
-            let manager = Rc::new(GlobalHotKeyManager::new().map_err(|e| e.to_string())?);
+            let manager = crate::shortcuts::hotkey_manager()?;
             manager
                 .register(HotKey::new(None, Code::Escape))
-                .map_err(|e| e.to_string())?;
+                .map_err(|error| format!("Could not register capture Escape: {error}"))?;
             captures_session::ensure_capture_escape_hook()?;
             captures_session::set_capture_escape_handler(Some(escape));
             captures_session::set_capture_escape_enabled(true);

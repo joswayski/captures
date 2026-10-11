@@ -284,6 +284,37 @@ pub(crate) fn install_dispatcher() {
     INSTALL.call_once(|| GlobalHotKeyEvent::set_event_handler(Some(dispatch)));
 }
 
+/// Acquire on the event-loop thread, like every registration owner. Carbon
+/// rejects installing global-hotkey's same callback twice on the application
+/// target. Keep one shared macOS manager for app shortcuts and capture Escape;
+/// a weak cache lets the last owner still release the native handler normally.
+pub(crate) fn hotkey_manager() -> Result<Rc<GlobalHotKeyManager>, String> {
+    install_dispatcher();
+    let create = || {
+        GlobalHotKeyManager::new()
+            .map(Rc::new)
+            .map_err(|error| format!("Could not initialize capture keyboard handler: {error}"))
+    };
+    #[cfg(target_os = "macos")]
+    {
+        thread_local! {
+            static MANAGER: std::cell::RefCell<std::rc::Weak<GlobalHotKeyManager>> =
+                const { std::cell::RefCell::new(std::rc::Weak::new()) };
+        }
+        MANAGER.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if let Some(manager) = slot.upgrade() {
+                return Ok(manager);
+            }
+            let manager = create()?;
+            *slot = Rc::downgrade(&manager);
+            Ok(manager)
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    create()
+}
+
 /// Win/Super+Shift+S. Explorer/Snipping Tool own it before `RegisterHotKey`
 /// on Windows, so shipping (`skip_windows_os_owned_super_shift_s`) never
 /// registers it there and a low-level hook routes the chord instead.
@@ -392,6 +423,21 @@ impl Registration for GlobalHotKeyManager {
             return Ok(());
         }
         GlobalHotKeyManager::unregister_all(self, &keys).map_err(|error| error.to_string())
+    }
+}
+
+impl Registration for Rc<GlobalHotKeyManager> {
+    fn register(&self, key: HotKey) -> Result<(), String> {
+        Registration::register(self.as_ref(), key)
+    }
+    fn unregister(&self, key: HotKey) -> Result<(), String> {
+        Registration::unregister(self.as_ref(), key)
+    }
+    fn register_all(&self, keys: &[HotKey]) -> Result<(), String> {
+        Registration::register_all(self.as_ref(), keys)
+    }
+    fn unregister_all(&self, keys: &[HotKey]) -> Result<(), String> {
+        Registration::unregister_all(self.as_ref(), keys)
     }
 }
 
@@ -553,8 +599,7 @@ impl CaptureShortcuts {
     ) -> Result<Self, String> {
         // Validate before touching OS state or claiming the singleton route.
         bindings(settings)?;
-        install_dispatcher();
-        let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
+        let manager = hotkey_manager()?;
         Self::with_input_order(
             settings,
             Box::new(manager),
