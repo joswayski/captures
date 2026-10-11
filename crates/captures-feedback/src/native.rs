@@ -9,7 +9,11 @@ pub fn context() -> FeedbackContext {
     static CONTEXT: OnceLock<FeedbackContext> = OnceLock::new();
     CONTEXT
         .get_or_init(|| FeedbackContext {
-            app_version: format!("{}-native", env!("CARGO_PKG_VERSION")),
+            // Packaging supplies the installed Preview identity to every Rust
+            // crate. Keep the workspace label only for development workbenches.
+            app_version: option_env!("CAPTURES_NATIVE_PREVIEW_VERSION")
+                .unwrap_or(concat!(env!("CARGO_PKG_VERSION"), "-native"))
+                .into(),
             os: std::env::consts::OS.into(),
             os_version: os_version(),
             arch: std::env::consts::ARCH.into(),
@@ -71,7 +75,13 @@ mod tests {
         assert_eq!(first.as_object().unwrap().len(), 4);
         assert_eq!(first["os"], std::env::consts::OS);
         assert_eq!(first["arch"], std::env::consts::ARCH);
-        assert!(first["app_version"].as_str().unwrap().ends_with("-native"));
+        match option_env!("CAPTURES_NATIVE_PREVIEW_VERSION") {
+            Some(version) => assert_eq!(first["app_version"], version),
+            None => assert_eq!(
+                first["app_version"],
+                concat!(env!("CARGO_PKG_VERSION"), "-native")
+            ),
+        }
         assert!(first["os_version"].as_str().unwrap().chars().count() <= 128);
     }
 }
