@@ -3,6 +3,7 @@ import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ThumbnailCard } from "./App";
+import { THUMBNAIL_CARD_SLOT_PX } from "./lib/thumbnailLayout";
 import type { CaptureArtifact } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -370,6 +371,8 @@ describe("ThumbnailCard", () => {
     expect(onRemoved).not.toHaveBeenCalled();
 
     await act(async () => {
+      // The stack controller has slid the survivor into the dismissed slot.
+      survivor.style.setProperty("--thumbnail-stack-shift", `${THUMBNAIL_CARD_SLOT_PX}px`);
       finishMotion?.();
       await finished;
     });

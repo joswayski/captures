@@ -161,6 +161,7 @@ import {
 import {
   animateThumbnailStackScroll,
   applyThumbnailStackGravity,
+  cancelThumbnailStackSlotRelease,
   createThumbnailStackShiftController,
   DEFAULT_MINI_PREVIEW_PLACEMENT,
   harnessOffsetForPlacement,
@@ -194,7 +195,7 @@ import {
   THUMBNAIL_STACK_CONTROL_GUTTER_PX,
   THUMBNAIL_STACK_EXPAND_COLLAPSE_MS,
   THUMBNAIL_STACK_SCROLLPORT_CLASS,
-  waitForThumbnailStackSettle,
+  waitForThumbnailStackSlotRelease,
   type ThumbnailStackAnchor,
   type ThumbnailStackSide,
 } from "./lib/thumbnailLayout";
@@ -8752,7 +8753,9 @@ export function ThumbnailCard({
     // animation is finishing. Releasing the held slot at that instant makes
     // the flex reflow race the in-flight compositor transition and visibly
     // snap. Wait for the browser's live stack transition, not a fixed estimate.
-    void waitForThumbnailStackSettle(cardRef.current)
+    // It also keeps the slot while a later exit still blocks the survivors
+    // behind it; releasing early strands them outside the shrunken stack.
+    void waitForThumbnailStackSlotRelease(cardRef.current)
       .then(() => {
         if (action === STACK_CLEAR_EXIT_ACTION) return;
         return invoke(action, { artifactId: artifact.id });
@@ -8769,6 +8772,7 @@ export function ThumbnailCard({
       })
       .catch((error) => {
         // Only unlock if remove failed — otherwise the card is gone.
+        cancelThumbnailStackSlotRelease(cardRef.current);
         exitingRef.current = false;
         onExitChange?.(artifact.id, false);
         setExit(null);

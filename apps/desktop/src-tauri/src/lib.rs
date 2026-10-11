@@ -6583,9 +6583,12 @@ fn update_thumbnail_stack_window(
     let geometry = thumbnail_window_geometry(handle, count, collapsed, origin, placement);
     let visible = window.is_visible().unwrap_or(false);
     let presented = thumbnail_window_is_presented(&window);
-    // WKWebView blanks painted cards when its visible NSWindow shrinks. macOS
-    // keeps the frame in every mode; Linux keeps it while collapsed. Precise
-    // hit testing keeps the retained empty area click-through on both platforms.
+    // WKWebView blanks painted cards when its visible NSWindow shrinks, and
+    // WebView2 presents its old frame top-aligned for a frame or two after a
+    // bottom-anchored shrink, so survivors jump down and back after a delete.
+    // macOS keeps the frame in every mode, Windows while expanded, and Linux
+    // while collapsed. Precise hit testing keeps the retained empty area
+    // click-through on every platform.
     let height = thumbnail_visible_window_height(
         geometry.height,
         visible
@@ -6661,7 +6664,9 @@ fn thumbnail_window_logical_height(window: &tauri::WebviewWindow) -> Option<f64>
 }
 
 fn thumbnail_preserve_current_height(collapsed: bool) -> bool {
-    cfg!(target_os = "macos") || (cfg!(target_os = "linux") && collapsed)
+    cfg!(target_os = "macos")
+        || (cfg!(target_os = "windows") && !collapsed)
+        || (cfg!(target_os = "linux") && collapsed)
 }
 
 fn thumbnail_webview_needs_tauri_show(is_visible: bool) -> bool {
@@ -9113,6 +9118,14 @@ mod tests {
         assert_eq!(
             thumbnail_preserve_current_height(true),
             cfg!(target_os = "macos") || cfg!(target_os = "linux")
+        );
+    }
+
+    #[test]
+    fn preserves_expanded_thumbnail_height_on_macos_and_windows() {
+        assert_eq!(
+            thumbnail_preserve_current_height(false),
+            cfg!(target_os = "macos") || cfg!(target_os = "windows")
         );
     }
 

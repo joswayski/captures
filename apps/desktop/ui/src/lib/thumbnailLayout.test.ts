@@ -78,7 +78,10 @@ import {
   THUMBNAIL_STACK_RECEDING_STEP,
   THUMBNAIL_STACK_SCROLL_DURATION_MS,
   THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS,
+  THUMBNAIL_STACK_SLOT_RELEASE_MAX_WAIT_MS,
+  thumbnailStackSlotReleaseIsSafe,
   waitForThumbnailStackSettle,
+  waitForThumbnailStackSlotRelease,
   type ThumbnailStackCardMotionState,
 } from "./thumbnailLayout";
 
@@ -2121,5 +2124,143 @@ describe("thumbnail stack layout", () => {
       stack.remove();
       vi.useRealTimers();
     }
+  });
+
+  describe("slot release", () => {
+    const slot = THUMBNAIL_CARD_SLOT_PX;
+
+    it("holds a bottom hole while a blocked survivor would leave the shrunken stack", () => {
+      // Delete the bottom card, then the middle one before the first slide:
+      // the top survivor is still in its original slot.
+      const blocked = [
+        { visible: true, shiftPx: 0 },
+        { visible: true, shiftPx: 0 },
+        { visible: false, shiftPx: 0 },
+      ];
+      expect(thumbnailStackSlotReleaseIsSafe(blocked, 2, 1)).toBe(false);
+      // Mid-settle freezes are still above the new top edge.
+      blocked[0] = { visible: true, shiftPx: slot * 0.55 };
+      expect(thumbnailStackSlotReleaseIsSafe(blocked, 2, 1)).toBe(false);
+      // Once the middle hole opens and the survivor slides both slots, release.
+      const settled = [
+        { visible: true, shiftPx: slot * 2 },
+        { visible: false, shiftPx: 0 },
+        { visible: false, shiftPx: 0 },
+      ];
+      expect(thumbnailStackSlotReleaseIsSafe(settled, 2, 1)).toBe(true);
+    });
+
+    it("lets a still-dissolving neighbor keep its slot inside the stack", () => {
+      const cards = [
+        { visible: true, shiftPx: slot * 2 },
+        { visible: true, shiftPx: 0 },
+        { visible: false, shiftPx: 0 },
+      ];
+      expect(thumbnailStackSlotReleaseIsSafe(cards, 2, 1)).toBe(true);
+    });
+
+    it("ignores cards on the anchored side of the released slot", () => {
+      const cards = [
+        { visible: false, shiftPx: 0 },
+        { visible: true, shiftPx: 0 },
+      ];
+      expect(thumbnailStackSlotReleaseIsSafe(cards, 0, 1)).toBe(true);
+    });
+
+    it("counts every slot already releasing", () => {
+      const cards = [
+        { visible: true, shiftPx: slot },
+        { visible: false, shiftPx: 0 },
+        { visible: false, shiftPx: 0 },
+      ];
+      expect(thumbnailStackSlotReleaseIsSafe(cards, 2, 1)).toBe(true);
+      expect(thumbnailStackSlotReleaseIsSafe(cards, 2, 2)).toBe(false);
+    });
+
+    it("mirrors the rule for top-anchored stacks", () => {
+      const blocked = [
+        { visible: false, shiftPx: 0 },
+        { visible: true, shiftPx: 0 },
+        { visible: true, shiftPx: 0 },
+      ];
+      expect(thumbnailStackSlotReleaseIsSafe(blocked, 0, 1, { fromTop: true })).toBe(false);
+      const settled = [
+        { visible: false, shiftPx: 0 },
+        { visible: false, shiftPx: 0 },
+        { visible: true, shiftPx: -slot * 2 },
+      ];
+      expect(thumbnailStackSlotReleaseIsSafe(settled, 0, 1, { fromTop: true })).toBe(true);
+    });
+
+    function heldDeleteStack() {
+      const stack = document.createElement("main");
+      stack.className = "thumbnail-stack";
+      const survivor = document.createElement("article");
+      survivor.className = "thumbnail-card";
+      const middle = document.createElement("article");
+      middle.className =
+        "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+      const bottom = document.createElement("article");
+      bottom.className =
+        "thumbnail-card thumbnail-exiting thumbnail-exit-delete thumbnail-exit-dust";
+      stack.append(survivor, middle, bottom);
+      document.body.append(stack);
+      return { stack, survivor, middle, bottom };
+    }
+
+    it("waits for the blocked survivor before releasing a finished delete", async () => {
+      vi.useFakeTimers();
+      const { stack, survivor, middle, bottom } = heldDeleteStack();
+      bottom.setAttribute("data-thumbnail-stack-hole", "");
+      try {
+        let released = false;
+        const wait = waitForThumbnailStackSlotRelease(bottom).then(() => {
+          released = true;
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(released).toBe(false);
+        expect(bottom.hasAttribute("data-thumbnail-stack-releasing")).toBe(false);
+
+        middle.setAttribute("data-thumbnail-stack-hole", "");
+        survivor.style.setProperty("--thumbnail-stack-shift", `${slot * 2}px`);
+        await vi.advanceTimersByTimeAsync(100);
+        await wait;
+        expect(released).toBe(true);
+        expect(bottom.hasAttribute("data-thumbnail-stack-releasing")).toBe(true);
+      } finally {
+        stack.remove();
+        vi.useRealTimers();
+      }
+    });
+
+    it("bounds the release wait", async () => {
+      vi.useFakeTimers();
+      const { stack, bottom } = heldDeleteStack();
+      try {
+        let released = false;
+        const wait = waitForThumbnailStackSlotRelease(bottom).then(() => {
+          released = true;
+        });
+        await vi.advanceTimersByTimeAsync(THUMBNAIL_STACK_SLOT_RELEASE_MAX_WAIT_MS - 100);
+        expect(released).toBe(false);
+        await vi.advanceTimersByTimeAsync(200);
+        await wait;
+        expect(released).toBe(true);
+      } finally {
+        stack.remove();
+        vi.useRealTimers();
+      }
+    });
+
+    it("releases compact stacks immediately", async () => {
+      const { stack, bottom } = heldDeleteStack();
+      stack.classList.add("thumbnail-stack-compact");
+      try {
+        await waitForThumbnailStackSlotRelease(bottom);
+        expect(bottom.hasAttribute("data-thumbnail-stack-releasing")).toBe(true);
+      } finally {
+        stack.remove();
+      }
+    });
   });
 });
