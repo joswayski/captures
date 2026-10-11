@@ -147,7 +147,9 @@ impl Instance {
             }
             // Retries are only before ANY request bytes are sent; no duplicate
             // opens on a lost acknowledgement or late primary shutdown.
-            if let Ok(Ok(mut stream)) = runtime.block_on(timeout_connect(name.clone())) {
+            if let Ok(Ok(stream)) = runtime.block_on(timeout_connect(name.clone())) {
+                let mut connection = platform::Connection(stream);
+                let stream = &mut connection.0;
                 runtime.block_on(async {
                     timeout(IO_DEADLINE, async {
                         stream.write_all(&payload).await?;
@@ -317,7 +319,9 @@ fn encode(request: &OpenRequest) -> io::Result<Vec<u8>> {
     Ok(framed)
 }
 
-async fn receive(mut stream: Stream, shared: &Arc<Mutex<Inbox>>) -> io::Result<()> {
+async fn receive(stream: Stream, shared: &Arc<Mutex<Inbox>>) -> io::Result<()> {
+    let mut connection = platform::Connection(stream);
+    let stream = &mut connection.0;
     let size = stream.read_u32().await? as usize;
     if size == 0 || size > MAX_BYTES {
         return Err(invalid("Invalid native request size"));
@@ -341,7 +345,13 @@ async fn receive(mut stream: Stream, shared: &Arc<Mutex<Inbox>>) -> io::Result<(
     if let Some(wake) = wake {
         wake();
     }
-    stream.write_all(&[reply]).await
+    stream.write_all(&[reply]).await?;
+    // Named-pipe close discards unread bytes. Keep the acknowledgement alive
+    // until the caller closes, still inside the exchange deadline/cancellation.
+    // The caller consumes the reply before closing its Connection synchronously.
+    #[cfg(windows)]
+    let _ = stream.read_u8().await;
+    Ok(())
 }
 
 fn invalid(message: &str) -> io::Error {

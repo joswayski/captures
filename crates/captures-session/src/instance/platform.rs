@@ -1,6 +1,25 @@
 use std::{io, path::PathBuf};
 
-use interprocess::local_socket::{ListenerOptions, Name};
+use interprocess::local_socket::{ListenerOptions, Name, tokio::Stream};
+
+/// An exchange cannot retain transport handles after its deadline or shutdown.
+/// On Windows interprocess otherwise moves dirty pipes into a background flush
+/// pool, which can outlive both the listener thread and the election lock.
+pub(super) struct Connection(pub(super) Stream);
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            let Stream::NamedPipe(pipe) = &self.0;
+            // Success consumes the request before acknowledging it, and keeps
+            // the reply alive until the caller closes. Cancellation/deadline
+            // intentionally abandons outstanding bytes: delivery is unknown,
+            // never retried. Do not start an uncancellable FlushFileBuffers.
+            pipe.inner().assume_flushed();
+        }
+    }
+}
 
 #[cfg(unix)]
 pub(super) fn directory() -> io::Result<PathBuf> {
