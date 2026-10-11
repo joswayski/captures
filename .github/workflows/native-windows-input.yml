@@ -4,7 +4,7 @@ name: Native Windows shortcut ownership
 # maintainer's self-hosted Windows runner. No release/cutover authority here.
 on:
   push:
-    branches: [main, native/windows-shortcut-release]
+    branches: [main]
     paths:
       - 'crates/captures-app/src/shortcuts.rs'
       - 'apps/native/windows_input_probe.py'

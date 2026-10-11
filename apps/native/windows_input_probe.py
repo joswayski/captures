@@ -155,6 +155,7 @@ def main():
     child = None
     registrations = []
     registered_raw = False
+    injection_started = False
     original_layout = user.GetKeyboardLayout(0)
     layouts = (w.HANDLE * user.GetKeyboardLayoutList(0, None))()
     user.GetKeyboardLayoutList(len(layouts), layouts)
@@ -170,11 +171,13 @@ def main():
         assert user.GetForegroundWindow() == target, "test window does not own keyboard focus"
 
     def inject(edges, scan_code=False):
+        nonlocal injection_started
         inputs = (Input * len(edges))()
         for value, (key, up) in zip(inputs, edges):
             value.kind = 1
             value.data.key = KeyInput(0 if scan_code else key, key if scan_code else 0,
                                      (8 if scan_code else 0) | (2 if up else 0), 0, 0xCA970001)
+        injection_started = True
         assert user.SendInput(len(inputs), inputs, c.sizeof(Input)) == len(inputs), c.WinError()
 
     def chord(key=0x78, modifiers=(0x11, 0x10)):
@@ -269,8 +272,14 @@ def main():
             child.terminate()
             child.wait(timeout=5)
         if not args.foreground:
-            # Every injected key is released even after an interrupted scenario.
-            inject([(key, True) for key in (0x78, 0x59, 0x10, 0x11, 0x12)])
+            # Release our input after interruption, but never release pre-held
+            # keys when the safety check rejected the desktop before injection.
+            if injection_started:
+                try:
+                    inject([(key, True) for key in (0x78, 0x59, 0x10, 0x11, 0x12)])
+                except Exception as error:
+                    result["passed"] = False
+                    result["cleanup_error"] = repr(error)
             user.ActivateKeyboardLayout(original_layout, 0)
             if loaded_layout and loaded_layout not in layouts:
                 user.UnloadKeyboardLayout(loaded_layout)
@@ -283,6 +292,7 @@ def main():
             args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         user.DestroyWindow(hwnd)
         user.UnregisterClassW(name, instance)
+    assert result["passed"], result
     print(f"PASS Windows keyboard transport: {len(result['checks'])} checks")
 
 
