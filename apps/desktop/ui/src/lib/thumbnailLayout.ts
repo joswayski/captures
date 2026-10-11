@@ -476,6 +476,17 @@ export const THUMBNAIL_STACK_MOTION_DURATION_MS = 580;
 export const THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS = THUMBNAIL_STACK_MOTION_DURATION_MS * 2 + 100;
 
 /**
+ * Bound how long a finished exit keeps its slot while a neighbor that started
+ * exiting later still blocks the survivors behind it. Covers that neighbor's
+ * full motion delay plus its settle, so cleanup is still guaranteed.
+ */
+export const THUMBNAIL_STACK_SLOT_RELEASE_MAX_WAIT_MS =
+  THUMBNAIL_DELETE_STACK_MOTION_DELAY_MS + THUMBNAIL_STACK_SETTLE_MAX_WAIT_MS;
+
+/** Re-check cadence while a finished exit waits to release its slot. */
+const THUMBNAIL_STACK_SLOT_RELEASE_POLL_MS = 48;
+
+/**
  * How long a dismiss card keeps its layout slot (visual exit + stacked settle).
  * Matches the CSS `thumbnail-dismiss` animation duration.
  */
@@ -549,6 +560,43 @@ export function resolveThumbnailStackShiftPx(
   // A removed slot can leave a frozen card behind its new layout position.
   // Keep that compensation until its own exit clears instead of snapping it.
   return Math.min(currentShiftPx, livePx);
+}
+
+export type ThumbnailStackSlotReleaseCard = {
+  /** False for exit holes and cards that are already releasing their slots. */
+  visible: boolean;
+  /** Signed translateY currently applied to the card, in CSS pixels. */
+  shiftPx: number;
+};
+
+/**
+ * Whether the held slot at `index` can leave layout without stranding a card.
+ *
+ * The stack is content-sized and pinned to its anchor, so every released slot
+ * shrinks it by one slot from the far edge, and the controller compensates
+ * survivors so they do not move. A visible card on the far side that has not
+ * yet slid toward the anchor by at least that many slots would then sit
+ * outside the stack's scroll clip (and the shrunken native window) and vanish
+ * until a later settle eased it back in. That happens when a second delete
+ * blocks the survivors behind it before the first hole's slide begins.
+ */
+export function thumbnailStackSlotReleaseIsSafe(
+  cards: readonly ThumbnailStackSlotReleaseCard[],
+  index: number,
+  releasingSlots: number,
+  options: { fromTop?: boolean } = {},
+): boolean {
+  const tolerance = 0.5 / THUMBNAIL_CARD_SLOT_PX;
+  for (let other = 0; other < cards.length; other += 1) {
+    const card = cards[other];
+    if (!card?.visible) continue;
+    if (options.fromTop ? other <= index : other >= index) continue;
+    const slotsFromFarEdge = options.fromTop
+      ? cards.length - 1 - other - card.shiftPx / THUMBNAIL_CARD_SLOT_PX
+      : other + card.shiftPx / THUMBNAIL_CARD_SLOT_PX;
+    if (slotsFromFarEdge + tolerance < releasingSlots) return false;
+  }
+  return true;
 }
 
 /** Treat a dissolving-in-place card as passable after its motion delay. */
@@ -887,6 +935,10 @@ export function animateThumbnailStackScroll(
 
 const STACK_SHIFT_VAR = "--thumbnail-stack-shift";
 const STACK_SHIFT_SLOTS_VAR = "--thumbnail-stack-shift-slots";
+/** Set by the controller once a held exit's motion delay has elapsed. */
+const STACK_HOLE_ATTR = "data-thumbnail-stack-hole";
+/** Set on a finished exit once it is cleared to leave layout. */
+const STACK_RELEASING_ATTR = "data-thumbnail-stack-releasing";
 export const THUMBNAIL_STACK_SHIFTING_CLASS = "thumbnail-stack-shifting";
 export const THUMBNAIL_STACK_SHIFT_INSTANT_CLASS = "thumbnail-stack-shift-instant";
 const STACK_SHIFTING_CLASS = THUMBNAIL_STACK_SHIFTING_CLASS;
@@ -1134,6 +1186,70 @@ export async function waitForThumbnailStackSettle(
   }
 }
 
+function thumbnailStackSlotReleaseReady(exitCard: HTMLElement): boolean {
+  const stack = exitCard.parentElement;
+  if (!stack || !isHeldLayoutExitCard(exitCard) || thumbnailStackSuppressesSlotShift(stack)) {
+    return true;
+  }
+  const cards = Array.from(stack.querySelectorAll<HTMLElement>(":scope > .thumbnail-card"));
+  const index = cards.indexOf(exitCard);
+  if (index < 0) return true;
+  let releasingSlots = 1;
+  const states = cards.map((card) => {
+    const releasing = card !== exitCard && card.hasAttribute(STACK_RELEASING_ATTR);
+    if (releasing) releasingSlots += 1;
+    return {
+      visible: card !== exitCard && !releasing && !card.hasAttribute(STACK_HOLE_ATTR),
+      // Settled first, so the stored target is the rendered offset. Computed
+      // transforms would also pick up hover lift and arrival poses.
+      shiftPx: readStackShiftPx(card),
+    };
+  });
+  return thumbnailStackSlotReleaseIsSafe(states, index, releasingSlots, {
+    fromTop: thumbnailStackShiftsFromTop(stack),
+  });
+}
+
+/**
+ * Wait until a finished held exit can leave layout: survivors have stopped
+ * moving and no visible card on the far side would be stranded outside the
+ * shrunken stack (see `thumbnailStackSlotReleaseIsSafe`). Bounded so a hidden
+ * WebView or a long chain of deletes still releases the slot.
+ */
+export async function waitForThumbnailStackSlotRelease(
+  exitCard: HTMLElement | null,
+  maxWaitMs = THUMBNAIL_STACK_SLOT_RELEASE_MAX_WAIT_MS,
+): Promise<void> {
+  if (!exitCard) return;
+  const deadline = Date.now() + Math.max(0, maxWaitMs);
+  while (exitCard.isConnected) {
+    await waitForThumbnailStackSettle(exitCard, Math.max(0, deadline - Date.now()));
+    if (!exitCard.isConnected || Date.now() >= deadline) break;
+    if (thumbnailStackSlotReleaseReady(exitCard)) break;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, THUMBNAIL_STACK_SLOT_RELEASE_POLL_MS);
+    });
+  }
+  exitCard.setAttribute(STACK_RELEASING_ATTR, "");
+}
+
+/** Undo `waitForThumbnailStackSlotRelease` when the exit is rolled back. */
+export function cancelThumbnailStackSlotRelease(exitCard: HTMLElement | null): void {
+  exitCard?.removeAttribute(STACK_RELEASING_ATTR);
+}
+
+function markThumbnailStackHoles(
+  cards: readonly HTMLElement[],
+  states: readonly ThumbnailStackCardMotionState[],
+): void {
+  cards.forEach((card, index) => {
+    const state = states[index];
+    const hole = Boolean(state?.holdsLayoutSlot && state.motionReady);
+    // Attribute writes are outside the controller's `class` observer filter.
+    if (card.hasAttribute(STACK_HOLE_ATTR) !== hole) card.toggleAttribute(STACK_HOLE_ATTR, hole);
+  });
+}
+
 /**
  * Drive multi-slot stack collapse for held-layout exits (dust delete + dismiss).
  *
@@ -1203,6 +1319,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
           currentShiftPx: readStackShiftPx(card),
         };
       });
+      markThumbnailStackHoles(cards, motionStates);
       const shifts = computeThumbnailStackShifts(motionStates, {
         fromTop: thumbnailStackShiftsFromTop(stack),
       });
@@ -1263,6 +1380,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       };
     });
 
+    markThumbnailStackHoles(cards, motionStates);
     const shifts = computeThumbnailStackShifts(motionStates, {
       fromTop,
     });
@@ -1334,6 +1452,7 @@ export function createThumbnailStackShiftController(stack: HTMLElement): () => v
       card.classList.remove(STACK_SHIFT_INSTANT_CLASS);
       clearTranslatePx(card);
       clearShiftSlots(card);
+      card.removeAttribute(STACK_HOLE_ATTR);
     }
   };
 }
