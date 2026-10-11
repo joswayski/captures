@@ -337,7 +337,13 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
         desktop = subprocess.Popen([sys.executable, __file__, "--desktop-fixture"], env=env, stdout=subprocess.PIPE, stderr=log)
         services.append(desktop)
         ready(desktop)
-        pipewire = subprocess.Popen(["pipewire"], env=env, stdout=log, stderr=log)
+        for command in (["pipewire", "--version"], ["wireplumber", "--version"], ["ldd", backend]):
+            subprocess.run(command, env=env, stdout=log, stderr=log, check=True, timeout=5)
+        # Trace the server allocation handshake, not the probes: verbose client
+        # logs can fill their stderr pipes before the parent starts reading.
+        pipewire = subprocess.Popen(["pipewire"],
+                                    env=dict(env, PIPEWIRE_DEBUG="2,pw.link:5,mod.client-node:5"),
+                                    stdout=log, stderr=log)
         services.append(pipewire)
         deadline = time.monotonic() + 8
         while not (runtime / "pipewire-0").is_socket():
