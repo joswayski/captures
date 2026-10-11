@@ -2698,6 +2698,13 @@ survives missing-root rename boundaries. Unpackaged builds do not participate.
 This guard is separate from the operation lock held through startup health, so
 the acknowledged replacement can start without waiting on its own helper.
 
+Normal host teardown explicitly unlocks its lease before closing the descriptor,
+as the operation guard already does. A concurrent Unix fork can briefly inherit
+that open-file description before exec; it must not leave a stopped host looking
+busy. Independently acquired leases still prevent replacement until their own
+hosts finish. The regression retains an inherited descriptor while checking both
+the second host's exclusion and immediate exclusive ownership after it exits.
+
 This is not automated admission: old binaries and orphaned media children are not
 represented, and executable loading precedes host code. The helper still requires
 the operator to stop every process and exclude new launches. Metadata is only
@@ -3606,6 +3613,12 @@ reclaims a stale Unix socket. Acknowledgement means queued, not successfully
 opened or durable across quit/crash. A lost acknowledgement is never retried
 automatically. Event-loop wakes replace idle polling. Accepted quit stops delivery,
 drains host workers, then releases the lock; cancelled quit retains the owner.
+Windows connections now close synchronously at that boundary rather than leaving
+dirty named-pipe handles in interprocess's background flush pool. The server keeps
+its reply until the caller closes, within the existing exchange deadline; normal
+callers consume the reply before closing. Timeout or shutdown abandons any unread
+bytes without replaying an accepted request. This avoids an unbounded blocking
+flush and preserves the protected current-user pipe permissions and wire format.
 Rust tests exercise concurrent election, cross-process sender CWD, killed-owner
 recovery, late wake registration, queue overflow, malformed/stalled peers and
 ordered delivery. AppKit and Windows include executable-level CI smoke coverage;

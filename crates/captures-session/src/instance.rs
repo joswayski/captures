@@ -147,7 +147,9 @@ impl Instance {
             }
             // Retries are only before ANY request bytes are sent; no duplicate
             // opens on a lost acknowledgement or late primary shutdown.
-            if let Ok(Ok(mut stream)) = runtime.block_on(timeout_connect(name.clone())) {
+            if let Ok(Ok(stream)) = runtime.block_on(timeout_connect(name.clone())) {
+                let mut connection = platform::Connection(stream);
+                let stream = &mut connection.0;
                 runtime.block_on(async {
                     timeout(IO_DEADLINE, async {
                         stream.write_all(&payload).await?;
@@ -317,7 +319,9 @@ fn encode(request: &OpenRequest) -> io::Result<Vec<u8>> {
     Ok(framed)
 }
 
-async fn receive(mut stream: Stream, shared: &Arc<Mutex<Inbox>>) -> io::Result<()> {
+async fn receive(stream: Stream, shared: &Arc<Mutex<Inbox>>) -> io::Result<()> {
+    let mut connection = platform::Connection(stream);
+    let stream = &mut connection.0;
     let size = stream.read_u32().await? as usize;
     if size == 0 || size > MAX_BYTES {
         return Err(invalid("Invalid native request size"));
@@ -341,7 +345,13 @@ async fn receive(mut stream: Stream, shared: &Arc<Mutex<Inbox>>) -> io::Result<(
     if let Some(wake) = wake {
         wake();
     }
-    stream.write_all(&[reply]).await
+    stream.write_all(&[reply]).await?;
+    // Named-pipe close discards unread bytes. Keep the acknowledgement alive
+    // until the caller closes, still inside the exchange deadline/cancellation.
+    // The caller consumes the reply before closing its Connection synchronously.
+    #[cfg(windows)]
+    let _ = stream.read_u8().await;
+    Ok(())
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -581,6 +591,60 @@ mod tests {
             started.elapsed() < IO_DEADLINE / 2,
             "shutdown must cancel stalled I/O"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unread_acknowledgement_cannot_retain_the_stopped_endpoint() {
+        use interprocess::local_socket::{Stream as SyncStream, traits::Stream as _};
+        use std::{
+            os::windows::io::{AsHandle, AsRawHandle},
+            ptr,
+        };
+        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+        let (_dir, server, name) = isolated_listener();
+        let rt = runtime().unwrap();
+        // A synchronous peer does not eagerly drain the reply into Mio's buffer.
+        let mut peer = SyncStream::connect(name.clone()).unwrap();
+        std::io::Write::write_all(&mut peer, &encode(&request(&["accepted.png"])).unwrap())
+            .unwrap();
+        let SyncStream::NamedPipe(pipe) = &peer;
+        let deadline = Instant::now() + IO_DEADLINE;
+        loop {
+            let mut available = 0;
+            // SAFETY: borrow a live pipe handle and a writable byte-count output.
+            // Observe the queued acknowledgement without consuming it: a dirty
+            // server stream must not outlive shutdown in a background flusher.
+            let result = unsafe {
+                PeekNamedPipe(
+                    pipe.as_handle().as_raw_handle(),
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    &mut available,
+                    ptr::null_mut(),
+                )
+            };
+            assert_ne!(result, 0, "{}", io::Error::last_os_error());
+            if available == 1 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "acknowledgement was not written");
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            server.next_request().unwrap(),
+            Some(request(&["accepted.png"]))
+        );
+        let started = Instant::now();
+        drop(server);
+        assert!(started.elapsed() < IO_DEADLINE / 2);
+        let replacement: Listener = rt
+            .block_on(async { platform::listener_options(name).unwrap().create_tokio() })
+            .expect("a stopped instance must release its endpoint even if a peer stalls");
+        drop(replacement);
+        drop(peer);
     }
 
     #[test]
