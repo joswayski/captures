@@ -6751,14 +6751,9 @@ export function ScreenshotEditor() {
                 </>
               ) : (
                 <>
-                  <DrawToolPreview
-                    tool="remove-bg"
-                    color="#ffffff"
-                    fill={null}
-                    strokeWidth={removeBgBrushSize}
+                  <BrushPreview
                     brushSize={removeBgBrushSize}
                     brushSoftness={removeBgBrushSoftness}
-                    opacity={100}
                   />
                   <label>
                     Size
@@ -7285,16 +7280,6 @@ export function ScreenshotEditor() {
                       ))}
                     </div>
                   )}
-                  <DrawToolPreview
-                    tool={tool}
-                    color={defaultStyle.color}
-                    fill={isClosedShapeTool(tool) ? defaultStyle.fill : null}
-                    strokeWidth={defaultStyle.strokeWidth}
-                    strokeEnabled={!isClosedShapeTool(tool) || defaultStyle.strokeEnabled !== false}
-                    brushSize={defaultStyle.strokeWidth}
-                    brushSoftness={0}
-                    opacity={defaultOpacity}
-                  />
                   {isClosedShapeTool(tool) && (
                     <label className="screenshot-check-row">
                       <input
@@ -8538,115 +8523,25 @@ function ShapesRailButton({
   );
 }
 
-function DrawToolPreview({
-  tool,
-  color,
-  fill,
-  strokeWidth,
-  strokeEnabled = true,
-  brushSize,
-  brushSoftness,
-  opacity,
-}: {
-  tool: ScreenshotTool;
-  color: string;
-  fill: string | null;
-  strokeWidth: number;
-  strokeEnabled?: boolean;
-  brushSize: number;
-  brushSoftness: number;
-  opacity: number;
-}) {
-  const previewStroke = strokeEnabled ? Math.max(1.75, Math.min(12, strokeWidth * 0.42)) : 0;
+function BrushPreview({ brushSize, brushSoftness }: { brushSize: number; brushSoftness: number }) {
   const brushRadius = 8 + ((brushSize - 4) / 116) * 22;
   const hardStop = Math.max(4, (1 - brushSoftness / 100) * 72);
 
   return (
     <div
-      className={[
-        "screenshot-draw-preview",
-        tool === "remove-bg" ? "screenshot-draw-preview-brush" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
+      className="screenshot-draw-preview screenshot-draw-preview-brush"
       role="img"
-      aria-label={tool === "remove-bg" ? "Brush preview" : "Stroke preview"}
+      aria-label="Brush preview"
     >
-      <svg viewBox="0 0 160 72" aria-hidden="true" style={{ opacity: opacity / 100 }}>
-        {tool === "remove-bg" ? (
-          <>
-            <defs>
-              <radialGradient id="screenshot-brush-preview-grad" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopOpacity="1" />
-                <stop offset={`${hardStop}%`} stopOpacity="1" />
-                <stop offset="100%" stopOpacity="0" />
-              </radialGradient>
-            </defs>
-            <circle cx="80" cy="36" r={brushRadius} fill="url(#screenshot-brush-preview-grad)" />
-          </>
-        ) : tool === "rectangle" ? (
-          <rect
-            x="38"
-            y="16"
-            width="84"
-            height="40"
-            rx="6"
-            fill={fill ?? "none"}
-            stroke={color}
-            strokeWidth={previewStroke}
-          />
-        ) : tool === "ellipse" ? (
-          <ellipse
-            cx="80"
-            cy="36"
-            rx="42"
-            ry="20"
-            fill={fill ?? "none"}
-            stroke={color}
-            strokeWidth={previewStroke}
-          />
-        ) : tool === "line" ? (
-          <path
-            d="M28 50 132 22"
-            fill="none"
-            stroke={color}
-            strokeWidth={previewStroke}
-            strokeLinecap="round"
-          />
-        ) : isPolygonShapeKind(tool) ? (
-          <path
-            d={editorPointsToSvgPath(
-              closedShapePolygon(tool, {
-                x: 38,
-                y: 12,
-                width: 84,
-                height: 48,
-              }),
-            )}
-            fill={fill ?? "none"}
-            stroke={color}
-            strokeWidth={previewStroke}
-            strokeLinejoin="round"
-          />
-        ) : tool === "arrow" ? (
-          <path
-            d="M30 50 118 24M104 20h18v18"
-            fill="none"
-            stroke={color}
-            strokeWidth={previewStroke}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        ) : (
-          <path
-            d="M22 48c18-28 28-32 38-12s18 16 36-16 22-8 42 8"
-            fill="none"
-            stroke={color}
-            strokeWidth={previewStroke}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
+      <svg viewBox="0 0 160 72" aria-hidden="true">
+        <defs>
+          <radialGradient id="screenshot-brush-preview-grad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopOpacity="1" />
+            <stop offset={`${hardStop}%`} stopOpacity="1" />
+            <stop offset="100%" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <circle cx="80" cy="36" r={brushRadius} fill="url(#screenshot-brush-preview-grad)" />
       </svg>
     </div>
   );

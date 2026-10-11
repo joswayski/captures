@@ -443,7 +443,7 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("button", { name: "Arrow (A)" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Shapes" }));
     expect(screen.getByRole("button", { name: "Shapes" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("img", { name: "Stroke preview" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Stroke preview" })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Filled shape" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Stroke" })).not.toBeChecked();
     expect(screen.getByRole("slider", { name: "Opacity" })).toHaveValue("100");
@@ -485,49 +485,47 @@ describe("ScreenshotEditor", () => {
     ).toBeInTheDocument();
   });
 
-  it("previews opaque fills with an optional stroke without disabling line or arrow ink", async () => {
+  it("shows drawing controls without sample artwork or adding layers when selecting tools", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
     chooseShapeTool("Rectangle (R)");
 
-    const preview = () =>
-      screen.getByRole("img", { name: "Stroke preview" }).querySelector("rect")!;
-    expect(preview()).toHaveAttribute("fill", "#ff3b5c");
-    expect(preview()).toHaveAttribute("stroke-width", "0");
+    expect(screen.queryByRole("img", { name: "Stroke preview" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Fill color: #ff3b5c" })).toHaveClass("active");
     expect(screen.queryByRole("slider", { name: "Stroke width" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Fill color: #2d9cff" }));
-    expect(preview()).toHaveAttribute("fill", "#2d9cff");
+    expect(screen.getByRole("button", { name: "Fill color: #2d9cff" })).toHaveClass("active");
     fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
     fireEvent.change(screen.getByRole("slider", { name: "Stroke width" }), {
       target: { value: "14" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Stroke color: #36c96b" }));
-    expect(preview()).toHaveAttribute("stroke", "#36c96b");
-    expect(preview()).toHaveAttribute("fill", "#2d9cff");
+    expect(screen.getByRole("button", { name: "Stroke color: #36c96b" })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "Fill color: #2d9cff" })).toHaveClass("active");
     fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
-    expect(preview()).toHaveAttribute("fill", "none");
+    expect(screen.queryByRole("group", { name: "Fill color" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "Filled shape" }));
-    expect(preview()).toHaveAttribute("fill", "#36c96b");
+    expect(screen.getByRole("button", { name: "Fill color: #36c96b" })).toHaveClass("active");
     fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
-    expect(preview()).toHaveAttribute("stroke-width", "0");
+    expect(screen.queryByRole("slider", { name: "Stroke width" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
     expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("14");
     fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
+
+    for (const key of ["r", "o", "l", "d", "s", "a", "p"]) {
+      fireEvent.keyDown(window, { key });
+      expect(screen.queryByRole("img", { name: "Stroke preview" })).not.toBeInTheDocument();
+      const layers = within(screen.getByRole("region", { name: "Layers" }));
+      expect(layers.getByText("Original screenshot")).toBeInTheDocument();
+      expect(layers.getAllByRole("listitem")).toHaveLength(1);
+      expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    }
 
     for (const key of ["l", "a", "p"]) {
       fireEvent.keyDown(window, { key });
       expect(screen.queryByRole("checkbox", { name: "Stroke" })).not.toBeInTheDocument();
       expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("14");
-      expect(
-        Number(
-          screen
-            .getByRole("img", { name: "Stroke preview" })
-            .querySelector("path")
-            ?.getAttribute("stroke-width"),
-        ),
-      ).toBeGreaterThan(0);
     }
   });
 
