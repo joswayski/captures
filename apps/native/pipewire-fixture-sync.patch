@@ -1,0 +1,12 @@
+diff --git a/src/pipewire/impl-node.c b/src/pipewire/impl-node.c
+--- a/src/pipewire/impl-node.c
++++ b/src/pipewire/impl-node.c
+@@ -1624 +1624 @@ static void node_result(void *data, int seq, int res, uint32_t type, const void *result)
+-	if (SPA_RESULT_IS_ASYNC(seq))
++	if (SPA_RESULT_IS_ASYNC(seq) && type != SPA_RESULT_TYPE_NODE_PARAMS)
+diff --git a/src/pipewire/impl-link.c b/src/pipewire/impl-link.c
+--- a/src/pipewire/impl-link.c
++++ b/src/pipewire/impl-link.c
+@@ -1056 +1056 @@ static void node_result(struct impl *impl, void *obj,
+-	if (SPA_RESULT_IS_ASYNC(seq))
++	if (SPA_RESULT_IS_ASYNC(seq) && type != SPA_RESULT_TYPE_NODE_PARAMS)

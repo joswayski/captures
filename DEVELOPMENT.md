@@ -257,7 +257,13 @@ The [Wayland video diagnostic](apps/native/wgpu/README.md#wayland-video-acquisit
 checks ScreenCast consent responses, a granted PipeWire remote and changing
 CPU-mapped pixels without X11. Its private software-rendered fixture uses a pinned
 backend with a SHM-only format-guard backport and a stream-teardown lifetime fix,
-not an installed portal replacement. Set `CAPTURES_PIPEWIRE_DEBUG=2,pw.link:5,mod.client-node:5`
+not an installed portal replacement. CI also uses a private PipeWire 1.0.5 daemon
+with a node/link sync-completion guard: parameter enumeration cannot complete a
+pending allocation. `apps/native/pipewire_sync_smoke.sh` runs deterministic
+unpatched/patched component comparisons and typed-error controls. Only that daemon
+uses private libraries; capture clients retain installed libraries and strict
+buffer validation. See the diagnostic README for stock-daemon comparison commands.
+Set `CAPTURES_PIPEWIRE_DEBUG=2,pw.link:5,mod.client-node:5`
 to collect server allocation traces on failure without filling the probes' stderr pipes.
 The recording diagnostic also exercises real MP4/GIF session finalization,
 pause/resume, restart, discard/cancel and recovery after transport loss. The

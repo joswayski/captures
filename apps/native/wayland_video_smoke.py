@@ -303,7 +303,7 @@ def recording_sessions(binary, root, env):
     return phases
 
 
-def real_video(binary, backend, root, env, recording_binary=None, screenshot_binary=None):
+def real_video(binary, backend, root, env, recording_binary=None, screenshot_binary=None, pipewire_daemon="pipewire"):
     width, height = 320, 200
     pixels = bytes(channel for y in range(height) for x in range(width)
                    for channel in ((35, 69, 103, 255) if x < 117 and y < 73 else
@@ -338,11 +338,11 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
         desktop = subprocess.Popen([sys.executable, __file__, "--desktop-fixture"], env=env, stdout=subprocess.PIPE, stderr=log)
         services.append(desktop)
         ready(desktop)
-        for command in (["pipewire", "--version"], ["wireplumber", "--version"], ["ldd", backend]):
+        for command in ([pipewire_daemon, "--version"], ["wireplumber", "--version"], ["ldd", backend], ["ldd", binary]):
             subprocess.run(command, env=env, stdout=log, stderr=log, check=True, timeout=5)
         # Trace the server allocation handshake, not the probes: verbose client
         # logs can fill their stderr pipes before the parent starts reading.
-        pipewire = subprocess.Popen(["pipewire"],
+        pipewire = subprocess.Popen([pipewire_daemon],
                                     env=dict(env, PIPEWIRE_DEBUG=env.get("CAPTURES_PIPEWIRE_DEBUG", "2")),
                                     stdout=log, stderr=log)
         services.append(pipewire)
@@ -530,6 +530,8 @@ def main():
     parser.add_argument("--screenshot-binary", type=Path, help="Also exercise window screenshot admission and real backend limits")
     parser.add_argument("--wlr-backend", type=Path, default=Path("/usr/libexec/xdg-desktop-portal-wlr"),
                         help="Private ScreenCast backend; use build_wayland_portal_fixture.sh for SHM-only desktops")
+    parser.add_argument("--pipewire-daemon", type=Path,
+                        help="Private daemon launcher from build_pipewire_fixture.sh; clients retain installed libraries")
     parser.add_argument("--fixture", help=argparse.SUPPRESS)
     parser.add_argument("--target", choices=("display", "window"), default="display", help=argparse.SUPPRESS)
     parser.add_argument("--desktop-fixture", action="store_true", help=argparse.SUPPRESS)
@@ -548,10 +550,11 @@ def main():
     recording_binary = str(args.recording_binary.resolve()) if args.recording_binary else None
     screenshot_binary = str(args.screenshot_binary.resolve()) if args.screenshot_binary else None
     backend = str(args.wlr_backend.resolve())
+    pipewire_daemon = str(args.pipewire_daemon.resolve()) if args.pipewire_daemon else "pipewire"
     if not args.isolated:
         subprocess.run(["sudo", "--preserve-env=CAPTURES_FFMPEG,CAPTURES_FFPROBE,CAPTURES_PIPEWIRE_DEBUG", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
-                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"} ${9:+--screenshot-binary "$9"}',
-                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or "", screenshot_binary or "", os.environ["PATH"]], check=True)
+                        'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"} ${9:+--screenshot-binary "$9"} ${11:+--pipewire-daemon "${11}"}',
+                        "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or "", screenshot_binary or "", os.environ["PATH"], pipewire_daemon if args.pipewire_daemon else ""], check=True)
         return
     with tempfile.TemporaryDirectory(prefix="captures-wayland-video-") as temporary:
         root = Path(temporary)
@@ -574,7 +577,7 @@ def main():
                 protocols(recording_binary, root, env, recording=True, target="window")
             if screenshot_binary:
                 protocols(screenshot_binary, root, env, target="window", screenshot=True)
-            real_video(binary, backend, root, env, recording_binary, screenshot_binary)
+            real_video(binary, backend, root, env, recording_binary, screenshot_binary, pipewire_daemon)
         finally:
             stop(daemon)
             subprocess.run(["fusermount3", "-uz", str(runtime / "doc")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

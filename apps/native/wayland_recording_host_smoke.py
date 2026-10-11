@@ -573,7 +573,7 @@ def isolated(args):
         env["WAYLAND_DISPLAY"] = sockets[0].name
         env["SWAYSOCK"] = str(wait(lambda: list(runtime.glob("sway-ipc.*.sock")), "Sway IPC")[0])
 
-        pipewire = spawn("pipewire", ["pipewire"])
+        pipewire = spawn("pipewire", [str(args.pipewire_daemon.resolve()) if args.pipewire_daemon else "pipewire"])
         wait(lambda: (runtime / "pipewire-0").is_socket(), "PipeWire socket")
         wireplumber = spawn("wireplumber", ["wireplumber"])
         wait(lambda: wireplumber.poll() is None and any(
@@ -666,6 +666,8 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--injector", type=Path, required=True)
     parser.add_argument("--wlr-backend", type=Path, required=True)
+    parser.add_argument("--pipewire-daemon", type=Path,
+                        help="Private daemon launcher from build_pipewire_fixture.sh; clients retain installed libraries")
     parser.add_argument("--output", type=Path, required=True,
                         help="new disposable directory; retained with logs, media, and screenshots")
     parser.add_argument("--isolated", action="store_true", help=argparse.SUPPRESS)
@@ -679,10 +681,11 @@ def main():
             "sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
             'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" '
             '--regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated '
-            '--binary "$6" --injector "$7" --wlr-backend "$8" --output "$9"',
+            '--binary "$6" --injector "$7" --wlr-backend "$8" --output "$9" ${11:+--pipewire-daemon "${11}"}',
             "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable,
             str(Path(__file__).resolve()), str(args.binary.resolve()), str(args.injector.resolve()),
             str(args.wlr_backend.resolve()), str(args.output.resolve()), os.environ["PATH"],
+            str(args.pipewire_daemon.resolve()) if args.pipewire_daemon else "",
         ]
         subprocess.run(command, check=True)
         return
