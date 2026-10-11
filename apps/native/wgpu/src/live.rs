@@ -1309,8 +1309,8 @@ impl MiniPreviews {
             return false;
         }
         self.trashing.remove(artifact_id);
-        self.exits.release(artifact_id, false);
-        self.exiting.remove(artifact_id);
+        // The filesystem reply does not make a viewport shrink safe. Let
+        // settle_exits release the empty slot once younger holds permit it.
         self.release_empty_stack();
         true
     }
@@ -1384,9 +1384,12 @@ impl MiniPreviews {
     fn settle_exits(&mut self, reduced_motion: bool) -> bool {
         let now = self.now_ms();
         let trashing = &self.trashing;
-        let mut changed = self
-            .exits
-            .prune_holding(now, reduced_motion, &|id| trashing.contains_key(id));
+        let mut changed = self.exits.prune_holding(
+            now,
+            reduced_motion,
+            &captures_app::preview_motion::settle_tween(),
+            &|id| trashing.contains_key(id),
+        );
         let exits = &self.exits;
         let before = self.exiting.len();
         self.exiting.retain(|id, _| exits.exiting(id).is_some());
@@ -6976,11 +6979,10 @@ impl Live {
                 },
             );
         }
-        if let Some(wait) = self
-            .previews
-            .exits
-            .next_finish_in_ms(self.previews.now_ms())
-        {
+        if let Some(wait) = self.previews.exits.next_finish_in_ms(
+            self.previews.now_ms(),
+            &captures_app::preview_motion::settle_tween(),
+        ) {
             request_hidden_root_paint(ctx);
             ctx.request_repaint_after(Duration::from_secs_f64(wait / 1000.));
         }
@@ -7024,6 +7026,10 @@ impl Live {
         let display_count = display.len().max(count);
         let settle = captures_app::preview_motion::settle_tween();
         let exits_now = self.previews.now_ms();
+        let exits_running = self
+            .previews
+            .exits
+            .running(exits_now, reduced_motion, &settle);
         let clipboard_owner = self
             .clipboard
             .current_artifact(crate::clipboard_revision::current());
@@ -7879,10 +7885,7 @@ impl Live {
                                             },
                                         );
                                     }
-                                    if exiting
-                                        .iter()
-                                        .any(|exit| exit.elapsed_ms < exit.kind.hold_ms())
-                                    {
+                                    if exits_running {
                                         // Exits and the survivor settle move
                                         // every frame until they end; a
                                         // dissolved card waiting on its Trash
@@ -12643,8 +12646,42 @@ mod tests {
         assert_eq!(previews.due_trash(true).len(), 1);
         assert!(previews.finish_trash(&id, generation));
         assert!(previews.trashing.is_empty() && !previews.cards.contains_key(&id));
+        assert!(previews.settle_exits(true));
         assert!(!previews.exiting.contains_key(&id));
         assert_eq!(previews.exits.display_ids(), previews.stack.ids());
+
+        // A successful older Trash reply must not shrink the window while a
+        // younger dust exit still holds the oldest survivor at the far edge.
+        previews.epoch -= Duration::from_secs(4);
+        let mut later = Vec::new();
+        for color in [[50, 60, 70, 255], [80, 90, 100, 255]] {
+            let artifact = preview_artifact(root.path(), color);
+            previews
+                .begin_capture(&settings, Some(preview_target()), 10)
+                .unwrap();
+            let (guard, _) = previews.start_artifact(&artifact).unwrap().unwrap();
+            previews.mark_ready(&guard.artifact_id);
+            previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture.clone());
+            later.push(guard);
+        }
+        assert!(!previews.begin_trash(&later[1].artifact_id, false));
+        previews.epoch -= Duration::from_millis(1_600);
+        assert!(!previews.begin_trash(&later[0].artifact_id, false));
+        previews.epoch -= Duration::from_millis(1_400);
+        assert_eq!(previews.due_trash(false).len(), 1);
+        assert!(previews.finish_trash(&later[1].artifact_id, later[1].generation));
+        assert!(!previews.settle_exits(false));
+        assert_eq!(
+            previews.exits.display_count(),
+            3,
+            "the reply cannot clip the survivor"
+        );
+        previews.epoch -= Duration::from_millis(1_600);
+        assert_eq!(previews.due_trash(false).len(), 1);
+        assert!(previews.finish_trash(&later[0].artifact_id, later[0].generation));
+        assert!(previews.settle_exits(false));
+        assert_eq!(previews.exits.display_ids(), previews.stack.ids());
+        assert_eq!(previews.stack.ids(), &[ids[0].0.clone()]);
         assert!(
             previews.begin_trash(&ids[0].0, true),
             "reduced motion sends at once"

@@ -264,30 +264,59 @@ impl StackExits {
         self.display.len()
     }
 
-    /// Drop exits whose hold ended. Returns whether any card left.
-    pub fn prune(&mut self, now_ms: f64, reduced_motion: bool) -> bool {
-        self.prune_holding(now_ms, reduced_motion, &|_| false)
+    /// Drop finished exits once shrinking the stack cannot clip a remaining
+    /// card. Returns whether any card left.
+    pub fn prune(&mut self, now_ms: f64, reduced_motion: bool, settle: &Tween) -> bool {
+        self.prune_holding(now_ms, reduced_motion, settle, &|_| false)
     }
 
     /// [`Self::prune`], except that finished exits `held` names keep their
     /// slot (shipping keeps a deleted card until its Trash request resolves)
-    /// until [`Self::release`].
+    /// until the host stops holding them. Failed Trash uses [`Self::release`]
+    /// with `keep_slot` to restore the card instead.
     pub fn prune_holding(
         &mut self,
         now_ms: f64,
         reduced_motion: bool,
+        settle: &Tween,
         held: &dyn Fn(&str) -> bool,
     ) -> bool {
-        let before = self.exits.len();
-        let finished: Vec<String> = self
+        let mut finished: Vec<String> = self
             .exits
             .iter()
             .filter(|(id, exit)| exit.finished(now_ms, reduced_motion) && !held(id))
             .map(|(id, _)| id.clone())
             .collect();
+        if finished.is_empty() {
+            return false;
+        }
+        // Removing N slots shrinks the far edge by N and rebases every
+        // remaining card to index + shift - N. A younger exit may still hold
+        // an older survivor at zero: preserving its screen position alone
+        // would then put it outside the smaller window/scroll clip. Limit the
+        // entire batch, not each removal separately. Finished exits are fully
+        // transparent and must not block one another (including Clear all).
+        let capacity = if reduced_motion {
+            self.display.len()
+        } else {
+            self.display
+                .iter()
+                .enumerate()
+                .filter(|(_, id)| {
+                    !self
+                        .exiting(id)
+                        .is_some_and(|exit| exit.finished(now_ms, false))
+                })
+                .map(|(index, id)| {
+                    (index as f64 + self.shift_slots(id, now_ms, false, settle)).max(0.0) as usize
+                })
+                .min()
+                .unwrap_or(self.display.len())
+        };
+        finished.truncate(capacity);
         self.exits.retain(|(id, _)| !finished.contains(id));
         self.remove_slots(&finished);
-        self.exits.len() != before
+        !finished.is_empty()
     }
 
     /// End `id`'s exit now. `keep_slot` leaves its display slot for the card
@@ -344,25 +373,24 @@ impl StackExits {
         self.shifts.clear();
     }
 
-    /// Milliseconds until the next exit ends, for hosts that schedule one
-    /// wake-up instead of polling.
-    pub fn next_finish_in_ms(&self, now_ms: f64) -> Option<f64> {
-        // A finished exit still here is held (see `prune_holding`); it waits
-        // for its host instead of a wake-up.
+    /// Milliseconds until the next exit or survivor settle ends, for hosts
+    /// that schedule one wake-up instead of polling. A finished exit waiting
+    /// only for its Trash reply needs no animation wake-up.
+    pub fn next_finish_in_ms(&self, now_ms: f64, settle: &Tween) -> Option<f64> {
         self.exits
             .iter()
             .filter(|(_, exit)| !exit.finished(now_ms, false))
             .map(|(_, exit)| (exit.kind.hold_ms() - exit.elapsed_ms(now_ms)).max(0.0))
+            .chain(self.shifts.iter().filter_map(|(_, shift)| {
+                let remaining = shift.start_ms + settle.duration_ms - now_ms;
+                (shift.from != shift.to && remaining > 0.0).then_some(remaining)
+            }))
             .reduce(f64::min)
     }
 
     /// Whether any slot is still sliding or any exit animating.
-    pub fn running(&self, now_ms: f64, reduced_motion: bool) -> bool {
-        !reduced_motion
-            && self
-                .exits
-                .iter()
-                .any(|(_, exit)| !exit.finished(now_ms, false))
+    pub fn running(&self, now_ms: f64, reduced_motion: bool, settle: &Tween) -> bool {
+        !reduced_motion && self.next_finish_in_ms(now_ms, settle).is_some()
     }
 
     /// Card slots (fractional while sliding) `id` has moved toward the stack
@@ -1277,12 +1305,12 @@ mod tests {
             exits.shift_px("a", 2_100., false, &settle, true),
             -THUMBNAIL_CARD_SLOT
         );
-        assert!(exits.running(2_000., false));
-        assert_eq!(exits.next_finish_in_ms(2_000.), Some(30.));
-        assert!(!exits.prune(2_029., false));
-        assert!(exits.prune(2_030., false));
+        assert!(exits.running(2_000., false, &settle));
+        assert_eq!(exits.next_finish_in_ms(2_000., &settle), Some(30.));
+        assert!(!exits.prune(2_029., false, &settle));
+        assert!(exits.prune(2_030., false, &settle));
         assert_eq!(exits.display_ids(), ["a", "c"]);
-        assert!(exits.is_empty() && !exits.running(2_030., false));
+        assert!(exits.is_empty() && !exits.running(2_030., false, &settle));
         assert_eq!(exits.shift_slots("a", 2_030., false, &settle), 0.);
     }
 
@@ -1295,10 +1323,10 @@ mod tests {
         assert!(exits.begin(&live, "b", ExitKind::Dust, 0., 0., true, &settle));
         let done = ExitKind::Dust.hold_ms();
         // A held exit outlives its hold without asking for a wake-up.
-        assert!(!exits.prune_holding(done, false, &|id| id == "b"));
+        assert!(!exits.prune_holding(done, false, &settle, &|id| id == "b"));
         assert!(exits.exiting("b").is_some());
-        assert_eq!(exits.next_finish_in_ms(done), None);
-        assert!(!exits.running(done, false));
+        assert_eq!(exits.next_finish_in_ms(done, &settle), None);
+        assert!(!exits.running(done, false, &settle));
         // Released for a card coming back, its slot stays in place.
         assert!(exits.release("b", true));
         exits.sync(&live);
@@ -1344,13 +1372,22 @@ mod tests {
             assert_eq!(screen_y(&exits, 2_380.), -368. * direction);
 
             let before = screen_y(&exits, 2_900.);
-            assert!(exits.prune(2_900., false));
-            assert_eq!(exits.display_ids(), ["top", "middle"]);
+            assert!(!exits.prune(2_900., false, &settle));
+            assert_eq!(exits.display_ids(), ["top", "middle", "bottom"]);
             assert_eq!(screen_y(&exits, 2_900.), before);
+            assert_eq!(
+                exits.shift_slots("top", 2_900., false, &settle),
+                0.,
+                "the survivor remains inside the held viewport, not at a negative shift"
+            );
             assert_eq!(screen_y(&exits, 3_199.), -368. * direction);
             assert!((screen_y(&exits, 3_490.) + 184. * direction).abs() < 1e-6);
+            assert!(!exits.prune(3_489., false, &settle));
+            assert!(exits.prune(3_490., false, &settle));
+            assert_eq!(exits.display_ids(), ["top", "middle"]);
+            assert!(exits.shift_slots("top", 3_490., false, &settle).abs() < 1e-6);
             assert_eq!(screen_y(&exits, 3_780.), 0.);
-            assert!(exits.prune(4_300., false));
+            assert!(exits.prune(4_300., false, &settle));
             assert_eq!(exits.display_ids(), ["top"]);
             assert_eq!(screen_y(&exits, 4_300.), 0.);
         }
@@ -1373,7 +1410,7 @@ mod tests {
                 };
                 assert!(exits.begin(&live, "bottom", ExitKind::Dust, 0., 0., true, &settle));
                 live.pop();
-                exits.prune(second_at, false);
+                exits.prune(second_at, false, &settle);
                 let before = screen_y(&exits, second_at);
                 let first_progress = ((second_at - 1_800.) / 580.).clamp(0., 1.);
                 assert!((before - (-368. + 184. * first_progress) * direction).abs() < 1e-6);
@@ -1399,15 +1436,16 @@ mod tests {
                 // the second dust, including when the first slot is pruned.
                 let held = second_at + 1_799.;
                 assert!((screen_y(&exits, held) - before).abs() < 1e-6);
-                exits.prune(held, false);
+                exits.prune(held, false, &settle);
                 assert!((screen_y(&exits, held) - before).abs() < 1e-6);
+                assert!(exits.shift_slots("top", held, false, &settle) >= 0.);
                 // The second settle covers the entire outstanding distance,
                 // not a fresh single-slot offset from the previous target.
                 let halfway = second_at + 1_800. + 290.;
                 assert!((screen_y(&exits, halfway) - before * 0.5).abs() < 1e-6);
                 let done = second_at + 2_900.;
                 assert!(screen_y(&exits, done).abs() < 1e-6);
-                assert!(exits.prune(done, false));
+                assert!(exits.prune(done, false, &settle));
                 assert_eq!(exits.display_ids(), ["top"]);
                 assert!(screen_y(&exits, done).abs() < 1e-6);
             }
@@ -1447,21 +1485,28 @@ mod tests {
                 };
                 let before = ["a", "b", "d"].map(|id| screen_y(&exits, id, 2_900.));
                 if release_after_trash {
-                    assert!(!exits.prune_holding(2_900., false, &|id| id == "c"));
-                    assert!(exits.release("c", false));
-                } else {
-                    assert!(exits.prune(2_900., false));
+                    assert!(!exits.prune_holding(2_900., false, &settle, &|id| id == "c"));
                 }
-                assert_eq!(exits.display_ids(), ["a", "b", "d"]);
+                // Even after the Trash reply, the held survivor has not moved
+                // a whole slot. Removing c would clip a at the far edge.
+                assert!(!exits.prune(2_900., false, &settle));
+                assert_eq!(exits.display_ids(), ["a", "b", "c", "d"]);
                 for (id, y) in ["a", "b", "d"].into_iter().zip(before) {
                     assert!((screen_y(&exits, id, 2_900.) - y).abs() < 1e-6, "{id}");
+                }
+                assert!((exits.exiting("b").unwrap().frozen_shift - frozen).abs() < 1e-6);
+                let before = ["a", "b", "d"].map(|id| screen_y(&exits, id, 4_090.));
+                assert!(exits.prune(4_090., false, &settle));
+                assert_eq!(exits.display_ids(), ["a", "b", "d"]);
+                for (id, y) in ["a", "b", "d"].into_iter().zip(before) {
+                    assert!((screen_y(&exits, id, 4_090.) - y).abs() < 1e-6, "{id}");
                 }
                 assert!((exits.exiting("b").unwrap().frozen_shift - (frozen - 1.)).abs() < 1e-6);
 
                 // The last held removal also swaps settled shift for layout
                 // without displacing the remaining previews.
                 let before = screen_y(&exits, "a", 4_900.);
-                assert!(exits.prune(4_900., false));
+                assert!(exits.prune(4_900., false, &settle));
                 assert_eq!(exits.display_ids(), ["a", "d"]);
                 assert!((screen_y(&exits, "a", 4_900.) - before).abs() < 1e-6);
             }
@@ -1516,7 +1561,10 @@ mod tests {
 
     #[test]
     fn batched_removal_rebases_only_exits_older_than_the_removed_slots() {
-        let settle = settle();
+        let settle = Tween {
+            duration_ms: 580.,
+            easing: CubicBezier::LINEAR,
+        };
         let mut exits = StackExits::default();
         let live = ids(&["a", "b", "c", "d", "e"]);
         for id in ["c", "d"] {
@@ -1525,18 +1573,72 @@ mod tests {
         exits.begin(&live, "b", ExitKind::Dust, 2_000., 0., true, &settle);
         exits.begin(&live, "e", ExitKind::Dust, 2_100., 0., true, &settle);
         let before = exits.exiting("b").unwrap().frozen_shift;
-        assert!(before > 0. && before < 2.);
-        assert!(exits.prune(2_900., false));
-        assert_eq!(exits.display_ids(), ["a", "b", "e"]);
-        assert_eq!(exits.exiting("b").unwrap().frozen_shift, before - 2.);
+        assert!((before - 2. * 200. / 580.).abs() < 1e-6);
+        assert!(!exits.prune(2_900., false, &settle));
+        assert_eq!(exits.display_ids(), ["a", "b", "c", "d", "e"]);
+        assert!(exits.prune(4_480., false, &settle));
+        assert_eq!(exits.display_ids(), ["a", "b", "d", "e"]);
+        assert_eq!(exits.exiting("b").unwrap().frozen_shift, before - 1.);
+        assert!(
+            !exits.prune(4_480., false, &settle),
+            "two independent one-slot releases would clip b"
+        );
         assert_eq!(exits.exiting("e").unwrap().frozen_shift, 0.);
         assert!(exits.release("b", true));
         assert_eq!(
             exits.display_ids(),
-            ["a", "b", "e"],
+            ["a", "b", "d", "e"],
             "failed Trash retains its slot"
         );
+        assert!(exits.prune(4_480., false, &settle));
+        assert_eq!(exits.display_ids(), ["a", "b", "e"]);
         assert_eq!(exits.exiting("e").unwrap().frozen_shift, 0.);
+    }
+
+    #[test]
+    fn a_younger_dust_hold_keeps_the_viewport_for_every_exit_kind() {
+        let settle = settle();
+        for (kind, second_at) in [
+            (ExitKind::Dust, 1_600.),
+            (ExitKind::Dismiss, 400.),
+            (ExitKind::DeleteFallback, 300.),
+        ] {
+            let mut exits = StackExits::default();
+            let live = ids(&["oldest", "middle", "newest"]);
+            exits.begin(&live, "newest", kind, 0., 0., true, &settle);
+            exits.begin(
+                &live[..2],
+                "middle",
+                ExitKind::Dust,
+                second_at,
+                0.,
+                true,
+                &settle,
+            );
+            assert!(!exits.prune(kind.hold_ms(), false, &settle), "{kind:?}");
+            assert_eq!(exits.display_count(), 3);
+            assert_eq!(
+                exits.shift_slots("oldest", kind.hold_ms(), false, &settle),
+                0.
+            );
+            assert!(exits.prune(second_at + DUST_HOLD_MS, false, &settle));
+            assert_eq!(exits.display_ids(), ["oldest"]);
+            assert_eq!(
+                exits.shift_slots("oldest", second_at + DUST_HOLD_MS, false, &settle),
+                0.
+            );
+        }
+        // The fallback source ends at 680 ms, before its 374 + 580 ms settle.
+        // Keep painting/waking until that last survivor reaches its slot.
+        let mut exits = StackExits::default();
+        let live = ids(&["a", "b"]);
+        exits.begin(&live, "b", ExitKind::DeleteFallback, 0., 0., true, &settle);
+        assert!(!exits.prune(680., false, &settle));
+        assert!(exits.running(680., false, &settle));
+        assert!((exits.next_finish_in_ms(680., &settle).unwrap() - 274.).abs() < 1e-6);
+        assert!(exits.prune(954., false, &settle));
+        assert_eq!(exits.display_ids(), ["a"]);
+        assert!(!exits.running(954., false, &settle));
     }
 
     #[test]
@@ -1571,8 +1673,8 @@ mod tests {
         let live = ids(&["a", "b"]);
         exits.begin(&live, "b", ExitKind::Dust, 0., 0., true, &settle);
         assert_eq!(exits.shift_slots("a", 0., true, &settle), 1.);
-        assert!(!exits.running(0., true));
-        assert!(exits.prune(0., true));
+        assert!(!exits.running(0., true, &settle));
+        assert!(exits.prune(0., true, &settle));
 
         let mut clearing = StackExits::default();
         for (index, id) in live.iter().enumerate() {
@@ -1582,13 +1684,14 @@ mod tests {
         assert_eq!(clearing.shift_slots("a", 900., false, &settle), 0.);
         assert_eq!(clearing.exiting("a").unwrap().delay_ms, 36.);
         assert_eq!(clearing.exiting("b").unwrap().delay_ms, 0.);
-        assert!(clearing.prune(1_030., false));
+        assert!(!clearing.prune(1_030., false, &settle));
         assert_eq!(
             clearing.display_ids(),
-            ["a"],
-            "the staggered card holds 36 ms longer"
+            ["a", "b"],
+            "the staggered far-edge card needs the full viewport for 36 ms longer"
         );
-        assert!(clearing.prune(1_066., false));
+        assert!(clearing.prune(1_066., false, &settle));
+        assert!(clearing.is_empty());
     }
 
     #[test]

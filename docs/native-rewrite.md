@@ -3453,8 +3453,18 @@ motion through an internal preference reader and restore it afterwards, without
 changing the runner's desktop accessibility settings. The wgpu three-card
 private-X11 probe acknowledges both exact
 artifact exits, verifies the second starts before the first settle, and compares
-survivor edge pixels through the overlapping hold at all four corners. wgpu also
-retains a revealed control's press/release eligibility when its card moves in the
+survivor edge pixels through the overlapping hold at all four corners. The probe
+now observes past the first exit's 2.9-second completion, not just its earlier
+settle deadline: wgpu retains finished slots until the whole removal batch fits
+behind every remaining visible card (`far-edge index + shift >= removed slots`).
+Trash replies use the same pruning path; filesystem Trash timing is unchanged.
+Exit/settle wake-ups continue until the viewport can shrink, including the shorter
+fallback exit, without polling once only a Trash reply remains. Clear all keeps
+the slots needed by remaining staggered exits; reduced motion still
+settles immediately. AppKit already retains its panel until the latest rebuild
+deadline and is unchanged. This is shared Windows/X11 wgpu behavior, with live
+software-X11 evidence; physical Windows/macOS and Wayland previews remain open.
+wgpu also retains a revealed control's press/release eligibility when its card moves in the
 input-consuming pass; never-revealed and busy controls remain inactive. Delete
 does not prepare unused Close streak textures. These checks do not close the
 physical-host, accessibility or performance acceptance gates.
