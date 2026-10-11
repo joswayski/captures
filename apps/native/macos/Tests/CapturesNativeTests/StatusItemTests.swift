@@ -248,6 +248,43 @@ final class StatusItemTests: XCTestCase {
             "hidden Preferences allows shortcuts")
     }
 
+    func testCaptureCanStartAndRepeatWhileGlobalShortcutsAreInstalled() throws {
+        _ = NSApplication.shared
+        XCTAssertTrue(Thread.isMainThread)
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("captures-shortcuts-\(UUID().uuidString).json").path
+        var settings = try XCTUnwrap(SettingsBridge().request([
+            "operation": "load", "path": path])["settings"] as? [String: Any])
+        // Exercise real Carbon registration without taking over macOS's
+        // screenshot keys or modifying the test user's settings.
+        for (index, field) in ["new_capture_shortcut", "region_shortcut",
+                               "window_shortcut", "display_shortcut"].enumerated() {
+            settings[field] = "Control+Alt+Shift+F\(13 + index)"
+        }
+        var recording = try XCTUnwrap(settings["recording"] as? [String: Any])
+        for (index, field) in ["video_shortcut", "window_shortcut", "display_shortcut"].enumerated() {
+            recording[field] = "Control+Alt+Shift+F\(17 + index)"
+        }
+        settings["recording"] = recording
+        var shortcuts = try NativeCaptureShortcuts(settings: settings)
+        defer { shortcuts.close() }
+
+        for attempt in 0..<3 {
+            let response = try AppBridge.flow(["operation": "begin", "seconds": 0])
+            let generation = try XCTUnwrap(response["generation"] as? NSNumber).uint64Value
+            defer { _ = try? AppBridge.flow(["operation": "finish", "generation": generation]) }
+            XCTAssertGreaterThan(generation, 0)
+            // Preferences can suspend/resume its chords without releasing
+            // capture Escape. A recreated host owner must coexist with it too.
+            try shortcuts.setSuspended(true)
+            try shortcuts.setSuspended(false)
+            if attempt == 1 {
+                shortcuts.close()
+                shortcuts = try NativeCaptureShortcuts(settings: settings)
+            }
+        }
+    }
+
     func testQuitInvocationLetsNestedRunLoopDrainMainQueueReplies() {
         _ = NSApplication.shared
         var insideCaller = false
