@@ -256,7 +256,9 @@ recording engines for development but does not select a production renderer.
 The [Wayland video diagnostic](apps/native/wgpu/README.md#wayland-video-acquisition-diagnostic)
 checks ScreenCast consent responses, a granted PipeWire remote and changing
 CPU-mapped pixels without X11. Its private software-rendered fixture uses a pinned
-backend with a SHM-only format-guard backport, not an installed portal replacement.
+backend with a SHM-only format-guard backport and a stream-teardown lifetime fix,
+not an installed portal replacement. Set `CAPTURES_PIPEWIRE_DEBUG=2,pw.link:5,mod.client-node:5`
+to collect server allocation traces on failure without filling the probes' stderr pipes.
 The recording diagnostic also exercises real MP4/GIF session finalization,
 pause/resume, restart, discard/cancel and recovery after transport loss. The
 [native Wayland recording host smoke](apps/native/wgpu/README.md#native-wayland-recording-controls)

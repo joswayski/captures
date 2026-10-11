@@ -620,9 +620,18 @@ system Python GTK/Cairo (`python3-gi-cairo`, `gir1.2-gtk-3.0`). Its pinned wlr
 0.7.1 source receives a **fixture-only SHM format-guard backport**: stock 0.7.x
 demands DMA-BUF even with a valid SHM format, while 0.8.x requires DMA-BUF during
 initialization (upstream issue #289). The later upstream constraints rewrite also
-renegotiates every frame before its follow-up fix. The helper neither installs
-the backend/service nor changes selection, consent or remote grants. This is not
-stock-backend or physical consent acceptance.
+renegotiates every frame before its follow-up fix. A second fixture-only fix keeps
+the capture target alive through PipeWire stream teardown: flushing an outstanding
+buffer synchronously invokes a Paused callback that reads the target's transform.
+Freeing the target first caused an AddressSanitizer-confirmed use-after-free and
+backend death during repeated capture/recording sessions. The helper neither
+installs the backend/service nor changes selection, consent or remote grants.
+This is not stock-backend or physical consent acceptance.
+
+`CAPTURES_PIPEWIRE_DEBUG=2,pw.link:5,mod.client-node:5` enables server-only allocation
+tracing; versions and service logs are printed on failure. Graph polling consumes
+all `pw-dump` JSON arrays, including removals during its initial snapshot, rather
+than accepting stale objects or failing when a stream disappears during polling.
 
 The smoke uses a private mount namespace, bus, Sway and PipeWire/WirePlumber with
 DISPLAY unset. Display and window protocol cases cover peer spoofs, early responses,

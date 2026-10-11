@@ -343,7 +343,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
         # Trace the server allocation handshake, not the probes: verbose client
         # logs can fill their stderr pipes before the parent starts reading.
         pipewire = subprocess.Popen(["pipewire"],
-                                    env=dict(env, PIPEWIRE_DEBUG="2,pw.link:5,mod.client-node:5"),
+                                    env=dict(env, PIPEWIRE_DEBUG=env.get("CAPTURES_PIPEWIRE_DEBUG", "2")),
                                     stdout=log, stderr=log)
         services.append(pipewire)
         deadline = time.monotonic() + 8
@@ -549,7 +549,7 @@ def main():
     screenshot_binary = str(args.screenshot_binary.resolve()) if args.screenshot_binary else None
     backend = str(args.wlr_backend.resolve())
     if not args.isolated:
-        subprocess.run(["sudo", "--preserve-env=CAPTURES_FFMPEG,CAPTURES_FFPROBE", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
+        subprocess.run(["sudo", "--preserve-env=CAPTURES_FFMPEG,CAPTURES_FFPROBE,CAPTURES_PIPEWIRE_DEBUG", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
                         'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"} ${9:+--screenshot-binary "$9"}',
                         "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or "", screenshot_binary or "", os.environ["PATH"]], check=True)
         return
