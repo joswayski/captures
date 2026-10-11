@@ -607,7 +607,7 @@ pixel dimensions or invented monitor geometry.
 
 ```sh
 cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked \
-  --bin wayland_video_probe --bin wayland_recording_probe
+  --bin wayland_video_probe --bin wayland_recording_probe --example pipewire_state
 backend="$(apps/native/build_wayland_portal_fixture.sh)"
 /usr/bin/python3 apps/native/wayland_video_smoke.py \
   --binary apps/native/wgpu/target/debug/wayland_video_probe \
@@ -629,17 +629,23 @@ installs the backend/service nor changes selection, consent or remote grants.
 This is not stock-backend or physical consent acceptance.
 
 `CAPTURES_PIPEWIRE_DEBUG=2,pw.link:5,mod.client-node:5` enables server-only allocation
-tracing; versions and service logs are printed on failure. Graph polling consumes
-all `pw-dump` JSON arrays, including removals during its initial snapshot, rather
-than accepting stale objects or failing when a stream disappears during polling.
+tracing; versions and service logs are printed on failure. Graph polling uses the
+development-only `pipewire_state` example above for node state and client properties,
+including removals during its snapshot. Unlike `pw-dump`, it never enumerates
+parameters: on PipeWire 1.0.5 those unrelated async replies can collide with the
+producer's pending allocation sync, exposing unallocated buffer skeletons to the
+consumer. The observer waits for bound info and fails on connection errors or a
+two-second deadline. It does not replace or patch the system server or capture
+client; external parameter-enumerating clients can still trigger that server bug.
+Build the same example before the recording-host or GNOME window smokes too.
 
-The teardown and graph-reader fixes do not resolve a separate intermittent
-[Ubuntu 24.04 allocation failure](https://github.com/joswayski/captures/actions/runs/38107027280):
-PipeWire 1.0.5 reports `invalid memory type 4` during buffer allocation,
-and the consumer rejects `DataType::Unknown`. Repeated source-built 1.0.5 runs pass
-in the Linux orb, but that does not establish distro or physical acceptance.
-The native Wayland CI gate remains open; invalid buffers must not be accepted or
-retried away to make this diagnostic pass.
+The [Ubuntu 24.04 failing allocation trace](https://github.com/joswayski/captures/actions/runs/38111029092/job/114386446344)
+shows the premature completion before the producer's pong, then `invalid memory
+type 4` and the consumer's `DataType::Unknown` rejection. Type 4 is the unfinalized
+MemFd mask, not a usable buffer. The state-only observer removes this diagnostic's
+parameter traffic; it is not a production PipeWire fix. Invalid buffers still fail
+capture, and no retry hides that failure. Physical compositor/GPU acceptance remains
+open regardless of the private software-rendered result.
 
 The smoke uses a private mount namespace, bus, Sway and PipeWire/WirePlumber with
 DISPLAY unset. Display and window protocol cases cover peer spoofs, early responses,

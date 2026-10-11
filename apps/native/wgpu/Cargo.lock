@@ -1074,6 +1074,7 @@ dependencies = [
  "image",
  "log",
  "moxcms",
+ "pipewire",
  "png 0.18.1",
  "rfd",
  "rustix 1.1.5",
