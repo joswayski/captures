@@ -513,8 +513,21 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("slider", { name: "Stroke width" })).toHaveValue("14");
     fireEvent.click(screen.getByRole("checkbox", { name: "Stroke" }));
 
-    for (const key of ["r", "o", "l", "d", "s", "a", "p"]) {
-      fireEvent.keyDown(window, { key });
+    for (const name of [
+      "Rectangle (R)",
+      "Ellipse (O)",
+      "Line (L)",
+      "Triangle",
+      "Diamond (D)",
+      "Star (S)",
+      "Arrow (A)",
+      "Freehand (P)",
+    ] as const) {
+      if (name === "Arrow (A)" || name === "Freehand (P)") {
+        fireEvent.click(screen.getByRole("button", { name }));
+      } else {
+        chooseShapeTool(name);
+      }
       expect(screen.queryByRole("img", { name: "Stroke preview" })).not.toBeInTheDocument();
       const layers = within(screen.getByRole("region", { name: "Layers" }));
       expect(layers.getByText("Original screenshot")).toBeInTheDocument();
