@@ -360,6 +360,7 @@ pub fn run() {
             dismiss_recording_saved_notice,
             dismiss_startup_notice,
             updates::get_update_status,
+            updates::is_installing_update,
             updates::check_for_updates,
             updates::install_update,
             updates::dismiss_update_notice,
@@ -435,7 +436,7 @@ pub fn run() {
             let update_restart = updates::take_update_restart_pending();
             let restarted_after_update = update_restart.is_some();
             crash_report::initialize(&handle, restarted_after_update);
-            let opening_files = open_media::finish_setup(&handle);
+            let opening_files = open_media::finish_setup(&handle, restarted_after_update);
             if pending_capture.is_none() {
                 let onboarding_completed =
                     app.state::<Arc<AppState>>().settings().onboarding_completed;
@@ -444,7 +445,9 @@ pub fn run() {
                     onboarding_completed,
                     launched_quietly,
                     opening_files,
-                    update_restart.is_some_and(|restart| restart.restore_preferences),
+                    update_restart
+                        .as_ref()
+                        .is_some_and(|restart| restart.restore_preferences),
                 ) {
                     #[cfg(target_os = "macos")]
                     if should_defer_macos_open_with_launch(opening_files, launched_quietly) {
@@ -455,6 +458,12 @@ pub fn run() {
                     #[cfg(not(target_os = "macos"))]
                     perform_interactive_launch(&handle, action);
                 }
+            }
+            if let Some(restart) = update_restart {
+                let app = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    updates::restore_update_captures(&app, restart).await;
+                });
             }
             if let Some(mode) = pending_capture {
                 let state = app.state::<Arc<AppState>>().inner().clone();
@@ -3488,6 +3497,7 @@ fn open_artifact_viewer(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<()> {
+    updates::ensure_capture_can_open(&app)?;
     let artifact_available = state
         .artifacts
         .lock()

@@ -4507,6 +4507,7 @@ fn recording_overlay_content_protected(app: &AppHandle) -> bool {
 }
 
 pub(crate) fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Result<(), AppError> {
+    crate::updates::ensure_capture_can_open(app).map_err(AppError::Task)?;
     let label = format!("recording-editor-{artifact_id}");
     // Opening the editor is intentional; keep Captures focused instead of
     // restoring the app that was frontmost when recording started.

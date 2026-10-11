@@ -65,10 +65,16 @@ pub(crate) fn enqueue_or_open(app: &AppHandle, paths: Vec<PathBuf>) {
     queue.pending.extend(paths);
 }
 
-/// Drain queued paths, include this process's CLI arguments, and open them.
+/// Drain queued paths and open them, including CLI arguments on ordinary launches.
 /// Returns whether any media path was handed to the editors.
-pub(crate) fn finish_setup(app: &AppHandle) -> bool {
-    let launch_paths = open_paths_from_cli_args(std::env::args(), std::env::current_dir().ok());
+pub(crate) fn finish_setup(app: &AppHandle, restarted_after_update: bool) -> bool {
+    // Restart replays the old argv. Reopening those files as a fresh OS open
+    // would discard the drafts that the update is about to restore.
+    let launch_paths = if restarted_after_update {
+        Vec::new()
+    } else {
+        open_paths_from_cli_args(std::env::args(), std::env::current_dir().ok())
+    };
     let mut queue = open_queue();
     queue.ready = true;
     let mut paths = std::mem::take(&mut queue.pending);
@@ -259,6 +265,7 @@ fn spawn_open(app: &AppHandle, paths: Vec<PathBuf>) {
 }
 
 async fn open_one(app: &AppHandle, path: PathBuf) -> Result<(), AppError> {
+    crate::updates::ensure_capture_can_open(app).map_err(AppError::Task)?;
     if !path.is_file() {
         return Err(AppError::Task(format!(
             "Captures could not find “{}”.",

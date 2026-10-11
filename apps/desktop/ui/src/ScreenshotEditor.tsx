@@ -1673,6 +1673,7 @@ function shouldUseOriginalFileSizeEstimate(
 
 export function ScreenshotEditor() {
   const artifactId = query("artifact_id");
+  const draftArtifactId = query("draft_id") ?? artifactId;
   const [artifact, setArtifact] = useState<CaptureArtifact | null>(null);
   const [editorDocument, setEditorDocument] = useState<ScreenshotDocument | null>(null);
   const documentRef = useRef<ScreenshotDocument | null>(null);
@@ -1857,6 +1858,7 @@ export function ScreenshotEditor() {
   const saveEditedImageRef = useRef<() => Promise<void>>(async () => undefined);
   /** Bumps to cancel in-flight debounced draft writes. */
   const draftSaveGenerationRef = useRef(0);
+  const draftWriteRef = useRef<Promise<void>>(Promise.resolve());
   /**
    * Image assets the backend already holds for the current draft, keyed by
    * source URL so unchanged layers are not re-encoded and re-sent every autosave.
@@ -1879,7 +1881,9 @@ export function ScreenshotEditor() {
     [forgetPersistedDraftAssets],
   );
   /** Latest flush function for the close handler (stable listener, no re-subscribe). */
-  const flushEditorDraftRef = useRef<() => Promise<void>>(async () => undefined);
+  const flushEditorDraftRef = useRef<(requireSaved?: boolean) => Promise<void>>(
+    async () => undefined,
+  );
   const objectUrlsRef = useRef(new Set<string>());
   const gestureRef = useRef<EditorGesture | null>(null);
   /** Live natural-resolution canvas drawn over the target layer during brush strokes. */
@@ -2188,7 +2192,7 @@ export function ScreenshotEditor() {
     [ensureImage],
   );
 
-  const persistEditorDraft = useCallback(
+  const writeEditorDraft = useCallback(
     async (document: ScreenshotDocument, artifactKey: string): Promise<void> => {
       if (!isScreenshotDocumentDirty(document, baselineDocumentRef.current)) {
         await discardEditorDraft(artifactKey);
@@ -2239,17 +2243,38 @@ export function ScreenshotEditor() {
     [discardEditorDraft, pngBytesForSource],
   );
 
-  const flushEditorDraft = useCallback(async (): Promise<void> => {
-    draftSaveGenerationRef.current += 1;
-    const document = documentRef.current;
-    const artifactKey = artifactId;
-    if (!document || !artifactKey) return;
-    try {
-      await persistEditorDraft(document, artifactKey);
-    } catch {
-      // Best-effort on close; a failed draft should not block quitting the editor.
-    }
-  }, [artifactId, persistEditorDraft]);
+  // The final close flush must follow every older autosave, never race it.
+  const persistEditorDraft = useCallback(
+    (document: ScreenshotDocument, artifactKey: string): Promise<void> => {
+      const writing = draftWriteRef.current
+        .catch(() => undefined)
+        .then(() => writeEditorDraft(document, artifactKey));
+      draftWriteRef.current = writing;
+      return writing;
+    },
+    [writeEditorDraft],
+  );
+
+  const flushEditorDraft = useCallback(
+    async (requireSaved = false): Promise<void> => {
+      draftSaveGenerationRef.current += 1;
+      const artifactKey = draftArtifactId;
+      if (!artifactKey) return;
+      try {
+        // A slow update flush can leave the editor interactive. Include changes
+        // made while saving before allowing the native window to disappear.
+        while (documentRef.current) {
+          const document = documentRef.current;
+          await persistEditorDraft(document, artifactKey);
+          if (!requireSaved || documentRef.current === document) return;
+        }
+      } catch (reason) {
+        // Normal close is best-effort, but an updater must not discard edits.
+        if (requireSaved) throw reason;
+      }
+    },
+    [draftArtifactId, persistEditorDraft],
+  );
 
   useLayoutEffect(() => {
     flushEditorDraftRef.current = flushEditorDraft;
@@ -2274,10 +2299,10 @@ export function ScreenshotEditor() {
     clearSuccess();
     setError("");
     draftSaveGenerationRef.current += 1;
-    void discardEditorDraft(artifact.id).catch(() => undefined);
-  }, [artifact, clearSuccess, discardEditorDraft, ensureImage, replaceDocument]);
+    if (draftArtifactId) void discardEditorDraft(draftArtifactId).catch(() => undefined);
+  }, [artifact, clearSuccess, discardEditorDraft, draftArtifactId, ensureImage, replaceDocument]);
 
-  const editorPresenceId = artifactId ? `screenshot-editor-${artifactId}` : null;
+  const editorPresenceId = draftArtifactId ? `screenshot-editor-${draftArtifactId}` : null;
   const lastEmittedPresenceRef = useRef<string[] | null>(null);
 
   const emitEditorPresence = useCallback(
@@ -2342,7 +2367,7 @@ export function ScreenshotEditor() {
       try {
         const draft = await invoke<LoadedScreenshotEditorDraft | null>(
           "load_screenshot_editor_draft",
-          { artifactId: loaded.id },
+          { artifactId: draftArtifactId },
         );
         if (
           draft &&
@@ -2383,25 +2408,25 @@ export function ScreenshotEditor() {
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
       objectUrls.clear();
     };
-  }, [artifactId, clearSuccess, ensureImage, replaceDocument]);
+  }, [artifactId, clearSuccess, draftArtifactId, ensureImage, replaceDocument]);
 
   // Autosave dirty documents so closing the window can restore the session later.
   useEffect(() => {
-    if (!artifactId || !editorDocument) return;
+    if (!draftArtifactId || !editorDocument) return;
     const generation = draftSaveGenerationRef.current + 1;
     draftSaveGenerationRef.current = generation;
     const timer = window.setTimeout(() => {
       void (async () => {
+        if (generation !== draftSaveGenerationRef.current) return;
         try {
-          await persistEditorDraft(editorDocument, artifactId);
+          await persistEditorDraft(editorDocument, draftArtifactId);
         } catch {
           // Keep editing; the next change or close flush can retry.
         }
-        if (generation !== draftSaveGenerationRef.current) return;
       })();
     }, SCREENSHOT_EDITOR_DRAFT_SAVE_MS);
     return () => window.clearTimeout(timer);
-  }, [artifactId, editorDocument, persistEditorDraft]);
+  }, [draftArtifactId, editorDocument, persistEditorDraft]);
 
   // Best-effort draft flush before the native window is destroyed.
   //
@@ -2412,16 +2437,42 @@ export function ScreenshotEditor() {
   // red traffic-light / title-bar close control looks dead while minimize and
   // zoom still work. A full dirty-draft encode (every image layer → PNG →
   // number[] IPC) can also hang long enough that close appears broken. Cap the
-  // wait so the window always closes; debounced autosave already keeps most
-  // sessions recoverable. Keep this effect dependent only on artifactId so we
+  // normal-close wait; updates instead keep a failed draft open and cancel.
+  // Keep this effect dependent only on artifactId so we
   // do not unlisten/re-listen on every render (unlisten can strand close).
   useEffect(() => {
     if (!isTauri() || !artifactId) return;
     let active = true;
     let unlisten: (() => void) | undefined;
     void getCurrentWindow()
-      .onCloseRequested(async () => {
+      .onCloseRequested(async (event) => {
         if (!active) return;
+        const updating = await invoke<boolean>("is_installing_update").catch(() => false);
+        if (updating) {
+          if (saveInFlightRef.current) {
+            event.preventDefault();
+            setError("Finish saving this screenshot before updating.");
+            return;
+          }
+          let timeout: number | undefined;
+          try {
+            await Promise.race([
+              flushEditorDraftRef.current(true),
+              new Promise<never>((_, reject) => {
+                timeout = window.setTimeout(
+                  () => reject(new Error("Draft save timed out.")),
+                  20_000,
+                );
+              }),
+            ]);
+          } catch (reason) {
+            event.preventDefault();
+            setError(`Could not save edits before updating: ${String(reason)}`);
+          } finally {
+            window.clearTimeout(timeout);
+          }
+          return;
+        }
         await Promise.race([
           flushEditorDraftRef.current(),
           new Promise<void>((resolve) => {
@@ -5042,8 +5093,8 @@ export function ScreenshotEditor() {
       draftSaveGenerationRef.current += 1;
       void discardEditorDraft(result.artifact.id).catch(() => undefined);
       // Window may still be keyed by the previous capture when Save as new file saved a new id.
-      if (artifactId && artifactId !== result.artifact.id) {
-        void discardEditorDraft(artifactId).catch(() => undefined);
+      if (draftArtifactId && draftArtifactId !== result.artifact.id) {
+        void discardEditorDraft(draftArtifactId).catch(() => undefined);
       }
       setSaved(result);
       showSuccess(

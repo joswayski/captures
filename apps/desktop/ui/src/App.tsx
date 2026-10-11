@@ -704,7 +704,11 @@ function useUpdateStatus() {
   return status;
 }
 
-const OPEN_CAPTURES_UPDATE_WARNING = "Open captures will close. Unsaved edits are kept as drafts.";
+function openCapturesUpdateWarning(installable: boolean): string {
+  return installable
+    ? "Open captures reopen after the update. Screenshot drafts are kept."
+    : "Open captures will close. Unsaved edits are kept as drafts.";
+}
 
 function UpdateDownloadFallback({ source }: { source: "notice" | "preferences" }) {
   const download = (
@@ -1044,7 +1048,7 @@ export function UpdateNotice() {
             <span className="update-close-warning-icon" aria-hidden="true">
               <WarningIcon />
             </span>
-            {OPEN_CAPTURES_UPDATE_WARNING}
+            {openCapturesUpdateWarning(available.installable)}
           </p>
         )}
 
@@ -1214,7 +1218,9 @@ function UpdatePreferences({
         )}
       </div>
       {available?.will_close_open_captures && !actionError && (
-        <p className="update-settings-warning">{OPEN_CAPTURES_UPDATE_WARNING}</p>
+        <p className="update-settings-warning">
+          {openCapturesUpdateWarning(available.installable)}
+        </p>
       )}
       {status?.state === "error" && !actionError && (
         <p className="update-settings-error" role="alert">

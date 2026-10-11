@@ -247,6 +247,11 @@ describe("ScreenshotEditor", () => {
   });
 
   it("restores a saved editor draft and can discard it", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=screenshot-editor&artifact_id=capture-1&draft_id=original-window",
+    );
     const draftDocument = createScreenshotDocument(
       "captures-capture://localhost/editor-draft/capture-1/asset-1",
       1_200,
@@ -299,7 +304,10 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByLabelText("Canvas width")).toHaveValue(1_440);
     expect(screen.queryByText("Draft note")).not.toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("discard_screenshot_editor_draft", {
-      artifactId: "capture-1",
+      artifactId: "original-window",
+    });
+    expect(invoke).toHaveBeenCalledWith("load_screenshot_editor_draft", {
+      artifactId: "original-window",
     });
   });
 
@@ -341,6 +349,79 @@ describe("ScreenshotEditor", () => {
       });
     });
   });
+
+  it.each([false, true])(
+    "waits for update draft saving and vetoes a failed save (failure=%s)",
+    async (fail) => {
+      const restore = installExportableCanvas();
+      try {
+        type CloseHandler = (event: { preventDefault: () => void }) => void | Promise<void>;
+        let closeHandler: CloseHandler | undefined;
+        vi.mocked(isTauri).mockReturnValue(true);
+        vi.mocked(getCurrentWindow).mockReturnValue({
+          onCloseRequested: async (handler: CloseHandler) => {
+            closeHandler = handler;
+            return () => undefined;
+          },
+        } as unknown as ReturnType<typeof getCurrentWindow>);
+
+        render(<ScreenshotEditor />);
+        await screen.findByLabelText("Canvas width");
+        await waitFor(() => expect(closeHandler).toBeDefined());
+        fireEvent.change(screen.getByLabelText("Canvas width"), { target: { value: "1200" } });
+        fireEvent.blur(screen.getByLabelText("Canvas width"));
+
+        let finishSave!: () => void;
+        const saving = new Promise<void>((resolve, reject) => {
+          finishSave = () => (fail ? reject(new Error("Disk full")) : resolve());
+        });
+        let savedWidth: number | undefined;
+        const previousInvoke = vi.mocked(invoke).getMockImplementation()!;
+        vi.mocked(invoke).mockImplementation((command, args, options) => {
+          if (command === "is_installing_update") return Promise.resolve(true);
+          if (command === "save_screenshot_editor_draft") {
+            return saving.then(() => {
+              savedWidth = (args as { request: { document: { width: number } } }).request.document
+                .width;
+            });
+          }
+          return previousInvoke(command, args, options);
+        });
+
+        const preventDefault = vi.fn();
+        let closed = false;
+        let closing!: Promise<void>;
+        await act(async () => {
+          closing = Promise.resolve(closeHandler!({ preventDefault })).then(() => {
+            closed = true;
+          });
+          await new Promise((resolve) => window.setTimeout(resolve, 550));
+        });
+        expect(closed).toBe(false);
+        if (!fail) {
+          fireEvent.change(screen.getByLabelText("Canvas width"), { target: { value: "800" } });
+          fireEvent.blur(screen.getByLabelText("Canvas width"));
+        }
+        await act(async () => {
+          finishSave();
+          await closing;
+        });
+        expect(closed).toBe(true);
+        if (fail) {
+          expect(preventDefault).toHaveBeenCalledOnce();
+          expect(
+            screen.getByText("Could not save edits before updating: Error: Disk full"),
+          ).toBeInTheDocument();
+          expect(screen.getByLabelText("Canvas width")).toHaveValue(1200);
+        } else {
+          expect(preventDefault).not.toHaveBeenCalled();
+          expect(savedWidth).toBe(800);
+        }
+      } finally {
+        restore();
+      }
+    },
+  );
 
   it("resolves the close handler even when draft flush never finishes", async () => {
     // Regression: awaiting an unbounded draft encode/IPC made the red X a no-op
@@ -4170,13 +4251,28 @@ describe("ScreenshotEditor", () => {
 
   it("names the destination before saving, honors the size mode, and reveals the result", async () => {
     const restoreCanvas = installExportableCanvas();
+    type CloseHandler = (event: { preventDefault: () => void }) => void | Promise<void>;
+    let closeHandler: CloseHandler | undefined;
+    let savedDraft: { artifact_id: string; document: { width: number } } | undefined;
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      onCloseRequested: async (handler: CloseHandler) => {
+        closeHandler = handler;
+        return () => undefined;
+      },
+    } as unknown as ReturnType<typeof getCurrentWindow>);
     const savedArtifact = {
       ...artifact,
       id: "capture-edited",
       path: "/Users/example/Pictures/edited-photo.png",
     };
     vi.mocked(open).mockResolvedValue("/Users/example/Pictures");
-    vi.mocked(invoke).mockImplementation(async (command) => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "is_installing_update") return true;
+      if (command === "save_screenshot_editor_draft") {
+        savedDraft = (args as { request: typeof savedDraft }).request;
+        return undefined;
+      }
       if (command === "get_artifact") return artifact;
       if (command === "save_screenshot_edit") {
         return {
@@ -4256,6 +4352,16 @@ describe("ScreenshotEditor", () => {
       expect(screen.getByRole("textbox", { name: "Saved filename" })).toHaveValue(
         "edited-photo-edited",
       );
+      // A saved copy keeps this window's own draft, separate from other editors.
+      fireEvent.change(screen.getByLabelText("Canvas width"), { target: { value: "1200" } });
+      fireEvent.blur(screen.getByLabelText("Canvas width"));
+      const preventDefault = vi.fn();
+      await act(async () => {
+        await closeHandler!({ preventDefault });
+      });
+      expect(preventDefault).not.toHaveBeenCalled();
+      expect(savedDraft?.artifact_id).toBe(artifact.id);
+      expect(savedDraft?.document.width).toBe(1200);
     } finally {
       restoreCanvas();
     }

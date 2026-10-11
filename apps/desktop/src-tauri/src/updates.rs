@@ -1,5 +1,7 @@
 use std::{
+    collections::BTreeMap,
     fs,
+    io::Write,
     path::Path,
     sync::{
         Arc,
@@ -30,7 +32,7 @@ const UPDATE_NOTICE_STATUS_HEIGHT: f64 = 56.0;
 const UPDATE_NOTICE_ERROR_HEIGHT: f64 = 96.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
-const EDITOR_CLOSE_FLUSH: Duration = Duration::from_millis(500);
+const EDITOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFER_CAPTURE_START_TIMEOUT: Duration = Duration::from_millis(1_500);
 const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(15);
 const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -100,6 +102,7 @@ pub struct UpdateCoordinator {
     notified_version: Mutex<Option<String>>,
     checking: AtomicBool,
     installing: AtomicBool,
+    closing_captures: AtomicBool,
     restoring: AtomicBool,
     deferred: AtomicBool,
 }
@@ -115,6 +118,7 @@ impl Default for UpdateCoordinator {
             notified_version: Mutex::new(None),
             checking: AtomicBool::new(false),
             installing: AtomicBool::new(false),
+            closing_captures: AtomicBool::new(false),
             restoring: AtomicBool::new(false),
             deferred: AtomicBool::new(false),
         }
@@ -179,6 +183,23 @@ pub fn install_is_active(app: &AppHandle) -> bool {
     app.state::<UpdateCoordinator>()
         .installing
         .load(Ordering::Acquire)
+}
+
+#[tauri::command]
+pub fn is_installing_update(app: AppHandle) -> bool {
+    install_is_active(&app)
+}
+
+pub fn ensure_capture_can_open(app: &AppHandle) -> Result<(), String> {
+    if app
+        .state::<UpdateCoordinator>()
+        .closing_captures
+        .load(Ordering::Acquire)
+    {
+        Err("Captures is restarting for an update. Please wait for it to reopen.".into())
+    } else {
+        Ok(())
+    }
 }
 
 pub fn defer_visible_notice(app: &AppHandle) {
@@ -412,6 +433,10 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
             installable: true,
             ..
         } | UpdateStatus::Downloading { .. }
+            | UpdateStatus::Error {
+                retry_install: true,
+                ..
+            }
     );
 
     if !installable {
@@ -432,10 +457,6 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     let Some(_install_guard) = AtomicFlagGuard::acquire(&coordinator.installing) else {
         return Err("an update is already being installed".to_owned());
     };
-    prepare_open_captures_for_update(&app, &app_state).await;
-    if let Some(message) = install_restart_blocker(&app_state) {
-        return Err(message.to_owned());
-    }
     let update = coordinator
         .pending
         .lock()
@@ -472,7 +493,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         let progress_version = progress_version.clone();
         let progress_display_version = progress_display_version.clone();
         let attempt_result = update
-            .download_and_install(
+            .download(
                 move |chunk_length, total| {
                     downloaded = downloaded.saturating_add(chunk_length as u64);
                     set_status(
@@ -491,8 +512,8 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
             )
             .await;
         match attempt_result {
-            Ok(()) => {
-                result = Ok(());
+            Ok(bytes) => {
+                result = Ok(bytes);
                 break;
             }
             Err(error) => {
@@ -509,7 +530,17 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         }
     }
 
+    // Keep captures open during the download. Windows exits inside install(),
+    // so the one-shot restoration marker must be durable before calling it.
+    let result = match result {
+        Ok(bytes) => {
+            coordinator.closing_captures.store(true, Ordering::Release);
+            install_downloaded_update(&app, &update, bytes).await
+        }
+        Err(error) => Err(error),
+    };
     if let Err(error) = result {
+        coordinator.closing_captures.store(false, Ordering::Release);
         let message = install_error_message(&error);
         set_status(
             &app,
@@ -538,25 +569,184 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     }
 
     tokio::time::sleep(RESTART_FADE_DURATION).await;
-    prepare_update_restart(&app);
+    crate::crash_report::mark_clean_exit();
     app.restart();
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateRestart {
     pub restore_preferences: bool,
+    #[serde(default)]
+    capture_windows: Vec<CaptureWindow>,
+    #[serde(default)]
+    preview_artifact_ids: Vec<String>,
+    /// Save as new file keeps the original window label but adopts a new capture.
+    #[serde(default)]
+    editor_artifact_ids: BTreeMap<String, String>,
 }
 
-fn prepare_update_restart(app: &AppHandle) {
-    let restart = UpdateRestart {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "artifact_id", rename_all = "snake_case")]
+enum CaptureWindow {
+    Viewer(String),
+    ScreenshotEditor(String),
+    RecordingEditor(String),
+}
+
+impl CaptureWindow {
+    fn from_label(label: &str) -> Option<Self> {
+        if let Some(id) = label.strip_prefix(crate::VIEWER_WINDOW_PREFIX) {
+            Some(Self::Viewer(id.to_owned()))
+        } else if let Some(id) =
+            label.strip_prefix(crate::screenshot_editor::SCREENSHOT_EDITOR_WINDOW_PREFIX)
+        {
+            Some(Self::ScreenshotEditor(id.to_owned()))
+        } else {
+            label
+                .strip_prefix(crate::RECORDING_EDITOR_WINDOW_PREFIX)
+                .map(|id| Self::RecordingEditor(id.to_owned()))
+        }
+    }
+
+    fn artifact_id(&self) -> &str {
+        match self {
+            Self::Viewer(id) | Self::ScreenshotEditor(id) | Self::RecordingEditor(id) => id,
+        }
+    }
+}
+
+fn snapshot_update_restart(app: &AppHandle) -> UpdateRestart {
+    let mut labels: Vec<_> = app.webview_windows().into_keys().collect();
+    labels.sort();
+    UpdateRestart {
         restore_preferences: app
             .get_webview_window("preferences")
             .is_some_and(|window| window.is_visible().unwrap_or(false)),
-    };
-    if let Err(error) = mark_restart_pending(&restart_marker_path(), restart) {
-        eprintln!("failed to remember update restart: {error}");
+        capture_windows: labels
+            .iter()
+            .filter_map(|label| CaptureWindow::from_label(label))
+            .collect(),
+        preview_artifact_ids: app
+            .state::<Arc<AppState>>()
+            .artifacts
+            .lock()
+            .iter()
+            .map(|artifact| artifact.id.clone())
+            .collect(),
+        editor_artifact_ids: app
+            .state::<Arc<AppState>>()
+            .editor_artifacts
+            .lock()
+            .iter()
+            .map(|(owner, artifact)| (owner.clone(), artifact.id.clone()))
+            .collect(),
     }
-    crate::crash_report::mark_clean_exit();
+}
+
+async fn install_downloaded_update(
+    app: &AppHandle,
+    update: &Update,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>();
+    if let Some(message) = install_restart_blocker(&state) {
+        return Err(message.to_owned());
+    }
+    let restart = snapshot_update_restart(app);
+    // Never knowingly close a capture which cannot be recovered from History.
+    for id in restart
+        .preview_artifact_ids
+        .iter()
+        .map(String::as_str)
+        .chain(
+            restart
+                .capture_windows
+                .iter()
+                .map(CaptureWindow::artifact_id),
+        )
+        .chain(restart.editor_artifact_ids.values().map(String::as_str))
+    {
+        if !state.history.lock().iter().any(|entry| entry.id == id) {
+            return Err(
+                "A capture is not saved in History. Save or close it before updating.".into(),
+            );
+        }
+    }
+    mark_restart_pending(&restart_marker_path(), &restart)
+        .map_err(|error| format!("Could not remember open captures; update cancelled: {error}"))?;
+    let result = match prepare_open_captures_for_update(app, &state).await {
+        Ok(()) => update.install(bytes).map_err(|error| error.to_string()),
+        Err(error) => Err(error),
+    };
+    if result.is_err() {
+        if let Err(error) = fs::remove_file(restart_marker_path()) {
+            eprintln!("failed to clear cancelled update restart: {error}");
+        }
+        app.state::<UpdateCoordinator>()
+            .closing_captures
+            .store(false, Ordering::Release);
+        restore_update_captures(app, restart).await;
+    }
+    result
+}
+
+pub async fn restore_update_captures(app: &AppHandle, restart: UpdateRestart) {
+    // Restore in stack order, then open windows. One missing/deleted capture
+    // must not prevent the remaining windows from reopening.
+    for id in restart.preview_artifact_ids {
+        if let Err(error) = crate::restore_history_artifact(app.clone(), app.state(), id).await {
+            eprintln!("failed to restore update mini preview: {error}");
+        }
+    }
+    for capture in restart.capture_windows {
+        if let Err(error) =
+            restore_capture_window(app, &capture, &restart.editor_artifact_ids).await
+        {
+            eprintln!("failed to reopen capture after update: {error}");
+        }
+    }
+}
+
+async fn restore_capture_window(
+    app: &AppHandle,
+    capture: &CaptureWindow,
+    editor_artifact_ids: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let id = if let CaptureWindow::ScreenshotEditor(owner) = capture {
+        // A vetoed close leaves the original editor intact on a failed update.
+        if crate::screenshot_editor::screenshot_editor_is_open(app, owner) {
+            return Ok(());
+        }
+        editor_artifact_ids.get(owner).unwrap_or(owner).clone()
+    } else {
+        capture.artifact_id().to_owned()
+    };
+    match capture {
+        CaptureWindow::Viewer(_) | CaptureWindow::ScreenshotEditor(_) => {
+            if app.state::<Arc<AppState>>().find_artifact(&id).is_none() {
+                crate::restore_history_artifact(app.clone(), app.state(), id.clone()).await?;
+            }
+            match capture {
+                CaptureWindow::Viewer(_) => {
+                    crate::open_artifact_viewer(app.clone(), app.state(), id)
+                }
+                _ => {
+                    let owner = capture.artifact_id();
+                    if id != owner {
+                        let state = app.state::<Arc<AppState>>();
+                        if let Some(artifact) = state.find_artifact(&id) {
+                            state.store_editor_artifact(owner, artifact);
+                        }
+                    }
+                    crate::screenshot_editor::show_screenshot_editor_with_draft(app, &id, owner)
+                        .map_err(|error| error.to_string())
+                }
+            }
+        }
+        CaptureWindow::RecordingEditor(_) => {
+            crate::recording::open_recording_editor(app.clone(), app.state(), id)
+        }
+    }
 }
 
 pub fn take_update_restart_pending() -> Option<UpdateRestart> {
@@ -569,14 +759,17 @@ pub fn take_update_restart_pending() -> Option<UpdateRestart> {
     }
 }
 
-fn mark_restart_pending(path: &Path, restart: UpdateRestart) -> std::io::Result<()> {
-    if let Some(parent) = path
+fn mark_restart_pending(path: &Path, restart: &UpdateRestart) -> std::io::Result<()> {
+    let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, serde_json::to_vec(&restart)?)
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&serde_json::to_vec(restart)?)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    Ok(())
 }
 
 fn take_restart_marker(path: &Path) -> std::io::Result<Option<UpdateRestart>> {
@@ -633,13 +826,13 @@ async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<Update
         );
     }
 
-    // Windows exits inside download_and_install, before our restart countdown.
-    // This hook runs after verification/extraction, not merely after download.
+    // Windows exits inside install(), before our restart countdown. The capture
+    // snapshot is already on disk; do not overwrite it with now-closed windows.
     let exit_app = app.clone();
     let checked = match app
         .updater_builder()
         .on_before_exit(move || {
-            prepare_update_restart(&exit_app);
+            crate::crash_report::mark_clean_exit();
             // Replacing the updater's default hook must preserve Tauri cleanup.
             exit_app.cleanup_before_exit();
         })
@@ -1332,9 +1525,6 @@ fn close_open_capture_windows(app: &AppHandle) {
             };
             if let Err(error) = window.close() {
                 eprintln!("failed to close {label} before update: {error}");
-                if let Err(error) = window.destroy() {
-                    eprintln!("failed to destroy {label} before update: {error}");
-                }
             }
         }
     }) {
@@ -1342,13 +1532,20 @@ fn close_open_capture_windows(app: &AppHandle) {
     }
 }
 
-async fn prepare_open_captures_for_update(app: &AppHandle, state: &Arc<AppState>) {
-    let should_wait_for_editors = capture_windows_are_open(app);
+async fn prepare_open_captures_for_update(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+) -> Result<(), String> {
     close_open_capture_windows(app);
     crate::dismiss_capture_ui_for_update(app, state);
-    if should_wait_for_editors {
-        tokio::time::sleep(EDITOR_CLOSE_FLUSH).await;
+    let deadline = Instant::now() + EDITOR_CLOSE_TIMEOUT;
+    while capture_windows_are_open(app) {
+        if Instant::now() >= deadline {
+            return Err("An editor could not save and close. Check its draft error, then try the update again.".into());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
+    Ok(())
 }
 
 fn install_restart_blocker(state: &AppState) -> Option<&'static str> {
@@ -1365,13 +1562,13 @@ mod tests {
     use std::{sync::atomic::AtomicBool, time::Duration};
 
     use super::{
-        AtomicFlagGuard, CHECK_INTERVAL, DOWNLOAD_ATTEMPTS, DOWNLOAD_PAGE_URL, NoticeDisposition,
-        NoticeRestorePlan, RELEASES_URL, UpdateChangelogEntry, UpdateRestart, UpdateStatus,
-        capture_window_should_close_for_update, changelog_pull_request_url, check_error_status,
-        display_version, download_error_is_retryable, download_retry_delay, install_error_message,
-        manifest_download_size, mark_restart_pending, notice_disposition, notice_restore_plan,
-        open_captures_will_close_from, release_channel_enabled, restart_blocker,
-        should_begin_deferred_restore, should_hide_update_notice_status,
+        AtomicFlagGuard, CHECK_INTERVAL, CaptureWindow, DOWNLOAD_ATTEMPTS, DOWNLOAD_PAGE_URL,
+        NoticeDisposition, NoticeRestorePlan, RELEASES_URL, UpdateChangelogEntry, UpdateRestart,
+        UpdateStatus, capture_window_should_close_for_update, changelog_pull_request_url,
+        check_error_status, display_version, download_error_is_retryable, download_retry_delay,
+        install_error_message, manifest_download_size, mark_restart_pending, notice_disposition,
+        notice_restore_plan, open_captures_will_close_from, release_channel_enabled,
+        restart_blocker, should_begin_deferred_restore, should_hide_update_notice_status,
         should_refresh_update_notice, should_wait_for_capture_start, stacked_changelog,
         take_restart_marker, tray_update_item, unsaved_mini_previews_are_open,
         update_available_menu_label, update_notice_height, version_is_newer_than,
@@ -1567,6 +1764,7 @@ mod tests {
             take_restart_marker(&marker).expect("marker should be consumed"),
             Some(UpdateRestart {
                 restore_preferences: false,
+                ..UpdateRestart::default()
             })
         );
         assert_eq!(
@@ -1576,14 +1774,21 @@ mod tests {
     }
 
     #[test]
-    fn restores_update_preferences_intent_once_for_open_and_closed_settings() {
+    fn restores_open_captures_and_preferences_once_after_update() {
         let directory = tempfile::tempdir().expect("temporary directory should exist");
         let marker = directory.path().join("profile/update-restart-pending");
         for restore_preferences in [true, false] {
             let restart = UpdateRestart {
                 restore_preferences,
+                capture_windows: vec![
+                    CaptureWindow::ScreenshotEditor("screenshot-1".into()),
+                    CaptureWindow::Viewer("screenshot-1".into()),
+                    CaptureWindow::RecordingEditor("clip-2".into()),
+                ],
+                preview_artifact_ids: vec!["screenshot-3".into(), "screenshot-1".into()],
+                editor_artifact_ids: [("screenshot-1".into(), "saved-copy-4".into())].into(),
             };
-            mark_restart_pending(&marker, restart).expect("marker should be written");
+            mark_restart_pending(&marker, &restart).expect("marker should be written");
             assert_eq!(
                 take_restart_marker(&marker).expect("marker should be consumed"),
                 Some(restart)
@@ -1592,6 +1797,46 @@ mod tests {
                 take_restart_marker(&marker).expect("consumed marker should stay absent"),
                 None
             );
+        }
+    }
+
+    #[test]
+    fn reads_preferences_only_markers_from_older_previews() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("update-restart-pending");
+        std::fs::write(&marker, br#"{"restore_preferences":true}"#).unwrap();
+        assert_eq!(
+            take_restart_marker(&marker).unwrap(),
+            Some(UpdateRestart {
+                restore_preferences: true,
+                ..UpdateRestart::default()
+            })
+        );
+    }
+
+    #[test]
+    fn remembers_each_document_kind_without_restoring_transient_capture_ui() {
+        assert_eq!(
+            CaptureWindow::from_label("viewer-shot-1"),
+            Some(CaptureWindow::Viewer("shot-1".into()))
+        );
+        assert_eq!(
+            CaptureWindow::from_label("screenshot-editor-shot-2"),
+            Some(CaptureWindow::ScreenshotEditor("shot-2".into()))
+        );
+        assert_eq!(
+            CaptureWindow::from_label("recording-editor-clip-3"),
+            Some(CaptureWindow::RecordingEditor("clip-3".into()))
+        );
+        for label in [
+            "overlay",
+            "thumbnail",
+            "recording-hud",
+            "recording-selector",
+            "update",
+            "preferences",
+        ] {
+            assert_eq!(CaptureWindow::from_label(label), None);
         }
     }
 
