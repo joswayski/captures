@@ -90,7 +90,7 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
         app = subprocess.Popen([binary, "--live", "--open-history", "--open-preferences",
                                 "--open-media", str(source),
                                 "--settings-file", str(settings), "--history-root", str(profile / "history"),
-                                "--quit-after", "8" if mode == "quit-countdown" else "20" if mode == "quit" else "60"],
+                                "--quit-after", "20" if mode == "quit" else "60"],
                                env=env, stdout=log, stderr=log)
         try:
             def shown():
@@ -155,6 +155,12 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
             assert not requests(), "portal invoked before the configured delay"
             assert set((profile / "history").glob("*/metadata.json")) == before
             if mode == "quit-countdown":
+                # Startup/renderer speed must not decide whether Quit happens
+                # before or during the countdown. Exercise the real tray action
+                # only after the countdown is visible and consent is still idle.
+                wait(lambda: watcher(bus) and watcher(bus).Get(
+                    "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"), "native tray registered")
+                menu_action(bus, "Quit Captures")
                 assert app.wait(timeout=15) == 0, "Quit must cancel before portal submission"
                 assert not requests(), "Quit during countdown requested consent"
                 assert set((profile / "history").glob("*/metadata.json")) == before
