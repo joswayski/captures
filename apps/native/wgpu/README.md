@@ -633,6 +633,14 @@ tracing; versions and service logs are printed on failure. Graph polling consume
 all `pw-dump` JSON arrays, including removals during its initial snapshot, rather
 than accepting stale objects or failing when a stream disappears during polling.
 
+The teardown and graph-reader fixes do not resolve a separate intermittent
+[Ubuntu 24.04 allocation failure](https://github.com/joswayski/captures/actions/runs/38107027280):
+PipeWire 1.0.5 reports `invalid memory type 4` during buffer allocation,
+and the consumer rejects `DataType::Unknown`. Repeated source-built 1.0.5 runs pass
+in the Linux orb, but that does not establish distro or physical acceptance.
+The native Wayland CI gate remains open; invalid buffers must not be accepted or
+retried away to make this diagnostic pass.
+
 The smoke uses a private mount namespace, bus, Sway and PipeWire/WirePlumber with
 DISPLAY unset. Display and window protocol cases cover peer spoofs, early responses,
 denial/cancellation, lost replies, legacy portals/cursors, unsupported source/cursor modes,
