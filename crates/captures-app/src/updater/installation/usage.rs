@@ -6,10 +6,19 @@ use serde::Deserialize;
 use std::{fs, io::Read, path::Path};
 
 /// Retain for the entire packaged host lifetime, independent of its profile.
-/// Closing the owned descriptor releases this host's shared lease. It is not
-/// inherited by media children and does not supervise them after a host crash.
+/// Dropping the guard explicitly releases this host's shared lease. Media children
+/// do not retain it across exec and are not supervised after a host crash.
 pub struct PackageUse {
     _lock: File,
+}
+
+impl Drop for PackageUse {
+    fn drop(&mut self) {
+        // A concurrent spawn can inherit our open-file description before exec.
+        // Closing just this descriptor would leave that host lease locked until
+        // the child execs/exits, unlike an independently acquired host lease.
+        let _ = self._lock.unlock();
+    }
 }
 
 impl PackageUse {
@@ -168,5 +177,26 @@ mod tests {
         assert!(PackageUse::acquire(root.path()).is_err());
         assert!(paths.exclusive_use().is_err());
         assert!(PackageUse::acquire(other.path()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_descriptors_do_not_extend_a_finished_host_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::for_package(root.path()).unwrap();
+        let first_host = PackageUse::acquire(root.path()).unwrap();
+        let second_host = PackageUse::acquire(root.path()).unwrap();
+        // A concurrent spawn inherits the same open-file description between
+        // fork and exec, even though the descriptor is close-on-exec.
+        let inherited = first_host._lock.try_clone().unwrap();
+        drop(first_host);
+        assert!(paths.exclusive_use().is_err());
+        drop(second_host);
+        let replacement = paths.exclusive_use().unwrap();
+        assert!(PackageUse::acquire(root.path()).is_err());
+        drop(inherited);
+        assert!(PackageUse::acquire(root.path()).is_err());
+        drop(replacement);
+        assert!(PackageUse::acquire(root.path()).is_ok());
     }
 }

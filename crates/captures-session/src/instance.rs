@@ -583,6 +583,55 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn unread_acknowledgement_cannot_retain_the_stopped_endpoint() {
+        use std::{os::windows::io::AsRawHandle, ptr};
+        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+        let (_dir, server, name) = isolated_listener();
+        let rt = runtime().unwrap();
+        let mut peer = rt.block_on(Stream::connect(name.clone())).unwrap();
+        rt.block_on(peer.write_all(&encode(&request(&["accepted.png"])).unwrap()))
+            .unwrap();
+        let Stream::NamedPipe(pipe) = &peer;
+        let deadline = Instant::now() + IO_DEADLINE;
+        loop {
+            let mut available = 0;
+            // SAFETY: borrow a live pipe handle and a writable byte-count output.
+            // Observe the queued acknowledgement without consuming it: a dirty
+            // server stream must not outlive shutdown in a background flusher.
+            let result = unsafe {
+                PeekNamedPipe(
+                    pipe.as_raw_handle(),
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                    &mut available,
+                    ptr::null_mut(),
+                )
+            };
+            assert_ne!(result, 0, "{}", io::Error::last_os_error());
+            if available == 1 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "acknowledgement was not written");
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            server.next_request().unwrap(),
+            Some(request(&["accepted.png"]))
+        );
+        let started = Instant::now();
+        drop(server);
+        assert!(started.elapsed() < IO_DEADLINE / 2);
+        let replacement: Listener = rt
+            .block_on(async { platform::listener_options(name).unwrap().create_tokio() })
+            .expect("a stopped instance must release its endpoint even if a peer stalls");
+        drop(replacement);
+        drop(peer);
+    }
+
     #[test]
     fn process_child() {
         let Some(root) = std::env::var_os("CAPTURES_INSTANCE_TEST_ROOT") else {
