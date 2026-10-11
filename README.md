@@ -59,6 +59,8 @@ Installed native copies check captur.es at launch and about every five minutes w
 
 The first native launch copies existing settings, retained capture history and screenshot drafts into a separate native Preview profile, leaving the previous profile and exports unchanged. Quit the previous app before a manual upgrade. Later native launches reuse the copy rather than importing again. The installed app and launch-at-login entry keep the Captures identity; macOS may ask to refresh permissions. Open capture windows are not automatically recreated across the native cutover: reopen captures and drafts from History. Native macOS/AppImage updates restore Preferences visibility, but not editor windows or unsaved recording trim/crop/export choices; Windows uses the installer’s relaunch flow. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained package backups and verification limits.
 
+History keeps links to previously saved files, including recordings opened from elsewhere; migration does not copy those external files. A moved or deleted recording appears as missing in History instead of preventing startup.
+
 On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow. When the tray icon's position is unavailable, including on Linux, the launch notice uses a compact, unpointed card.
 
 ## Features

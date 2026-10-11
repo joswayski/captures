@@ -29,6 +29,14 @@ validate the marker and reuse that copy. Do not launch another old or native app
 during this first import. The process check is a best-effort guard, not a lock
 honored by old Tauri versions. Development workbenches remain separate.
 
+Preview migration retains History's saved-file references, including reference-only
+recordings created by Open With. It neither reads nor copies external media; missing
+files remain missing History entries. Development imports still reject reference-only
+recordings and clear saved-file links so test workbenches cannot modify installed exports.
+If an earlier Preview exits with `Reference-only recordings must be reconciled before
+import`, install a fixed Preview over the app and retry. That failed import publishes
+no native profile; do not delete or edit the original History to work around it.
+
 macOS/AppImage native updates keep `.Captures-previous-<uuid>.app` / `.AppImage`
 next to the installed app until the replacement acknowledges renderer, settings
 and bundled FFmpeg readiness. Failure retains that backup and the private temporary
