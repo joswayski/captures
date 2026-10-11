@@ -72,8 +72,8 @@ struct Binding {
 }
 type Bindings = BTreeMap<u32, Binding>;
 
-/// Input ownership at native receipt, or host dispatch for portal commands.
-/// Portal timestamps have an undefined base, not native-input chronology.
+/// Input ownership at native receipt, or host dispatch for asynchronous commands.
+/// Portal timestamps and Windows release pollers are not native-input chronology.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelectorInputScope {
     pub generation: u64,
@@ -123,16 +123,31 @@ fn bindings(settings: &AppSettings) -> Result<Bindings, String> {
 enum InputOrder {
     #[default]
     NativeReceipt,
-    #[cfg(target_os = "linux")]
-    PortalDispatch,
+    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    CommandDispatch,
+}
+
+impl InputOrder {
+    fn direct_manager() -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            // global-hotkey synthesizes release callbacks on polling threads,
+            // not the window input queue. Never stamp selector input there.
+            Self::CommandDispatch
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Self::NativeReceipt
+        }
+    }
 }
 
 #[derive(Default)]
 struct Routes {
     bindings: Bindings,
     armed: BTreeSet<u32>,
-    // Only native-queue events have a receipt revision. Portal commands gain
-    // one when the event-loop owner takes them, never on the D-Bus worker.
+    // Only native-queue events have a receipt revision. Asynchronous commands
+    // gain one when the event-loop owner takes them, never on a worker.
     pending: VecDeque<(CaptureShortcut, Option<u64>)>,
     input_order: InputOrder,
     input_revision: u64,
@@ -228,8 +243,8 @@ impl Routes {
                     let action = binding.action;
                     let revision = match self.input_order {
                         InputOrder::NativeReceipt => Some(self.advance_input_revision()),
-                        #[cfg(target_os = "linux")]
-                        InputOrder::PortalDispatch => None,
+                        #[cfg(any(target_os = "linux", target_os = "windows", test))]
+                        InputOrder::CommandDispatch => None,
                     };
                     self.pending.push_back((action, revision));
                     !self.suspended
@@ -540,7 +555,12 @@ impl CaptureShortcuts {
         bindings(settings)?;
         install_dispatcher();
         let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
-        Self::with_registration(settings, Box::new(manager), wake)
+        Self::with_input_order(
+            settings,
+            Box::new(manager),
+            InputOrder::direct_manager(),
+            wake,
+        )
     }
 
     /// Use the native host's input transport instead of a second event queue.
@@ -549,9 +569,18 @@ impl CaptureShortcuts {
         manager: Box<dyn Registration>,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<Self, String> {
+        Self::with_input_order(settings, manager, InputOrder::NativeReceipt, wake)
+    }
+
+    fn with_input_order(
+        settings: &AppSettings,
+        manager: Box<dyn Registration>,
+        input_order: InputOrder,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self, String> {
         bindings(settings)?;
         install_dispatcher();
-        let dispatcher = Self::claim_dispatcher(InputOrder::NativeReceipt, wake)?;
+        let dispatcher = Self::claim_dispatcher(input_order, wake)?;
         let mut shortcuts = Self {
             backend: Backend::Direct(manager),
             dispatcher,
@@ -574,7 +603,7 @@ impl CaptureShortcuts {
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<Self, String> {
         let desired = bindings(settings)?;
-        let dispatcher = Self::claim_dispatcher(InputOrder::PortalDispatch, wake)?;
+        let dispatcher = Self::claim_dispatcher(InputOrder::CommandDispatch, wake)?;
         let worker = portal::Worker::start(desired.clone(), dispatcher.clone());
         let shortcuts = Self {
             backend: Backend::Portal(worker),
@@ -749,7 +778,7 @@ impl CaptureShortcuts {
             let action = if allowed {
                 routes.pop_pending()
             } else {
-                // A capture/session can end between portal receipt and host
+                // A capture/session can end between command receipt and host
                 // dispatch. Rejected commands never acquire input ownership.
                 routes.pending.pop_front();
                 None
@@ -1118,6 +1147,60 @@ mod tests {
         routes.event(new_capture, HotKeyState::Pressed, false);
         assert!(routes.event(new_capture, HotKeyState::Released, false));
         assert_eq!(routes.pop_pending(), Some(CaptureShortcut::NewCapture));
+    }
+
+    #[test]
+    fn asynchronous_commands_acquire_scope_at_dispatch_not_worker_receipt() {
+        for (input_order, deferred) in [
+            (InputOrder::CommandDispatch, true),
+            (InputOrder::direct_manager(), cfg!(target_os = "windows")),
+        ] {
+            let mut routes = Routes {
+                bindings: bindings(&settings()).unwrap(),
+                input_order,
+                enabled: true,
+                ..Routes::default()
+            };
+            routes.set_selector_generation(Some(17));
+            let display = "Control+Shift+3".parse::<HotKey>().unwrap().id();
+            let window = "Control+Shift+2".parse::<HotKey>().unwrap().id();
+            for key in [display, window, display] {
+                routes.event(key, HotKeyState::Pressed, false);
+                assert!(routes.event(key, HotKeyState::Released, false));
+            }
+            let before_dispatch = routes.input_scope().unwrap();
+            assert_eq!(before_dispatch.revision, if deferred { 0 } else { 3 });
+            assert_eq!(routes.applied_input_revision, 0);
+            for (index, action) in [
+                CaptureShortcut::Display,
+                CaptureShortcut::Window,
+                CaptureShortcut::Display,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_eq!(routes.pop_pending(), Some(action));
+                let accepted = index as u64 + 1;
+                assert_eq!(routes.applied_input_revision, accepted);
+                assert_eq!(
+                    routes.input_scope().unwrap().revision,
+                    if deferred { accepted } else { 3 }
+                );
+            }
+            // Held/queued commands discarded on replacement cannot acquire
+            // the next selector's scope or retroactively alter earlier input.
+            routes.event(display, HotKeyState::Pressed, false);
+            routes.event(display, HotKeyState::Released, false);
+            routes.event(window, HotKeyState::Pressed, false);
+            routes.set_selector_generation(Some(23));
+            assert!(!routes.event(window, HotKeyState::Released, false));
+            assert_eq!(routes.pop_pending(), None);
+            assert_eq!(routes.input_scope().unwrap().revision, 0);
+            routes.event(display, HotKeyState::Pressed, false);
+            assert!(!routes.event(display, HotKeyState::Released, true));
+            assert_eq!(routes.pop_pending(), None);
+            assert_eq!(routes.input_scope().unwrap().revision, 0);
+        }
     }
 
     #[derive(Default)]
