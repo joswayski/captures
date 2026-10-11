@@ -1,5 +1,5 @@
-//! Signed native development checks and opt-in acquisition/installation intent.
-//! Replacement belongs to the external development supervisor, not this bridge.
+//! Native update checks and explicit verified acquisition/installation intent.
+//! Replacement belongs to the external supervisor or installed Preview helper.
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -21,23 +21,39 @@ pub struct CapturesUpdateChecks {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Configuration {
-    endpoint: String,
-    key_file: PathBuf,
+    endpoint: Option<String>,
+    key_file: Option<PathBuf>,
     renderer: Renderer,
-    current_version: String,
+    current_version: Option<String>,
     staging_directory: Option<PathBuf>,
     base_archive: Option<PathBuf>,
     #[serde(default)]
     install_request: bool,
+    #[serde(default)]
+    preview: bool,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
-    Check { show_changelog: Option<bool> },
-    Poll { show_changelog: Option<bool> },
-    DownloadVerify { show_changelog: Option<bool> },
-    CancelDownload { show_changelog: Option<bool> },
+    Check {
+        show_changelog: Option<bool>,
+        #[serde(default)]
+        automatic: bool,
+    },
+    Poll {
+        show_changelog: Option<bool>,
+    },
+    DownloadVerify {
+        show_changelog: Option<bool>,
+    },
+    CancelDownload {
+        show_changelog: Option<bool>,
+    },
+    InstallPreview {
+        show_changelog: Option<bool>,
+        preferences_visible: bool,
+    },
 }
 
 #[derive(Deserialize)]
@@ -127,15 +143,30 @@ pub unsafe extern "C" fn captures_update_checks_create_v1(
         let Ok(config) = serde_json::from_slice::<Configuration>(bytes) else {
             return std::ptr::null_mut();
         };
+        if config.preview {
+            if config.endpoint.is_some()
+                || config.key_file.is_some()
+                || config.current_version.is_some()
+                || config.staging_directory.is_some()
+                || config.base_archive.is_some()
+                || config.install_request
+            {
+                return std::ptr::null_mut();
+            }
+            return CheckWorker::preview(config.renderer, Arc::new(|| {}))
+                .map(|worker| Box::into_raw(Box::new(CapturesUpdateChecks { worker })))
+                .unwrap_or(std::ptr::null_mut());
+        }
         if config.install_request && config.staging_directory.is_none() {
             return std::ptr::null_mut();
         }
-        let Ok(client) = client_from_key_file(
-            &config.endpoint,
-            &config.key_file,
-            config.renderer,
-            &config.current_version,
-        ) else {
+        let (Some(endpoint), Some(key_file), Some(version)) =
+            (config.endpoint, config.key_file, config.current_version)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Ok(client) = client_from_key_file(&endpoint, &key_file, config.renderer, &version)
+        else {
             return std::ptr::null_mut();
         };
         let client = if let Some(path) = config.base_archive {
@@ -186,16 +217,32 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
             let worker = &mut unsafe { &mut *handle }.worker;
             worker.poll();
             let show_changelog = match request {
-                Request::Check { show_changelog }
+                Request::Check { show_changelog, .. }
                 | Request::Poll { show_changelog }
                 | Request::DownloadVerify { show_changelog }
-                | Request::CancelDownload { show_changelog } => show_changelog.unwrap_or(true),
+                | Request::CancelDownload { show_changelog }
+                | Request::InstallPreview { show_changelog, .. } => show_changelog.unwrap_or(true),
             };
             let accepted = match request {
-                Request::Check { .. } => worker.check(),
+                Request::Check { automatic, .. } => {
+                    if automatic {
+                        worker.check_automatically()
+                    } else {
+                        worker.check()
+                    }
+                }
                 Request::DownloadVerify { .. } => worker.download(),
                 Request::CancelDownload { .. } => worker.cancel_download(),
                 Request::Poll { .. } => false,
+                Request::InstallPreview {
+                    preferences_visible,
+                    ..
+                } => {
+                    worker.launch_preview_install(preferences_visible).map_err(
+                        |_| "Could not start the verified Preview installer; check again.",
+                    )?;
+                    true
+                }
             };
             Ok(json!({"accepted":accepted, "checking":worker.checking(),
                 "status":worker.status(), "presentation":worker.presentation(),

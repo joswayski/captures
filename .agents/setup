@@ -48,6 +48,7 @@ packages=(
   nasm
   ninja-build
   openbox
+  patchelf
   picom
   pipewire
   pkg-config

@@ -2,6 +2,28 @@
 
 This guide covers local setup, validation, and packaging. Maintainer release procedures live in [docs/releases.md](docs/releases.md), and bundled media details live in [docs/media-sidecars.md](docs/media-sidecars.md).
 
+## Native Preview packages
+
+The installed Preview pipeline selects AppKit on macOS and Rust/wgpu on Windows/Linux.
+Ordinary `apps/native` development commands still use isolated development profiles;
+building with `--release` alone does not join the installed channel. Root `npm run build`
+retains the older Tauri reference build for comparison and historical recovery.
+
+After preparing the pinned media sidecars, build an unsigned installer on its target OS:
+
+```sh
+node scripts/native-preview-build.mjs build x86_64-unknown-linux-gnu 2026.10.1101 --unsigned
+```
+
+Use `aarch64-apple-darwin` or `x86_64-pc-windows-msvc` on those hosts. Rust/wgpu
+requires Rust 1.95 in addition to the workspace's 1.94; macOS requires the macOS 26
+SDK and Swift. This command deliberately produces an installed-channel executable
+using the real signing public key and profile identity: do not launch it against
+valuable data as a test. The `--preview-build-info` flag prints renderer/version
+without loading a profile or GUI. The unsigned option is for packaging verification,
+not publication. Release signing, native profile handoff and recovery are documented
+in [release procedures](docs/releases.md#native-preview-packaging-and-recovery).
+
 ## Requirements
 
 - Rust 1.94 with `rustfmt` and `clippy`

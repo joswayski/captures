@@ -421,6 +421,7 @@ struct NativeMediaTools {
                 ? "aarch64-apple-darwin" : "x86_64-apple-darwin"
             let binary = "\(name)-\(suffix)"
             let bundled = [
+                executable?.deletingLastPathComponent().appendingPathComponent(name),
                 executable?.deletingLastPathComponent().appendingPathComponent(binary),
                 executable?.deletingLastPathComponent().appendingPathComponent("binaries/\(binary)"),
                 URL(fileURLWithPath: #filePath).deletingLastPathComponent()

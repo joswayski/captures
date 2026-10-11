@@ -6852,6 +6852,8 @@ impl Live {
                 self.send(Request::Displays);
             }
             Response::HistoryRoot { .. }
+            | Response::PreviewStartup { .. }
+            | Response::PreviewBuildInfo { .. }
             | Response::OpenedImage { .. }
             | Response::OpenedMedia { .. }
             | Response::PreviewDragPrepared { .. }

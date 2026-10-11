@@ -174,11 +174,11 @@ jobs:
           toolchain: 1.94.0
       - run: npm ci
       - uses: ./.github/actions/prepare-media
-      - run: npm run tauri:build --workspace @captures/desktop -- --config src-tauri/tauri.recording.local.conf.json
+      - run: node scripts/native-preview-build.mjs build aarch64-apple-darwin 2026.10.1101 --unsigned
       - name: Validate bundled media sidecars and notices
         shell: bash
         run: |
-          app="target/release/bundle/macos/Captures.app"
+          app="target/aarch64-apple-darwin/release/bundle/macos/Captures.app"
           ffmpeg="$(find "$app/Contents/MacOS" -maxdepth 1 -type f -name 'ffmpeg*' -print -quit)"
           ffprobe="$(find "$app/Contents/MacOS" -maxdepth 1 -type f -name 'ffprobe*' -print -quit)"
           test -n "$ffmpeg"
@@ -195,7 +195,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: captures-macos-app
-          path: target/release/bundle/macos/Captures.app
+          path: target/aarch64-apple-darwin/release/bundle/macos/Captures.app
       - name: Stop the rest of this run after a failure
         # One failed job already fails the run; cancel the other jobs instead of
         # letting them hold runners (and block newer pushes) until they finish.
@@ -220,13 +220,15 @@ jobs:
           - platform: Windows
             os: windows-2025
             bundle: nsis
+            target: x86_64-pc-windows-msvc
             artifact_name: captures-windows-installer
-            artifact_path: target/release/bundle/nsis/*.exe
+            artifact_path: target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           - platform: Ubuntu
             os: ubuntu-24.04
             bundle: deb
+            target: x86_64-unknown-linux-gnu
             artifact_name: captures-ubuntu-package
-            artifact_path: target/release/bundle/deb/*.deb
+            artifact_path: target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -253,6 +255,8 @@ jobs:
             libxdo-dev \
             libxrandr-dev \
             nasm \
+            patchelf \
+            xdg-utils \
             pkg-config \
             wget \
             xz-utils \
@@ -281,8 +285,9 @@ jobs:
             mingw-w64-ucrt-x86_64-zlib
       - run: npm ci
       - uses: ./.github/actions/prepare-media
-      - name: Build desktop app through the root build command
-        run: npm run build -- --bundles ${{ matrix.bundle }}
+      - run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Build native Preview installers without release credentials
+        run: node scripts/native-preview-build.mjs build "${{ matrix.target }}" 2026.10.1101 --unsigned
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}

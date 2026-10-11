@@ -1,5 +1,52 @@
 # Captures releases
 
+## Native Preview packaging and recovery
+
+The maintainer authorized switching the experimental Preview channel to AppKit
+(macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64), before physical acceptance
+is complete. This does not authorize a stable release. `scripts/native-preview-build.mjs`
+builds the native executable and updater helper, verifies their build identity,
+then uses the existing pinned Tauri CLI only to bundle installers. It does not
+build or embed the Tauri app, frontend or WebView2 installer. `CI` can be manually
+dispatched on a branch to build unsigned installers without release secrets.
+
+The release still requires all three platforms, Apple signing/notarization,
+FFmpeg notices, checksums and a draft before publication. Native artifacts use
+version/target-bound filenames in their signed Minisign trusted comments; the
+compiled helper authenticates the collected bytes before upload. `latest.json`
+keeps the existing Tauri-compatible platform keys and public signing key, so
+already-installed Tauri Previews receive the native app. The website/README
+download aliases move only in the existing complete-release publication step.
+The manifest retains a separately signed `linux-x86_64-deb` artifact for existing
+Tauri Debian installs: their updater cannot install an AppImage fallback. Once on
+native, Debian installs use the manual package update path.
+Historical pre-cutover rebuilds retain their old packaging path.
+
+The installed native profile lives under the platform-local `Captures Native Preview`
+data directory, in `profile`. First launch copies previous settings, retained History
+and screenshot drafts, preserving the old source and exports; subsequent launches
+validate the marker and reuse that copy. Do not launch another old or native app
+during this first import. The process check is a best-effort guard, not a lock
+honored by old Tauri versions. Development workbenches remain separate.
+
+macOS/AppImage native updates keep `.Captures-previous-<uuid>.app` / `.AppImage`
+next to the installed app until the replacement acknowledges renderer, settings
+and bundled FFmpeg readiness. Failure retains that backup and the private temporary
+`captures-preview-*` directory (`install.log`, `install.json`, `backup.json`). Quit
+every Captures process before restoring the backup to the `installed` location in
+`backup.json`, or reinstall from the download page. Do not delete the native profile
+to repair an executable. There is no automatic timeout rollback or profile rollback.
+Windows delegates replacement/relaunch to NSIS; Debian remains a manual update.
+
+Known cutover limits: capture windows do not reopen automatically; reopen saved
+captures and screenshot drafts from History. macOS/AppImage preserve Preferences
+visibility, while Windows follows the installer launch. Physical signing/permission
+continuity, login items, mixed DPI, accessibility and GNOME/KDE acceptance remain
+unverified until run on those systems. Wayland region capture and floating previews
+remain unavailable. Automated checks must not be reported as physical acceptance.
+
+## Release queue
+
 Pushes to `main` request a Preview in `.github/workflows/release.yml`. One release
 runs at a time; GitHub's default single pending slot replaces older requests while
 `cancel-in-progress: false` lets the active release finish. When the next run

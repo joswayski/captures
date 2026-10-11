@@ -17,6 +17,7 @@ pub mod checks;
 mod delta;
 mod health;
 mod installation;
+pub mod preview;
 mod shutdown_intent;
 mod staging;
 pub use health::{HealthAcknowledgement, take_restart_preferences};

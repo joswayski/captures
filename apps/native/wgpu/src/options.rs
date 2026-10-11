@@ -137,7 +137,7 @@ pub struct Options {
 impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut options = Self {
-            live: false,
+            live: captures_app::preview_channel::version().is_some(),
             history_root: None,
             open_media: Vec::new(),
             scene: Scene::Preferences,
@@ -204,6 +204,10 @@ impl Options {
                     }
                 }
                 "--live" => options.live = true,
+                "--captures-autostart" => {
+                    options.live = true;
+                    options.scene = Scene::Idle;
+                }
                 "--open-preferences" => options.open_preferences = true,
                 "--open-history" => options.open_history = true,
                 "--permission-dialog" => {
@@ -349,9 +353,19 @@ impl Options {
                     native_update_ready_token =
                         Some(args.next().ok_or("Missing update ready token")?);
                 }
+                _ if captures_app::preview_channel::version().is_some()
+                    && !arg.starts_with('-') =>
+                {
+                    options.open_media.push(PathBuf::from(arg));
+                }
                 _ => return Err(format!("Unknown option {arg}")),
             }
         }
+        options.open_media = options
+            .open_media
+            .into_iter()
+            .map(captures_app::preview_channel::local_media_path)
+            .collect::<Result<_, _>>()?;
         if !["light", "dark", "system"].contains(&options.appearance.as_str())
             || !THEMES.contains(&options.theme.as_str())
         {
@@ -768,6 +782,13 @@ mod tests {
             ]
         );
         assert!(parse(&[]).unwrap().open_media.is_empty());
+        #[cfg(unix)]
+        assert_eq!(
+            parse(&["--live", "--open-media", "file:///tmp/image%20one.png"])
+                .unwrap()
+                .open_media,
+            [PathBuf::from("/tmp/image one.png")]
+        );
         for args in [
             vec!["--open-media", "movie.mp4"],
             vec!["--live", "--open-media"],

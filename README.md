@@ -53,9 +53,11 @@ These links always download the **latest** validated Preview:
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-Preview builds automatically publish installed-app changes from `main`, and may contain bugs or incomplete features. Changes arriving during a build are grouped into the next Preview instead of waiting for an installer for every merge. Installed copies check captur.es for a new Preview shortly after launch and about every five minutes; the site caches GitHub's updater note so those checks stay off GitHub. The notice lists every Preview published since the version you have, then installs the latest. Turn **Show what’s new on update notices** off in Preferences for a compact Update now prompt. Installing still downloads the signed archive from GitHub; captures stay open while it downloads, then close for installation and reopen after restarting. Screenshot edits are kept as drafts in Capture History; a failed draft save cancels installation. The update notice stays on screen during a capture so you can screenshot the changelog or an error. GitHub 403s are often a short rate limit, and Try again usually works. If the download is missing (404), use **download from captur.es** on the error, or the installer links above. You can also check from Preferences → Updates, or the tray **Check for Updates…** item. If Captures will not open or cannot install an update, download the installer for your OS from the table above. The macOS disk image, Windows setup, and Debian package replace the installed app. For the AppImage, copy it over `~/.local/bin/Captures.AppImage` and make it executable (`chmod +x`); running it from Downloads starts a second copy. Settings, capture history, and OS permissions stay. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
+Preview builds automatically publish installed-app changes from `main`, and may contain bugs or incomplete features. The Preview pipeline builds a browser-free app: Swift/AppKit on macOS and Rust/wgpu on Windows and Linux. The download links and existing Tauri updater channel move together only after all platforms finish packaging and validation; older downloads remain available until then. This is still an experimental Preview, not a stable release or a claim of physical-platform acceptance.
 
-After an in-app update, Captures shows its ready tooltip and restores open screenshot previews, screenshot and recording editors, and the screenshot mini-preview stack. Preferences reopens if it was open before installation. Missing or deleted captures are skipped. Recording editors reopen the recording, not unsaved trim/crop/export settings; capture selections and countdowns do not resume, and active recordings still block updates. Window positions and zoom are not restored. Otherwise Captures stays in the tray or menu bar. This restoration applies to updates started by a version that includes it, not the update that first installs it or a manual installer.
+Installed native copies check captur.es at launch and about every five minutes when no update is pending. Preferences and the tray also offer **Check for Updates**. Downloads from GitHub are signature-verified before installation; screenshot draft-save failure cancels restart. Debian packages use the manual installer. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
+
+The first native launch copies existing settings, retained capture history and screenshot drafts into a separate native Preview profile, leaving the previous profile and exports unchanged. Quit the previous app before a manual upgrade. Later native launches reuse the copy rather than importing again. The installed app and launch-at-login entry keep the Captures identity; macOS may ask to refresh permissions. Open capture windows are not automatically recreated across the native cutover: reopen captures and drafts from History. Native macOS/AppImage updates restore Preferences visibility, but not editor windows or unsaved recording trim/crop/export choices; Windows uses the installer’s relaunch flow. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained package backups and verification limits.
 
 On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow. When the tray icon's position is unavailable, including on Linux, the launch notice uses a compact, unpointed card.
 
@@ -114,9 +116,9 @@ not implemented yet.
 | macOS 13+ | Supported; primary development target |
 | Windows 11 | Supported; experimental |
 | Linux X11 | Supported; hide recording controls manually when needed |
-| Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
+| Linux Wayland | Experimental; portal display/window capture depends on compositor support. No region screenshots, floating previews or History Restore; no click highlights |
 
-These statuses describe the downloadable Tauri Preview.
+These describe the native Preview target. Physical macOS/Windows, mixed-DPI, accessibility and real GNOME/KDE acceptance remain open; automated or headless tests do not replace them.
 
 ## Shortcuts
 
@@ -179,14 +181,14 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
-The downloadable Preview uses Tauri and React for its UI, with Rust engines and
-platform-specific integrations for capture, recording, and media processing.
+The Preview pipeline uses native UI with shared Rust engines and platform-specific
+capture integrations. Tauri/React sources remain for comparison and historical
+recovery; the Tauri CLI is only an installer bundler for native releases, not an
+application runtime. Ordinary development workbenches keep separate data and do
+not join the installed update channel. The detailed development notes below
+describe implemented slices, not completion of physical acceptance.
 
-A browser-free native replacement is planned for macOS, Windows, and Linux,
-developed feature by feature across platforms using shared Rust logic and the
-Captures design. Development workbenches include Swift/AppKit on macOS and an
-experimental Rust/wgpu renderer candidate for Windows/Linux. They are not
-replacement downloads. An opt-in native capture workspace connects full-display
+The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
 shared Rust engines. Its History uses the shipping card grid, header, filters,
 Restore to a floating preview and empty states; Delete all asks for a second click, removes all capture types
@@ -526,8 +528,8 @@ for temporary package validation, with progress, cancellation and retry. An expl
 retained base archive enables authenticated incremental downloads with signed full
 package fallback; this is development-only, not the Preview updater. Dismissing a
 pending operation keeps its result hidden until another explicit check or download.
-Ordinary check-only launches never fetch packages or enable installation; no
-automatic requests or native update channel is enabled. A separate opt-in
+Ordinary development check-only launches never fetch packages or enable installation;
+only the explicitly versioned Preview build enables the installed channel. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
 checks signed native manifests, verifies downloads and can validate unpacked native
 packages in temporary storage. It never installs or replaces an app, and no native
@@ -550,8 +552,9 @@ connected. The [offline development-profile importer](apps/native/README.md#expl
 also available separately, copies explicitly selected shipping settings, retained
 History and drafts with an original-data snapshot. Shipping data and exports stay
 unchanged, copied profiles survive failed startup and package recovery, and the
-new app identity requires fresh setup. Automatic migration and installed-app
-update handoff remain open.
+development identity requires fresh setup. Installed Previews instead use the
+one-time copy described above; the development importer does not enroll a profile
+in that channel.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
 native editor slice restores and saves isolated drafts, previews shared-Rust crop
 and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
@@ -954,12 +957,12 @@ Windows/X11 need no upfront screen grant; microphone status is not reported ther
 Wayland window screenshots require a window-sharing portal; region capture remains unavailable. Physical
 permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
-physical setup/login acceptance and updates remain open. Shared editor support is prerequisite work,
+physical setup/login and installed-update acceptance remain open. Shared editor support is prerequisite work,
 not native editor acceptance. Resident shortcuts and single-instance relaunch are
 connected, but physical cross-platform acceptance and full feature/design parity
 remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
-existing Preview features remain available during development. The wgpu candidate
+older Tauri Previews remain in the build archive. The wgpu host
 supports hidden Wayland startup, but physical resource acceptance remains open; see its
 [evaluation limits](apps/native/wgpu/README.md).
 

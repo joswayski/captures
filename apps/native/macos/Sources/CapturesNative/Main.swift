@@ -18,6 +18,7 @@ struct Options {
     var nativeUpdateReadyToken: String?
     var nativeUpdateRestorePreferences = false
     var nativeUpdateChecks: UpdateCheckModel?
+    var previewChannel = false
     var nativeUpdateShutdownIntent: [String: Any]?
     var nativeUpdateInstallSession: String?
     var screenshot: String?
@@ -53,6 +54,7 @@ struct Options {
             case "--reference-chips": referenceChips = true
             case "--exercise": exercise = true
             case "--live": live = true; explicitLive = true
+            case "--captures-autostart": live = true; scene = "idle"
             case "--history-root":
                 guard let value = iterator.next(), !value.isEmpty else { throw Usage.invalid }
                 historyRoot = value
@@ -171,6 +173,12 @@ struct Options {
 @main enum Main {
     static func main() {
         do {
+            if CommandLine.arguments.dropFirst().elementsEqual(["--preview-build-info"]) {
+                var info = try AppBridge().request(["operation": "preview_build_info"])
+                info["renderer"] = "appkit"
+                print(String(decoding: try JSONSerialization.data(withJSONObject: info), as: UTF8.self))
+                return
+            }
             if CommandLine.arguments.dropFirst().elementsEqual(["--font-license"]) {
                 guard let url = NativeResources.bundle.url(forResource: "EDITOR-FONT-LICENSE", withExtension: "txt")
                 else { throw Options.Usage.invalid }
@@ -187,6 +195,17 @@ struct Options {
             defer { captures_package_use_free_v1(packageUse) }
             let bundled = Bundle.main.object(forInfoDictionaryKey: "CapturesNativeLive") as? Bool == true
             var options = try Options(Array(CommandLine.arguments.dropFirst()), bundled: bundled)
+            if options.live, options.historyRoot == nil, options.settingsFile == nil,
+               let startup = try AppBridge().request(["operation": "preview_startup"])["startup"] as? [String: Any] {
+                options.historyRoot = startup["history_root"] as? String
+                options.settingsFile = startup["settings_file"] as? String
+            }
+            if options.live, options.nativeUpdateChecks == nil,
+               try AppBridge().request(["operation": "preview_build_info"])["version"] is String {
+                options.previewChannel = true
+                options.nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(
+                    configuration: ["preview": true, "renderer": "appkit"]))
+            }
             if bundled {
                 runBundle(options)
                 return

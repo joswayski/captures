@@ -507,7 +507,16 @@ jobs:
             exit 1
           fi
           echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Install the native renderer toolchain
+        if: runner.os != 'macOS' && hashFiles('scripts/native-preview-build.mjs') != ''
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Build and bundle the native Preview
+        if: hashFiles('scripts/native-preview-build.mjs') != ''
+        run: node scripts/native-preview-build.mjs build "${{ matrix.target }}" "${{ needs.prepare.outputs.app_version }}"
+      # Keep historical pre-cutover recovery builds possible. Current sources
+      # use the native executable; tauri-action is never their runtime/build path.
       - uses: tauri-apps/tauri-action@v1
+        if: hashFiles('scripts/native-preview-build.mjs') == ''
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -587,6 +596,15 @@ jobs:
             "$ffmpeg" \
             "$ffprobe" \
             "$app/Contents/Resources/notices/ffmpeg/BUILD_CONFIG.txt"
+      - name: Sign version-bound native updater artifacts and upload installers
+        if: hashFiles('scripts/native-preview-build.mjs') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        shell: bash
+        run: |
+          node scripts/native-preview-build.mjs collect "${{ matrix.target }}" "${{ needs.prepare.outputs.app_version }}" native-release-assets
+          node "$GITHUB_WORKSPACE/release-tools/scripts/github-release-assets.mjs" upload "$RELEASE_ID" native-release-assets/*
       - name: Attach FFmpeg source and compliance files
         if: runner.os == 'macOS'
         env:
@@ -617,9 +635,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_NOTES: ${{ needs.prepare.outputs.release_notes }}
         shell: bash
         run: |
           node scripts/github-release-assets.mjs download "$RELEASE_ID" release-assets
+          # Legacy tauri-action builds upload their own manifest. Native builds
+          # assemble one only after every platform's signed artifact exists.
+          if [[ ! -f release-assets/latest.json ]]; then
+            node scripts/native-preview-build.mjs manifest release-assets "$APP_VERSION"
+          fi
           # GitHub draft releases report tag_name as untagged-* even when the
           # CalVer git tag already exists. Pass that tag explicitly so latest.json
           # keeps publishable download URLs before checksums are frozen.

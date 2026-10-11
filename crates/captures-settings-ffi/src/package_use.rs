@@ -4,6 +4,7 @@ use std::panic::catch_unwind;
 
 pub struct CapturesPackageUse {
     _owner: Option<PackageUse>,
+    _preview_owner: Option<std::fs::File>,
 }
 
 /// No profile access, network, renderer or worker initialization. A non-null
@@ -11,8 +12,14 @@ pub struct CapturesPackageUse {
 #[unsafe(no_mangle)]
 pub extern "C" fn captures_package_use_current_v1() -> *mut CapturesPackageUse {
     catch_unwind(|| {
+        let Ok(preview_owner) = captures_app::preview_channel::package_use() else {
+            return std::ptr::null_mut();
+        };
         PackageUse::current().map_or(std::ptr::null_mut(), |owner| {
-            Box::into_raw(Box::new(CapturesPackageUse { _owner: owner }))
+            Box::into_raw(Box::new(CapturesPackageUse {
+                _owner: owner,
+                _preview_owner: preview_owner,
+            }))
         })
     })
     .unwrap_or(std::ptr::null_mut())

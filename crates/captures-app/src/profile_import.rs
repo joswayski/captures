@@ -267,6 +267,38 @@ fn import_with(
     cancel: &CancelToken,
     before_publish: impl FnOnce() -> Result<(), Error>,
 ) -> Result<ImportReport, Error> {
+    import_profile_with(
+        settings_file,
+        data_root,
+        destination,
+        cancel,
+        false,
+        before_publish,
+    )
+}
+
+/// Copy installed data into a new native Preview profile, retaining preferences
+/// and the unchanged source snapshot. The caller excludes source writers, just
+/// as for development import; this function does not stop running applications.
+pub fn import_preview_profile(
+    settings_file: &Path,
+    data_root: &Path,
+    destination: &Path,
+    cancel: &CancelToken,
+) -> Result<ImportReport, Error> {
+    import_profile_with(settings_file, data_root, destination, cancel, true, || {
+        Ok(())
+    })
+}
+
+fn import_profile_with(
+    settings_file: &Path,
+    data_root: &Path,
+    destination: &Path,
+    cancel: &CancelToken,
+    preview: bool,
+    before_publish: impl FnOnce() -> Result<(), Error>,
+) -> Result<ImportReport, Error> {
     check_cancel(cancel)?;
     if !settings_file.is_absolute() || !data_root.is_absolute() || !destination.is_absolute() {
         return Err(invalid("All profile paths must be explicit absolute paths"));
@@ -351,8 +383,24 @@ fn import_with(
             return Err(invalid("Source snapshot changed during preparation"));
         }
     }
-    prepare_working_copy(stage.path(), &destination, cancel)?;
-    mark_development_profile(stage.path(), &destination)?;
+    prepare_working_copy(stage.path(), &destination, cancel, preview)?;
+    if preview {
+        let mut marker = File::options()
+            .write(true)
+            .create_new(true)
+            .open(stage.path().join(".captures-native-preview-profile.json"))?;
+        serde_json::to_writer_pretty(
+            &mut marker,
+            &serde_json::json!({
+                "schema_version": 1,
+                "identity": "io.github.joswayski.captures",
+                "root": destination,
+            }),
+        )?;
+        marker.sync_all()?;
+    } else {
+        mark_development_profile(stage.path(), &destination)?;
+    }
     before_publish()?;
     let mut checked = Budget::default();
     for ((source, _), expected) in sources.iter().zip(&digests) {
@@ -386,15 +434,18 @@ fn prepare_working_copy(
     root: &Path,
     destination: &Path,
     cancel: &CancelToken,
+    preview: bool,
 ) -> Result<(), Error> {
     let settings_path = root.join("settings.json");
     if fs::metadata(&settings_path)?.len() > MAX_JSON_BYTES {
         return Err(invalid("Profile JSON is too large"));
     }
     let mut settings = captures_settings::load(&settings_path)?;
-    settings.output_directory = destination.join("exports").to_string_lossy().into_owned();
-    settings.launch_at_login = false;
-    settings.onboarding_completed = false;
+    if !preview {
+        settings.output_directory = destination.join("exports").to_string_lossy().into_owned();
+        settings.launch_at_login = false;
+        settings.onboarding_completed = false;
+    }
     settings.last_screen_permission_request_id = None;
     settings.pending_capture_after_restart = None;
     captures_settings::validate(&settings)?;

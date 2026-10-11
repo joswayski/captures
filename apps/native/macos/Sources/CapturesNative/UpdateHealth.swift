@@ -102,8 +102,9 @@ extension NativeMediaTools {
         guard let directory = executable?.deletingLastPathComponent() else {
             throw UpdateHealthError.invalidFile
         }
-        let ffmpeg = directory.appendingPathComponent("binaries/ffmpeg-\(suffix)").path
-        let ffprobe = directory.appendingPathComponent("binaries/ffprobe-\(suffix)").path
+        let preview = executable?.lastPathComponent == "captures"
+        let ffmpeg = directory.appendingPathComponent(preview ? "ffmpeg" : "binaries/ffmpeg-\(suffix)").path
+        let ffprobe = directory.appendingPathComponent(preview ? "ffprobe" : "binaries/ffprobe-\(suffix)").path
         guard FileManager.default.isExecutableFile(atPath: ffmpeg),
               FileManager.default.isExecutableFile(atPath: ffprobe) else {
             throw UpdateHealthError.invalidFile
