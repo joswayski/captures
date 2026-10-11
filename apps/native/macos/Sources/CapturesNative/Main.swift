@@ -120,11 +120,13 @@ struct Options {
         let hasHealth = nativeUpdateReadyFile != nil || nativeUpdateReadyToken != nil
         if hasHealth {
             let tokenPattern = #"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"#
+            let explicitPaths = historyRoot?.hasPrefix("/") == true && settingsFile?.hasPrefix("/") == true
+            let installedProfile = bundled && historyRoot == nil && settingsFile == nil
+                && (try? AppBridge().request(["operation": "preview_build_info"])["version"]) is String
             guard explicitLive, let file = nativeUpdateReadyFile, file.hasPrefix("/"),
                   let token = nativeUpdateReadyToken,
                   token.range(of: tokenPattern, options: .regularExpression) == (token.startIndex..<token.endIndex),
-                  let historyRoot, historyRoot.hasPrefix("/"),
-                  let settingsFile, settingsFile.hasPrefix("/"),
+                  explicitPaths || installedProfile,
                   !exercise, !referenceChips, openMedia.isEmpty,
                   updateState == nil, updateTray == nil, scene == "preferences", screenshot == nil
             else { throw Usage.invalid }
@@ -195,6 +197,7 @@ struct Options {
             defer { captures_package_use_free_v1(packageUse) }
             let bundled = Bundle.main.object(forInfoDictionaryKey: "CapturesNativeLive") as? Bool == true
             var options = try Options(Array(CommandLine.arguments.dropFirst()), bundled: bundled)
+            StartupRecovery.start(&options)
             if options.live, options.historyRoot == nil, options.settingsFile == nil,
                let startup = try AppBridge().request(["operation": "preview_startup"])["startup"] as? [String: Any] {
                 options.historyRoot = startup["history_root"] as? String
@@ -208,13 +211,14 @@ struct Options {
             }
             if bundled {
                 runBundle(options)
+                StartupRecovery.finish()
                 return
             }
             var nativeInstance: NativeInstance?
             var crashDiagnostics: CrashDiagnostics?
             if options.live {
                 let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
-                guard result.primary else { return }
+                guard result.primary else { StartupRecovery.finish(); return }
                 nativeInstance = result.owner
                 do { crashDiagnostics = try CrashDiagnostics.start(historyRoot: options.historyRoot) }
                 catch { reportDiagnosticsFailure(error) }
@@ -227,6 +231,7 @@ struct Options {
                                      crashDiagnostics: crashDiagnostics)
             application.delegate = delegate
             withExtendedLifetime(delegate) { application.run() }
+            StartupRecovery.finish()
         } catch Options.Usage.invalid {
             FileHandle.standardError.write(Data("Development metadata checks: explicit --live --history-root ABSOLUTE_PATH --settings-file ABSOLUTE_PATH --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (check only; no health launch or media open).\n".utf8))
             FileHandle.standardError.write(Data("Optional --native-update-staging-directory ABSOLUTE_PATH enables explicit temporary download/verification in an existing scratch directory, never installation.\n".utf8))
@@ -250,7 +255,7 @@ struct Options {
         // Collect those before election so a secondary does not exit and lose them.
         let launch = BundledLaunch(options: options) { options, notification in
             let result = try NativeInstance.start(historyRoot: options.historyRoot, paths: options.openMedia)
-            guard result.primary else { return false }
+            guard result.primary else { StartupRecovery.finish(); return false }
             nativeInstance = result.owner
             var primaryOptions = options
             try primaryOptions.takeUpdateRestartIntent()

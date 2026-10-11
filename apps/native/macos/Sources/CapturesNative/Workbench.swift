@@ -1118,7 +1118,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard !terminationPending else { return .terminateLater }
         terminationPending = true
         terminating = true
-        updateHealth?.cancel()
         // Reply only after returning .terminateLater, even with no live editor.
         // The main queue must keep running to submit Save queued during Copy.
         DispatchQueue.main.async { [weak self] in
@@ -1159,6 +1158,10 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.presentHostError(title: "Couldn’t Restart Captures", message: "The verified update is no longer available. Check again before requesting installation.")
                     return
                 }
+                // A vetoed Quit must leave startup monitoring usable. Once
+                // accepted, cancel before AppKit exits (run() need not return).
+                self.updateHealth?.cancel()
+                StartupRecovery.finish()
                 self.nativeInstance?.stopAccepting()
                 var remaining = 2
                 let drained = { [weak self] in

@@ -7,6 +7,9 @@ fn main() {
         [flag, path] if flag == "--install" => {
             captures_app::updater::preview::install(std::path::Path::new(&path))
         }
+        [flag, path] if flag == "--watch-startup" => {
+            captures_app::updater::preview::recovery::watch(std::path::Path::new(&path))
+        }
         [flag, version, artifact, signature] if flag == "--verify" => {
             captures_app::updater::preview::verify_package(
                 &version.to_string_lossy(),
@@ -15,7 +18,7 @@ fn main() {
             )
         }
         _ => Err(captures_app::updater::Error::Configuration(
-            "usage: native_preview_update_helper --install REQUEST | --verify VERSION ARTIFACT SIGNATURE",
+            "usage: native_preview_update_helper --install REQUEST | --watch-startup REQUEST | --verify VERSION ARTIFACT SIGNATURE",
         )),
     };
     if let Err(error) = result {

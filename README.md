@@ -61,6 +61,8 @@ The first native launch copies existing settings, retained capture history and s
 
 History keeps links to previously saved files, including recordings opened from elsewhere; migration does not copy those external files. A moved or deleted recording appears as missing in History instead of preventing startup.
 
+Native Previews arm a separate, headless startup-recovery helper before importing the profile. It exits after settings, rendering and media tools confirm startup; it adds no second Captures window or tray icon. If startup fails, macOS, Windows and AppImage installs can automatically download and install a signed newer Preview, without loading or deleting History. A hung app must be quit before replacement; recovery does not force-quit it. Recovery retries are bounded, Debian remains manual, and an app that cannot reach its startup code (or has a missing/broken helper) still needs the installer. Earlier builds without this helper cannot repair themselves this way.
+
 On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow. When the tray icon's position is unavailable, including on Linux, the launch notice uses a compact, unpointed card.
 
 ## Features

@@ -46,6 +46,55 @@ every Captures process before restoring the backup to the `installed` location i
 to repair an executable. There is no automatic timeout rollback or profile rollback.
 Windows delegates replacement/relaunch to NSIS; Debian remains a manual update.
 
+### Startup recovery companion
+
+Installed hosts start a copied `native_preview_update_helper --watch-startup`
+before profile import. The GUI remains the original app executable, preserving
+LaunchServices/Open With routing; this is not a wrapper app, login service, or
+second tray. A per-launch file lock tracks actual host lifetime without PID reuse.
+The existing renderer/settings/bundled-media readiness gate ends monitoring;
+successful secondary forwarding and normal Quit explicitly cancel it. Healthy
+launches perform no recovery HTTP requests. Ordinary in-app updates still require
+user confirmation; failed-startup recovery automatically installs a signed newer
+Preview using the same pinned key and version/target binding.
+
+The helper reads only its private request/health files and installed executable,
+never settings, History, migration markers or exports. Its scratch directories are
+`startup-recovery/watch-*` alongside (not inside) the native `profile` directory.
+They contain `recovery.log`, `status.json` on failure, and the retained install
+request/backup journal if replacement fails. Completed sessions are pruned on the
+next launch. Repaired launches run first-launch import normally rather than
+passing explicit empty profile paths that would bypass migration.
+
+After 120 seconds without readiness, an OS dialog asks the user to quit a hung
+app. Recovery waits up to ten more minutes for actual exit and never kills an
+importer or assumes timeout means it is safe to replace files. A repair lock
+serializes failed launches; the installer still requires every native host's
+package-use lock to release. It rechecks the captured package fingerprint under
+that lock, so an older helper cannot overwrite a manual replacement or another
+update. Recovery makes at most 30 checks with one minute between attempts (plus
+bounded HTTP timeouts). Reopening retries later if no fix was published. A
+persisted attempted-version marker prevents repeatedly installing the same or
+an older repair; failed downloads do not consume that attempt. There is no blind
+application downgrade or user-data rollback. OS permissions may still require
+manual intervention. Debian directs the user to its installer.
+
+Failure dialogs use the OS facilities (AppleScript / Windows MessageBox;
+zenity, kdialog or xmessage on Linux when available). If no dialog program/display
+is available, the recovery log still records the manual-installer fallback.
+No capture permissions, GPU, FFmpeg execution, or migrated profile are needed by
+the helper. Corrupt loaders, failures before the host arms it, missing/broken
+helpers, power loss during package replacement, and builds released before this
+companion still require manual recovery. This is a startup safeguard, not a
+claim that every possible broken build can update itself.
+
+Acceptance must include a real packaged failed migration, pre-readiness crash,
+hang, normal Quit and secondary Open With; the signed repair must restart with
+unchanged original captures and no duplicate UI. Automated component tests cover
+the readiness/lifetime contract, retry/signature rejection, package-use exclusion,
+newer-version loop prevention and retained backup on failed readiness. Physical
+macOS, Windows, X11 and Wayland acceptance remains separate.
+
 Known cutover limits: capture windows do not reopen automatically; reopen saved
 captures and screenshot drafts from History. macOS/AppImage preserve Preferences
 visibility, while Windows follows the installer launch. Physical signing/permission

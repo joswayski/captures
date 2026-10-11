@@ -28,7 +28,7 @@ pub(super) fn write_restart_preferences(ready_file: &Path, visible: bool) -> Res
 }
 
 /// Consume a helper-owned one-shot visibility snapshot, only after primary
-/// election and only for an explicit development health launch. An absent marker
+/// election and only for a helper-provided health launch. An absent marker
 /// preserves ordinary launch routing; an empty legacy marker means tray-only.
 /// No installed profile or global marker is discovered. Invalid input is retained.
 pub fn take_restart_preferences(ready_file: &Path) -> Result<Option<bool>, Error> {
@@ -66,14 +66,15 @@ pub fn take_restart_preferences(ready_file: &Path) -> Result<Option<bool>, Error
     Ok(Some(intent.restore_preferences))
 }
 
-/// Used only by an explicitly launched native-development primary after its
-/// renderer, persisted settings and packaged media tools initialize. The helper
+/// Used by an elected native primary after its renderer, persisted settings
+/// and packaged media tools initialize. The helper or startup companion
 /// creates an empty regular file in an owned private directory. Neither this
 /// acknowledgement nor root-process exit proves that descendants have stopped.
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HealthAcknowledgement {
-    file: PathBuf,
-    token: String,
+    pub(super) file: PathBuf,
+    pub(super) token: String,
 }
 
 impl HealthAcknowledgement {

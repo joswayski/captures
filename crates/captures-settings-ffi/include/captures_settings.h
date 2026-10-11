@@ -15,6 +15,13 @@ typedef struct CapturesPackageUse CapturesPackageUse;
 CapturesPackageUse *captures_package_use_current_v1(void);
 void captures_package_use_free_v1(CapturesPackageUse *handle);
 
+/* Main-thread-only startup companion, before profile import. {operation:"start",
+ * health?:{file,token}} returns {health:null|{file,token}}. A separate copied
+ * helper observes the real readiness gate. {operation:"finish"} only on normal
+ * Quit or successful secondary forwarding, never on failed startup. Development
+ * builds are a no-op. Same JSON envelope/free contract as settings requests. */
+char *captures_preview_recovery_request_v1(const char *request_json);
+
 /* Native update checks, with no HTTP until Check.
  * Installed builds may instead create with {preview:true,renderer}; endpoints,
  * version and key are compiled in, and development overrides are rejected.
