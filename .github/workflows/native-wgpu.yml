@@ -295,7 +295,7 @@ jobs:
           components: rustfmt, clippy
           cache-workspaces: apps/native/wayland_drag_probe
       - name: Install private compositor and native-input fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y meson ninja-build pkg-config libwayland-dev libxkbcommon-dev libdrm-dev libinput-dev libevdev-dev libpixman-1-dev libjson-c-dev libpcre2-dev libffi-dev libexpat1-dev libcairo2-dev libpango1.0-dev libsystemd-dev libgl1-mesa-dri libegl1 dbus python3-dbus python3-gi sway grim ffmpeg imagemagick wl-clipboard
+        run: sudo apt-get update && sudo apt-get install -y meson ninja-build pkg-config libwayland-dev libxkbcommon-dev libpipewire-0.3-dev libdrm-dev libinput-dev libevdev-dev libpixman-1-dev libjson-c-dev libpcre2-dev libffi-dev libexpat1-dev libcairo2-dev libpango1.0-dev libsystemd-dev libgl1-mesa-dri libegl1 dbus python3-dbus python3-gi sway grim ffmpeg imagemagick wl-clipboard
       - uses: actions/download-artifact@v4
         with:
           name: native-wgpu-binary-ubuntu-24.04
@@ -303,6 +303,8 @@ jobs:
       - name: Deliver native Find, Text and trim keys through pinned private Sway
         run: |
           chmod +x apps/native/wgpu/target/release/captures-wgpu-workbench
+          # Fail on missing runtime libraries before waiting for a tray that cannot start.
+          apps/native/wgpu/target/release/captures-wgpu-workbench --font-license > /dev/null
           compositor="$(apps/native/build_wayland_compositor_fixture.sh "$RUNNER_TEMP/wayland-compositor-fixture")"
           cargo +1.95.0 fmt --manifest-path apps/native/wayland_drag_probe/Cargo.toml -- --check
           cargo +1.95.0 clippy --manifest-path apps/native/wayland_drag_probe/Cargo.toml --locked --all-targets -- -D warnings
