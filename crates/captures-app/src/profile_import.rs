@@ -1,5 +1,6 @@
-//! Explicit offline import and snapshotting of isolated native development profiles.
-//! Sources remain untouched. Hosts never invoke this or discover installed paths.
+//! Offline profile import for native Previews and isolated development workbenches.
+//! Sources remain untouched. Preview imports retain external History references;
+//! development imports isolate the working copy from installed exports.
 use std::{
     fs::{self, File},
     io::{Read, Write},
@@ -278,8 +279,10 @@ fn import_with(
 }
 
 /// Copy installed data into a new native Preview profile, retaining preferences
-/// and the unchanged source snapshot. The caller excludes source writers, just
-/// as for development import; this function does not stop running applications.
+/// and the unchanged source snapshot. History keeps its saved-file references,
+/// including recordings with no private media or a missing external file. The
+/// import does not read or copy external media. The caller excludes source writers,
+/// just as for development import; this function does not stop running applications.
 pub fn import_preview_profile(
     settings_file: &Path,
     data_root: &Path,
@@ -494,13 +497,19 @@ fn prepare_working_copy(
                     }
                     if entry.kind.is_recording()
                         && captures_history::find_recording_media(&path).is_none()
+                        && (!preview || entry.saved_path.is_none())
                     {
                         return Err(invalid(
                             "Reference-only recordings must be reconciled before import; external exports were not read",
                         ));
                     }
-                    // Never let development Replace original/Trash act on shipping exports.
-                    value["saved_path"] = serde_json::Value::Null;
+                    // Installed Previews retain the same History links as Tauri,
+                    // without reading external media during migration. A missing
+                    // referenced file stays a missing History card, not a startup error.
+                    // Development Replace original/Trash must remain isolated.
+                    if !preview {
+                        value["saved_path"] = serde_json::Value::Null;
+                    }
                     fs::write(metadata, serde_json::to_vec_pretty(&value)?)?;
                 }
                 "screenshot-editor-drafts" => {
@@ -983,6 +992,127 @@ mod tests {
                 .as_ref()
         );
         assert_eq!(original_manifest["segments"], copied_manifest["segments"]);
+        assert_eq!(
+            fs::read(fixture.root.path().join("shipping export.png")).unwrap(),
+            b"do not overwrite or trash this external export"
+        );
+    }
+
+    #[test]
+    fn preview_import_preserves_saved_history_references_even_when_recordings_are_missing() {
+        use captures_history::{ArtifactKind, HistoryEntry};
+
+        let fixture = Fixture::new();
+        let history = fixture.data.join("capture-history");
+        let screenshot: HistoryEntry = serde_json::from_value(
+            super::json(&history.join(&fixture.capture_id).join("metadata.json")).unwrap(),
+        )
+        .unwrap();
+        let poster = fs::read(history.join(&fixture.capture_id).join("preview.png")).unwrap();
+        let settings_before = fs::read(&fixture.settings).unwrap();
+        let mut originals = Vec::new();
+        for (kind, extension, present) in [
+            (ArtifactKind::Video, "mp4", true),
+            (ArtifactKind::Gif, "gif", false),
+        ] {
+            let external = fixture
+                .root
+                .path()
+                .join(format!("opened recording é.{extension}"));
+            fs::write(
+                &external,
+                b"external recording must not be copied or changed",
+            )
+            .unwrap();
+            let entry = HistoryEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind,
+                mode: None,
+                saved_path: Some(external.to_string_lossy().into_owned()),
+                mime_type: Some(if present { "video/mp4" } else { "image/gif" }.into()),
+                duration_ms: Some(2_700),
+                target: Some(captures_recording::RecordingTarget::Display {
+                    display_id: "opened-media".into(),
+                }),
+                ..screenshot.clone()
+            };
+            captures_history::save_recording_reference(&history, &entry, &poster).unwrap();
+            if !present {
+                fs::remove_file(&external).unwrap();
+            }
+            let metadata = fs::read(history.join(&entry.id).join("metadata.json")).unwrap();
+            originals.push((entry, external, present, metadata));
+        }
+        // Development workbenches must still be isolated from shipping exports.
+        assert!(
+            fixture
+                .import()
+                .unwrap_err()
+                .to_string()
+                .contains("Reference-only")
+        );
+        fixture.no_partial_profile();
+        import_preview_profile(
+            &fixture.settings,
+            &fixture.data,
+            &fixture.destination,
+            &CancelToken::default(),
+        )
+        .unwrap();
+
+        let imported_history = fixture.destination.join("history");
+        let entries = captures_history::load(&imported_history, chrono::Utc::now()).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.id == screenshot.id)
+                .unwrap()
+                .saved_path,
+            screenshot.saved_path
+        );
+        for (original, external, present, metadata) in originals {
+            let entry = entries
+                .iter()
+                .find(|entry| entry.id == original.id)
+                .unwrap();
+            assert_eq!(entry.saved_path, original.saved_path);
+            assert_eq!(
+                entry.recording_media_path(&imported_history),
+                Some(external.clone())
+            );
+            assert_eq!(
+                crate::history_view::media_missing(&imported_history, entry),
+                !present
+            );
+            assert!(
+                captures_history::find_recording_media(&imported_history.join(&entry.id)).is_none()
+            );
+            assert_eq!(
+                fs::read(history.join(&entry.id).join("metadata.json")).unwrap(),
+                metadata
+            );
+            assert_eq!(
+                fs::read(
+                    fixture
+                        .destination
+                        .join("source-snapshot/capture-history")
+                        .join(&entry.id)
+                        .join("metadata.json")
+                )
+                .unwrap(),
+                metadata
+            );
+            if present {
+                assert_eq!(
+                    fs::read(external).unwrap(),
+                    b"external recording must not be copied or changed"
+                );
+            } else {
+                assert!(!external.exists());
+            }
+        }
+        assert_eq!(fs::read(&fixture.settings).unwrap(), settings_before);
         assert_eq!(
             fs::read(fixture.root.path().join("shipping export.png")).unwrap(),
             b"do not overwrite or trash this external export"
