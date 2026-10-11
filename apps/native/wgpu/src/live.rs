@@ -5773,7 +5773,7 @@ impl Live {
                                     continue;
                                 }
                                 self.recording_screenshot_texture =
-                                    session.frozen_image().map(|image| {
+                                    session.frozen_preview().map(|image| {
                                         ctx.load_texture(
                                             format!("recording-screenshot-frozen-{generation}"),
                                             egui::ColorImage::from_rgba_unmultiplied(
@@ -5823,7 +5823,7 @@ impl Live {
                                 );
                                 continue;
                             }
-                            self.region_texture = session.frozen_image().map(|image| {
+                            self.region_texture = session.frozen_preview().map(|image| {
                                 ctx.load_texture(
                                     format!("region-frozen-{generation}"),
                                     egui::ColorImage::from_rgba_unmultiplied(
@@ -5960,7 +5960,7 @@ impl Live {
                                     continue;
                                 }
                                 self.recording_screenshot_texture =
-                                    session.frozen_image().map(|image| {
+                                    session.frozen_preview().map(|image| {
                                         ctx.load_texture(
                                             format!("recording-screenshot-windows-{generation}"),
                                             egui::ColorImage::from_rgba_unmultiplied(
@@ -6017,7 +6017,7 @@ impl Live {
                                 }
                                 continue;
                             }
-                            self.window_texture = session.frozen_image().map(|image| {
+                            self.window_texture = session.frozen_preview().map(|image| {
                                 ctx.load_texture(
                                     format!("window-frozen-{generation}"),
                                     egui::ColorImage::from_rgba_unmultiplied(

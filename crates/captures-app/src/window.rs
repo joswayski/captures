@@ -8,10 +8,10 @@ use crate::{
 use captures_capture::{
     CaptureError, CaptureMode, CaptureResult, DisplayDescriptor, DisplayFrame, LogicalRect,
     PointerCursor, WindowDescriptor, WindowSelectionTargets, XcapBackend,
-    classify_windows_for_display, overlay_pointer_cursor, overlay_pointer_cursor_in_crop,
-    overlay_pointer_cursor_on_window, pointer_cursor, refine_window_chrome_from_snapshot,
-    resolve_window_capture, screenshot_pointer_scale, window_display_crop_is_safe,
-    window_physical_rect,
+    classify_windows_for_display, frozen_capture_preview, overlay_pointer_cursor,
+    overlay_pointer_cursor_in_crop, overlay_pointer_cursor_on_window, pointer_cursor,
+    refine_window_chrome_from_snapshot, resolve_window_capture, screenshot_pointer_scale,
+    window_display_crop_is_safe, window_physical_rect,
 };
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -187,6 +187,19 @@ impl WindowSession {
     /// Borrowed RGBA8; retain the session until every provider/worker is finished.
     pub fn frozen_image(&self) -> Option<&RgbaImage> {
         self.frozen.as_ref().map(|frame| &frame.image)
+    }
+
+    /// Selector pixels, including the frozen Windows cursor when enabled. The
+    /// raw frame remains untouched for capture; only that preview needs a copy.
+    pub fn frozen_preview(&self) -> Option<std::borrow::Cow<'_, RgbaImage>> {
+        self.frozen_image().map(|image| {
+            frozen_capture_preview(
+                image,
+                &self.display,
+                self.cursor.as_ref(),
+                self.include_cursor,
+            )
+        })
     }
 
     /// After hiding/settling the selector/countdown. Frozen safe crops preserve
@@ -514,6 +527,16 @@ mod tests {
                 for include_cursor in [false, true] {
                     let mut session = session(freeze);
                     session.include_cursor = include_cursor;
+                    assert_eq!(
+                        session
+                            .frozen_preview()
+                            .map(|preview| preview.get_pixel(26, 27).0),
+                        freeze.then_some(if include_cursor && cfg!(target_os = "windows") {
+                            [233, 17, 201, 255]
+                        } else {
+                            [26, 27, 11, 255]
+                        })
+                    );
                     let source = Fake::default();
                     let (image, mode) = session.image(&target(), countdown, &source).unwrap();
                     let frozen = freeze && !countdown;

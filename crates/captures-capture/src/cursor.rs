@@ -97,6 +97,28 @@ pub struct PointerCursor {
     pub image: Option<CursorImage>,
 }
 
+/// Windows selectors show the sampled cursor in the frozen desktop, separately
+/// from the live selection pointer. Other platforms retain their cursor-free
+/// preview. Never alter the capture source: final crops composite independently
+/// so a cursor outside the crop cannot leave fragments or be blended twice.
+pub fn frozen_capture_preview<'a>(
+    image: &'a RgbaImage,
+    display: &DisplayDescriptor,
+    cursor: Option<&PointerCursor>,
+    include_cursor: bool,
+) -> std::borrow::Cow<'a, RgbaImage> {
+    if cfg!(target_os = "windows")
+        && include_cursor
+        && let Some(cursor) = cursor
+    {
+        let mut preview = image.clone();
+        overlay_pointer_cursor(&mut preview, display, cursor, 1.0);
+        std::borrow::Cow::Owned(preview)
+    } else {
+        std::borrow::Cow::Borrowed(image)
+    }
+}
+
 /// Snapshot before changing the host's cursor or opening a selector. macOS and
 /// Windows keep system cursor pixels; X11 retains the shipping synthetic arrow.
 #[cfg(not(target_os = "windows"))]

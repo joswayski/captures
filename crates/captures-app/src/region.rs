@@ -3,7 +3,8 @@
 use crate::{Artifact, Error, capture_flow, persist_screenshot};
 use captures_capture::{
     CaptureError, CaptureMode, DisplayDescriptor, DisplayFrame, LogicalRect, PointerCursor,
-    XcapBackend, overlay_pointer_cursor_in_crop, pointer_cursor, screenshot_pointer_scale,
+    XcapBackend, frozen_capture_preview, overlay_pointer_cursor_in_crop, pointer_cursor,
+    screenshot_pointer_scale,
 };
 use image::RgbaImage;
 use std::path::Path;
@@ -61,6 +62,19 @@ impl RegionSession {
     /// is dropped; the host must retain the session while any image provider reads.
     pub fn frozen_image(&self) -> Option<&RgbaImage> {
         self.frozen.as_ref().map(|f| &f.image)
+    }
+
+    /// Selector pixels, including the frozen Windows cursor when enabled. The
+    /// raw frame remains untouched for capture; only that preview needs a copy.
+    pub fn frozen_preview(&self) -> Option<std::borrow::Cow<'_, RgbaImage>> {
+        self.frozen_image().map(|image| {
+            frozen_capture_preview(
+                image,
+                &self.display,
+                self.cursor.as_ref(),
+                self.include_cursor,
+            )
+        })
     }
 
     /// Off-main-thread final capture. Like shipping Captures, a nonzero countdown
@@ -232,6 +246,16 @@ mod tests {
                         cursor: Some(frozen_pointer.clone()),
                         include_cursor,
                     };
+                    assert_eq!(
+                        session
+                            .frozen_preview()
+                            .map(|preview| preview.get_pixel(8, 6).0),
+                        freeze.then_some(if include_cursor && cfg!(target_os = "windows") {
+                            [211, 19, 79, 255]
+                        } else {
+                            [8, 18, 17, 255]
+                        })
+                    );
                     let mut fresh_calls = 0;
                     let pixels = session
                         .image(rect, countdown, || {
