@@ -375,6 +375,18 @@ pub fn shipping_settings_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("settings.json"))
 }
 
+/// The installed native Preview never shares writable data with a development
+/// workbench or the previous Tauri application.
+pub fn native_preview_profile_path() -> PathBuf {
+    ProjectDirs::from("io", "github", "Captures Native Preview")
+        .map(|d| d.data_local_dir().join("profile"))
+        .unwrap_or_else(|| PathBuf::from(".captures-native-preview/profile"))
+}
+
+pub fn shipping_data_directory() -> Option<PathBuf> {
+    ProjectDirs::from("io", "github", "captures").map(|d| d.data_local_dir().to_path_buf())
+}
+
 pub fn load(path: &Path) -> Result<AppSettings, SettingsError> {
     let data = match fs::read(path) {
         Ok(v) => v,

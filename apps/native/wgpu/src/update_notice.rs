@@ -790,6 +790,10 @@ impl Host {
         }
         let blocked = self.presentation().dismiss_blocked;
         while let Ok(action) = self.rx.try_recv() {
+            if self.live && action == Action::OpenDownloadPage {
+                ctx.open_url(egui::OpenUrl::new_tab("https://captur.es/#download"));
+                continue;
+            }
             if self.live
                 && let Action::OpenPullRequest { url } = &action
             {

@@ -322,7 +322,9 @@ final class UpdateNoticeModel {
             let opened = checkedPresentation != nil && openPullRequest(url)
             event("update-notice-open-url", ["kind": "pull_request", "url": url, "opened": opened])
         case .openDownloadPage:
-            event("update-notice-open-url", ["kind": "download", "url": "https://captur.es/#download", "opened": false])
+            let url = "https://captur.es/#download"
+            let opened = checkedPresentation != nil && openPullRequest(url)
+            event("update-notice-open-url", ["kind": "download", "url": url, "opened": opened])
         }
         changed()
     }

@@ -279,6 +279,7 @@ pub struct Preferences {
     last_shortcut_probe: Option<Value>,
     feedback: crate::feedback::FeedbackWindow,
     update_checks: Option<captures_app::updater::checks::CheckWorker>,
+    next_preview_check: Instant,
     install_update_requested: bool,
     login_root: Option<PathBuf>,
     login_enabled: Option<bool>,
@@ -385,6 +386,7 @@ impl Preferences {
             last_shortcut_probe: None,
             feedback: crate::feedback::FeedbackWindow::default(),
             update_checks: None,
+            next_preview_check: Instant::now() + Duration::from_secs(300),
             install_update_requested: false,
             login_root: None,
             login_enabled: None,
@@ -720,6 +722,34 @@ impl Preferences {
         Ok(())
     }
 
+    pub fn connect_preview_updates(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> Result<(), captures_app::updater::Error> {
+        let wake = ctx.clone();
+        let mut checker = captures_app::updater::checks::CheckWorker::preview(
+            captures_app::updater::Renderer::Wgpu,
+            Arc::new(move || wake.request_repaint_of(egui::ViewportId::ROOT)),
+        )?;
+        checker.check_automatically();
+        self.update_checks = Some(checker);
+        Ok(())
+    }
+
+    pub fn has_preview_updates(&self) -> bool {
+        self.update_checks
+            .as_ref()
+            .is_some_and(|checker| checker.is_preview())
+    }
+
+    pub fn launch_preview_install(&mut self, preferences_visible: bool) -> Result<(), String> {
+        self.update_checks
+            .as_mut()
+            .ok_or("Preview updater is unavailable")?
+            .launch_preview_install(preferences_visible)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn check_updates(&mut self) -> bool {
         let Some(checker) = &mut self.update_checks else {
             return false;
@@ -781,6 +811,21 @@ impl Preferences {
     pub fn receive(&mut self, ctx: &egui::Context) {
         if let Some(checker) = &mut self.update_checks {
             checker.poll();
+            if checker.is_preview() {
+                let now = Instant::now();
+                if now >= self.next_preview_check {
+                    self.next_preview_check = now + Duration::from_secs(300);
+                    if matches!(
+                        checker.status(),
+                        captures_app::updater::checks::CheckStatus::Idle
+                            | captures_app::updater::checks::CheckStatus::UpToDate
+                            | captures_app::updater::checks::CheckStatus::Error { .. }
+                    ) {
+                        checker.check_automatically();
+                    }
+                }
+                ctx.request_repaint_after(self.next_preview_check.saturating_duration_since(now));
+            }
         }
         while let Ok(message) = self.rx.try_recv() {
             match message {
@@ -2598,7 +2643,9 @@ impl Preferences {
                     ui,
                     t,
                     "Package verification",
-                    if button.action == captures_app::update_notice::Action::Install {
+                    if this.has_preview_updates() {
+                        "Install the signed native Preview after capture work and drafts finish."
+                    } else if button.action == captures_app::update_notice::Action::Install {
                         "Restart after capture work and drafts finish; update this development package only."
                     } else {
                         "Temporary storage only; nothing is installed or executed."

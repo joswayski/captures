@@ -31,6 +31,7 @@ pub mod onboarding;
 pub mod permission_recovery;
 pub mod preferences;
 pub mod preview;
+pub mod preview_channel;
 pub mod preview_chrome;
 pub mod preview_drag;
 pub mod preview_motion;
@@ -109,6 +110,8 @@ pub fn default_history_root() -> PathBuf {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
     DefaultHistoryRoot,
+    PreviewStartup,
+    PreviewBuildInfo,
     Displays,
     RequestPermission,
     CaptureDisplay {
@@ -177,6 +180,12 @@ pub enum Response {
     HistoryRoot {
         path: PathBuf,
     },
+    PreviewStartup {
+        startup: Option<preview_channel::Startup>,
+    },
+    PreviewBuildInfo {
+        version: Option<&'static str>,
+    },
     Displays {
         displays: Vec<DisplayDescriptor>,
     },
@@ -218,6 +227,12 @@ pub fn execute(request: Request) -> Result<Response, Error> {
     match request {
         Request::DefaultHistoryRoot => Ok(Response::HistoryRoot {
             path: default_history_root(),
+        }),
+        Request::PreviewStartup => Ok(Response::PreviewStartup {
+            startup: preview_channel::startup().map_err(Error::Unsupported)?,
+        }),
+        Request::PreviewBuildInfo => Ok(Response::PreviewBuildInfo {
+            version: preview_channel::version(),
         }),
         Request::Displays => {
             XcapBackend.ensure_permission(false)?;

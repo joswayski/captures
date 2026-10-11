@@ -957,13 +957,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             self?.refreshLiveUpdateNotice()
         }
         options.nativeUpdateChecks?.requestInstallation = { [weak self] in
-            guard let self, self.options.nativeUpdateInstallSession != nil,
+            guard let self, (self.options.previewChannel || self.options.nativeUpdateInstallSession != nil),
                   !self.terminationPending, !self.terminating, !self.installUpdateRequested
             else { return false }
             self.installUpdateRequested = true
             requestApplicationTermination()
             return true
         }
+        if options.previewChannel { options.nativeUpdateChecks?.startPreviewChecks() }
         if let file = options.nativeUpdateReadyFile, let token = options.nativeUpdateReadyToken,
            let acknowledgement = try? UpdateHealthAcknowledgement(file: file, token: token) {
             updateHealth = UpdateHealthCoordinator(acknowledgement: acknowledgement) {
@@ -1140,7 +1141,18 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     }
                     self.shutdownUpdateIntent = intent
                 }
-                if self.installUpdateRequested && self.shutdownUpdateIntent == nil {
+                if self.installUpdateRequested && self.options.previewChannel {
+                    do { try self.options.nativeUpdateChecks?.launchPreviewInstall(
+                        preferencesVisible: self.appWindows.window(.preferences)?.isVisible == true) }
+                    catch {
+                        self.installUpdateRequested = false
+                        self.terminating = false; self.terminationPending = false
+                        sender.reply(toApplicationShouldTerminate: false)
+                        self.presentHostError(title: "Couldn’t Restart Captures", message: error.localizedDescription)
+                        return
+                    }
+                }
+                if self.installUpdateRequested && !self.options.previewChannel && self.shutdownUpdateIntent == nil {
                     self.installUpdateRequested = false
                     self.terminating = false; self.terminationPending = false
                     sender.reply(toApplicationShouldTerminate: false)

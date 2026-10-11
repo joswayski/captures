@@ -35,6 +35,18 @@ pub fn locate() -> MediaToolchain {
 pub fn verify_bundled() -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("Could not locate the packaged executable: {error}"))?;
+    if captures_app::preview_channel::version().is_some() {
+        let parent = executable
+            .parent()
+            .ok_or("Packaged executable has no parent")?;
+        let suffix = if cfg!(windows) { ".exe" } else { "" };
+        return MediaToolchain::new(
+            parent.join(format!("ffmpeg{suffix}")),
+            parent.join(format!("ffprobe{suffix}")),
+        )
+        .verify()
+        .map_err(|error| error.to_string());
+    }
     verify_bundled_at(&executable, &target()).map_err(|error| error.to_string())
 }
 
@@ -114,6 +126,14 @@ fn locate_tool(
         .into_iter()
         .flat_map(|parent| {
             [
+                parent.join(format!(
+                    "{name}{}",
+                    if target.contains("windows") {
+                        ".exe"
+                    } else {
+                        ""
+                    }
+                )),
                 parent.join(&filename),
                 parent.join("binaries").join(&filename),
             ]

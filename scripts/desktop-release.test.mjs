@@ -37,6 +37,10 @@ test("classifies installed-app paths without treating website, API, docs, or tes
   for (const path of [
     "apps/desktop/ui/src/App.tsx",
     "apps/desktop/src-tauri/src/lib.rs",
+    "apps/native/wgpu/src/main.rs",
+    "apps/native/macos/Sources/CapturesNative/Main.swift",
+    "apps/native/wgpu/Cargo.lock",
+    "scripts/native-preview-build.mjs",
     "crates/captures-video/src/lib.rs",
     "shared/design.css",
     ".cargo/config.toml",

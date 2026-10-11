@@ -78,10 +78,11 @@ final class NativeUpdateCheckTransport: UpdateCheckTransport {
     }
 }
 
-/// Retained across Preferences closure. No automatic check or idle polling.
+/// Retained across Preferences closure. Only installed Previews start periodic checks.
 final class UpdateCheckModel {
     private let transport: UpdateCheckTransport
     private var timer: Timer?
+    private var previewTimer: Timer?
     private var closed = false
     private(set) var presentation: [String: Any] = [:]
     private(set) var notice: [String: Any]?
@@ -96,12 +97,23 @@ final class UpdateCheckModel {
         try apply(transport.request(["operation": "poll"]))
     }
 
-    deinit { timer?.invalidate() }
+    deinit { timer?.invalidate(); previewTimer?.invalidate() }
     var enabled: Bool { !closed && !busy && presentation["enabled"] as? Bool == true }
 
-    @discardableResult func check() -> Bool {
+    func startPreviewChecks() {
+        guard previewTimer == nil else { return }
+        check(automatically: true)
+        let timer = Timer(timeInterval: 300, repeats: true) { [weak self] _ in
+            guard let self, self.acquisition == nil else { return }
+            self.check(automatically: true)
+        }
+        previewTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    @discardableResult func check(automatically: Bool = false) -> Bool {
         guard enabled else { return false }
-        return command("check")
+        return command("check", automatic: automatically)
     }
 
     var acquisition: UpdateNoticeButton? { UpdateNoticeButton(presentation["acquisition"]) }
@@ -128,12 +140,21 @@ final class UpdateCheckModel {
         return status
     }
 
-    private func command(_ operation: String) -> Bool {
+    func launchPreviewInstall(preferencesVisible: Bool) throws {
+        let reply = try transport.request(["operation": "install_preview", "preferences_visible": preferencesVisible])
+        guard reply["accepted"] as? Bool == true else {
+            throw AppBridgeError.backend("The Preview installer could not start.")
+        }
+    }
+
+    private func command(_ operation: String, automatic: Bool = false) -> Bool {
         // An unread reply is not evidence that an accepted request stopped.
         busy = true
         var accepted = false
         do {
-            let reply = try transport.request(["operation": operation, "show_changelog": showChangelog])
+            var request: [String: Any] = ["operation": operation, "show_changelog": showChangelog]
+            if automatic { request["automatic"] = true }
+            let reply = try transport.request(request)
             try apply(reply)
             accepted = reply["accepted"] as? Bool == true
         } catch {
@@ -177,6 +198,7 @@ final class UpdateCheckModel {
 
     func shutdown(completion: @escaping () -> Void) {
         closed = true; timer?.invalidate(); timer = nil
+        previewTimer?.invalidate(); previewTimer = nil
         transport.shutdown(completion: completion)
     }
 }

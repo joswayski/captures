@@ -1,4 +1,5 @@
-//! Per-profile, user-owned development login registration.
+//! User-owned login registration: isolated development entries or the installed
+//! Preview's existing Captures entry (including registrations made by Tauri).
 
 use sha2::{Digest, Sha256};
 #[cfg(any(unix, test))]
@@ -27,6 +28,14 @@ pub fn configure(
     let settings_file = std::path::absolute(settings_file).map_err(|e| e.to_string())?;
     let executable = std::env::current_exe()
         .map_err(|error| format!("Could not locate the current executable: {error}"))?;
+    #[cfg(target_os = "linux")]
+    let executable = if crate::preview_channel::version().is_some() {
+        std::env::var_os("APPIMAGE")
+            .map(PathBuf::from)
+            .unwrap_or(executable)
+    } else {
+        executable
+    };
     if !executable.is_absolute() || !executable.is_file() {
         return Err("Current executable is not an absolute existing file".into());
     }
@@ -50,6 +59,10 @@ fn arguments(executable: &Path, history_root: &Path, settings_file: &Path) -> Ve
             .expect("validated executable")
             .to_owned(),
     ];
+    if crate::preview_channel::version().is_some() {
+        result.push("--captures-autostart".into());
+        return result;
+    }
     result.extend(ARGUMENTS.map(str::to_owned));
     result.push(
         history_root
@@ -79,7 +92,8 @@ fn reconcile_file(path: &Path, expected: &[u8], enabled: Option<bool>) -> Result
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(format!("Could not read login item: {error}")),
     };
-    if existing.as_deref().is_some_and(|value| value != expected) {
+    let installed = crate::preview_channel::version().is_some();
+    if !installed && existing.as_deref().is_some_and(|value| value != expected) {
         return Err(format!(
             "A different login item already exists at {}",
             path.display()
@@ -87,7 +101,7 @@ fn reconcile_file(path: &Path, expected: &[u8], enabled: Option<bool>) -> Result
     }
     match enabled {
         None => Ok(existing.is_some()),
-        Some(true) if existing.is_some() => Ok(true),
+        Some(true) if existing.is_some() && !installed => Ok(true),
         Some(true) => {
             let parent = path.parent().ok_or("Login item has no parent directory")?;
             fs::create_dir_all(parent)
@@ -96,8 +110,12 @@ fn reconcile_file(path: &Path, expected: &[u8], enabled: Option<bool>) -> Result
             let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
             file.write_all(expected).map_err(|e| e.to_string())?;
             file.as_file().sync_all().map_err(|e| e.to_string())?;
-            file.persist_noclobber(path)
-                .map_err(|e| format!("Could not create login item: {e}"))?;
+            (if installed {
+                file.persist(path)
+            } else {
+                file.persist_noclobber(path)
+            })
+            .map_err(|e| format!("Could not create login item: {e}"))?;
             Ok(true)
         }
         Some(false) if existing.is_some() => {
@@ -121,13 +139,22 @@ fn configure_platform(
         .filter(|path| path.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .ok_or("HOME and XDG_CONFIG_HOME are unavailable")?;
+    let installed = crate::preview_channel::version().is_some();
+    // auto-launch 0.5 used HOME, not XDG_CONFIG_HOME. Keep that identity so
+    // toggling the native setting also controls the previous registration.
+    let base = if installed {
+        PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable")?).join(".config")
+    } else {
+        base
+    };
     if !base.is_absolute() {
         return Err("Login item directory must be absolute".into());
     }
-    let path = base.join("autostart").join(format!(
-        "captures-native-{}.desktop",
-        identity(history_root)
-    ));
+    let path = base.join("autostart").join(if installed {
+        "Captures.desktop".into()
+    } else {
+        format!("captures-native-{}.desktop", identity(history_root))
+    });
     let exec = desktop_command(&arguments(executable, history_root, settings_file))?;
     let content = format!(
         "[Desktop Entry]\nType=Application\nName=Captures Native ({})\nExec={}\nTerminal=false\nX-Captures-Profile={}\n",
@@ -185,15 +212,24 @@ fn configure_platform(
         .filter(|path| path.is_absolute())
         .ok_or("HOME is unavailable")?;
     let id = identity(history_root);
-    let path = home
-        .join("Library/LaunchAgents")
-        .join(format!("dev.captures.native.{id}.plist"));
+    let path =
+        home.join("Library/LaunchAgents")
+            .join(if crate::preview_channel::version().is_some() {
+                "Captures.plist".into()
+            } else {
+                format!("dev.captures.native.{id}.plist")
+            });
     let content = launch_agent(&id, &arguments(executable, history_root, settings_file));
     reconcile_file(&path, content.as_bytes(), enabled)
 }
 
 #[cfg(any(target_os = "macos", test))]
 fn launch_agent(id: &str, arguments: &[String]) -> String {
+    let label = if crate::preview_channel::version().is_some() {
+        "Captures".into()
+    } else {
+        format!("dev.captures.native.{id}")
+    };
     let xml = |value: &str| {
         value
             .replace('&', "&amp;")
@@ -209,7 +245,7 @@ fn launch_agent(id: &str, arguments: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>dev.captures.native.{id}</string>\n  <key>ProgramArguments</key><array>\n{values}\n  </array>\n  <key>RunAtLoad</key><true/>\n</dict></plist>\n"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{label}</string>\n  <key>ProgramArguments</key><array>\n{values}\n  </array>\n  <key>RunAtLoad</key><true/>\n</dict></plist>\n"
     )
 }
 
@@ -224,7 +260,12 @@ fn configure_platform(
         RegKey,
         enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE},
     };
-    let name = format!("CapturesNative-{}", identity(history_root));
+    let installed = crate::preview_channel::version().is_some();
+    let name = if installed {
+        "Captures".into()
+    } else {
+        format!("CapturesNative-{}", identity(history_root))
+    };
     let expected = arguments(executable, history_root, settings_file)
         .iter()
         .map(|arg| windows_quote(arg))
@@ -242,15 +283,45 @@ fn configure_platform(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e.to_string()),
     };
-    if existing.as_ref().is_some_and(|value| value != &expected) {
+    if !installed && existing.as_ref().is_some_and(|value| value != &expected) {
         return Err(format!("A different login item already exists for {name}"));
     }
     match enabled {
-        None => Ok(existing.is_some()),
-        Some(true) if existing.is_some() => Ok(true),
+        None => {
+            let approved = hkcu
+                .open_subkey(
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
+                )
+                .and_then(|key| key.get_raw_value(&name))
+                .ok();
+            Ok(existing.is_some()
+                && approved.is_none_or(|value| {
+                    value
+                        .bytes
+                        .first()
+                        .is_none_or(|byte| !matches!(byte, 3 | 7))
+                }))
+        }
+        Some(true) if existing.is_some() && !installed => Ok(true),
         Some(true) => {
             let (key, _) = hkcu.create_subkey(key_path).map_err(|e| e.to_string())?;
-            key.set_value(name, &expected).map_err(|e| e.to_string())?;
+            key.set_value(&name, &expected).map_err(|e| e.to_string())?;
+            if installed
+                && let Ok(approved) = hkcu.open_subkey_with_flags(
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
+                    KEY_WRITE,
+                )
+            {
+                approved
+                    .set_raw_value(
+                        &name,
+                        &winreg::RegValue {
+                            vtype: winreg::enums::REG_BINARY,
+                            bytes: vec![2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
             Ok(true)
         }
         Some(false) if existing.is_some() => {

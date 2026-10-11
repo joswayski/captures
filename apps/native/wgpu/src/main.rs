@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod accessibility;
 mod capture_controls;
 mod capture_error;
@@ -418,6 +420,17 @@ fn main() -> eframe::Result {
         print!("{}", captures_app::editor_fonts::NOTICE);
         return Ok(());
     }
+    if std::env::args().nth(1).as_deref() == Some("--preview-build-info") {
+        println!(
+            "{}",
+            json!({"renderer": "wgpu", "version": captures_app::preview_channel::version()})
+        );
+        return Ok(());
+    }
+    let _preview_use = captures_app::preview_channel::package_use().unwrap_or_else(|error| {
+        eprintln!("Captures could not start: {error}");
+        std::process::exit(1);
+    });
     // Package ownership outlives profile election, every worker and the event
     // loop. Fixtures use package resources too; checkout binaries acquire none.
     let _package_use = captures_app::updater::PackageUse::current().unwrap_or_else(|error| {
@@ -428,6 +441,19 @@ fn main() -> eframe::Result {
         eprintln!("{error}\n{}", options::USAGE);
         std::process::exit(2);
     });
+    if options.live && options.history_root.is_none() && options.settings_file.is_none() {
+        match captures_app::preview_channel::startup() {
+            Ok(Some(startup)) => {
+                options.history_root = Some(startup.history_root);
+                options.settings_file = Some(startup.settings_file);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Captures could not start: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     // Election precedes the renderer, capture workers, tray and global keys.
     // Fixtures never acquire ownership of a live development profile.
     let instance = if options.live {

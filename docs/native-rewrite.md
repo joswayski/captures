@@ -1,13 +1,23 @@
 # Browser-free desktop migration
 
-Status: **native capture/recording workflows implemented; screenshot and recording editor slices underway;
-cross-platform acceptance and renderer selection still open**.
+Status: **native Preview cutover authorized; physical cross-platform acceptance remains open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
-complete OS at a time. AppKit and the experimental Rust/wgpu host both connect
-real capture engines in opt-in development builds; neither replaces the released app.
-The shipping Tauri application remains available. No WebView, JavaScript runtime,
-localhost server, or Tauri dependency belongs in the replacement. The website is
-unaffected.
+complete OS at a time. Preview packaging now selects AppKit on macOS and Rust/wgpu
+on Windows/Linux. The maintainer explicitly authorized switching installed updates
+and downloads before physical acceptance; this does not mark the remaining gates
+complete or start a stable channel. The existing download aliases and updater
+manifest change only after a complete signed release. Older Tauri releases remain
+in the archive. No WebView, JavaScript runtime, localhost server or Tauri runtime
+belongs in the replacement; the existing CLI remains a build-time installer bundler.
+The website continues using the same download aliases.
+
+Installed profile copy, pinned signature verification and a stopped-process helper
+are now connected separately from the opt-in development updater. macOS/AppImage
+replacement keeps the previous package until renderer/settings/media startup
+acknowledgement; a failed acknowledgement retains recovery files and does not
+automatically roll back a possibly running application. Windows uses NSIS; Debian
+uses manual package installation. Open editor-window restoration across this
+cutover is not connected. See [release recovery](releases.md#native-preview-packaging-and-recovery).
 
 ## Progress dashboard
 

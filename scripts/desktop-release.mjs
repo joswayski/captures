@@ -3,8 +3,12 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const ZERO_SHA = /^0{40}$/u;
-const DESKTOP_ROOTS = [".cargo/", "apps/desktop/", "crates/", "shared/"];
-const DESKTOP_EXACT_PATHS = new Set(["Cargo.lock", "Cargo.toml"]);
+const DESKTOP_ROOTS = [".cargo/", "apps/desktop/", "apps/native/", "crates/", "shared/"];
+const DESKTOP_EXACT_PATHS = new Set([
+  "Cargo.lock",
+  "Cargo.toml",
+  "scripts/native-preview-build.mjs",
+]);
 const TEST_ONLY_PATH = /(?:^|\/)[^/]+\.test\.(?:[cm]?[jt]sx?)$/u;
 
 /** Files whose contents can change the installed desktop app. */

@@ -1,5 +1,5 @@
-//! Explicit native development checks and opt-in temporary package verification.
-//! No automatic requests, installation, profile access or channel activation.
+//! Serialized update checks and acquisition for explicit development endpoints
+//! or the compiled installed Preview channel. Construction never issues HTTP.
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -105,6 +105,7 @@ pub struct Presentation {
 enum Job {
     Check(CancelToken),
     Download(CancelToken),
+    TakePreview(mpsc::Sender<Option<super::preview::Download>>),
     Shutdown,
 }
 
@@ -114,12 +115,84 @@ enum Event {
     Verifying,
 }
 
+enum Source {
+    Development(UpdateClient),
+    Preview(super::preview::Client),
+}
+
+enum Pending {
+    Development(super::PendingUpdate),
+    Preview(super::preview::Pending),
+}
+
+enum Stage {
+    Development(super::StagedUpdate),
+    Preview(super::preview::Download),
+}
+
+impl Source {
+    fn check(&self, token: &CancelToken) -> Result<Option<Pending>, Error> {
+        match self {
+            Self::Development(client) => client
+                .check(token)
+                .map(|update| update.map(Pending::Development)),
+            Self::Preview(client) => client
+                .check(token)
+                .map(|update| update.map(Pending::Preview)),
+        }
+    }
+}
+
+impl Pending {
+    fn info(&self) -> &ReleaseInfo {
+        match self {
+            Self::Development(update) => update.info(),
+            Self::Preview(update) => &update.info,
+        }
+    }
+
+    fn stage(
+        &self,
+        directory: &Path,
+        token: &CancelToken,
+        progress: impl FnMut(u64, u64),
+        verifying: impl FnOnce(),
+    ) -> Result<Stage, Error> {
+        match self {
+            Self::Development(update) => {
+                let verified = update.download(directory, token, progress)?;
+                verifying();
+                verified.stage(directory, token).map(Stage::Development)
+            }
+            Self::Preview(update) => update
+                .download(directory, token, progress)
+                .map(Stage::Preview),
+        }
+    }
+}
+
+impl Stage {
+    fn sha256(&self) -> String {
+        match self {
+            Self::Development(package) => package
+                .archive
+                .hash
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            Self::Preview(package) => package.sha256.clone(),
+        }
+    }
+}
+
 pub struct CheckWorker {
     current_version: String,
     status: CheckStatus,
     generation: u64,
     staging_enabled: bool,
     install_request_enabled: bool,
+    preview: bool,
+    automatic_check: bool,
     jobs: mpsc::Sender<Job>,
     results: mpsc::Receiver<Event>,
     operation_cancel: Option<CancelToken>,
@@ -136,10 +209,38 @@ impl CheckWorker {
         wake: Arc<dyn Fn() + Send + Sync>,
         staging_directory: Option<PathBuf>,
     ) -> Result<Self, Error> {
+        Self::with_source(Source::Development(client), wake, staging_directory)
+    }
+
+    pub fn preview(renderer: Renderer, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, Error> {
+        let client = super::preview::Client::installed(renderer)?;
+        let installable = client.installable();
+        let directory = crate::preview_channel::profile_path()
+            .map_err(|_| Error::Configuration("Preview profile is unavailable"))?
+            .join("updates");
+        std::fs::create_dir_all(&directory)?;
+        let mut worker = Self::with_source(
+            Source::Preview(client),
+            wake,
+            installable.then_some(directory),
+        )?;
+        worker.install_request_enabled = installable;
+        Ok(worker)
+    }
+
+    fn with_source(
+        client: Source,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        staging_directory: Option<PathBuf>,
+    ) -> Result<Self, Error> {
         if let Some(path) = &staging_directory {
             validate_staging_directory(path)?;
         }
-        let current_version = client.current_version.to_string();
+        let current_version = match &client {
+            Source::Development(client) => client.current_version.to_string(),
+            Source::Preview(client) => client.current_version(),
+        };
+        let preview = matches!(client, Source::Preview(_));
         let staging_enabled = staging_directory.is_some();
         let (jobs, requests) = mpsc::channel();
         let (finished, results) = mpsc::channel();
@@ -154,6 +255,17 @@ impl CheckWorker {
                 }
                 let status = match job {
                     Job::Shutdown => break,
+                    Job::TakePreview(reply) => {
+                        let value = match staged.take() {
+                            Some(Stage::Preview(package)) => Some(package),
+                            other => {
+                                staged = other;
+                                None
+                            }
+                        };
+                        let _ = reply.send(value);
+                        continue;
+                    }
                     Job::Check(token) => {
                         // Drop verified temporary storage before rechecking.
                         staged.take();
@@ -176,20 +288,22 @@ impl CheckWorker {
                             continue;
                         };
                         let release = update.info().clone();
-                        let result = update
-                            .download(directory, &token, |received, total| {
+                        let result = update.stage(
+                            directory,
+                            &token,
+                            |received, total| {
                                 if !cancelled.is_cancelled() && !token.is_cancelled() {
                                     let _ = finished.send(Event::Progress(received, total));
                                     wake();
                                 }
-                            })
-                            .and_then(|verified| {
+                            },
+                            || {
                                 if !cancelled.is_cancelled() && !token.is_cancelled() {
                                     let _ = finished.send(Event::Verifying);
                                     wake();
                                 }
-                                verified.stage(directory, &token)
-                            });
+                            },
+                        );
                         if token.is_cancelled() {
                             // Cleanup precedes the cancellation acknowledgement.
                             drop(result);
@@ -197,11 +311,9 @@ impl CheckWorker {
                         } else {
                             match result {
                                 Ok(package) => {
+                                    let sha256 = package.sha256();
                                     staged = Some(package);
-                                    CheckStatus::Staged {
-                                        release,
-                                        sha256: update.sha256(),
-                                    }
+                                    CheckStatus::Staged { release, sha256 }
                                 }
                                 Err(error) => CheckStatus::DownloadError {
                                     release,
@@ -231,6 +343,8 @@ impl CheckWorker {
             generation: 0,
             staging_enabled,
             install_request_enabled: false,
+            preview,
+            automatic_check: false,
             jobs,
             results,
             operation_cancel: None,
@@ -239,8 +353,45 @@ impl CheckWorker {
         })
     }
 
-    /// Only a GUI launched by the explicit development supervisor enables this
-    /// presentation route. The worker itself cannot replace or execute a package.
+    pub fn is_preview(&self) -> bool {
+        self.preview
+    }
+
+    /// Call after the host's editor/recording veto, before shutting this worker
+    /// down. The copied helper cannot install until every package-use guard exits.
+    pub fn launch_preview_install(&mut self, preferences_visible: bool) -> Result<(), Error> {
+        if !self.preview
+            || !self.install_request_enabled
+            || !matches!(self.status, CheckStatus::Staged { .. })
+        {
+            return Err(Error::Installation(
+                "a verified Preview update is not available",
+            ));
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.jobs
+            .send(Job::TakePreview(sender))
+            .map_err(|_| Error::Installation("update worker stopped"))?;
+        let package = receiver
+            .recv()
+            .map_err(|_| Error::Installation("update worker stopped"))?
+            .ok_or(Error::Installation(
+                "verified Preview package is no longer available",
+            ))?;
+        if let Err(error) = package.launch(preferences_visible) {
+            if let CheckStatus::Staged { release, .. } = &self.status {
+                self.status = CheckStatus::DownloadError {
+                    release: release.clone(),
+                    message: error.to_string(),
+                };
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Development hosts enable this only under the explicit supervisor.
+    /// Installed Previews enable it when their package supports replacement.
     pub fn enable_install_request(&mut self) {
         self.install_request_enabled = self.staging_enabled;
     }
@@ -251,12 +402,22 @@ impl CheckWorker {
         if self.cancel.is_cancelled() || self.checking() || self.thread.is_none() {
             return false;
         }
+        self.automatic_check = false;
         self.status = CheckStatus::Checking;
         let token = CancelToken::default();
         self.operation_cancel = Some(token.clone());
         let accepted = self.jobs.send(Job::Check(token)).is_ok();
         if accepted {
             self.generation += 1;
+        }
+        accepted
+    }
+
+    /// Background checks only raise a notice when an update is available.
+    pub fn check_automatically(&mut self) -> bool {
+        let accepted = self.check();
+        if accepted {
+            self.automatic_check = true;
         }
         accepted
     }
@@ -272,6 +433,7 @@ impl CheckWorker {
             }
             _ => return false,
         };
+        self.automatic_check = false;
         let token = CancelToken::default();
         self.operation_cancel = Some(token.clone());
         let accepted = self.jobs.send(Job::Download(token)).is_ok();
@@ -364,6 +526,9 @@ impl CheckWorker {
     /// download-page link, close-captures warning or simulated restart.
     pub fn notice(&self, show_changelog: bool) -> Option<crate::update_notice::Presentation> {
         use crate::update_notice::{self as notice, Action, Button, UpdateStatus, ViewState};
+        if self.automatic_check && !matches!(self.status, CheckStatus::Available { .. }) {
+            return None;
+        }
         let current_version = self.current_version.clone();
         let current_display_version = current_version.clone();
         let status = match &self.status {
@@ -505,6 +670,38 @@ impl CheckWorker {
                 p.close_warning = Some(notice::OPEN_CAPTURES_WARNING.into());
             }
         }
+        if self.preview {
+            p.title = match self.status {
+                CheckStatus::Checking => "Checking for updates",
+                CheckStatus::UpToDate => "Captures is up to date",
+                CheckStatus::Downloading { .. } => "Downloading Preview",
+                CheckStatus::Staged { .. } => "Preview ready to install",
+                CheckStatus::Error { .. } | CheckStatus::DownloadError { .. } => "Update failed",
+                _ => "Captures Preview update",
+            }
+            .into();
+            p.description = self.presentation().status;
+            p.status_message = if matches!(self.status, CheckStatus::Staged { .. }) {
+                Some("Restart installs the signed native Preview after capture work and drafts finish.".into())
+            } else {
+                None
+            };
+            if let Some(error) = &mut p.error {
+                error.fallback_prefix = "Try again, or ".into();
+                error.fallback_link = "download from captur.es".into();
+                error.fallback_suffix = ".".into();
+            }
+            if !self.staging_enabled
+                && matches!(self.status, CheckStatus::Available { .. })
+                && let Some(footer) = &mut p.footer
+            {
+                footer.primary = Some(Button {
+                    label: "Download Preview".into(),
+                    enabled: true,
+                    action: Action::OpenDownloadPage,
+                });
+            }
+        }
         Some(p)
     }
 
@@ -552,7 +749,7 @@ impl CheckWorker {
                 message.clone()
             }
         };
-        Presentation {
+        let mut presentation = Presentation {
             version: format!("Native development {}", self.current_version),
             channel: if self.install_request_enabled {
                 "Explicit development endpoint · Supervised restart"
@@ -580,7 +777,28 @@ impl CheckWorker {
                 "Verifies signed native development metadata. No download, installation or update channel is enabled."
             },
             acquisition: self.acquisition(),
+        };
+        if self.preview {
+            presentation.version = format!("Captures {}", self.current_version);
+            presentation.channel = "Preview · Experimental";
+            presentation.status = match &self.status {
+                CheckStatus::UpToDate => "You have the latest Preview".into(),
+                CheckStatus::Available { release } => {
+                    format!("Preview {} available", release.version)
+                }
+                CheckStatus::Staged { release, .. } => {
+                    format!("Preview {} verified", release.version)
+                }
+                CheckStatus::Checking => "Checking for updates…".into(),
+                _ => presentation.status,
+            };
+            presentation.detail = if self.staging_enabled {
+                "Signed native Preview updates. Restart and install closes open captures after preserving drafts. Ordinary Quit does not install."
+            } else {
+                "Debian packages use manual updates. Download the latest native Preview from captur.es."
+            };
         }
+        presentation
     }
 
     fn begin_shutdown(&mut self) {
@@ -674,6 +892,40 @@ mod tests {
         artifact["size"] = serde_json::json!(body.len());
         artifact["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(body)));
         signed(&value)
+    }
+
+    #[test]
+    fn automatic_checks_only_raise_available_notices_but_manual_checks_always_report() {
+        for (current, unavailable, expect_notice) in [
+            ("2026.9.99", false, true),
+            ("2026.10.50", false, false),
+            ("2026.9.99", true, false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/native.json", listener.local_addr().unwrap());
+            let (key, bytes, signature) = signed(&manifest("https://example.invalid/artifact"));
+            let replies = if unavailable {
+                vec![(503, Vec::new())]
+            } else {
+                vec![(200, bytes), (200, signature)]
+            };
+            let server = serve(listener, [replies.clone(), replies].concat());
+            let (mut worker, _) = worker(&endpoint, &key, current);
+            assert!(worker.check_automatically());
+            assert!(worker.notice(true).is_none());
+            wait_idle(&mut worker);
+            assert_eq!(worker.notice(true).is_some(), expect_notice);
+            assert_eq!(
+                matches!(worker.status(), CheckStatus::Error { .. }),
+                unavailable
+            );
+            assert!(worker.check());
+            assert!(worker.notice(true).is_some());
+            wait_idle(&mut worker);
+            assert!(worker.notice(true).is_some());
+            worker.shutdown();
+            server.join().unwrap();
+        }
     }
 
     #[test]

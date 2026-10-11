@@ -298,8 +298,9 @@ impl Workbench {
             options.theme_override.then(|| options.theme.clone()),
             shortcut_input,
         );
-        let updates_enabled = options.native_update_checks.is_some();
-        let update_error = options.native_update_checks.take().and_then(|client| {
+        let preview_updates = options.live && captures_app::preview_channel::version().is_some();
+        let updates_enabled = options.native_update_checks.is_some() || preview_updates;
+        let update_error = if let Some(client) = options.native_update_checks.take() {
             preferences_state
                 .connect_update_checks(
                     client,
@@ -309,7 +310,14 @@ impl Workbench {
                 )
                 .err()
                 .map(|e| e.to_string())
-        });
+        } else if preview_updates {
+            preferences_state
+                .connect_preview_updates(&cc.egui_ctx)
+                .err()
+                .map(|e| e.to_string())
+        } else {
+            None
+        };
         let crash_review_pending = crash
             .as_ref()
             .is_some_and(|session| session.preview().is_some())
@@ -901,7 +909,25 @@ impl Workbench {
                 .update_check_status()
                 .zip(self.preferences.shutdown_visibility(ctx));
         }
-        if self.install_update_requested && self.shutdown_update_intent.is_none() {
+        let preview_install =
+            self.install_update_requested && self.preferences_state.has_preview_updates();
+        if preview_install {
+            let result = self
+                .preferences
+                .shutdown_visibility(ctx)
+                .ok_or_else(|| "Preferences visibility is unavailable".to_owned())
+                .and_then(|visible| self.preferences_state.launch_preview_install(visible));
+            if let Err(error) = result {
+                self.install_update_requested = false;
+                self.action_error = Some(format!("Restart cancelled: {error}"));
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                return;
+            }
+        }
+        if self.install_update_requested
+            && !preview_install
+            && self.shutdown_update_intent.is_none()
+        {
             self.install_update_requested = false;
             self.action_error = Some(
                 "Restart cancelled: update status or native Preferences visibility is unavailable."

@@ -15,7 +15,13 @@ typedef struct CapturesPackageUse CapturesPackageUse;
 CapturesPackageUse *captures_package_use_current_v1(void);
 void captures_package_use_free_v1(CapturesPackageUse *handle);
 
-/* Explicit signed development update checks, with no HTTP until Check.
+/* Native update checks, with no HTTP until Check.
+ * Installed builds may instead create with {preview:true,renderer}; endpoints,
+ * version and key are compiled in, and development overrides are rejected.
+ * {operation:"install_preview",preferences_visible:bool} transfers a verified
+ * package to a copied helper after the host's editor veto. The helper waits for
+ * all host-lifetime package guards to exit before replacement. Development
+ * builds cannot create this channel. No implicit installation on ordinary Quit.
  * create takes {endpoint,key_file,renderer,current_version,staging_directory?,base_archive?}; pins the public
  * Minisign key (regular UTF-8 file, <=8 KiB), development identity and host target.
  * The optional existing absolute scratch directory enables explicit temporary
@@ -23,8 +29,8 @@ void captures_package_use_free_v1(CapturesPackageUse *handle);
  * base archive requires staging; signed delta reconstruction falls back to full
  * acquisition when incompatible. Construction does not read the base archive.
  * Downloading status includes actual downloaded/total bytes, including fallback resets.
- * No installation/execution,
- * default endpoint/channel or profile access. Owned stage cleanup on recheck/free.
+ * Development mode has no installation/execution, default endpoint/channel or
+ * profile access. Owned stage cleanup on recheck/free.
  * Nonblocking serialized UI-thread requests: {operation:"check"|"poll"|"download_verify"|"cancel_download",
  * show_changelog?:bool}. Replies contain {accepted,checking,status,presentation,
  * generation,notice}; checking means busy including download/verification/cancelling.
