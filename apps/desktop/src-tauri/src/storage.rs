@@ -416,19 +416,8 @@ pub fn encode_overlay_snapshot(
     cursor: Option<&captures_capture::PointerCursor>,
     include_cursor: bool,
 ) -> Result<Vec<u8>, AppError> {
-    // On Windows the live selector pointer is a crosshair/selection control,
-    // not the cursor frozen into the capture. Show the captured cursor too so
-    // users can choose a crop that includes it. Keep source pixels untouched:
-    // commit composites once after cropping and checks the hotspot is inside.
-    if cfg!(target_os = "windows")
-        && include_cursor
-        && let Some(cursor) = cursor
-    {
-        let mut preview = image.clone();
-        captures_capture::overlay_pointer_cursor(&mut preview, display, cursor, 1.0);
-        return encode_png(&preview);
-    }
-    encode_png(image)
+    let preview = captures_capture::frozen_capture_preview(image, display, cursor, include_cursor);
+    encode_png(&preview)
 }
 
 pub fn overlay_snapshot_mime_type(bytes: &[u8]) -> &'static str {

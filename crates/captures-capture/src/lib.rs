@@ -16,8 +16,9 @@ mod windows_cursor;
 
 pub use backend::XcapBackend;
 pub use cursor::{
-    CursorImage, PointerCursor, overlay_pointer_cursor, overlay_pointer_cursor_in_crop,
-    overlay_pointer_cursor_on_window, pointer_cursor, pointer_position, screenshot_pointer_scale,
+    CursorImage, PointerCursor, frozen_capture_preview, overlay_pointer_cursor,
+    overlay_pointer_cursor_in_crop, overlay_pointer_cursor_on_window, pointer_cursor,
+    pointer_position, screenshot_pointer_scale,
 };
 pub use error::{CaptureError, CaptureResult};
 pub use geometry::{LogicalRect, PhysicalRect};

@@ -131,8 +131,12 @@ no input and closes with the recording; display/window recordings have no guide.
 The private-X11 recording smoke checks input passthrough, clean inner-edge pixels,
 decoded output, Hide/restore preservation and end/cancellation cleanup. Windows
 and physical macOS/compositor/mixed-DPI acceptance remain open; Wayland stays gated.
-Windows/X11 use the shipping
-synthetic cursor arrow, not the actual system cursor image. Other capture defaults remain unconnected;
+Windows screenshots use the shipping system cursor image and hotspot; X11 retains
+the synthetic arrow. When cursor inclusion is enabled, Windows frozen selectors
+show the sampled cursor for region/window/display selection and screenshots during
+recording. Preview compositing never changes the source used for final capture;
+countdowns still sample fresh pixels and cursor. macOS/X11 preview behavior is
+unchanged; physical cursor/DPI acceptance remains open. Other capture defaults remain unconnected;
 other scenes remain fixtures. The selector fixture handles window-focused Escape
 only, while live capture uses the shared process-wide Escape cancellation handler.
 Preferences → About → Send feedback and tray Send Feedback… open the shipping

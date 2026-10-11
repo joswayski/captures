@@ -17,6 +17,23 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Windows native frozen selectors now use the shipping cursor-preview policy for
+region/window/display selection and screenshots during recording. The preview
+includes the originally sampled system cursor only when screenshot cursor
+inclusion is enabled; the session retains clean capture pixels so final cropping
+cannot blend twice or retain a cursor whose hotspot lies outside the crop.
+Counted-down captures still acquire fresh pixels and cursor. The same shared
+function produces shipping overlay snapshots; its existing PNG/pixel regression
+remains unchanged. AppKit keeps its borrowed cursor-free preview through the
+unchanged C ABI, and X11/Wayland preview behavior is unchanged.
+
+| Platform | Frozen cursor preview implementation / verification |
+| --- | --- |
+| AppKit/macOS | Existing cursor-free preview retained; no physical verification in this Linux orb |
+| Windows | Native preview connected; cursor inclusion/freeze/countdown regressions added to native CI; physical cursor/DPI acceptance open |
+| X11 | Existing cursor-free preview retained; region/window pixel regressions pass in the Linux orb; physical acceptance open |
+| Wayland | Portal acquisition unchanged; no direct frozen-selector cursor acquisition or invented X11 fallback |
+
 The private Wayland video/recording fixtures now have an isolated PipeWire 1.0.5
 daemon option. Its node/link completion guard excludes parameter-enumeration
 results from pending sync work without dropping parameters or typed errors.
@@ -3303,7 +3320,7 @@ shipping "Delete recording?" question before discarding a take (AppKit alert,
 wgpu confirmation window). Real mixed-DPI,
 focus, compositor, accessibility, and animation acceptance remains open.
 Cursor inclusion now shares sampling/compositing with the shipping host (macOS
-system pixels, Windows/X11 synthetic arrow). Full region/window parity, recording, editor,
+and Windows system pixels, X11 synthetic arrow). Full region/window parity, recording, editor,
 preview-stack interactions and full UI/UX parity are still open; this slice closes no complete
 platform acceptance row. Hardware capture and clipboard tests remain required.
 

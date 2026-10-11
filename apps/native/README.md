@@ -1067,10 +1067,12 @@ focus, mixed-DPI, compositor, and screen-reader acceptance still needs real OS t
 
 Cursor inclusion follows `show_cursor_in_screenshots`: the shared Rust engine
 samples the pointer after countdown/window hiding and composites it before
-history, copy, and export. This preserves shipping behavior: macOS system pixels
-and hotspot, a synthetic arrow on Windows/X11, and no overlay when the pointer
-is outside the selected display or unavailable. Wayland-only cursor acquisition
-remains unsupported. Exact cursor shapes on Windows/Linux are not claimed.
+history, copy, and export. This preserves shipping behavior: macOS/Windows system
+pixels and hotspot, a synthetic arrow on X11, and no overlay when the pointer
+is outside the selected display or unavailable. Windows frozen selectors also
+show the original cursor when enabled, without modifying the source used for
+final capture. macOS/X11 frozen previews remain cursor-free. Wayland-only cursor
+acquisition remains unsupported; physical cursor/DPI acceptance remains open.
 
 Both native hosts offer **Capture region** on the selected display.
 Draw from an empty selection, move it or resize its corners, choose Free/1:1/4:3/
