@@ -586,7 +586,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn unread_acknowledgement_cannot_retain_the_stopped_endpoint() {
-        use std::{os::windows::io::AsRawHandle, ptr};
+        use std::{
+            os::windows::io::{AsHandle, AsRawHandle},
+            ptr,
+        };
         use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
         let (_dir, server, name) = isolated_listener();
@@ -603,7 +606,7 @@ mod tests {
             // server stream must not outlive shutdown in a background flusher.
             let result = unsafe {
                 PeekNamedPipe(
-                    pipe.as_raw_handle(),
+                    pipe.as_handle().as_raw_handle(),
                     ptr::null_mut(),
                     0,
                     ptr::null_mut(),
