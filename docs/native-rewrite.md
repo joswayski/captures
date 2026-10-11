@@ -17,6 +17,19 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+The private Wayland video/recording fixtures now have an isolated PipeWire 1.0.5
+daemon option. Its node/link completion guard excludes parameter-enumeration
+results from pending sync work without dropping parameters or typed errors.
+The deterministic component probe reproduces premature node-state completion,
+unfilled MemFd-mask delivery and premature input-link completion on stock 1.0.5;
+five patched scenarios and ten no-parameter controls pass in the Linux orb.
+It uses real PipeWire nodes/links/work queues with controlled SPA endpoints, not
+the client-node wire protocol. Only the test daemon uses private libraries;
+Captures, WirePlumber and the portal backend retain installed libraries.
+No shipping renderer, installed daemon or buffer-rejection policy changes.
+macOS, Windows and X11 production paths are unchanged; physical GNOME/KDE,
+stock-distro and cross-platform acceptance remain open.
+
 Native Wayland shortcuts now use the public GlobalShortcuts portal with
 desktop-authoritative membership and trigger descriptions. Preferences exposes
 Pending/Bound/Unavailable, read-only rows, v2 Configure and explicit Retry.

@@ -609,9 +609,12 @@ pixel dimensions or invented monitor geometry.
 cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked \
   --bin wayland_video_probe --bin wayland_recording_probe
 backend="$(apps/native/build_wayland_portal_fixture.sh)"
-/usr/bin/python3 apps/native/wayland_video_smoke.py \
+compositor="$(apps/native/build_wayland_compositor_fixture.sh)"
+pipewire="$(apps/native/build_pipewire_fixture.sh)"
+PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_video_smoke.py \
   --binary apps/native/wgpu/target/debug/wayland_video_probe \
-  --recording-binary apps/native/wgpu/target/debug/wayland_recording_probe --wlr-backend "$backend"
+  --recording-binary apps/native/wgpu/target/debug/wayland_recording_probe \
+  --wlr-backend "$backend" --pipewire-daemon "$pipewire"
 ```
 
 The private fixture needs the screenshot-smoke dependencies plus Meson, Ninja,
@@ -633,13 +636,32 @@ tracing; versions and service logs are printed on failure. Graph polling consume
 all `pw-dump` JSON arrays, including removals during its initial snapshot, rather
 than accepting stale objects or failing when a stream disappears during polling.
 
-The teardown and graph-reader fixes do not resolve a separate intermittent
+The teardown and graph-reader fixes did not resolve a separate intermittent
 [Ubuntu 24.04 allocation failure](https://github.com/joswayski/captures/actions/runs/38107027280):
 PipeWire 1.0.5 reports `invalid memory type 4` during buffer allocation,
-and the consumer rejects `DataType::Unknown`. Repeated source-built 1.0.5 runs pass
-in the Linux orb, but that does not establish distro or physical acceptance.
-The native Wayland CI gate remains open; invalid buffers must not be accepted or
-retried away to make this diagnostic pass.
+and the consumer correctly rejects `DataType::Unknown`. The private daemon helper
+pins 1.0.5 and excludes `NODE_PARAMS` from node/link sync completion. A parameter
+result sharing a pending sync sequence must not release allocation skeletons
+(MemFd capability mask 4) before their producer fills them. Typed errors still
+complete the wait; parameter results still reach listeners.
+
+`apps/native/pipewire_sync_smoke.sh` builds unpatched and patched variants and runs
+the same C probe against both. Real PipeWire nodes, links and work queues use
+controlled SPA endpoints, not the client-node wire protocol: the stock build
+prematurely completes node state and both link directions; the patched build holds
+them until completion. All five no-parameter controls pass on each version,
+including typed-error propagation. This deterministic component regression is
+separate from the real portal/video and native-host smokes, not a claim that every
+hosted allocation failure has this cause.
+
+The helper needs a C/C++ compiler, Meson, Ninja, pkg-config, Git, D-Bus and GLib
+development headers. Nothing is installed: only the daemon launcher sets private
+library/module/plugin/config paths. WirePlumber, the portal and Captures retain
+their installed libraries. Keep its cache outside `/tmp`, which the smokes hide.
+Omit `--pipewire-daemon` to test the installed daemon, or pass the helper's
+`--unpatched` variant for comparison. Neither fixture patch changes shipping
+dependencies, portal consent, grants or strict buffer validation. Stock distro,
+physical compositor and native parity acceptance remain open.
 
 The smoke uses a private mount namespace, bus, Sway and PipeWire/WirePlumber with
 DISPLAY unset. Display and window protocol cases cover peer spoofs, early responses,
@@ -708,13 +730,15 @@ during recording, region targeting and click/keystroke overlays are not
 supported on Wayland. Window placement after remapping is compositor-controlled.
 
 ```sh
-/usr/bin/python3 apps/native/wayland_recording_host_smoke.py \
+PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_recording_host_smoke.py \
   --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
   --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe \
-  --wlr-backend "$backend" --output /tmp/native-wayland-recording-new
+  --wlr-backend "$backend" --pipewire-daemon "$pipewire" \
+  --output "$HOME/.cache/native-wayland-recording-new"
 ```
 
-Use a new disposable output directory and the video fixture's pinned backend.
+Use a new disposable output directory outside `/tmp` and the video fixture's pinned
+backend, compositor and private daemon.
 The dark/light real-window smoke uses compositor geometry and real pointer input,
 checks the window action at normal/minimum sizes and the actual wlr backend's
 unsupported-window error, failed `portal_window` manifest, Retry/Delete and no media/fallback,
