@@ -2,8 +2,8 @@
 //! shared by the AppKit and wgpu hosts so both match `Preferences` in the
 //! Tauri UI (`App.tsx`, `lib/preferencesFind.ts`, `lib/shortcut.ts`).
 //!
-//! Native-only differences are explicit here rather than in each host: signed
-//! updates remain unavailable, and login items use a separate development identity.
+//! Installed Preview and isolated development copy are selected here rather
+//! than separately in each host.
 
 use crate::shortcuts::ShortcutPlatform;
 
@@ -19,7 +19,11 @@ pub const SECTIONS: [Section; 8] = [
     Section {
         id: "general",
         title: "General",
-        description: "Startup and app behavior for this native development profile.",
+        description: if crate::preview_channel::version().is_some() {
+            "Startup and app behavior."
+        } else {
+            "Startup and app behavior for this native development profile."
+        },
     },
     Section {
         id: "appearance",
@@ -49,7 +53,11 @@ pub const SECTIONS: [Section; 8] = [
     Section {
         id: "updates",
         title: "Updates",
-        description: "Signed Preview updates are not available to native development builds yet.",
+        description: if crate::preview_channel::version().is_some() {
+            "Experimental Preview builds. Check for the latest signed update."
+        } else {
+            "Signed Preview updates are not available to native development builds yet."
+        },
     },
     Section {
         id: "about",
@@ -561,7 +569,7 @@ pub fn open_keyboard_settings(platform: ShortcutPlatform) -> Result<(), String> 
 pub const UPDATES_VERSION: &str = concat!("Version ", env!("CARGO_PKG_VERSION"));
 pub const UPDATES_CHANNEL: &str = "Native development";
 pub const UPDATES_ACTION_WIDTH: f32 = 160.;
-/// Signed updates are not connected natively. No check or timestamp is fabricated.
+/// Default copy for development hosts without an update worker.
 pub const UPDATES_TITLE: &str = "Updates unavailable";
 pub const UPDATES_DETAIL: &str =
     "Signed Preview updates are not available to native development builds yet.";

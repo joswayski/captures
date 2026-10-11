@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub const IDENTITY: &str = "io.github.joswayski.captures";
 pub const PROFILE_MARKER: &str = ".captures-native-preview-profile.json";
 
-pub fn version() -> Option<&'static str> {
+pub const fn version() -> Option<&'static str> {
     option_env!("CAPTURES_NATIVE_PREVIEW_VERSION")
 }
 
