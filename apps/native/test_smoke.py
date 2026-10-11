@@ -1,5 +1,6 @@
 import importlib.util
 import http.client
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -8,6 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from pipewire_state import pipewire_objects
 from wayland_update_smoke import Host, Loopback, digest, fingerprint
 
 spec = importlib.util.spec_from_file_location("smoke", Path(__file__).parent / "wgpu" / "smoke.py")
@@ -16,6 +18,26 @@ spec.loader.exec_module(smoke)
 
 
 class SmokeEvidenceTests(unittest.TestCase):
+    def test_pipewire_graph_applies_all_updates_and_removals(self):
+        active = {"id": 7, "info": {"state": "running", "props": {"media.name": "Captures portal video"}}}
+        idle = {"id": 7, "info": {"state": "idle", "props": {"media.name": "Captures portal video"}}}
+        other = {"id": 11, "props": {"name": "other"}}
+        reused = {"id": 11, "info": {"state": "running", "props": {"media.name": "unrelated"}}}
+        for records, expected in [
+            ([[], [active, other]], [active, other]),
+            ([[active, other], [idle, {"id": 11, "props": None}]], [idle]),
+            ([[active, other], [{"id": 7, "info": None}, {"id": 11, "props": None}], [reused]], [reused]),
+        ]:
+            with self.subTest(records=records):
+                text = "\n  ".join(json.dumps(record) for record in records) + "\n"
+                with patch("pipewire_state.subprocess.check_output", return_value=text):
+                    self.assertEqual(pipewire_objects({}), expected)
+        # Missing/malformed output must fail rather than accept an idle or stale graph.
+        for text in ("", " \n", "{}", json.dumps([active]) + "\n["):
+            with self.subTest(text=text), patch("pipewire_state.subprocess.check_output", return_value=text):
+                with self.assertRaises(ValueError):
+                    pipewire_objects({})
+
     def test_timeout_preserves_partial_output_and_still_fails(self):
         for stdout, stderr in [(b'{"event":"starting"}\n', b'GPU diagnostic\n'), (None, None)]:
             with self.subTest(stdout=stdout), tempfile.TemporaryDirectory() as directory:

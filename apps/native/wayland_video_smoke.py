@@ -18,6 +18,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
+from pipewire_state import pipewire_objects
 from wayland_screenshot_smoke import DESKTOP, DESKTOP_PATH, REQUEST, ready, rgba, stop, wait_owner
 
 SCREENCAST = "org.freedesktop.portal.ScreenCast"
@@ -337,7 +338,13 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
         desktop = subprocess.Popen([sys.executable, __file__, "--desktop-fixture"], env=env, stdout=subprocess.PIPE, stderr=log)
         services.append(desktop)
         ready(desktop)
-        pipewire = subprocess.Popen(["pipewire"], env=env, stdout=log, stderr=log)
+        for command in (["pipewire", "--version"], ["wireplumber", "--version"], ["ldd", backend]):
+            subprocess.run(command, env=env, stdout=log, stderr=log, check=True, timeout=5)
+        # Trace the server allocation handshake, not the probes: verbose client
+        # logs can fill their stderr pipes before the parent starts reading.
+        pipewire = subprocess.Popen(["pipewire"],
+                                    env=dict(env, PIPEWIRE_DEBUG=env.get("CAPTURES_PIPEWIRE_DEBUG", "2")),
+                                    stdout=log, stderr=log)
         services.append(pipewire)
         deadline = time.monotonic() + 8
         while not (runtime / "pipewire-0").is_socket():
@@ -348,7 +355,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             assert policy.poll() is None, "Private WirePlumber exited"
-            objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+            objects = pipewire_objects(env)
             if any(item.get("info", {}).get("props", {}).get("application.name") == "WirePlumber" for item in objects):
                 break
             time.sleep(.1)
@@ -406,7 +413,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 assert probe.poll() is None, "Transform-change probe ended before streaming"
-                objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                objects = pipewire_objects(env)
                 if any(item.get("info", {}).get("state") == "running" and
                        item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
                     break
@@ -457,7 +464,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 assert probe.poll() is None, "Revocation probe ended before the stream became active"
-                objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                objects = pipewire_objects(env)
                 if any(item.get("info", {}).get("state") == "running" and
                        item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
                     break
@@ -481,7 +488,7 @@ def real_video(binary, backend, root, env, recording_binary=None, screenshot_bin
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
                     assert probe.poll() is None, "Recording ended before stream loss"
-                    objects = json.loads(subprocess.check_output(["pw-dump"], env=env, timeout=3))
+                    objects = pipewire_objects(env)
                     if any(item.get("info", {}).get("state") == "running" and
                            item["info"].get("props", {}).get("media.name") == "Captures portal video" for item in objects):
                         break
@@ -542,7 +549,7 @@ def main():
     screenshot_binary = str(args.screenshot_binary.resolve()) if args.screenshot_binary else None
     backend = str(args.wlr_backend.resolve())
     if not args.isolated:
-        subprocess.run(["sudo", "--preserve-env=CAPTURES_FFMPEG,CAPTURES_FFPROBE", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
+        subprocess.run(["sudo", "--preserve-env=CAPTURES_FFMPEG,CAPTURES_FFPROBE,CAPTURES_PIPEWIRE_DEBUG", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
                         'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated --binary "$6" --wlr-backend "$7" ${8:+--recording-binary "$8"} ${9:+--screenshot-binary "$9"}',
                         "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable, str(Path(__file__).resolve()), binary, backend, recording_binary or "", screenshot_binary or "", os.environ["PATH"]], check=True)
         return
