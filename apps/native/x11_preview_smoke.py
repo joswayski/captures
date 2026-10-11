@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--sharing-only", action="store_true", help="Exercise Share lifetime and exact capture exclusion")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
+    parser.add_argument("--record-retarget", action="store_true", help="Record overlapping exits in the retarget smoke")
     parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
     parser.add_argument("--system-motion-only", action="store_true", help="Exercise desktop motion preference refresh")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
@@ -56,6 +57,8 @@ def main():
         parser.error("--login-item-only requires --lifecycle for a real tray and disposable configuration")
     if args.record_clear and not args.stack:
         parser.error("--record-clear requires --stack")
+    if args.record_retarget and not args.retarget_only:
+        parser.error("--record-retarget requires --retarget-only")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -624,6 +627,15 @@ def main():
                 before = survivor_pixels()
                 shot(preview, f"{prefix}-retarget-three")
                 preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
+                recording = None
+                if args.record_retarget:
+                    recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                        "-video_size", "1280x900", "-framerate", "30", "-i", env["DISPLAY"],
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                        str(output / f"{prefix}-retarget.mp4")], env=env, stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-retarget.ffmpeg.log").open("w"))
+                    children.append(recording)
+                    time.sleep(.3)
                 x = 290 if placement.endswith("right") else 50
                 def delete(slot, entry, second=False):
                     y = base + slot * 184 + 22
@@ -645,28 +657,38 @@ def main():
                     wait(hovered, "painted Delete hover")
                     if second:
                         assert survivor_pixels() == before, "input missed the before-slide boundary"
+                        # Prepare the hover/pixels first, then place the 150 ms
+                        # click near 1.6 s instead of adding their variable cost
+                        # to a fixed sleep. The host trace below checks timing.
+                        time.sleep(max(0, first_accepted + 1.25 - time.monotonic()))
                     run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1")
                     # Keep the pointer over the button until the host accepts
                     # this exact artifact's exit, not just a changed hover tint.
                     return wait(accepted, "Delete consumed before moving the pointer")
                 first_exit = delete(0 if top else 2, stack_entries[2])
-                time.sleep(.8)  # First source has faded; its settle has not begun.
+                first_accepted = time.monotonic()
                 second_exit = delete(1, stack_entries[1], second=True)
-                assert second_exit["started_ms"] - first_exit["started_ms"] < 1800, "second exit missed the hold"
+                second_at = second_exit["started_ms"] - first_exit["started_ms"]
+                assert 1400 <= second_at < 1800, f"second exit missed the late hold: {second_at} ms"
                 run("xdotool", "mousemove", "--sync", "640", "440")
-                time.sleep(1.1)  # Past the FIRST settle, inside the SECOND hold.
-                assert int(window_geometry(preview)["HEIGHT"]) == 608, "held slots disappeared early"
-                shot(preview, f"{prefix}-retarget-held")
+                # First exit FINISHED (2.9 s); second still blocks the survivor.
+                time.sleep(max(0, first_accepted + 2.95 - time.monotonic()))
+                shot("root", f"{prefix}-retarget-held")
+                height = int(window_geometry(preview)["HEIGHT"])
+                assert height == 608, f"held slots disappeared early: height={height}, expected 608"
                 assert survivor_pixels() == before, "survivor drifted during the reentrant dust hold"
                 wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 240, "one settled survivor")
                 shot(preview, f"{prefix}-retarget-settled")
+                if recording:
+                    recording.communicate(input=b"q\n", timeout=10)
+                    assert recording.returncode == 0, "Retarget recording failed"
                 click(preview, 170, (52 if top else 28) + 61, activate=False)
                 wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"), "oldest survivor remains actionable")
                 assert entries() == set(preserved), "preview deletion removed History"
                 assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
                 run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
                 assert app.wait(timeout=10) == 0
-                print(f"PASS {placement}: three-card reentrant dust holds pixels and settles to the oldest capture", flush=True)
+                print(f"PASS {placement}: second exit at {second_at:.0f} ms; 608px viewport holds exact survivor pixels past 2.9s; settles to actionable oldest capture", flush=True)
                 continue
             if enabled:
                 preview = wait(lambda: windows(PREVIEW), "mini preview")[0]

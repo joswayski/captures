@@ -1170,8 +1170,13 @@ older cards slide into it after the shipping delay, then the window resizes.
 An overlapping deletion freezes the exiting card and affected survivors at their
 current presentation (zero is valid), holds until the new exit is ready, then
 eases the accumulated distance. Removing a held slot rebases the Rust trajectory
-without moving its survivor. AppKit retargets its Core Animation presentation
-rather than scheduling independent model-frame shifts.
+without moving its survivor. wgpu also keeps finished empty slots until every
+remaining visible card fits inside the smaller window/scroll clip; the limit
+applies to the whole removal batch. A successful Trash reply does not bypass
+that geometry check. Trash still starts after the dust finishes, and a failed
+request restores the card. AppKit retargets its Core Animation presentation
+rather than scheduling independent model-frame shifts and retains the panel
+until the latest exit's rebuild deadline.
 Clear all streaks every card out, bottom first, holding each card's current
 brightness, blur, media scale, opacity and arrival pose through its stagger and
 composing the streak underneath that appearance. It does not force idle cards
@@ -1190,9 +1195,12 @@ dissolve blur.
 Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --retarget-only --binary
 apps/native/wgpu/target/debug/captures-wgpu-workbench --output /tmp/native-retarget`
 with a fresh output folder to exercise three-card dust holds in all four corners.
-It compares the survivor's media-edge pixels past the first settle deadline,
+Add `--record-retarget` to record the disposable desktop with ffmpeg.
+It starts the second Delete near 1.6 seconds, checks the held window height and
+survivor's exact media-edge pixels after the first exit finishes at 2.9 seconds,
 checks the final actionable card and preserves original History bytes. Shared
-clock-driven tests cover zero, just-started settle and slot-pruning boundaries;
+clock-driven tests cover zero, just-started settle, batched slot-pruning,
+Close→Delete, fallback and reduced-motion boundaries;
 AppKit tests read presentation-layer positions, not model targets. Software-X11
 and macOS CI do not establish physical Windows/macOS or Wayland preview acceptance.
 
