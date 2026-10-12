@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--record-clear", action="store_true", help="Record Clear all presentation in the stack smoke")
+    parser.add_argument("--record-stack-motion", action="store_true", help="Record collapse/expand with interrupted toolbar hover")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
     parser.add_argument("--record-retarget", action="store_true", help="Record overlapping exits in the retarget smoke")
@@ -56,6 +57,8 @@ def main():
         parser.error("--login-item-only requires --lifecycle for a real tray and disposable configuration")
     if args.record_clear and not args.stack:
         parser.error("--record-clear requires --stack")
+    if args.record_stack_motion and not args.stack:
+        parser.error("--record-stack-motion requires --stack")
     if args.record_retarget and not args.retarget_only:
         parser.error("--record-retarget requires --retarget-only")
     binary = args.binary.resolve(strict=True)
@@ -1153,7 +1156,30 @@ def main():
                         click(preview, 268 if placement.endswith("right") else 72,
                               26 if placement.startswith("top") else height - 26, activate=False)
 
-                    toggle()
+                    if args.record_stack_motion:
+                        # Record only this disposable desktop. Leave immediately
+                        # after release, while the 280ms toolbar exit still paints.
+                        recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                            "-video_size", "1280x900", "-framerate", "30", "-i", env["DISPLAY"],
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                            str(output / f"{prefix}-collapse.mp4")], env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-collapse.ffmpeg.log").open("w"))
+                        children.append(recording)
+                        time.sleep(.3)
+                        frame = window_geometry(preview)
+                        x = 268 if placement.endswith("right") else 72
+                        y = 26 if placement.startswith("top") else int(frame["HEIGHT"]) - 26
+                        run("xdotool", "mousemove", "--window", preview, str(x), str(y),
+                            "sleep", ".35")
+                        shot(preview, f"{prefix}-collapse-hover")
+                        run("xdotool", "mousedown", "1", "sleep", ".05", "mouseup", "1",
+                            "mousemove", "0", "0", "sleep", ".12")
+                        shot("root", f"{prefix}-collapse-pointer-left")
+                        time.sleep(.7)
+                        recording.communicate(input=b"q\n", timeout=10)
+                        assert recording.returncode == 0, "collapse recording failed"
+                    else:
+                        toggle()
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 264, "two-card compact pile")
                     run("xdotool", "mousemove", "0", "0")
                     time.sleep(.35)
@@ -1281,7 +1307,28 @@ def main():
                     preview = wait(lambda: windows(PREVIEW) and not windows(SELECTOR) and windows(PREVIEW),
                                    "cancel restores compact pile")[0]
                     assert int(window_geometry(preview)["HEIGHT"]) == 278
-                    click(preview, 170, 132, activate=False)
+                    if args.record_stack_motion:
+                        recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                            "-video_size", "1280x900", "-framerate", "30", "-i", env["DISPLAY"],
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                            str(output / f"{prefix}-expand.mp4")], env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-expand.ffmpeg.log").open("w"))
+                        children.append(recording)
+                        time.sleep(.3)
+                        run("xdotool", "mousemove", "--window", preview, "170", "132",
+                            "sleep", ".1", "mousedown", "1", "sleep", ".05", "mouseup", "1")
+                        wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608,
+                             "expanding viewport accepts the toolbar hover probe")
+                        x, y = (268 if moved_right else 72), (26 if moved_top else 582)
+                        run("xdotool", "mousemove", "--window", preview, str(x - 1), str(y),
+                            "mousemove_relative", "1", "0", "sleep", ".12")
+                        shot("root", f"{prefix}-expand-held-hover")
+                        time.sleep(.8)
+                        shot(preview, f"{prefix}-expand-hover-settled")
+                        recording.communicate(input=b"q\n", timeout=10)
+                        assert recording.returncode == 0, "expand recording failed"
+                    else:
+                        click(preview, 170, 132, activate=False)
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608, "front card expands all previews")
                     assert int(window_geometry(preview)["X"]) == start_x + dx, "expansion reset dragged x"
                     # Screen edge, not the saved preference, owns the expanded
@@ -1842,6 +1889,7 @@ def main():
             print("PASS lifecycle: real tray automation Quit and hidden-root host-loss recovery", flush=True)
         result = {"passed": True, "scenarios": len(cases),
             "multiCard": args.stack or args.retarget_only, "residentLifecycle": args.lifecycle, "shortcutEditing": args.shortcut_editing,
+            "recordedStackMotion": any(output.glob("*-collapse.mp4")) and any(output.glob("*-expand.mp4")),
             "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "Save becomes Reveal; exact Unicode folder delivery, missing export and retry preserve files",

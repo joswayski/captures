@@ -65,7 +65,10 @@ final class MiniPreviewButton: NSButton {
     /// Keep the trailing edge fixed (right-anchored piles grow leftward).
     var growsFromTrailingEdge = false
     private var restFrame: NSRect?
-    var showsHoverLabel: Bool { hoverLabel != nil && (hovered || focused) }
+    /// Lifecycle CSS overrides hover: Collapse holds the pill; other toolbar
+    /// transitions hold the icon. Nil restores ordinary hover/focus.
+    var hoverLabelOverride: Bool? { didSet { applyHoverShape() } }
+    var showsHoverLabel: Bool { hoverLabel != nil && (hoverLabelOverride ?? (hovered || focused)) }
     /// Show less morph: 0 is the 28 pt stack icon, 1 the hover pill. The width
     /// follows the 240 ms morph, the icon/label crossfade the 180 ms swap.
     private(set) var morphWidth: Double = 0
@@ -313,6 +316,11 @@ final class MiniPreviewButton: NSButton {
         let rest = restFrame ?? frame
         restFrame = rest
         let target: Double = showsHoverLabel ? 1 : 0
+        if hoverLabelOverride != nil {
+            morphAnimation = nil; morphWidth = target; morphSwap = target
+            layoutMorph()
+            return
+        }
         let morph = NativeMotion.transition("preview_minimize_morph", tokens: tokens)
         if window?.isVisible == true, morph.duration > 0, morphWidth != target || morphSwap != target {
             if morphAnimation?.target != target {
@@ -1363,6 +1371,8 @@ final class MiniPreviewView: NSView {
     private var dustOverlays: [String: PreviewMotionOverlay] = [:]
     /// The latest list <-> pile flight; an older flight's end never lands.
     private var flyToken = 0
+    /// An old toolbar entrance cannot unlock a newer leaving/clearing toolbar.
+    private var toolbarToken = 0
     /// Dust chips on screen, for tests.
     var dustChipCount: Int { dustOverlays.values.reduce(0) { $0 + ($1.content.sublayers?.count ?? 0) } }
     /// `.thumbnail-collapsed-hit-target::before/::after` sparkles.
@@ -1743,18 +1753,28 @@ final class MiniPreviewView: NSView {
     /// leaving toolbar on its last keyframe until the stack rebuilds, and an
     /// entering one unlocks afterwards.
     func playToolbar(_ name: String, holdEnd: Bool) {
+        toolbarToken &+= 1
+        let token = toolbarToken
         if name == "preview_toolbar_clear" {
             stackClearing = true
             updateOverflowCues()
         }
+        switch name {
+        case "preview_toolbar_out": collapseButton?.hoverLabelOverride = true
+        case "preview_toolbar_in", "preview_toolbar_exit", "preview_toolbar_clear":
+            collapseButton?.hoverLabelOverride = false
+        default: collapseButton?.hoverLabelOverride = nil
+        }
         let seconds = stackToolbarButtons.map {
             NativeMotion.play(name, on: $0, tokens: tokens, holdEnd: holdEnd, key: "preview-toolbar")
         }.max() ?? 0
-        guard seconds > 0 else { return }
+        guard seconds > 0 else { collapseButton?.hoverLabelOverride = nil; return }
         stackToolbarButtons.forEach { $0.isEnabled = false }
         guard !holdEnd else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-            self?.stackToolbarButtons.forEach { $0.isEnabled = true }
+            guard let self, self.toolbarToken == token else { return }
+            self.collapseButton?.hoverLabelOverride = nil
+            self.stackToolbarButtons.forEach { $0.isEnabled = true }
         }
     }
 

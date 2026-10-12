@@ -8004,6 +8004,7 @@ impl Live {
                                     placement.is_right(),
                                     top_anchor,
                                     reduced_motion,
+                                    toolbar.minimize_override(&tokens, frame_ms, reduced_motion),
                                 )
                             })
                         })

@@ -206,7 +206,14 @@ final class PreviewMotionTests: XCTestCase {
         let controller = try presentedController(ids: ["older", "newer"])
         defer { controller.close() }
         let list = try XCTUnwrap(controller.previewView)
+        let minimize = try XCTUnwrap(list.stackToolbarButtons.first { $0.kind == .collapse })
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: .zero,
+            modifierFlags: [], timestamp: 1, windowNumber: list.window?.windowNumber ?? 0, context: nil,
+            eventNumber: 0, clickCount: 0, pressure: 0))
         controller.setCollapsed(true)
+        minimize.mouseExited(with: event)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(minimize.frame.width, 92, "collapse keeps the label after the pointer leaves")
         XCTAssertTrue(controller.isCollapsed)
         XCTAssertTrue(controller.isTransitioning, "cards fly to the pile before the rebuild")
         XCTAssertEqual(list.visibleCardLabelCount, 0, "flying cards are compact")
@@ -214,8 +221,33 @@ final class PreviewMotionTests: XCTestCase {
 
         controller.setCollapsed(false)
         let expanded = try XCTUnwrap(controller.previewView)
+        let entering = try XCTUnwrap(expanded.stackToolbarButtons.first { $0.kind == .collapse })
+        entering.mouseEntered(with: event)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(entering.frame.width, 28, "enter ignores hover until its motion ends")
         XCTAssertEqual(expanded.visibleCardLabelCount, 0, "cards fly out of the pile compact")
         try waitUntil { expanded.visibleCardLabelCount == 2 }
+        try waitUntil { entering.frame.width == 92 }
+        XCTAssertTrue(entering.isEnabled, "idle hover and input resume after enter")
+    }
+
+    func testClearDuringExpandDoesNotUnlockOrMorphAtTheOldEntranceDeadline() throws {
+        _ = NSApplication.shared
+        try XCTSkipIf(NativeMotion.reduceMotion, "Reduce Motion has no pending toolbar entrance")
+        let controller = try presentedController(ids: ["older", "newer"])
+        defer { controller.close() }
+        controller.setCollapsed(true)
+        try waitUntil { !controller.isTransitioning }
+        controller.setCollapsed(false)
+        let view = try XCTUnwrap(controller.previewView)
+        let minimize = try XCTUnwrap(view.stackToolbarButtons.first { $0.kind == .collapse })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        controller.clearAll()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(minimize.frame.width, 28, "Clear retains the icon after the older enter ends")
+        XCTAssertTrue(view.stackToolbarButtons.allSatisfy { !$0.isEnabled },
+            "the obsolete entrance callback cannot re-enable a clearing toolbar")
+        try waitUntil { !controller.isPanelVisible }
     }
 
     func testCopyFailureWarnsUntilACopyWorksAndHighlightFades() throws {

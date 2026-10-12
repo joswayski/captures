@@ -3367,8 +3367,8 @@ icons and centered Copy/Save file/Show in Folder controls. Saved cards expose
 Close plus Delete; unsaved Delete only dismisses. Right placements mirror the
 corner controls. The stack toolbar appears only for two or more expanded
 previews: an outer Clear all icon (tooltip "Clear all") and a Minimize icon that
-swaps to a "Show less" label and widens inward on hover or focus (no morph
-animation). Card icons (Close, Delete, Edit) and Clear all show the shipping
+swaps to a "Show less" label and widens inward on hover or focus with the
+shipping width/crossfade morph. Card icons (Close, Delete, Edit) and Clear all show the shipping
 instant glass tip, on hover or keyboard focus with no delay: centered, above
 the icon in bottom-anchored stacks and below it in top-anchored ones, fading
 and nudging 2 pt (`.icon-button::after`). AppKit and wgpu share this chip with
@@ -3381,9 +3381,12 @@ placing a separate truncating text-field cell inside the measured chip. The
 mini-preview Delete and recording-HUD Hide controls fixtures exposed visible
 ellipses despite correct stored copy; the HUD regression now inspects the final
 letter's painted height. Font/padding tokens, placement, mouse transparency and
-hover animations remain unchanged. macOS CI must verify the rendered correction;
-Windows, X11 and Wayland retain the unchanged egui tooltip path. Physical
-cross-platform text/accessibility acceptance remains open.
+hover animations remain unchanged. The regression passes in
+[macOS CI](https://github.com/joswayski/captures/actions/runs/38262922016); inspected
+top/bottom Delete and Hide controls fixtures show full copy. The overall run still
+has five existing VideoToolbox recording-export failures. Windows, X11 and Wayland
+retain the unchanged egui tooltip path. Physical cross-platform text/accessibility
+acceptance remains open.
 When an expanded stack overflows, centered chevron cues at the window edges
 ("Show older captures" / "Show newer captures", swapped for top placements)
 scroll one card slot; `captures_app::preview` owns the edge tolerance, slot
@@ -3433,8 +3436,17 @@ through the `captures_preview_editor_*`, `_hover_lock_v1`,
   leaves the stack (`data-thumbnail-suppress-card-hover`); a pointer already
   outside releases it at once, and keyboard focus still reveals chrome.
 
-The animated Show less morph, the dismiss/delete exits and other stack
-transitions remain follow-up work; this does not close the visual parity gate.
+The Show less morph now follows shipping's toolbar lifecycle rules on both hosts:
+Collapse holds the full 92 pt label while leaving; enter, last-card exit and Clear
+hold the 28 pt icon without accepting hover/focus morphs. Idle interaction resumes
+after entrance. AppKit also rejects an obsolete entrance completion after a newer
+exit/Clear starts, preventing it from unlocking the disappearing controls. Shared
+Rust and native UI regressions cover the locked shapes and idle resumption;
+`x11_preview_smoke.py --stack --record-stack-motion` records leaving-pointer and
+held-hover expansion scenarios on the disposable desktop. AppKit CI must exercise
+its window regressions; Windows/Wayland share the egui path but physical input,
+presentation and accessibility acceptance remain open. This does not close the
+visual parity gate.
 Share/sign-in UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
