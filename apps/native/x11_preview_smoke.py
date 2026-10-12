@@ -1825,7 +1825,7 @@ def main():
             assert probe.wait(timeout=10) == 0, "tray loss retained close-to-hide"
             print("PASS lifecycle: real tray automation Quit and hidden-root host-loss recovery", flush=True)
         result = {"passed": True, "scenarios": len(cases),
-            "multiCard": args.stack, "residentLifecycle": args.lifecycle, "shortcutEditing": args.shortcut_editing,
+            "multiCard": args.stack or args.retarget_only, "residentLifecycle": args.lifecycle, "shortcutEditing": args.shortcut_editing,
             "checks": ["selected corner positions and dimensions", "nonactivating map",
                 "minimized-root full-pixel Copy and Save without activation",
                 "Save becomes Reveal; exact Unicode folder delivery, missing export and retry preserve files",
@@ -1855,6 +1855,15 @@ def main():
                   "edited New Capture launches unified controls after restart and blur",
                   "hidden root creates first selector and mini preview without reopening"] if args.shortcut_editing else []),
             "scope": "Private X11/software GL, simulated session; not hardware, real lock, Wayland or accessibility acceptance."}
+        if args.retarget_only:
+            # This branch continues before the general preview/lifecycle checks.
+            result["residentLifecycle"] = False
+            result["shortcutEditing"] = False
+            result["checks"] = ["full-resolution capture and surviving Copy pixels",
+                "late overlapping Deletes at all four corners",
+                "608px viewport and exact survivor pixels held past the first exit",
+                "settled 240px viewport with one actionable oldest capture",
+                "History and original capture bytes preserved", "clean exit"]
         (output / "result.json").write_text(json.dumps(result, indent=2))
     finally:
         for child in reversed(children):
