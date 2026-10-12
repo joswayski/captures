@@ -75,34 +75,47 @@ pub fn gaussian_blur(image: &ColorImage, sigma: [f32; 2], pad: [usize; 2]) -> Co
         }
     }
     let pass = |source: &[[f32; 4]], kernel: &[f32], horizontal: bool| {
-        let radius = (kernel.len() / 2) as isize;
+        let radius = kernel.len() / 2;
         let mut out = vec![[0f32; 4]; source.len()];
-        let (len, lines) = if horizontal {
-            (out_w, out_h)
-        } else {
-            (out_h, out_w)
-        };
-        let index = |line: usize, at: usize| {
-            if horizontal {
-                line * out_w + at
-            } else {
-                at * out_w + line
-            }
-        };
-        for line in 0..lines {
-            for at in 0..len {
-                let mut sum = [0f32; 4];
-                for (k, weight) in kernel.iter().enumerate() {
-                    let from = at as isize + k as isize - radius;
-                    if from < 0 || from >= len as isize {
-                        continue;
+        if source.is_empty() {
+            return out;
+        }
+        // Clip taps once at each edge, retaining their accumulation order and
+        // transparent padding. Keep each output row hot in the vertical pass
+        // instead of reading and writing whole columns with a pixel stride.
+        if horizontal {
+            for (input, output) in source.chunks_exact(out_w).zip(out.chunks_exact_mut(out_w)) {
+                for (x, pixel) in output.iter_mut().enumerate() {
+                    let from = x.saturating_sub(radius);
+                    let first = radius.saturating_sub(x);
+                    let count = (out_w - from).min(kernel.len() - first);
+                    let mut sum = [0f32; 4];
+                    for (value, &weight) in input[from..from + count]
+                        .iter()
+                        .zip(&kernel[first..first + count])
+                    {
+                        for channel in 0..4 {
+                            sum[channel] += value[channel] * weight;
+                        }
                     }
-                    let value = source[index(line, from as usize)];
-                    for channel in 0..4 {
-                        sum[channel] += value[channel] * weight;
-                    }
+                    *pixel = sum;
                 }
-                out[index(line, at)] = sum;
+            }
+        } else {
+            for (y, output) in out.chunks_exact_mut(out_w).enumerate() {
+                let from = y.saturating_sub(radius);
+                let first = radius.saturating_sub(y);
+                let count = (out_h - from).min(kernel.len() - first);
+                for (x, pixel) in output.iter_mut().enumerate() {
+                    let mut sum = [0f32; 4];
+                    for (k, &weight) in kernel[first..first + count].iter().enumerate() {
+                        let value = source[(from + k) * out_w + x];
+                        for channel in 0..4 {
+                            sum[channel] += value[channel] * weight;
+                        }
+                    }
+                    *pixel = sum;
+                }
             }
         }
         out
