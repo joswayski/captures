@@ -1319,6 +1319,18 @@ def main():
                     wait(stack_settled, "expanded stack settles before Clear all")
                     height = int(window_geometry(preview)["HEIGHT"])
                     shot(preview, f"{prefix}-before-clear")
+                    cue_background = None
+                    if len(stack_entries) >= 8 and not args.reduced_motion:
+                        # At the oldest scroll edge the lower cue is visible,
+                        # outside the card clip and between the toolbar buttons.
+                        position = window_geometry(preview)
+                        cue_x, cue_y = int(position["X"]) + 147, int(position["Y"]) + height - 28
+                        cue_crop = f"46x22+{cue_x}+{cue_y}"
+                        cue_background = wallpaper_crop(cue_x, cue_y, 46, 22)
+                        # Sample the composited desktop: the window's own
+                        # transparent pixels read black, not the wallpaper.
+                        assert run("import", "-window", "root", "-crop", cue_crop,
+                                   "-depth", "8", "rgb:-") != cue_background, "overflow cue was absent before Clear all"
                     recording = None
                     if args.record_clear:
                         # Only this disposable X11 desktop, never the caller's.
@@ -1331,6 +1343,14 @@ def main():
                         time.sleep(.3)
                     click(preview, 298 if placement.endswith("right") else 42,
                           26 if placement.startswith("top") else height - 26, activate=False)
+                    if cue_background is not None:
+                        # Input delivery is asynchronous. The cue must vanish
+                        # while the exit viewport is still mapped, not merely
+                        # because the entire window eventually closed.
+                        wait(lambda: run("import", "-window", "root", "-crop", cue_crop,
+                                         "-depth", "8", "rgb:-") == cue_background and windows(PREVIEW),
+                             "overflow cue hides during Clear all, before the viewport closes")
+                        shot("root", f"{prefix}-clearing-overflow-hidden")
                     wait(lambda: not windows(PREVIEW), "Clear all empties previews")
                     if recording:
                         recording.communicate(input=b"q\n", timeout=10)

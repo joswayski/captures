@@ -1342,6 +1342,8 @@ final class MiniPreviewView: NSView {
     /// One card slot (card plus gap), for survivors settling into a hole.
     private let cardSlot: CGFloat
     private let stackCollapsed: Bool
+    /// Clear all hides overflow controls until a new stack view replaces this one.
+    private var stackClearing = false
     /// Shipping pile gravity (-1 top … 1 bottom); spin fades in toward 0.
     private(set) var pileGravity: Double
     /// Cards playing an exit in place, and their dust overlays.
@@ -1653,6 +1655,10 @@ final class MiniPreviewView: NSView {
     /// leaving toolbar on its last keyframe until the stack rebuilds, and an
     /// entering one unlocks afterwards.
     func playToolbar(_ name: String, holdEnd: Bool) {
+        if name == "preview_toolbar_clear" {
+            stackClearing = true
+            updateOverflowCues()
+        }
         let seconds = stackToolbarButtons.map {
             NativeMotion.play(name, on: $0, tokens: tokens, holdEnd: holdEnd, key: "preview-toolbar")
         }.max() ?? 0
@@ -1862,7 +1868,7 @@ final class MiniPreviewView: NSView {
                                                  Double(viewportHeight))
         for cue in overflowCues {
             let bit = UInt32(cue.above ? CAPTURES_PREVIEW_OVERFLOW_ABOVE : CAPTURES_PREVIEW_OVERFLOW_BELOW)
-            cue.isHidden = edges & bit == 0
+            cue.isHidden = stackClearing || edges & bit == 0
         }
     }
 

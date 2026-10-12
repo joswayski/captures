@@ -1004,6 +1004,7 @@ impl MiniPreviews {
         {
             return Err("Mini-preview capture generation changed before persistence.".into());
         }
+        self.finish_clear_exits();
         if !self.stack.insert(artifact_id.clone()) {
             self.visibility.restore_capture(capture_generation);
             return Err("Mini-preview artifact was already present in the stack.".into());
@@ -1067,11 +1068,12 @@ impl MiniPreviews {
             return Ok(RestoreStart::AlreadyShowing);
         }
         // The per-frame settings sync applies show/placement changes.
+        let target = target.filter(|target| target.preview_bounds.is_some());
+        if self.stack.ids().is_empty() && target.is_none() && settings.show_mini_previews {
+            return Err("Mini-preview positioning is unavailable for this display.".into());
+        }
+        self.finish_clear_exits();
         if self.stack.ids().is_empty() {
-            let target = target.filter(|target| target.preview_bounds.is_some());
-            if target.is_none() && settings.show_mini_previews {
-                return Err("Mini-preview positioning is unavailable for this display.".into());
-            }
             self.stack_target = target;
         }
         if !self.stack.insert(artifact.entry.id.clone()) {
@@ -1134,6 +1136,23 @@ impl MiniPreviews {
             self.stack_target = None;
             self.visibility.clear_stack_origin();
         }
+    }
+
+    /// Shipping ends the Clear all snapshot on a new capture or History
+    /// Restore. Individual Close/Delete exits and pending Trash stay intact.
+    fn finish_clear_exits(&mut self) {
+        let clearing: Vec<_> = self
+            .exits
+            .display_ids()
+            .iter()
+            .filter(|id| self.exits.exiting(id).is_some_and(|exit| !exit.settles))
+            .cloned()
+            .collect();
+        for id in clearing {
+            self.exits.release(&id, false);
+            self.exiting.remove(&id);
+        }
+        self.release_empty_stack();
     }
 
     fn now_ms(&self) -> f64 {
@@ -7010,6 +7029,12 @@ impl Live {
         } else {
             self.previews.exits.display_ids().to_vec()
         };
+        let clearing = display.iter().any(|id| {
+            self.previews
+                .exits
+                .exiting(id)
+                .is_some_and(|exit| !exit.settles)
+        });
         let display_count = display.len().max(count);
         let settle = captures_app::preview_motion::settle_tween();
         let exits_now = self.previews.now_ms();
@@ -7890,19 +7915,21 @@ impl Live {
                     );
                     // Cues paint over the cards and under the stack toolbar,
                     // matching the shipping z-order.
-                    if let Some(slots) = crate::mini_preview::show_overflow_cues(
-                        ui,
-                        &tokens,
-                        egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(
-                                captures_app::preview::THUMBNAIL_WIDTH as f32,
-                                geometry.height as f32,
+                    if !clearing
+                        && let Some(slots) = crate::mini_preview::show_overflow_cues(
+                            ui,
+                            &tokens,
+                            egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(
+                                    captures_app::preview::THUMBNAIL_WIDTH as f32,
+                                    geometry.height as f32,
+                                ),
                             ),
-                        ),
-                        overflow,
-                        top_anchor,
-                    ) {
+                            overflow,
+                            top_anchor,
+                        )
+                    {
                         let target = captures_app::preview::stack_scroll_target(
                             offset,
                             content_height,
