@@ -917,6 +917,8 @@ struct TrashingCard {
     card: PreviewCard,
     /// The card's slot in the stack, for a failed Trash.
     index: usize,
+    /// The original Delete deadline survives cancellation of its visuals.
+    ready_ms: f64,
     /// The Trash request went out (after the dust played).
     sent: bool,
 }
@@ -1020,6 +1022,9 @@ impl MiniPreviews {
     /// Add the card for an artifact already inserted into `stack`.
     fn insert_card(&mut self, artifact: &Artifact, editor_open: bool, now_ms: f64) -> PreviewGuard {
         let artifact_id = artifact.entry.id.clone();
+        self.exits.release(&artifact_id, false);
+        self.exiting.remove(&artifact_id);
+        self.exits.sync(self.stack.ids());
         self.next_generation = self.next_generation.wrapping_add(1);
         let generation = self.next_generation;
         self.cards.insert(
@@ -1262,6 +1267,9 @@ impl MiniPreviews {
     /// export to the Trash once the dust has played and the stack settled.
     /// Returns whether the request can go out now (no exit plays).
     fn begin_trash(&mut self, artifact_id: &str, reduced_motion: bool) -> bool {
+        if self.trashing.contains_key(artifact_id) {
+            return false;
+        }
         let Some(index) = self.stack.ids().iter().position(|id| id == artifact_id) else {
             return false;
         };
@@ -1277,11 +1285,18 @@ impl MiniPreviews {
             return false;
         };
         let now = !self.exiting.contains_key(artifact_id);
+        let ready_ms = self
+            .exits
+            .exiting(artifact_id)
+            .map_or(self.now_ms(), |exit| {
+                exit.started_ms + exit.delay_ms + exit.kind.hold_ms()
+            });
         self.trashing.insert(
             artifact_id.to_owned(),
             TrashingCard {
                 card,
                 index,
+                ready_ms,
                 sent: now,
             },
         );
@@ -1294,15 +1309,9 @@ impl MiniPreviews {
     /// shipping keeps the card until `trash_artifact` resolves.
     fn due_trash(&mut self, reduced_motion: bool) -> Vec<(String, u64, Option<PathBuf>)> {
         let now = self.now_ms();
-        let exits = &self.exits;
         self.trashing
             .iter_mut()
-            .filter(|(id, pending)| {
-                !pending.sent
-                    && exits
-                        .exiting(id)
-                        .is_none_or(|exit| exit.finished(now, reduced_motion))
-            })
+            .filter(|(_, pending)| !pending.sent && (reduced_motion || now >= pending.ready_ms))
             .map(|(id, pending)| {
                 pending.sent = true;
                 (
@@ -6984,6 +6993,19 @@ impl Live {
                     generation,
                 },
             );
+        }
+        // Restore/collapse can remove every visual exit. The accepted file
+        // operation still needs its own wake, even with a hidden idle root.
+        if let Some(wait) = self
+            .previews
+            .trashing
+            .values()
+            .filter(|pending| !pending.sent)
+            .map(|pending| (pending.ready_ms - self.previews.now_ms()).max(0.))
+            .min_by(f64::total_cmp)
+        {
+            request_hidden_root_paint(ctx);
+            ctx.request_repaint_after(Duration::from_secs_f64(wait / 1000.));
         }
         if let Some(wait) = self.previews.exits.next_finish_in_ms(
             self.previews.now_ms(),
@@ -13117,6 +13139,81 @@ mod tests {
         assert_eq!(live.previews.stack.ids(), std::slice::from_ref(&id));
         assert!(live.card_restoring.is_none() && live.card_restored.is_some());
         assert!(requests.try_recv().is_err());
+
+        // Restore during Delete must not paint the old dust over the new card.
+        // A different Close still holds its slot and keeps its original clock.
+        let neighbor = preview_artifact(root.path(), [120, 40, 90, 255]);
+        let neighbor_id = neighbor.entry.id.clone();
+        live.artifacts.push(neighbor);
+        live.restore(&ctx, &neighbor_id, &settings, None);
+        let (generation, _) = decode_job();
+        results.send(decoded(generation, &neighbor_id)).unwrap();
+        live.logic(&ctx, &mut frame);
+        assert!(
+            live.previews
+                .exit_card(&id, captures_app::preview_motion::ExitKind::Dust, false)
+        );
+        assert!(live.previews.exit_card(
+            &neighbor_id,
+            captures_app::preview_motion::ExitKind::Dismiss,
+            false
+        ));
+        let neighbor_exit = live.previews.exits.exiting(&neighbor_id).cloned().unwrap();
+        live.restore(&ctx, &id, &settings, Some(preview_target()));
+        let (generation, _) = decode_job();
+        results.send(decoded(generation, &id)).unwrap();
+        live.logic(&ctx, &mut frame);
+        assert!(
+            live.previews.exits.exiting(&id).is_none(),
+            "restored card must not retain its old dust"
+        );
+        assert!(!live.previews.exiting.contains_key(&id));
+        assert_eq!(
+            live.previews.exits.exiting(&neighbor_id),
+            Some(&neighbor_exit)
+        );
+        assert_eq!(
+            live.previews.exits.display_ids(),
+            &[neighbor_id, id.clone()]
+        );
+        assert_eq!(live.previews.stack.ids(), std::slice::from_ref(&id));
+        live.previews.settle_exits(true);
+
+        // Cancelling a saved Delete's visuals must not bring its file work
+        // forward, lose the original request or let a late reply close Restore.
+        let generation = live.previews.cards[&id].generation;
+        let saved = root.path().join("Café export.png");
+        live.previews.cards.get_mut(&id).unwrap().saved_path = Some(saved.clone());
+        assert!(!live.previews.begin_trash(&id, false));
+        live.previews.epoch -= Duration::from_millis(1_600);
+        live.restore(&ctx, &id, &settings, Some(preview_target()));
+        let (restored_generation, _) = decode_job();
+        results.send(decoded(restored_generation, &id)).unwrap();
+        live.logic(&ctx, &mut frame);
+        assert!(live.previews.exits.exiting(&id).is_none());
+        assert!(
+            live.previews.due_trash(false).is_empty(),
+            "Restore must not send Trash early"
+        );
+        assert!(
+            !live.previews.begin_trash(&id, false),
+            "a pending Delete cannot be replaced"
+        );
+        assert!(live.previews.accepts(&id, restored_generation));
+        live.previews.epoch -= Duration::from_millis(1_400);
+        assert_eq!(
+            live.previews.due_trash(false),
+            vec![(id.clone(), generation, Some(saved))]
+        );
+        assert!(
+            live.previews.due_trash(false).is_empty(),
+            "send the original request exactly once"
+        );
+        assert!(live.previews.finish_trash(&id, generation));
+        assert!(
+            live.previews.accepts(&id, restored_generation),
+            "a late reply must not close the restored card"
+        );
 
         // A card dismissed before it decodes ends the restore without feedback.
         let generation = live.previews.cards[&id].generation;

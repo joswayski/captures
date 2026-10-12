@@ -84,7 +84,11 @@ def main():
                     write_history(history)
                     protected = next(history.iterdir())  # Older item is deleted last.
                     write_history(root / "second")
-                    shutil.move(str(next((root / "second").iterdir())), history)
+                    neighbor = next((root / "second").iterdir())
+                    run("convert", str(neighbor / "capture.png"), "-channel", "B", "-evaluate", "multiply", ".65",
+                        "+channel", str(neighbor / "capture.png"))
+                    shutil.copyfile(neighbor / "capture.png", neighbor / "preview.png")
+                    shutil.move(str(neighbor), history)
                     write_history(root / "third")
                     third = next((root / "third").iterdir())
                     # A distinct oldest source makes Copy reject a stale old card,
@@ -109,12 +113,13 @@ def main():
                     window = run("xdotool", "search", "--all", "--sync", "--onlyvisible", "--pid", str(app.pid), "--name", "^Capture History$").decode().splitlines()[0]
                     time.sleep(1)  # Font upload and asynchronous fixture decode.
 
-                    def click(x, y):
+                    def click(x, y, settle=True):
                         run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
                             "mousemove", "--sync", "--window", window, str(x - 1), str(y),
                             "mousemove_relative", "--sync", "1", "0", "sleep", ".12",
                             "mousedown", "1", "sleep", ".12", "mouseup", "1")
-                        time.sleep(.2)
+                        if settle:
+                            time.sleep(.2)
 
                     def screenshot(name):
                         run("import", "-window", window, str(output / f"{prefix}-{name}.png"))
@@ -169,6 +174,45 @@ def main():
                     time.sleep(.3)
                     assert len(previews()) == 1, "Restore duplicated the preview window"
                     assert len(list(history.glob("*/metadata.json"))) == 3, "Restore changed History"
+                    # An individual Delete is not Clear all. Restore cancels
+                    # only that ID's dust, keeping a different Delete's slot.
+                    click(574, 433)
+                    preview = wait(previews)[0]
+                    time.sleep(1.1)
+                    def preview_height():
+                        return int(dict(line.split("=", 1) for line in run(
+                            "xdotool", "getwindowgeometry", "--shell", preview).decode().splitlines())["HEIGHT"])
+                    assert preview_height() == 424
+                    preserved_restore = {path: path.read_bytes() for path in history.glob("*/*")
+                                         if path.is_file() and not path.parent.name.startswith(".")}
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "50", "50", "sleep", ".12",
+                        "mousedown", "1", "sleep", ".12", "mouseup", "1")
+                    deleted_at = time.monotonic()
+                    deleted_id = json.loads(entries[0].read_text())["id"]
+                    wait(lambda: any('"name":"preview-exit"' in line and deleted_id in line
+                                    for line in (output / "processes.log").read_text().splitlines()))
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "50", "234", "sleep", ".12",
+                        "mousedown", "1", "sleep", ".12", "mouseup", "1")
+                    neighbor_id = json.loads(entries[1].read_text())["id"]
+                    wait(lambda: any('"name":"preview-exit"' in line and neighbor_id in line
+                                    for line in (output / "processes.log").read_text().splitlines()))
+                    click(254, 433)
+                    preview = wait(previews)[0]
+                    run("xdotool", "mousemove", "--sync", "640", "440")
+                    # The restored card is the newest/front slot (bottom).
+                    # Its blue interior has no text/chrome or resized edges.
+                    # A stale old slot paints the differently colored neighbor.
+                    expected_pixel = run("convert", str(entries[0].parent / "capture.png"),
+                                         "-crop", "1x1+100+180", "-depth", "8", "rgb:-")
+                    wait(lambda: run("import", "-window", preview, "-crop", "1x1+100+292",
+                                     "-depth", "8", "rgb:-") == expected_pixel)
+                    elapsed = time.monotonic() - deleted_at
+                    run("import", "-window", preview, str(output / f"{prefix}-delete-restored-held.png"))
+                    assert elapsed < 2.4, f"Restore waited for the original dust instead of cancelling it: {elapsed:.3f}s"
+                    wait(lambda: preview_height() == 240)
+                    run("import", "-window", preview, str(output / f"{prefix}-delete-restored-settled.png"))
+                    assert all(path.read_bytes() == data for path, data in preserved_restore.items())
+                    print(f"PASS {prefix}: same-ID Restore cancels dust in {elapsed:.3f}s; unrelated Delete settles; History unchanged", flush=True)
                     # Drop the first History capture into the second capture's
                     # editor. The first already has a mini preview: this drag
                     # must not run that preview's dismissal callback.
@@ -207,8 +251,12 @@ def main():
                         "mousedown", "1", "sleep", ".04", "mouseup", "1")
                     cleared_at = time.monotonic()
                     wait(lambda: (output / "processes.log").read_text().count('"settles":false') >= previous_exits + 2)
-                    click(894, 433)
+                    click(894, 433, settle=False)
                     preview = wait(previews)[0]
+                    # Decode acceptance and the OS resize land on different
+                    # frames. Check the resized viewport within the same hold,
+                    # not whatever frame happens to follow the click release.
+                    wait(lambda: preview_height() == 240)
                     elapsed = time.monotonic() - cleared_at
                     height = int(dict(line.split("=", 1) for line in run(
                         "xdotool", "getwindowgeometry", "--shell", preview).decode().splitlines())["HEIGHT"])
@@ -266,7 +314,7 @@ def main():
                     assert not list(history.glob("*/metadata.json"))
                     print(f"PASS {prefix}: direct History COPY (saved/recovery bytes), editor layer drop with preview retained, cancelled drag, Restore, confirmation, Escape/Cancel, clear, export preserved, clean exit", flush=True)
             (output / "result.json").write_text(json.dumps({"passed": True, "appearances": 2, "partialFailureAndRetry": True, "restore": True,
-                "historyDrag": True, "historyEditorDrop": True, "restoreDuringClearAll": True,
+                "historyDrag": True, "historyEditorDrop": True, "restoreDuringClearAll": True, "restoreDuringDelete": True,
                 "scope": "Disposable native history on private X11/software GL; not hardware or other OS acceptance."}, indent=2))
         finally:
             for child in reversed(children):
