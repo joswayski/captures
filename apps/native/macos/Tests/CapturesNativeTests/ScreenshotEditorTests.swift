@@ -7118,7 +7118,8 @@ final class ScreenshotEditorTests: XCTestCase {
                 controller.root.layoutSubtreeIfNeeded()
                 XCTAssertFalse(control.isHiddenOrHasHiddenAncestor)
                 XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)))
-                let center = control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: controller.root)
+                // NSView.hitTest expects the receiver's superview coordinates.
+                let center = control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: controller.root.superview)
                 let hit = try XCTUnwrap(controller.root.hitTest(center))
                 XCTAssertTrue(hit === control || hit.isDescendant(of: control),
                               "\(control.accessibilityLabel() ?? "text control") must receive pointer input after scrolling")
@@ -7768,7 +7769,7 @@ final class ScreenshotEditorTests: XCTestCase {
             family.scrollToVisible(family.bounds)
             controller.root.layoutSubtreeIfNeeded()
             XCTAssertTrue(family.visibleRect.contains(family.bounds), "the real worker’s font control must be visible")
-            let point = family.convert(NSPoint(x: family.bounds.midX, y: family.bounds.midY), to: controller.root)
+            let point = family.convert(NSPoint(x: family.bounds.midX, y: family.bounds.midY), to: controller.root.superview)
             let hit = try XCTUnwrap(controller.root.hitTest(point))
             XCTAssertTrue(hit === family || hit.isDescendant(of: family))
             family.selectItem(withTitle: "Serif")
