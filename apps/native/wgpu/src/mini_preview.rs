@@ -1361,8 +1361,27 @@ fn editor_control(
         crate::primitives::focus_indicated(ui.ctx());
     }
     let visible = reveal || focused || phase.pinned();
+    let icon_hover = eased_toggle(
+        ui,
+        id.with("editor-hover"),
+        visible && enabled && phase.interactive() && hovered,
+        captures_app::motion::Transition::PreviewEditorHover,
+        tokens,
+        view.reduced_motion || !visible || !enabled || !phase.interactive(),
+    );
     if visible {
         let action_hover = (hovered || focused) && enabled && phase.interactive();
+        // The face, glyph, label and shadow move together; the shell's hit
+        // target and tooltip do not. The just-opened latch only mutes the action.
+        let transform = crate::motion::transform(
+            captures_app::motion::Pose {
+                translate_y: -icon_hover,
+                scale: 1. + 0.04 * icon_hover,
+                ..captures_app::motion::Pose::REST
+            },
+            rect,
+        );
+        let face = transform * rect;
         if phase.present() {
             let offers_action = action_hover && !just_opened;
             let accent = tokens.color("theme-accent");
@@ -1372,7 +1391,14 @@ fn editor_control(
                 14.,
                 accent.gamma_multiply(0.2),
             ));
-            crate::effects::paint_box_shadows(ui.painter(), rect, rect.height() / 2., &shadows, 1.);
+            crate::effects::paint_box_shadows_mapped(
+                ui.painter(),
+                rect,
+                rect.height() / 2.,
+                &shadows,
+                1.,
+                &|point| transform * point,
+            );
             let (fill, border, color) = if offers_action {
                 (
                     accent,
@@ -1387,10 +1413,10 @@ fn editor_control(
                 )
             };
             ui.painter().rect(
-                rect,
-                rect.height() / 2.,
+                face,
+                face.height() / 2.,
                 fill,
-                Stroke::new(1., border),
+                Stroke::new(transform.scaling, border),
                 egui::StrokeKind::Inside,
             );
             let icon_side = preview_chrome::EDITOR_PILL_ICON as f32;
@@ -1402,7 +1428,13 @@ fn editor_control(
                 egui::vec2(icon_side, icon_side),
             );
             // `stroke-width: 2.2` in the 24-unit viewBox at 11 pt.
-            paint_icon_with(ui.painter(), Icon::Edit, icon, color, 2.2 * icon_side / 24.);
+            paint_icon_with(
+                ui.painter(),
+                Icon::Edit,
+                transform * icon,
+                color,
+                2.2 * icon_side / 24. * transform.scaling,
+            );
             let label = ui.painter().layout_no_wrap(
                 preview_chrome::editor_pill_label(hovered || focused, just_opened).to_owned(),
                 egui::FontId::proportional(tokens.number("text-2xs")),
@@ -1412,34 +1444,38 @@ fn editor_control(
                 icon.right() + preview_chrome::EDITOR_PILL_GAP as f32,
                 rect.center().y - label.size().y / 2.,
             );
+            // Scale the existing glyph mesh, not the font cache on every tick.
+            let mut label = egui::epaint::TextShape::new(text, label, color);
+            label.transform(transform);
             // Clip the label while the pill is still widening.
             ui.painter()
-                .with_clip_rect(rect.shrink(1.))
-                .galley(text, label, color);
+                .with_clip_rect(transform * rect.shrink(1.))
+                .add(label);
         } else {
-            crate::effects::paint_box_shadows(
+            crate::effects::paint_box_shadows_mapped(
                 ui.painter(),
                 rect,
                 tokens.number("r-md"),
                 tokens.shadow("shadow-sm"),
                 1.,
+                &|point| transform * point,
             );
             ui.painter().rect(
-                rect,
-                tokens.number("r-md"),
+                face,
+                tokens.number("r-md") * transform.scaling,
                 tokens.color(if action_hover {
                     "glass-raised"
                 } else {
                     "glass-strong"
                 }),
-                Stroke::new(1., tokens.color("glass-border")),
+                Stroke::new(transform.scaling, tokens.color("glass-border")),
                 egui::StrokeKind::Inside,
             );
             let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(16., 16.));
             paint_icon(
                 ui.painter(),
                 Icon::Edit,
-                icon,
+                transform * icon,
                 tokens.color(if enabled {
                     "glass-text"
                 } else {
@@ -1449,13 +1485,13 @@ fn editor_control(
         }
         if focused {
             ui.painter().rect_stroke(
-                rect.expand(2.),
+                transform * rect.expand(2.),
                 if phase.present() {
-                    rect.height() / 2. + 2.
+                    face.height() / 2. + 2. * transform.scaling
                 } else {
-                    tokens.number("r-md")
+                    tokens.number("r-md") * transform.scaling
                 },
-                Stroke::new(2., tokens.color("theme-accent")),
+                Stroke::new(2. * transform.scaling, tokens.color("theme-accent")),
                 egui::StrokeKind::Outside,
             );
         }
@@ -4059,6 +4095,16 @@ mod tests {
         assert!(ring(&output));
         let pill = text_rect(&output, "In editor").unwrap();
         assert!(pill.max.x <= 276. && pill.min.x > 150., "{pill:?}");
+        let resting_face = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.stroke.color == accent.gamma_multiply(0.72) => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("outlined editor pill");
         output.textures_delta.clear();
 
         let mut hover = case(egui::pos2(pill.center().x, pill.center().y));
@@ -4073,6 +4119,25 @@ mod tests {
         assert!(
             !texts.iter().any(|text| text == "Edit"),
             "the pill carries no tooltip"
+        );
+        let hovered_face = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == accent && rect.rect.height() < 32. => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("accent editor pill");
+        assert!(
+            (hovered_face.width() - resting_face.width() * 1.04).abs() < 0.01,
+            "the present pill grows to 104%: {hovered_face:?}"
+        );
+        assert!((hovered_face.height() - 28. * 1.04).abs() < 0.01);
+        assert!(
+            (hovered_face.center().y - (resting_face.center().y - 1.)).abs() < 0.01,
+            "the whole face lifts 1pt"
         );
         output.textures_delta.clear();
 

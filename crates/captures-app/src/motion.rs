@@ -731,6 +731,8 @@ pub enum Transition {
     PreviewMediaScale,
     /// `.icon-button`: hover background and foreground over `0.14s ease`.
     PreviewIconHover,
+    /// `.thumbnail-editor-control-face`: hover lift/scale over `0.18s ease`.
+    PreviewEditorHover,
     /// `.icon-button::after`: card icon tooltips fade and nudge over `0.12s ease`.
     PreviewIconTooltip,
     /// `.thumbnail-stack-control[data-tooltip]::after`: the stack toolbar tip
@@ -790,7 +792,7 @@ const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::SegmentLabel,
@@ -798,6 +800,7 @@ impl Transition {
         Self::PreviewMediaFilter,
         Self::PreviewMediaScale,
         Self::PreviewIconHover,
+        Self::PreviewEditorHover,
         Self::PreviewIconTooltip,
         Self::PreviewStackTooltip,
         Self::PreviewEditorRing,
@@ -823,6 +826,7 @@ impl Transition {
             Self::PreviewMediaFilter => "preview_media_filter",
             Self::PreviewMediaScale => "preview_media_scale",
             Self::PreviewIconHover => "preview_icon_hover",
+            Self::PreviewEditorHover => "preview_editor_hover",
             Self::PreviewIconTooltip => "preview_icon_tooltip",
             Self::PreviewStackTooltip => "preview_stack_tooltip",
             Self::PreviewEditorRing => "preview_editor_ring",
@@ -851,7 +855,7 @@ impl Transition {
             Self::CaptureGuidanceSlide => token("dur-3", "ease-out"),
             Self::CaptureShadeFade => (Timing::Token("dur-4"), CSS_EASE_IN_OUT),
             Self::Tooltip => token("dur-1", "ease-standard"),
-            Self::PreviewMediaFilter => (Timing::Millis(180.), CSS_EASE),
+            Self::PreviewMediaFilter | Self::PreviewEditorHover => (Timing::Millis(180.), CSS_EASE),
             Self::PreviewMediaScale | Self::PreviewEditorRing => (Timing::Millis(220.), CSS_EASE),
             Self::PreviewIconHover => (Timing::Millis(140.), CSS_EASE),
             Self::PreviewIconTooltip => (Timing::Millis(120.), CSS_EASE),
@@ -1366,6 +1370,9 @@ mod tests {
             icon_hover.easing,
             CubicBezier::new(0.25, 0.1, 0.25, 1.).unwrap()
         );
+        let editor_hover = Transition::PreviewEditorHover.resolve(&Shipping).unwrap();
+        assert_eq!(editor_hover.duration_ms, 180.);
+        assert_eq!(editor_hover.easing, icon_hover.easing);
         // The ring leave matches the shipping presence leave timer.
         assert_eq!(
             Transition::PreviewEditorRingLeave

@@ -76,17 +76,7 @@ final class MiniPreviewButton: NSButton {
     private var morphAnimation: (start: CFTimeInterval, width: Double, swap: Double, target: Double)?
     private var iconPopStart: CFTimeInterval?
     private(set) var iconHover: Double = 0 {
-        didSet {
-            guard kind == .close || kind == .trash, let layer else { return }
-            // Transform only presentation: the action's frame and pointer
-            // tracking stay stable through the 1pt/104% shipping hover.
-            let pose = MotionKeyframes.Frame(offset: 0, opacity: 1, translateY: -iconHover,
-                                             scale: 1 + 0.04 * iconHover)
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            layer.transform = NativeMotion.transform(pose, layer: layer,
-                                                      down: superview?.isFlipped == true ? 1 : -1)
-            CATransaction.commit()
-        }
+        didSet { applyIconHoverPose() }
     }
     private var iconHoverAnimation: (start: CFTimeInterval, from: Double, target: Double)?
     /// Drives self-drawn morph, icon pop and hover colors while they run.
@@ -138,6 +128,26 @@ final class MiniPreviewButton: NSButton {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         refreshBoxShadow()
+        applyIconHoverPose()
+    }
+
+    /// Keep the held pose centred as Edit morphs between an icon and a pill.
+    private func applyIconHoverPose() {
+        guard kind == .close || kind == .trash || kind == .edit, let layer else { return }
+        // Transform only presentation: the hit target and tooltip stay fixed.
+        let key = "preview-icon-hover-pose"
+        guard iconHover != 0 else { layer.removeAnimation(forKey: key); return }
+        let pose = MotionKeyframes.Frame(offset: 0, opacity: 1, translateY: -iconHover,
+                                         scale: 1 + 0.04 * iconHover)
+        // AppKit owns a backing layer's model transform and can reset it
+        // during display. Hold this sampled pose in presentation instead.
+        let hold = CABasicAnimation(keyPath: "transform")
+        hold.fromValue = NSValue(caTransform3D: NativeMotion.transform(pose, layer: layer,
+            down: superview?.isFlipped == true ? 1 : -1))
+        hold.toValue = hold.fromValue
+        hold.duration = 0
+        hold.fillMode = .both; hold.isRemovedOnCompletion = false
+        layer.add(hold, forKey: key)
     }
 
     /// Rebuild the shadow for the current size. The present editor pill keeps
@@ -176,7 +186,7 @@ final class MiniPreviewButton: NSButton {
         let now = CACurrentMediaTime()
         var running = false
         if let hover = iconHoverAnimation {
-            let spec = NativeMotion.transition("preview_icon_hover", tokens: tokens)
+            let spec = NativeMotion.transition(kind == .edit ? "preview_editor_hover" : "preview_icon_hover", tokens: tokens)
             let elapsed = now - hover.start
             if spec.duration > 0, elapsed < spec.duration {
                 iconHover = hover.from + (hover.target - hover.from) * NativeMotion.ease(spec.timing, elapsed / spec.duration)
@@ -245,6 +255,7 @@ final class MiniPreviewButton: NSButton {
         layer?.shadowOffset = .zero
         layer?.shadowOpacity = editorPresent ? 0.2 : 0
         refreshBoxShadow()
+        applyIconHover()
         let morph = NativeMotion.transition("preview_editor_morph", tokens: tokens)
         if animated, window?.isVisible == true, morph.duration > 0, frame != next {
             NSAnimationContext.runAnimationGroup { context in
@@ -285,8 +296,8 @@ final class MiniPreviewButton: NSButton {
     private func applyIconHover() {
         guard boxShadowToken == "shadow-sm" else { return }
         let target: Double = hovered && isEnabled && !isHidden ? 1 : 0
-        let spec = NativeMotion.transition("preview_icon_hover", tokens: tokens)
-        if window?.isVisible == true, spec.duration > 0, iconHover != target {
+        let spec = NativeMotion.transition(kind == .edit ? "preview_editor_hover" : "preview_icon_hover", tokens: tokens)
+        if isEnabled, !isHidden, window?.isVisible == true, spec.duration > 0, iconHover != target {
             iconHoverAnimation = (CACurrentMediaTime(), iconHover, target)
             startTicker()
         } else {

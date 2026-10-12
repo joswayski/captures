@@ -779,6 +779,27 @@ def main():
                 run("xdotool", "mousemove", "--sync", "--window", preview, "60", str(card_top + 72))
                 wait(lambda: max(abs(a - b) for a, b in zip(delete_fill(), signal)) > 40,
                      "Delete loses destructive fill when the pointer leaves")
+                # Edit has its own 180ms face transform, including the compact
+                # icon. Its old top border becomes the same glass as the inside.
+                edit_x = 28 + (8 if placement.endswith("right") else 248)
+                edit_y = card_top + 8
+                run("xdotool", "mousemove", "--sync", "--window", preview,
+                    str(edit_x + 14), str(edit_y + 14))
+                def edit_lifted():
+                    top = run("import", "-window", preview, "-crop",
+                              f"1x1+{edit_x + 14}+{edit_y}", "-depth", "8", "rgb:-")
+                    inside = run("import", "-window", preview, "-crop",
+                                 f"1x1+{edit_x + 14}+{edit_y + 4}", "-depth", "8", "rgb:-")
+                    return max(abs(a - b) for a, b in zip(top, inside)) <= 2
+
+                wait(edit_lifted, "Edit hover lifts the compact face above its resting border")
+                shot(preview, f"{prefix}-edit-hover")
+                if icon_recording:
+                    for _ in range(3):
+                        run("xdotool", "mousemove", "--window", preview, "60", str(card_top + 72),
+                            "sleep", ".04", "mousemove", "--window", preview,
+                            str(edit_x + 14), str(edit_y + 14), "sleep", ".035")
+                    wait(edit_lifted, "rapid Edit reversals return to the lifted face")
                 run("xdotool", "mousemove", "--sync", "640", "440")
                 wait(lambda: sample() == idle_pixel, "preview media returns to idle after hover")
                 if icon_recording:
@@ -951,6 +972,16 @@ def main():
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "Edit changed the artifact or History")
                     shot("root", f"{prefix}-edit-with-preview")
+                    editor_recording = None
+                    if args.record_stack_motion:
+                        frame = window_geometry(preview)
+                        editor_recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                            "-video_size", "340x240", "-framerate", "30", "-i",
+                            env["DISPLAY"] + f"+{frame['X']},{frame['Y']}",
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                            str(output / f"{prefix}-editor-hover.mp4")], env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-editor-hover.ffmpeg.log").open("w"))
+                        children.append(editor_recording)
                     # Shipping editor presence: with the pointer away, the Edit
                     # icon stays pinned as the "In editor" pill (glass fill over
                     # the orange media quadrant) and the card gains the 2 px
@@ -970,6 +1001,18 @@ def main():
                     wait(lambda: accent_ring() and glass_at(230, 42),
                          "an open editor pins the In editor pill and accent ring")
                     shot(preview, f"{prefix}-in-editor")
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "290", "50")
+                    def lifted_editor_pill():
+                        # The focused saved preview has scrolled its card to
+                        # y=16: the resting pill starts at 24, above its label.
+                        return max(abs(a - b) for a, b in zip(pixel(254, 23), bytes.fromhex("ffca28"))) <= 2
+
+                    wait(lifted_editor_pill, "Show in editor lifts the accent pill above its resting border")
+                    shot(preview, f"{prefix}-editor-hover")
+                    for _ in range(3):
+                        run("xdotool", "mousemove", "640", "440", "sleep", ".04",
+                            "mousemove", "--window", preview, "290", "50", "sleep", ".035")
+                    wait(lifted_editor_pill, "rapid present-pill reversals return to its lifted face")
                     run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
                     assert active_window() == other
                     click(preview, 290, 50, activate=False)
@@ -980,6 +1023,10 @@ def main():
                     assert not windows("Capture History"), "repeated Edit restored minimized workspace"
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "repeated Edit changed the artifact or History")
+                    wait(lambda: max(abs(a - b) for a, b in zip(pixel(254, 24), pixel(254, 28))) <= 2
+                         and not lifted_editor_pill(),
+                         "just-opened keeps the lifted pose but restores the passive glass fill")
+                    shot(preview, f"{prefix}-editor-just-opened")
                     run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                         "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
                     wait(lambda: not windows(EDITOR),
@@ -994,6 +1041,9 @@ def main():
                          "closing the editor leaves a lingering Edit icon without the ring")
                     shot(preview, f"{prefix}-editor-linger")
                     wait(lambda: not glass_at(280, 42), "the Edit linger ends")
+                    if editor_recording:
+                        editor_recording.communicate(input=b"q\n", timeout=10)
+                        assert editor_recording.returncode == 0, "editor-hover recording failed"
                     click(preview, 50, 50, activate=False)  # Saved card Close (top-left).
                     wait(lambda: not windows(PREVIEW), "Dismiss closes only the card")
                     time.sleep(.3)
