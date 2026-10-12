@@ -44,7 +44,8 @@ def main():
     parser.add_argument("--record-stack-motion", action="store_true", help="Record collapse/expand and interrupted icon/toolbar hover")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
-    parser.add_argument("--record-retarget", action="store_true", help="Record overlapping exits in the retarget smoke")
+    parser.add_argument("--close-only", action="store_true", help="Exercise saved Close without moving held survivors at all corners")
+    parser.add_argument("--record-retarget", action="store_true", help="Record held exits in the retarget or Close smoke")
     parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
     parser.add_argument("--system-motion-only", action="store_true", help="Exercise desktop motion preference refresh")
     parser.add_argument("--lifecycle", action="store_true", help="Exercise a real Xfce SNI tray and background shortcuts")
@@ -59,13 +60,13 @@ def main():
         parser.error("--record-clear requires --stack")
     if args.record_stack_motion and not args.stack:
         parser.error("--record-stack-motion requires --stack")
-    if args.record_retarget and not args.retarget_only:
-        parser.error("--record-retarget requires --retarget-only")
+    if args.record_retarget and not (args.retarget_only or args.close_only):
+        parser.error("--record-retarget requires --retarget-only or --close-only")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     env = {**os.environ, "WGPU_BACKEND": "gl", "WINIT_X11_SCALE_FACTOR": "1", "XDG_SESSION_TYPE": "x11"}
-    if args.retarget_only:
+    if args.retarget_only or args.close_only:
         env["CAPTURES_NATIVE_TRACE"] = "1"
     # Live hosts must never unbind the developer's real OS screenshot keys.
     env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
@@ -532,8 +533,8 @@ def main():
         cases += [("bottom_left", True, True), ("bottom_left", False, False)]
         if args.lifecycle or args.drag_only:
             cases = cases[:1]
-        if args.retarget_only:
-            assert not args.reduced_motion, "retarget requires animated dust"
+        if args.retarget_only or args.close_only:
+            assert not args.reduced_motion, "held-slot checks require animated exits"
             cases = cases[:4]
         for placement, enabled, include in cases:
             prefix = f"{placement}-enabled-{enabled}-include-{include}"
@@ -609,7 +610,7 @@ def main():
             first = capture((140, 180, 310, 170))
             stack_entries = [first]
             assert rgb(first.parent / "capture.png") == wallpaper_crop(140, 180, 310, 170)
-            if args.retarget_only:
+            if args.retarget_only or args.close_only:
                 for rect in [(45, 55, 230, 110), (260, 240, 200, 140)]:
                     stack_entries.append(capture(rect))
                 preview = wait(lambda: windows(PREVIEW), "three-card retarget preview")[0]
@@ -629,14 +630,68 @@ def main():
                 preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
                 recording = None
                 if args.record_retarget:
+                    effect = "close" if args.close_only else "retarget"
                     recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
                         "-video_size", "1280x900", "-framerate", "30", "-i", env["DISPLAY"],
                         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
-                        str(output / f"{prefix}-retarget.mp4")], env=env, stdin=subprocess.PIPE,
-                        stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-retarget.ffmpeg.log").open("w"))
+                        str(output / f"{prefix}-{effect}.mp4")], env=env, stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-{effect}.ffmpeg.log").open("w"))
                     children.append(recording)
                     time.sleep(.3)
                 x = 290 if placement.endswith("right") else 50
+                if args.close_only:
+                    middle = stack_entries[1]
+                    middle_y = base + 184
+                    click(preview, 170, middle_y + 99, activate=False)
+                    exported = Path(wait(lambda: json.loads(middle.read_text()).get("saved_path"),
+                                         "saved middle card exposes Close"))
+                    exported_bytes = exported.read_bytes()
+                    time.sleep(.3)
+                    # Require the host's actual accepted Close event before
+                    # sampling the edge of the oldest, non-hovered survivor.
+                    artifact_id = json.loads(middle.read_text())["id"]
+                    def close_accepted():
+                        for line in (output / f"{prefix}.stdout.log").read_text().splitlines():
+                            if '"name":"preview-exit"' in line and line.endswith("}"):
+                                data = json.loads(line)["detail"]["data"]
+                                if data["id"] == artifact_id:
+                                    assert data["kind"] == "Dismiss"
+                                    return data
+
+                    # Saved controls keep Close before Delete in both groups;
+                    # the right group therefore puts Close 34px inward.
+                    close_x = x - 34 if placement.endswith("right") else x
+                    run("xdotool", "mousemove", "--sync", "--window", preview,
+                        str(close_x), str(middle_y + 22), "sleep", ".15")
+                    shot(preview, f"{prefix}-close-before")
+                    pressed_at = time.monotonic()
+                    run("xdotool", "mousedown", "1", "sleep", ".15", "mouseup", "1")
+                    wait(close_accepted, "Close consumed by the saved middle card")
+                    time.sleep(.05)  # Allow the accepted exit's first frame to present.
+                    held = survivor_pixels()
+                    # The pixel sample must finish inside the shipping
+                    # 450ms delay, not after a survivor is allowed to slide.
+                    # The host starts its exit after this input command begins,
+                    # so this elapsed time bounds the real exit age from above.
+                    elapsed = (time.monotonic() - pressed_at) * 1000
+                    assert elapsed < 450, f"Close probe missed the held-slot delay: {elapsed}ms"
+                    shot(preview, f"{prefix}-close-held")
+                    assert held == before, "Close moved the survivor before its 450ms slide delay"
+                    wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 424, "Close settles to two live cards")
+                    shot(preview, f"{prefix}-close-settled")
+                    if recording:
+                        recording.communicate(input=b"q\n", timeout=10)
+                        assert recording.returncode == 0, "Close recording failed"
+                    assert exported.read_bytes() == exported_bytes, "Close deleted or changed the saved export"
+                    assert entries() == set(preserved), "Close removed History"
+                    assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
+                    click(preview, 170, base + (1 if top else 0) * 184 + 61, activate=False)
+                    wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"), "oldest Close survivor remains actionable")
+                    run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
+                    assert app.wait(timeout=10) == 0
+                    print(f"PASS {placement}: Close holds exact survivor pixels at {elapsed:.0f}ms; settles to actionable oldest capture; export and History retained", flush=True)
+                    continue
+
                 def delete(slot, entry, second=False):
                     y = base + slot * 184 + 22
                     artifact_id = json.loads(entry.read_text())["id"]
