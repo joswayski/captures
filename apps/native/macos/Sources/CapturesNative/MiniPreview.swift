@@ -75,7 +75,18 @@ final class MiniPreviewButton: NSButton {
     private(set) var morphSwap: Double = 0
     private var morphAnimation: (start: CFTimeInterval, width: Double, swap: Double, target: Double)?
     private var iconPopStart: CFTimeInterval?
-    private(set) var iconHover: Double = 0
+    private(set) var iconHover: Double = 0 {
+        didSet {
+            guard kind == .close || kind == .trash, let layer else { return }
+            // Transform only presentation: the action's frame and pointer
+            // tracking stay stable through the 1pt/104% shipping hover.
+            let pose = MotionKeyframes.Frame(offset: 0, opacity: 1, translateY: -iconHover,
+                                             scale: 1 + 0.04 * iconHover)
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            layer.transform = NativeMotion.transform(pose, layer: layer, down: isFlipped ? 1 : -1)
+            CATransaction.commit()
+        }
+    }
     private var iconHoverAnimation: (start: CFTimeInterval, from: Double, target: Double)?
     /// Drives self-drawn morph, icon pop and hover colors while they run.
     private var ticker: Timer?

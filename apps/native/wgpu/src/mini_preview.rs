@@ -1955,18 +1955,29 @@ fn control(
         )
     });
     let hover_id = id.with("icon-hover");
-    let icon_hover = if visible && enabled {
-        crate::motion::eased_bool(
-            ui.ctx(),
-            hover_id,
-            tooltip.is_some() && response.hovered(),
-            &tokens.transition(captures_app::motion::Transition::PreviewIconHover),
-        )
-    } else {
-        // Hiding chrome or disabling the action clears its hover immediately.
-        ui.ctx().animate_bool_with_time(hover_id, false, 0.)
-    };
+    let icon_hover = eased_toggle(
+        ui,
+        hover_id,
+        visible && enabled && tooltip.is_some() && response.hovered(),
+        captures_app::motion::Transition::PreviewIconHover,
+        tokens,
+        tooltip.is_some_and(|(_, reduced)| reduced)
+            || crate::motion::reduced(ui.ctx())
+            || !visible
+            || !enabled,
+    ) as f32;
     if visible {
+        // CSS lifts/scales the whole icon face and shadow. Keep the hit target
+        // and floating tooltip anchor stable; painting must not allocate a UI
+        // scope, which would advance this card's parent layout cursor.
+        let transform = crate::motion::transform(
+            captures_app::motion::Pose {
+                translate_y: -f64::from(icon_hover),
+                scale: 1. + 0.04 * f64::from(icon_hover),
+                ..captures_app::motion::Pose::REST
+            },
+            rect,
+        );
         let fill = if primary {
             tokens.color("theme-accent")
         } else if tooltip.is_some() {
@@ -1985,7 +1996,7 @@ fn control(
         };
         // `.icon-button` carries `--shadow-sm`, `.thumbnail-main-actions
         // button` `--shadow-md`.
-        crate::effects::paint_box_shadows(
+        crate::effects::paint_box_shadows_mapped(
             ui.painter(),
             rect,
             tokens.number("r-md"),
@@ -1995,12 +2006,14 @@ fn control(
                 "shadow-md"
             }),
             1.,
+            &|point| transform * point,
         );
+        let rect = transform * rect;
         ui.painter().rect(
             rect,
-            tokens.number("r-md"),
+            tokens.number("r-md") * transform.scaling,
             fill,
-            Stroke::new(1., tokens.color("glass-border")),
+            Stroke::new(transform.scaling, tokens.color("glass-border")),
             egui::StrokeKind::Inside,
         );
         let color = if primary {
@@ -2037,7 +2050,10 @@ fn control(
         paint_icon(
             ui.painter(),
             icon,
-            egui::Rect::from_center_size(icon_center, egui::vec2(16., 16.) * pop.scale as f32),
+            egui::Rect::from_center_size(
+                icon_center,
+                egui::vec2(16., 16.) * pop.scale as f32 * transform.scaling,
+            ),
             color.gamma_multiply(pop.opacity as f32),
         );
         if let Some(text) = label {
@@ -2053,9 +2069,9 @@ fn control(
         if response.has_focus() {
             crate::primitives::focus_indicated(ui.ctx());
             ui.painter().rect_stroke(
-                rect.expand(2.),
-                tokens.number("r-md"),
-                Stroke::new(2., tokens.color("theme-accent")),
+                rect.expand(2. * transform.scaling),
+                tokens.number("r-md") * transform.scaling,
+                Stroke::new(2. * transform.scaling, tokens.color("theme-accent")),
                 egui::StrokeKind::Outside,
             );
         }
@@ -2727,11 +2743,16 @@ mod tests {
                     );
                     let mut output = ctx.end_pass();
                     output.textures_delta.clear();
-                    let fill = output
+                    let (fill, face) = output
                         .shapes
                         .iter()
                         .find_map(|shape| match &shape.shape {
-                            egui::Shape::Rect(shape) if shape.rect == rect => Some(shape.fill),
+                            egui::Shape::Rect(shape)
+                                if shape.stroke.width > 0.
+                                    && shape.stroke.color == tokens.color("glass-border") =>
+                            {
+                                Some((shape.fill, shape.rect))
+                            }
                             _ => None,
                         })
                         .unwrap();
@@ -2743,11 +2764,11 @@ mod tests {
                         }
                         _ => None,
                     });
-                    (fill, ink)
+                    (fill, ink, face)
                 };
                 let rest = tokens.color("glass-strong");
                 assert_eq!(frame(0., false, true).0, rest);
-                frame(0.01, false, true);
+                assert_eq!(frame(0.01, false, true).2, rect);
                 frame(0.02, true, true);
                 let halfway = frame(0.08, true, true).0;
                 let expected = tokens.color(if icon == Icon::Trash {
@@ -2759,19 +2780,34 @@ mod tests {
                     assert_ne!(halfway, rest);
                     assert_ne!(halfway, expected, "the hover must ease rather than jump");
                 }
-                let (fill, ink) = frame(0.4, true, true);
+                let before_leave = frame(0.08, true, true).2;
+                let on_leave = frame(0.08, false, true).2;
+                if !reduced {
+                    assert!(before_leave.min.distance(on_leave.min) < 0.001);
+                    assert!(before_leave.max.distance(on_leave.max) < 0.001);
+                } else {
+                    assert_eq!(on_leave, rect, "Reduce Motion leaves immediately");
+                }
+                frame(0.09, true, true);
+                let (fill, ink, face) = frame(0.4, true, true);
                 assert_eq!(fill, expected);
+                assert!((face.width() - 29.12).abs() < 0.001, "104% of 28 pt");
+                assert!((face.height() - 29.12).abs() < 0.001);
+                assert!((face.center().y - 53.).abs() < 0.001, "1 pt lift");
+                assert!((face.center().x - 54.).abs() < 0.001);
                 if icon == Icon::Trash {
                     assert_eq!(ink, Some(egui::epaint::ColorMode::Solid(Color32::WHITE)));
                 }
                 frame(0.5, false, true);
                 assert_eq!(frame(0.8, false, true).0, rest);
+                assert_eq!(frame(0.8, false, true).2, rect);
                 frame(0.9, true, false);
                 assert_eq!(
                     frame(1.2, true, false).0,
                     rest,
                     "disabled controls must not advertise an action"
                 );
+                assert_eq!(frame(1.2, true, false).2, rect);
             }
         }
     }

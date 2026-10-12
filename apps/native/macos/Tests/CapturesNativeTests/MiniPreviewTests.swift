@@ -92,13 +92,21 @@ final class MiniPreviewTests: XCTestCase {
         }
         assertColor(delete.chromeBackground, tokens.color("glass-strong"))
         assertColor(delete.chromeForeground, tokens.color("theme-signal-text"))
+        let restingFrame = delete.frame
         delete.mouseEntered(with: hover)
         try waitUntil { delete.iconHover == 1 }
         assertColor(delete.chromeBackground, tokens.color("theme-signal"))
         assertColor(delete.chromeForeground, .white)
-        try write(render(panel), name: "mini-preview-delete-hover.png")
+        XCTAssertEqual(delete.frame, restingFrame, "hover must not move the hit target")
+        let lifted = try XCTUnwrap(renderPresentation(panel))
+        let anchor = delete.convert(delete.bounds, to: panel.previewView)
+        // The resting top border is now inside the lifted, scaled face.
+        assertColor(try XCTUnwrap(pixelColor(in: lifted, of: panel, x: anchor.midX, y: anchor.minY)),
+                    tokens.color("theme-signal"))
+        try write(lifted, name: "mini-preview-delete-hover.png")
         delete.mouseExited(with: hover)
         try waitUntil { delete.iconHover == 0 }
+        XCTAssertEqual(delete.frame, restingFrame)
         assertColor(delete.chromeBackground, tokens.color("glass-strong"))
         edit.mouseEntered(with: hover)
         try waitUntil { edit.iconHover == 1 }

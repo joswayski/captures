@@ -273,6 +273,7 @@ images and idle dimensions, hover-only corner icons and centered Copy/Save actio
 with controls mirrored for right-side placement. Hover blurs and dims the image;
 cards show byte sizes, clipboard confirmation and editor-presence pills. Delete
 uses a white icon on the signal-colored hover background. Native previews also
+lift and grow Close/Delete on hover while keeping their click targets fixed, and
 animate arrival, dismissal, pile expansion and settling, respecting reduced motion.
 Clear all retains each screenshot card's current appearance while it streaks out,
 without forcing idle cards into hover dimming; later captures and retained files stay.
