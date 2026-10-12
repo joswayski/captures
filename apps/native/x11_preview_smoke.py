@@ -871,7 +871,14 @@ def main():
                     time.sleep(.5)
                     run("xdotool", "mousemove", "--sync", "--window", preview, "60", "90", "mousedown", "1",
                         "sleep", ".2", "mousemove", "--sync", "--window", preview, "90", "90", "sleep", ".5",
-                        "mousemove", "--sync", "--window", preview, "200", "90", "sleep", ".3", "mouseup", "1")
+                        "mousemove", "--sync", "--window", preview, "200", "90", "sleep", ".3", "mouseup", "1",
+                        "sleep", ".05", "mousemove", "--sync", "--window", preview, "201", "90", "sleep", ".1")
+                    # Recover hover during rejection: the media must stay sharp
+                    # and at brightness 1, not ease back to the hovered .5.
+                    rejected_pixel = sample()
+                    assert all(abs(a - b) <= 2 for a, b in zip(rejected_pixel, idle_pixel)), (
+                        "self-drop rejection must override hovered media", tuple(rejected_pixel), tuple(idle_pixel))
+                    shot(preview, "self-drop-hover-rejected")
                     time.sleep(.7)
                     assert windows(PREVIEW) and not windows(EDITOR), "self drop must retain, not reimport"
                     assert recording.wait(timeout=10) == 0

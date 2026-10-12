@@ -579,6 +579,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var editControl: MiniPreviewButton? { editButton }
     private var press: NSPoint?
     private var fileDragStarted = false
+    private(set) var dropRejectedAt: CFTimeInterval?
     var preparedDragPath: String?
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
     var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
@@ -965,7 +966,8 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     /// `html:not(.thumbnail-native-tracking) .thumbnail-card:hover img`: blur,
     /// darken and scale the media over its shipping transitions.
-    private func setMediaHovered(_ hovered: Bool, animated: Bool = true) {
+    private func setMediaHovered(_ requested: Bool, animated: Bool = true) {
+        let hovered = requested && (dropRejectedAt == nil || isExiting)
         guard hovered != mediaHovered else { return }
         mediaHovered = hovered
         let media = captures_preview_hover_media_v1()
@@ -1234,16 +1236,30 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         dragEnded?(screenPoint, operation)
     }
 
-    func rejectDrop() {
+    func rejectDrop(startedAt: CFTimeInterval? = nil) {
+        let began = startedAt ?? CACurrentMediaTime()
+        let duration = Double(tokens.number("thumbnail-drop-reject-duration")) / 1000
+        let elapsed = CACurrentMediaTime() - began
+        guard !isExiting, elapsed < duration else { return }
+        dropRejectedAt = began
+        imageView.layer?.removeAllAnimations()
+        mediaDim.layer?.removeAllAnimations()
+        setMediaHovered(false, animated: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration - elapsed) { [weak self] in
+            guard let self, self.dropRejectedAt == began else { return }
+            self.dropRejectedAt = nil
+            guard !self.isExiting else { return }
+            self.refreshChrome()
+        }
         guard !NativeMotion.reduceMotion, let layer else { return }
         let shake = CAKeyframeAnimation(keyPath: "transform.translation.x")
         shake.values = [0, -tokens.number("thumbnail-drop-reject-x-1"), tokens.number("thumbnail-drop-reject-x-1"),
                         -tokens.number("thumbnail-drop-reject-x-2"), tokens.number("thumbnail-drop-reject-x-3"),
                         -tokens.number("thumbnail-drop-reject-x-4"), tokens.number("thumbnail-drop-reject-x-4"), 0]
         shake.keyTimes = [0, 0.1, 0.3, 0.5, 0.65, 0.8, 0.9, 1]
-        shake.duration = Double(tokens.number("thumbnail-drop-reject-duration")) / 1000
+        shake.duration = duration
         shake.timingFunction = CAMediaTimingFunction(name: .linear)
-        shake.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil)
+        shake.beginTime = layer.convertTime(began, from: nil)
         layer.add(shake, forKey: "preview-drop-reject")
     }
 }
@@ -2086,6 +2102,13 @@ final class MiniPreviewView: NSView {
     }
 
     func rejectDrop(for artifactID: String) { cards[artifactID]?.rejectDrop() }
+
+    func continueRejections(from previous: MiniPreviewView) {
+        for (id, card) in cards {
+            guard let old = previous.cards[id], !old.isExiting, let began = old.dropRejectedAt else { continue }
+            card.rejectDrop(startedAt: began)
+        }
+    }
 
     /// Shipping `thumbnail-arrive`: a newly decoded card rises, fades in and
     /// sharpens from its 3 px blur. Presentation-only; skipped under Reduce Motion.
@@ -3021,6 +3044,7 @@ final class MiniPreviewController {
         panel = next
         refreshClipboardOwner(continuing: previous?.previewView)
         updateEditorPresence(animated: false)
+        if let previous { next.previewView.continueRejections(from: previous.previewView) }
         for id in liveIDs { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
         let now = CACurrentMediaTime()
         let highlight = NativeMotion.duration("preview_capture_highlight", tokens: tokens)
