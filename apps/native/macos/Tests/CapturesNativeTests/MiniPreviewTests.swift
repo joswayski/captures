@@ -1317,6 +1317,18 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(top.previewView.visibleOverflowCueLabels, ["Show older captures"],
             "top stacks list newest first, so the lower cue reveals older captures")
 
+        for preview in [view, top.previewView] {
+            // A scroll already queued when Clear all starts must not bring
+            // its controls back while the cards are still streaking out.
+            preview.scrollStack(bySlots: 1)
+            preview.playToolbar("preview_toolbar_clear", holdEnd: true)
+            XCTAssertEqual(preview.visibleOverflowCueLabels, [])
+            try waitUntil { abs(preview.scrollOffsetY - 184) < 0.5 }
+            preview.updateOverflowCues()
+            XCTAssertEqual(preview.visibleOverflowCueLabels, [])
+        }
+        try write(render(bottom), name: "mini-preview-clear-overflow-hidden.png")
+
         let fits = fixturePanel(ids: ["a", "b"], images: ["a": solidImage(.red), "b": solidImage(.blue)])
         defer { fits.close() }
         XCTAssertEqual(fits.previewView.visibleOverflowCueLabels, [])

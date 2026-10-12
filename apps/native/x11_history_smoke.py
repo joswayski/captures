@@ -28,6 +28,7 @@ def main():
     env = {**os.environ, "WGPU_BACKEND": "gl"}
     # Live hosts must never unbind the developer's real OS screenshot keys.
     env["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
+    env["CAPTURES_NATIVE_TRACE"] = "1"
     env.pop("WAYLAND_DISPLAY", None)
     children = []
     with (output / "processes.log").open("w") as log:
@@ -84,14 +85,23 @@ def main():
                     protected = next(history.iterdir())  # Older item is deleted last.
                     write_history(root / "second")
                     shutil.move(str(next((root / "second").iterdir())), history)
+                    write_history(root / "third")
+                    third = next((root / "third").iterdir())
+                    # A distinct oldest source makes Copy reject a stale old card,
+                    # independently of the window-height assertion below.
+                    run("convert", str(protected / "capture.png"), "-channel", "R", "-evaluate", "multiply", ".7",
+                        "+channel", str(protected / "capture.png"))
+                    shutil.copyfile(protected / "capture.png", protected / "preview.png")
+                    shutil.move(str(third), history)
                     for preview_path in history.glob("*/preview.png"):
                         run("convert", str(preview_path), "-resize", "160x90", str(preview_path))
                     export = root / "Café capture.png"
-                    shutil.copyfile(next(history.glob("*/capture.png")), export)
+                    shutil.copyfile(protected / "capture.png", export)
                     original_export = export.read_bytes()
-                    metadata = next(history.glob("*/metadata.json"))
+                    metadata = protected / "metadata.json"
                     entry = json.loads(metadata.read_text())
                     entry["saved_path"] = str(export)
+                    entry["size_bytes"] = len(original_export)
                     metadata.write_text(json.dumps(entry))
                     write_completed_settings(root / "settings.json")
                     app = spawn([str(binary), "--live", "--open-history", "--history-root", str(history),
@@ -102,7 +112,8 @@ def main():
                     def click(x, y):
                         run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
                             "mousemove", "--sync", "--window", window, str(x - 1), str(y),
-                            "mousemove_relative", "--sync", "1", "0", "click", "1")
+                            "mousemove_relative", "--sync", "1", "0", "sleep", ".12",
+                            "mousedown", "1", "sleep", ".12", "mouseup", "1")
                         time.sleep(.2)
 
                     def screenshot(name):
@@ -140,7 +151,7 @@ def main():
                         if saved:
                             assert Path(received["path"]) == Path(saved), "saved export did not win"
                         assert not previews(), "History drag must not Restore"
-                        assert len(list(history.glob("*/metadata.json"))) == 2, "History drag removed its source"
+                        assert len(list(history.glob("*/metadata.json"))) == 3, "History drag removed its source"
                         receiver.terminate(); receiver.wait(timeout=5)
                     # Cancel a repeat gesture and verify it neither opens an
                     # editor nor consumes History or pointer state.
@@ -157,7 +168,7 @@ def main():
                     click(254, 433)  # Already showing: no duplicate window, still confirms.
                     time.sleep(.3)
                     assert len(previews()) == 1, "Restore duplicated the preview window"
-                    assert len(list(history.glob("*/metadata.json"))) == 2, "Restore changed History"
+                    assert len(list(history.glob("*/metadata.json"))) == 3, "Restore changed History"
                     # Drop the first History capture into the second capture's
                     # editor. The first already has a mini preview: this drag
                     # must not run that preview's dismissal callback.
@@ -179,19 +190,57 @@ def main():
                         "mousemove_relative", "--sync", "1", "0", "sleep", ".3", "mouseup", "1")
                     wait(lambda: draft.exists() and len(json.loads(draft.read_text())["document"]["elements"]) == 2)
                     assert len(previews()) == preview_count, "History-to-editor drag dismissed a mini preview"
-                    assert len(list(history.glob("*/metadata.json"))) == 2, "editor drop republished History"
+                    assert len(list(history.glob("*/metadata.json"))) == 3, "editor drop republished History"
                     run("import", "-window", editor, str(output / f"{prefix}-history-editor-drop.png"))
                     run("xdotool", "windowactivate", "--sync", editor, "key", "alt+F4")
                     time.sleep(.5)
+                    # Edit restored the second card, so Clear all has two
+                    # visible cards. Restore a different third during its hold.
+                    preview = wait(previews)[0]
+                    wait(lambda: int(dict(line.split("=", 1) for line in run(
+                        "xdotool", "getwindowgeometry", "--shell", preview).decode().splitlines())["HEIGHT"]) == 424)
+                    time.sleep(1.2)
+                    preserved = {path: path.read_bytes() for path in history.glob("*/*")
+                                 if path.is_file() and not path.parent.name.startswith(".")}
+                    previous_exits = (output / "processes.log").read_text().count('"settles":false')
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "42", "398", "sleep", ".12",
+                        "mousedown", "1", "sleep", ".04", "mouseup", "1")
+                    cleared_at = time.monotonic()
+                    wait(lambda: (output / "processes.log").read_text().count('"settles":false') >= previous_exits + 2)
+                    click(894, 433)
+                    preview = wait(previews)[0]
+                    elapsed = time.monotonic() - cleared_at
+                    height = int(dict(line.split("=", 1) for line in run(
+                        "xdotool", "getwindowgeometry", "--shell", preview).decode().splitlines())["HEIGHT"])
+                    assert elapsed < .8, f"Restore missed the Clear all hold: {elapsed:.3f}s"
+                    run("import", "-window", preview, str(output / f"{prefix}-clear-arrival.png"))
+                    assert height == 240, f"Restore inherited Clear all held slots: {height}px, not 240px"
+                    assert all(path.read_bytes() == data for path, data in preserved.items()), "Clear all or Restore changed History"
+                    expected = run("convert", str(entries[2].parent / "capture.png"), "-depth", "8", "rgb:-")
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "169", "89",
+                        "mousemove_relative", "--sync", "1", "0", "sleep", ".12",
+                        "mousedown", "1", "sleep", ".12", "mouseup", "1")
+
+                    def copied_restored():
+                        value = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                                               env=env, capture_output=True, timeout=5)
+                        if value.returncode != 0:
+                            return False
+                        pixels = subprocess.run(["convert", "png:-", "-depth", "8", "rgb:-"],
+                                                env=env, input=value.stdout, capture_output=True, timeout=5)
+                        return pixels.returncode == 0 and pixels.stdout == expected
+
+                    wait(copied_restored)
+                    print(f"PASS {prefix}: Restore during Clear all opens one actionable 240px card in {elapsed:.3f}s; all source files unchanged", flush=True)
                     click(948, 79)  # Delete all arms "Delete all forever" in place.
                     screenshot("confirmation")
-                    assert len(list(history.glob("*/metadata.json"))) == 2, "arming confirmation deleted files"
+                    assert len(list(history.glob("*/metadata.json"))) == 3, "arming confirmation deleted files"
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
-                    assert len(list(history.glob("*/metadata.json"))) == 2, "Escape deleted files"
+                    assert len(list(history.glob("*/metadata.json"))) == 3, "Escape deleted files"
                     click(948, 79)
                     click(820, 79)  # Explicit Cancel.
-                    assert len(list(history.glob("*/metadata.json"))) == 2, "Cancel deleted files"
+                    assert len(list(history.glob("*/metadata.json"))) == 3, "Cancel deleted files"
                     screenshot("cancelled")
                     if fail_partway:
                         protected.chmod(0o555)
@@ -217,7 +266,7 @@ def main():
                     assert not list(history.glob("*/metadata.json"))
                     print(f"PASS {prefix}: direct History COPY (saved/recovery bytes), editor layer drop with preview retained, cancelled drag, Restore, confirmation, Escape/Cancel, clear, export preserved, clean exit", flush=True)
             (output / "result.json").write_text(json.dumps({"passed": True, "appearances": 2, "partialFailureAndRetry": True, "restore": True,
-                "historyDrag": True, "historyEditorDrop": True,
+                "historyDrag": True, "historyEditorDrop": True, "restoreDuringClearAll": True,
                 "scope": "Disposable native history on private X11/software GL; not hardware or other OS acceptance."}, indent=2))
         finally:
             for child in reversed(children):
