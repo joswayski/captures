@@ -678,6 +678,71 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(save.frame.minY, pairedSaveY)
     }
 
+    func testClipboardChipDoesNotReplayWhenAnotherCardArrivesOrSettingsRebuild() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        let controller = try presentedController(artifact(id: "owned", previewPath: "/owned.png"))
+        defer { controller.close() }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        pasteboard.clearContents(); pasteboard.setString("capture", forType: .string)
+        controller.recordClipboardCopy(artifactID: "owned", pasteboard: pasteboard)
+        CATransaction.flush()
+        // Opacity has reached 1, but the 1.15-second scale bounce is still running.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        let original = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.isVisible && $0.previewView === controller.previewView })
+        let chip = try XCTUnwrap(original.previewView.card(for: "owned")?.subviews
+            .compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        XCTAssertEqual(try XCTUnwrap(chip.layer?.presentation()).opacity, 1, accuracy: 0.01)
+
+        var restored = false
+        controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
+                           settings: previewSettings()) { _ in restored = true }
+        try waitUntil { restored }
+        let arrival = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.isVisible && $0.previewView === controller.previewView })
+        let continued = try XCTUnwrap(arrival.previewView.card(for: "owned")?.subviews
+            .compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        // Hold the sampled pose before slow bitmap rendering can age the bounce.
+        let continuedLayer = try XCTUnwrap(continued.layer)
+        let continuedTime = continuedLayer.convertTime(CACurrentMediaTime(), from: nil) + 0.03
+        continuedLayer.speed = 0; continuedLayer.timeOffset = continuedTime
+        try write(XCTUnwrap(renderPresentation(arrival)), name: "mini-preview-clipboard-after-arrival.png")
+        let continuedPose = try XCTUnwrap(continued.layer?.presentation())
+        XCTAssertEqual(continuedPose.opacity, 1, accuracy: 0.01,
+            "an unrelated arrival must not fade the surviving clipboard badge in again")
+        XCTAssertGreaterThan(continuedPose.transform.m11, 0.985)
+        XCTAssertLessThan(continuedPose.transform.m11, 0.999,
+            "the original scale bounce must finish, not snap to its resting scale")
+        XCTAssertTrue(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertFalse(controller.isClipboardCurrent(for: "other"))
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.7))
+        controller.updateSettings(previewSettings())
+        let settled = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+            .first { $0.isVisible && $0.previewView === controller.previewView })
+        let settledChip = try XCTUnwrap(settled.previewView.card(for: "owned")?.subviews
+            .compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        try write(XCTUnwrap(renderPresentation(settled)), name: "mini-preview-clipboard-after-settings.png")
+        XCTAssertEqual(try XCTUnwrap(settledChip.layer?.presentation()).opacity, 1, accuracy: 0.01,
+            "a settled badge must remain visible through a settings rebuild")
+
+        pasteboard.clearContents(); pasteboard.setString("other capture", forType: .string)
+        controller.recordClipboardCopy(artifactID: "other", pasteboard: pasteboard)
+        let fresh = try XCTUnwrap(settled.previewView.card(for: "other")?.subviews
+            .compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        let freshLayer = try XCTUnwrap(fresh.layer)
+        let freshTime = freshLayer.convertTime(CACurrentMediaTime(), from: nil) + 0.03
+        freshLayer.speed = 0; freshLayer.timeOffset = freshTime
+        try write(XCTUnwrap(renderPresentation(settled)), name: "mini-preview-clipboard-new-owner.png")
+        XCTAssertFalse(controller.isClipboardCurrent(for: "owned"))
+        XCTAssertTrue(controller.isClipboardCurrent(for: "other"))
+        XCTAssertLessThan(try XCTUnwrap(fresh.layer?.presentation()).opacity, 0.9,
+            "a new clipboard owner must still play its entrance")
+    }
+
     func testSaveUpdatesExistingCardThenRevealAndMissingExportNeverSaveAgain() throws {
         _ = NSApplication.shared
         let image = solidImage(.systemBlue)
