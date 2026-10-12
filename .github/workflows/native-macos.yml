@@ -119,6 +119,14 @@ jobs:
           "$FFMPEG" -version
           "$FFPROBE" -version
           printf 'CAPTURES_FFMPEG=%s\nCAPTURES_FFPROBE=%s\n' "$FFMPEG" "$FFPROBE" >> "$GITHUB_ENV"
+      - name: Diagnose VideoToolbox selection and property support
+        run: python3 apps/native/macos/encoder_probe.py --output "$RUNNER_TEMP/native-encoder"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-encoder-macos
+          path: ${{ runner.temp }}/native-encoder
+          if-no-files-found: ignore
       - run: bash apps/native/macos/build.sh
         env:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
