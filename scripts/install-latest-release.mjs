@@ -14,7 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { latestPreviewRelease } from "./preview-release.mjs";
+import { publicPreviewRelease } from "./preview-release.mjs";
 
 const APP_NAME = "Captures";
 const BINARY_NAME = "captures";
@@ -205,9 +205,7 @@ function confirmGitHubAccess() {
 }
 
 function fetchLatestRelease() {
-  const release = latestPreviewRelease(listPublishedReleases());
-  if (!release) throw new Error(`no published Preview releases were found in ${REPOSITORY}`);
-  return release;
+  return publicPreviewRelease(listPublishedReleases());
 }
 
 async function waitForCompleteRelease(release, spec, waitMs) {
@@ -543,13 +541,13 @@ function installAppImage(assetPath, launch) {
 function printHelp() {
   console.log(`Usage: npm run install:preview -- [options]
 
-Downloads, verifies, and installs the newest complete Preview for this system.
+Downloads, verifies, and installs the approved public Preview for this system.
 The command verifies the release checksum before changing the installed app.
 
 Options:
-  --dry-run    Report the newest Preview's status without downloading or installing
+  --dry-run    Report the public Preview's status without downloading or installing
   --no-launch  Do not open Captures after installation
-  --no-wait    Fail immediately if the newest Preview is incomplete
+  --no-wait    Fail immediately if the public Preview is incomplete
   --help       Show this help`);
 }
 
@@ -567,7 +565,7 @@ export async function main(args = process.argv.slice(2)) {
     commandExists("apt-get", ["--version"]);
   const spec = platformSpec(process.platform, process.arch, preferDebian);
   const release = fetchLatestRelease();
-  log(`Newest Preview: ${release.name} (${release.tag_name}).`);
+  log(`Public Preview: ${release.name} (${release.tag_name}).`);
 
   const initialReadiness = releaseReadiness(release, spec);
   if (options.dryRun) {

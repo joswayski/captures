@@ -3,6 +3,17 @@ import { pathToFileURL } from "node:url";
 
 const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
 
+// Explicit public-channel approval, not the newest experimental native build.
+export const PUBLIC_PREVIEW_TAG = "v2026.10.11.4";
+
+export function publicPreviewRelease(releases) {
+  const release = releases.find((candidate) => candidate.tag_name === PUBLIC_PREVIEW_TAG);
+  if (!release || release.draft || !release.prerelease) {
+    throw new Error(`approved public Preview ${PUBLIC_PREVIEW_TAG} is not published`);
+  }
+  return release;
+}
+
 export function previewVersion(tag) {
   const match = PREVIEW_TAG.exec(tag ?? "");
   if (!match) return null;
@@ -53,8 +64,7 @@ function main() {
   if (!releasesPath) {
     throw new Error("usage: node scripts/preview-release.mjs <releases.json>");
   }
-  const release = latestPreviewRelease(JSON.parse(readFileSync(releasesPath, "utf8")));
-  if (!release) throw new Error("no published Captures Preview was found");
+  const release = publicPreviewRelease(JSON.parse(readFileSync(releasesPath, "utf8")));
   process.stdout.write(`${release.tag_name}\n`);
 }
 

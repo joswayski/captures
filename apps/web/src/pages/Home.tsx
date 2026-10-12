@@ -10,7 +10,7 @@ const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const COOKING_TOOLTIP =
-  "Preview builds are still publishing this change. Downloads may not include it yet.";
+  "Development builds are still running. These changes may not be in the public Tauri download.";
 
 const PREVIEW_DOWNLOADS = [
   {
@@ -117,8 +117,9 @@ export default function Home({
                   <span className="text-xs font-normal text-ink-soft">(experimental)</span>
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Builds are available after every merge and may contain bugs or incomplete
-                  features. {linuxInstallCopy(detectedDownload)} Please give feedback in the app, on{" "}
+                  Downloads use the existing Tauri app. The native rewrite is being tested
+                  separately. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,
+                  on{" "}
                   <a
                     href={X_URL}
                     target="_blank"
@@ -192,7 +193,7 @@ export default function Home({
             id="latest-changes-heading"
             className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
           >
-            Latest changes
+            Development updates
           </h2>
 
           <ol className="mt-6 space-y-5">

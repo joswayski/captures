@@ -1,7 +1,10 @@
 # Native desktop workbenches
 
 These are implementation stages of the [native rewrite](../../docs/native-rewrite.md),
-**not replacement downloads**. The existing Tauri Preview is unchanged.
+**not replacement downloads**. Public downloads and updates have returned to the
+approved Tauri Preview after the native rollout; native builds stay opt-in until
+behavior, visual and platform parity are accepted. See the
+[public-channel pin](../../docs/releases.md#public-channel-is-pinned-to-tauri).
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
 No WebView, React, JavaScript runtime or Rust sidecar is used. Local capture
 does not require a network service; optional sharing uses the account API.

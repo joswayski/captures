@@ -49,6 +49,29 @@ test("rejects a manifest that is not the newest changelog version", () => {
   );
 });
 
+test("a pinned public manifest excludes newer development notes without changing its assets", () => {
+  const latest = {
+    version: "2026.10.1104",
+    platforms: {
+      "darwin-aarch64": { signature: "signed-tauri", url: "https://example.com/tauri" },
+    },
+  };
+  const releases = [
+    release({ tag: "v2026.10.11.7", body: "Native" }),
+    release({ tag: "v2026.10.11.4", body: "Tauri" }),
+    release({ tag: "v2026.10.11.3", body: "Earlier" }),
+  ];
+  const updated = applyPreviewChangelog(latest, releases, "v2026.10.11.4");
+  assert.deepEqual(updated.platforms, latest.platforms);
+  assert.equal(updated.version, "2026.10.1104");
+  assert.deepEqual(
+    updated.changelog.map((entry) => entry.notes),
+    ["Tauri", "Earlier"],
+  );
+  assert.throws(() => applyPreviewChangelog(latest, releases, "v2026.10.11.3"), /does not match/u);
+  assert.throws(() => applyPreviewChangelog(latest, releases, "preview"), /invalid Preview/u);
+});
+
 test("writes changelog onto latest.json for the Preview channel", () => {
   const directory = mkdtempSync(join(tmpdir(), "captures-preview-changelog-"));
   const latestPath = join(directory, "latest.json");

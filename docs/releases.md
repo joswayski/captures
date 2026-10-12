@@ -1,10 +1,39 @@
 # Captures releases
 
+## Public channel is pinned to Tauri
+
+Public downloads, `npm run install:preview`, and both updater endpoints use the
+approved tag in `scripts/preview-release.mjs`: currently `v2026.10.11.4`
+(`2026.10.1104`), the last Tauri Preview before the native cutover. Selection
+fails closed if that release is unavailable; it never falls forward to a newer
+native build. The changelog excludes versions newer than the approved release.
+This is a rollback of the public Preview channel, not a stable-channel launch.
+
+Native parity work and development CI continue separately. Installed native
+versions are newer than this pin and do not automatically downgrade. Returning
+to Tauri requires quitting Captures and replacing the installed app manually;
+the original Tauri profile remains separate from native-only captures and edits.
+Do not delete either profile or assume a reverse migration exists. While pinned,
+the native startup-recovery helper cannot obtain a newer fix from this channel.
+
+To refresh the public installers and updater metadata without rebuilding apps:
+
+```sh
+gh workflow run release.yml --repo joswayski/captures --ref main -f channel_only=true
+```
+
+All four installer aliases and `latest.json` are copied from the approved dated
+release. Verify the public feed and installer digests after this job, not merely
+the workflow dispatch. Before a rollback, cancel any obsolete release run using
+the older auto-promoting workflow and verify its draft cleanup. Changing the
+approved tag requires maintainer approval of behavior, visuals and platform parity;
+passing CI or publishing a newer archive is not authorization to promote it.
+
 ## Native Preview packaging and recovery
 
-The maintainer authorized switching the experimental Preview channel to AppKit
-(macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64), before physical acceptance
-is complete. This does not authorize a stable release. `scripts/native-preview-build.mjs`
+The native public rollout has been withdrawn pending parity. Manually requested
+native archives use AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
+and remain experimental; physical acceptance is incomplete. `scripts/native-preview-build.mjs`
 builds the native executable and updater helper, verifies their build identity,
 then uses the existing pinned Tauri CLI only to bundle installers. It does not
 build or embed the Tauri app, frontend or WebView2 installer. `CI` can be manually
@@ -15,8 +44,8 @@ FFmpeg notices, checksums and a draft before publication. Native artifacts use
 version/target-bound filenames in their signed Minisign trusted comments; the
 compiled helper authenticates the collected bytes before upload. `latest.json`
 keeps the existing Tauri-compatible platform keys and public signing key, so
-already-installed Tauri Previews receive the native app. The website/README
-download aliases move only in the existing complete-release publication step.
+the earlier native rollout could update installed Tauri Previews. That promotion
+is now blocked by the public-channel pin, including after a manual native release.
 The manifest retains a separately signed `linux-x86_64-deb` artifact for existing
 Tauri Debian installs: their updater cannot install an AppImage fallback. Once on
 native, Debian installs use the manual package update path.
@@ -104,30 +133,18 @@ remain unavailable. Automated checks must not be reported as physical acceptance
 
 ## Release queue
 
-Pushes to `main` request a Preview in `.github/workflows/release.yml`. One release
-runs at a time; GitHub's default single pending slot replaces older requests while
-`cancel-in-progress: false` lets the active release finish. When the next run
-starts, it snapshots the latest `main` commit once. If changes 2–5 arrive while
-change 1 is building, they ship together in the next Preview. Change 6 arriving
-after that snapshot waits for the following batch. Individual intermediate
-installers are skipped, not their changes.
+`.github/workflows/release.yml` is manual-only while native parity is unfinished.
+Main pushes continue normal CI but do not request installed native releases.
+Dispatch without `channel_only` to build an experimental dated archive; the
+workflow snapshots `main` once, or rebuilds an explicitly supplied `target_sha`.
+One request runs at a time and a newer pending dispatch replaces the older pending
+request. Channel-only dispatches share this lock and skip all app builds.
 
-The scope check compares that snapshot with the nearest **published** dated
-Preview in its main-branch history, ignoring drafts and orphan tags. Website,
-hosted API, documentation, standalone desktop UI test-file, and release-tooling-only
-changes since that Preview stop there: they do not
-choose a new version, build installers, publish a Preview, or notify installed
-desktop apps. Changes to desktop source, shared UI source, Rust crates and
-manifests, or the desktop's reachable `package-lock.json` dependency graph
-continue through the release. Manual builds always run, including when a
-release-tooling change intentionally needs a new installer set.
-
-Qualifying batches run the frontend and Rust quality gates, then build macOS
+Archive builds run the frontend and Rust quality gates, then build macOS
 Apple Silicon, Windows x64, and Linux x64 packages in parallel. A Preview is
-published only when every job succeeds. Failed batches remain included in the
-next request's comparison with the last published Preview; a docs-only push
-cannot hide unreleased desktop changes. Notes use that same published baseline
-and include all qualifying commits in the batch.
+published only when every job succeeds. Notes compare with the nearest published
+dated Preview in the requested commit's history, ignoring drafts and orphan tags.
+Publication does not advance the approved public-channel tag.
 
 PR and release packaging reuse an exact-key cache of unsigned FFmpeg/ffprobe
 binaries, source archives, and compliance files. The key includes the platform,
@@ -150,8 +167,8 @@ using the
 through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
 `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
 `2026.7.1901`; source manifests remain at the development version. The updater
-channel and fixed Git tag are both named `preview` and update after each
-successful batch of installed-app changes.
+channel and fixed Git tag are both named `preview`; refreshing them always uses
+the approved public tag, independently of the newest dated archive.
 
 The workflow stages a draft Preview at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
@@ -192,10 +209,10 @@ not mean the release is complete.
 
 The fixed `preview` pre-release is the permanent **Captures Preview — Latest**
 download page, not a historical build. It holds the macOS, Windows, Debian, and
-AppImage installers plus the `latest.json` updater manifest for the greatest
-published CalVer version. That manifest includes a `changelog` of each dated
-Preview’s notes so an installed copy can list every change between its version
-and the latest Preview, not only the newest release. Installed Preview builds ask `https://captur.es/api/updates/preview` for that
+AppImage installers plus the `latest.json` updater manifest for the approved
+public CalVer version. That manifest includes a `changelog` only through that
+version, never notes from newer experimental native archives.
+Installed Preview builds ask `https://captur.es/api/updates/preview` for that
 manifest about every five minutes (and again shortly after launch). The website
 caches GitHub's `latest.json` for one minute and serves it unchanged; Tauri
 still falls back to the GitHub download URL if captur.es is unreachable.
@@ -212,8 +229,8 @@ already exists. Installers on this channel use **stable filenames**
 link directly without updating URLs on every merge. Dated immutable Previews keep
 versioned package names. The channel page links to the corresponding immutable
 Preview, while the Releases page remains the dated build archive. Selection uses
-the version, not publication time, so publishing an older backfill cannot
-downgrade the download page. Future stable releases can use normal GitHub release
+the explicit public pin, not the highest version or publication time.
+Future stable releases can use normal GitHub release
 metadata and their own updater endpoint without replacing the Preview archive.
 
 The first successful Preview publication removes the obsolete `nightly` rolling
@@ -225,7 +242,7 @@ set to a commit that is already on `main`. The workflow checks out and rebuilds
 that commit, derives its New York date from the commit timestamp, and publishes
 the next revision for that date. Dispatch historical commits from oldest to
 newest so their revisions preserve merge order. Manual requests share the same
-single pending slot and can be superseded by a subsequent push or dispatch
+single pending slot and can be superseded by a subsequent dispatch
 before starting; retry a superseded backfill when the queue is quiet. A dispatch
 without `target_sha` snapshots the latest `main` when it starts.
 

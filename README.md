@@ -44,7 +44,7 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## Download Captures Preview
 
-These links always download the **latest** validated Preview:
+These links download the **Tauri Preview 2026.10.1104**, pinned while the native rewrite continues separately. This remains an experimental Preview, not a new stable release.
 
 | Platform | Download |
 | --- | --- |
@@ -53,15 +53,13 @@ These links always download the **latest** validated Preview:
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-Preview builds automatically publish installed-app changes from `main`, and may contain bugs or incomplete features. The Preview pipeline builds a browser-free app: Swift/AppKit on macOS and Rust/wgpu on Windows and Linux. The download links and existing Tauri updater channel move together only after all platforms finish packaging and validation; older downloads remain available until then. This is still an experimental Preview, not a stable release or a claim of physical-platform acceptance.
+The website, installer links and public updater channel stay on this Tauri build. New native builds do not replace them automatically. Native AppKit/wgpu builds remain opt-in development work until behavior, appearance and platform parity are accepted.
 
-Installed native copies check captur.es at launch and about every five minutes when no update is pending. Preferences and the tray also offer **Check for Updates**. Downloads from GitHub are signature-verified before installation; screenshot draft-save failure cancels restart. Debian packages use the manual installer. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Older dated builds stay in the [build archive](https://github.com/joswayski/captures/releases).
+Installed copies check captur.es at launch and about every five minutes. Preferences and the tray also offer **Check for Updates**. Downloads from GitHub are signature-verified before installation; screenshot draft-save failure cancels restart. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Dated builds, including experimental native builds, remain in the [build archive](https://github.com/joswayski/captures/releases).
 
-The first native launch copies existing settings, retained capture history and screenshot drafts into a separate native Preview profile, leaving the previous profile and exports unchanged. Quit the previous app before a manual upgrade. Later native launches reuse the copy rather than importing again. The installed app and launch-at-login entry keep the Captures identity; macOS may ask to refresh permissions. Open capture windows are not automatically recreated across the native cutover: reopen captures and drafts from History. Native macOS/AppImage updates restore Preferences visibility, but not editor windows or unsaved recording trim/crop/export choices; Windows uses the installer’s relaunch flow. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained package backups and verification limits.
+If you installed a native Preview, the updater will not automatically downgrade it. Quit Captures and manually replace the installed app to return to Tauri. Native migration preserved the original Tauri profile; native-only captures and edits remain in the separate native profile and are not imported back automatically. Do not delete either profile. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained backups and limitations.
 
-History keeps links to previously saved files, including recordings opened from elsewhere; migration does not copy those external files. A moved or deleted recording appears as missing in History instead of preventing startup.
-
-Native Previews arm a separate, headless startup-recovery helper before importing the profile. It exits after settings, rendering and media tools confirm startup; it adds no second Captures window or tray icon. If startup fails, macOS, Windows and AppImage installs can automatically download and install a signed newer Preview, without loading or deleting History. A hung app must be quit before replacement; recovery does not force-quit it. Recovery retries are bounded, Debian remains manual, and an app that cannot reach its startup code (or has a missing/broken helper) still needs the installer. Earlier builds without this helper cannot repair themselves this way.
+After a Tauri in-app update, Captures restores open screenshot previews, screenshot and recording editors, the screenshot mini-preview stack and Preferences visibility. Screenshot edits are retained as drafts. Recording editors do not restore unsaved trim/crop/export settings; active recordings block updates. This applies to updates started by a Tauri version with restoration support, not a native cutover or manual reinstall.
 
 On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow. When the tray icon's position is unavailable, including on Linux, the launch notice uses a compact, unpointed card.
 
@@ -120,9 +118,9 @@ not implemented yet.
 | macOS 13+ | Supported; primary development target |
 | Windows 11 | Supported; experimental |
 | Linux X11 | Supported; hide recording controls manually when needed |
-| Linux Wayland | Experimental; portal display/window capture depends on compositor support. No region screenshots, floating previews or History Restore; no click highlights |
+| Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
 
-These describe the native Preview target. Physical macOS/Windows, mixed-DPI, accessibility and real GNOME/KDE acceptance remain open; automated or headless tests do not replace them.
+These statuses describe the downloadable Tauri Preview. Native parity and physical-platform acceptance remain separate; automated or headless tests do not replace them.
 
 ## Shortcuts
 

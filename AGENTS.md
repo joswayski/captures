@@ -5,6 +5,7 @@
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
 - Treat automatic per-merge builds as experimental Previews. Do not publish a stable release until the maintainer explicitly starts that channel.
+- Public downloads and updates are pinned to the approved Tauri tag in `scripts/preview-release.mjs`. Native builds are opt-in until the maintainer accepts parity; passing CI does not authorize promotion. Match Tauri behavior and visuals, without adding unrequested controls such as Share.
 
 ## Repository map
 

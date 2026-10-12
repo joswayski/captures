@@ -3,12 +3,15 @@ import { pathToFileURL } from "node:url";
 
 import { comparePreviewVersions, encodedPreviewVersion } from "./preview-release.mjs";
 
-export function previewChangelog(releases) {
+export function previewChangelog(releases, throughTag) {
+  const through = throughTag === undefined ? null : encodedPreviewVersion(throughTag);
+  if (throughTag !== undefined && !through) throw new Error("invalid Preview changelog tag");
   return releases
     .flatMap((release) => {
       if (release?.draft || !release?.prerelease) return [];
       const encoded = encodedPreviewVersion(release.tag_name);
       if (!encoded) return [];
+      if (through && comparePreviewVersions(encoded.order, through.order) > 0) return [];
       const notes = typeof release.body === "string" ? release.body : "";
       return [
         {
@@ -27,8 +30,8 @@ export function previewChangelog(releases) {
     }));
 }
 
-export function applyPreviewChangelog(latest, releases) {
-  const changelog = previewChangelog(releases);
+export function applyPreviewChangelog(latest, releases, throughTag) {
+  const changelog = previewChangelog(releases, throughTag);
   if (changelog.length === 0) {
     throw new Error("Preview changelog is empty");
   }
@@ -41,15 +44,15 @@ export function applyPreviewChangelog(latest, releases) {
 }
 
 function main() {
-  const [command, latestPath, releasesPath] = process.argv.slice(2);
+  const [command, latestPath, releasesPath, throughTag] = process.argv.slice(2);
   if (command !== "apply" || !latestPath || !releasesPath) {
     throw new Error(
-      "usage: node scripts/preview-changelog.mjs apply <latest.json> <releases.json>",
+      "usage: node scripts/preview-changelog.mjs apply <latest.json> <releases.json> [through-tag]",
     );
   }
   const latest = JSON.parse(readFileSync(latestPath, "utf8"));
   const releases = JSON.parse(readFileSync(releasesPath, "utf8"));
-  const updated = applyPreviewChangelog(latest, releases);
+  const updated = applyPreviewChangelog(latest, releases, throughTag);
   writeFileSync(latestPath, `${JSON.stringify(updated, null, 2)}\n`);
 }
 
