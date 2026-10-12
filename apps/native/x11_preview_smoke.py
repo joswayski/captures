@@ -893,6 +893,16 @@ def main():
                     wait(lambda: all(abs(b - a * .5) <= 2 for a, b in zip(idle_pixel, sample())),
                          "stationary self-drop restores hover after rejection")
                     shot(preview, "self-drop-stationary-hover")
+                    # An open editor retains its accent ring while source
+                    # media hides. Its outer shadow must not tint the interior.
+                    click(preview, edit_x + 14, edit_y + 14, activate=False)
+                    editor = wait(lambda: windows(EDITOR), "editor for the drag-source glow")[0]
+                    wait(lambda: run("xprop", "-id", editor, "_NET_WM_NAME").decode().strip()
+                         == '_NET_WM_NAME(UTF8_STRING) = "Captures Screenshot Editor"',
+                         "drag-source editor finishes loading")
+                    run("xdotool", "windowmove", "--sync", editor, "620", "20")
+                    wait(lambda: int(window_geometry(editor)["X"]) >= 600,
+                         "editor leaves the source wallpaper sample unobstructed")
                     for mode in ("cancel", "reject", "nofinish", "disappear", "accept"):
                         if mode == "accept":
                             click(preview, 170, second_action_y(first), activate=False)
