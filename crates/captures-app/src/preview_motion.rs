@@ -514,6 +514,18 @@ impl StackToolbar {
         self.shown && !self.running(tokens, now_ms, reduced)
     }
 
+    /// Shipping keeps Show less fully expanded while collapsing, and forces
+    /// the resting icon during enter/exit/Clear. Neither accepts hover morphs.
+    pub fn minimize_override(
+        &self,
+        tokens: &impl MotionTokens,
+        now_ms: f64,
+        reduced: bool,
+    ) -> Option<bool> {
+        self.running(tokens, now_ms, reduced)
+            .then_some(matches!(self.motion, Some((Motion::PreviewToolbarOut, _))))
+    }
+
     pub fn running(&self, tokens: &impl MotionTokens, now_ms: f64, reduced: bool) -> bool {
         self.motion.is_some_and(|(motion, started)| {
             motion
@@ -1737,14 +1749,23 @@ mod tests {
         let start = toolbar.pose(&Shipping, 100., false).unwrap();
         assert_eq!(start.opacity, 0., "hidden for the first 35 %");
         assert!(!toolbar.interactive(&Shipping, 100., false));
+        assert_eq!(
+            toolbar.minimize_override(&Shipping, 100., false),
+            Some(false)
+        );
         assert_eq!(toolbar.pose(&Shipping, 520., false), Some(Pose::REST));
         assert!(toolbar.interactive(&Shipping, 520., false));
+        assert_eq!(toolbar.minimize_override(&Shipping, 520., false), None);
         assert!(!toolbar.set(true, ToolbarCause::Other, 600.));
 
         assert!(toolbar.set(false, ToolbarCause::Collapse, 1_000.));
         assert_eq!(toolbar.motion().unwrap().0, Motion::PreviewToolbarOut);
         let leaving = toolbar.pose(&Shipping, 1_140., false).unwrap();
         assert!(leaving.opacity > 0. && leaving.opacity < 1.);
+        assert_eq!(
+            toolbar.minimize_override(&Shipping, 1_140., false),
+            Some(true)
+        );
         assert_eq!(toolbar.pose(&Shipping, 1_280., false), None);
 
         toolbar.set(true, ToolbarCause::Other, 2_000.);
@@ -1755,9 +1776,18 @@ mod tests {
             Some(Pose::REST),
             "the exit holds for 42 %"
         );
+        assert_eq!(
+            toolbar.minimize_override(&Shipping, 3_400., false),
+            Some(false)
+        );
         toolbar.set(true, ToolbarCause::Other, 5_000.);
         toolbar.set(false, ToolbarCause::Clear, 6_000.);
         assert_eq!(toolbar.motion().unwrap().0, Motion::PreviewToolbarClear);
+        assert_eq!(
+            toolbar.minimize_override(&Shipping, 6_050., false),
+            Some(false)
+        );
+        assert_eq!(toolbar.minimize_override(&Shipping, 6_050., true), None);
         assert_eq!(
             toolbar.pose(&Shipping, 6_000., true),
             None,

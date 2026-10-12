@@ -1559,6 +1559,7 @@ pub fn show_stack_controls(
     right_anchor: bool,
     top_anchor: bool,
     reduced_motion: bool,
+    minimize_override: Option<bool>,
 ) -> Option<StackAction> {
     use captures_app::preview::{
         STACK_CLEAR_ALL_LABEL, STACK_CLEAR_ALL_TOOLTIP, STACK_MINIMIZE_HOVER_LABEL,
@@ -1614,9 +1615,13 @@ pub fn show_stack_controls(
     // The pill keeps its hover width until the pointer leaves the wide
     // bounds, so growing under a stationary pointer cannot flicker.
     let minimize_id = ui.scope_id().with("show-less");
-    let expanded = ui.data(|data| data.get_temp::<bool>(minimize_id.with("expanded")))
-        == Some(true)
-        || ui.memory(|memory| memory.has_focus(minimize_id));
+    let expanded = minimize_override.unwrap_or_else(|| {
+        ui.data(|data| data.get_temp::<bool>(minimize_id.with("expanded"))) == Some(true)
+            || ui.memory(|memory| memory.has_focus(minimize_id))
+    });
+    if minimize_override.is_some() {
+        ui.data_mut(|data| data.insert_temp(minimize_id.with("expanded"), expanded));
+    }
     let anchored = |width: f32| {
         if right_anchor {
             egui::Rect::from_min_max(
@@ -1641,7 +1646,7 @@ pub fn show_stack_controls(
             expanded,
             captures_app::motion::Transition::PreviewMinimizeMorph,
             tokens,
-            reduced_motion,
+            reduced_motion || minimize_override.is_some(),
         ),
         swap: eased_toggle(
             ui,
@@ -1649,7 +1654,7 @@ pub fn show_stack_controls(
             expanded,
             captures_app::motion::Transition::PreviewMinimizeSwap,
             tokens,
-            reduced_motion,
+            reduced_motion || minimize_override.is_some(),
         ),
     };
     let painted = anchored(morph.width_between(28., STACK_MINIMIZE_HOVER_WIDTH) as f32);
@@ -1663,7 +1668,7 @@ pub fn show_stack_controls(
         !expanded,
     );
     let hover = response.hovered() || response.has_focus();
-    if hover != expanded {
+    if minimize_override.is_none() && hover != expanded {
         ui.data_mut(|data| data.insert_temp(minimize_id.with("expanded"), hover));
         ui.ctx().request_repaint();
     }
@@ -3143,7 +3148,7 @@ mod tests {
             egui::Id::unique("preview-controls-input-test"),
             egui::UiBuilder::new().max_rect(screen),
         );
-        let action = show_stack_controls(&mut ui, &tokens, false, false, false);
+        let action = show_stack_controls(&mut ui, &tokens, false, false, false, None);
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         action
@@ -3176,7 +3181,7 @@ mod tests {
                     egui::Id::unique("show-less-test"),
                     egui::UiBuilder::new().max_rect(screen),
                 );
-                show_stack_controls(&mut ui, &tokens, right_anchor, false, false);
+                show_stack_controls(&mut ui, &tokens, right_anchor, false, false, None);
                 let mut output = ctx.end_pass();
                 let texts = painted_texts(&output);
                 assert_eq!(
@@ -3211,11 +3216,17 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 52.));
         let pointer = egui::pos2(46., 26.);
         let mut widths = Vec::new();
-        for (time, position) in [
-            (0., egui::pos2(500., 500.)),
-            (0.01, pointer),
-            (0.05, pointer),
-            (0.4, pointer),
+        let outside = egui::pos2(500., 500.);
+        for (time, position, minimize_override) in [
+            (0., outside, None),
+            (0.01, pointer, None),
+            (0.05, pointer, None),
+            (0.4, pointer, None),
+            (0.5, pointer, Some(false)), // enter/exit/Clear suppress held hover
+            (0.6, outside, Some(true)),  // collapse preserves the leaving label
+            (0.9, outside, Some(true)),
+            (1., pointer, Some(false)),
+            (1.1, outside, None), // no stale hover after the transition
         ] {
             ctx.begin_pass(egui::RawInput {
                 time: Some(time),
@@ -3226,8 +3237,16 @@ mod tests {
                 egui::Id::unique("show-less-morph-test"),
                 egui::UiBuilder::new().max_rect(screen),
             );
-            show_stack_controls(&mut ui, &tokens, false, false, false);
+            show_stack_controls(&mut ui, &tokens, false, false, false, minimize_override);
             let mut output = ctx.end_pass();
+            if let Some(forced) = minimize_override {
+                assert_eq!(
+                    painted_texts(&output)
+                        .iter()
+                        .any(|text| text == "Show less"),
+                    forced
+                );
+            }
             // The pill is the widest glass rect starting at the inner slot.
             let width = output
                 .shapes
@@ -3245,6 +3264,7 @@ mod tests {
         assert_eq!(widths[0], 28.);
         assert!(widths[2] > 28. && widths[2] < 92., "mid-morph {widths:?}");
         assert_eq!(widths[3], 92.);
+        assert_eq!(&widths[4..], &[28., 92., 92., 28., 28.]);
     }
 
     #[test]
