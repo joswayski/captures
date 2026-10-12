@@ -190,6 +190,27 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(rear.pileGlowOpacity, 1, "the hovered pile takes its accent ring and glow")
         XCTAssertEqual(rear.depthBlurRadius, captures_preview_pile_media_blur_v1(1, true), accuracy: 1e-9)
         try write(render(panel), name: "mini-preview-stack-hovered.png")
+        for delta in [NSPoint(x: 7, y: 0), NSPoint(x: 5, y: -5)] {
+            moves.removeAll()
+            button.mouseDown(with: try event(.leftMouseDown, point))
+            let jitter = NSPoint(x: point.x + delta.x, y: point.y + delta.y)
+            button.mouseDragged(with: try event(.leftMouseDragged, jitter))
+            XCTAssertTrue(moves.isEmpty, "sub-eight-point jitter must remain an Expand click")
+            let before = expanded
+            button.mouseUp(with: try event(.leftMouseUp, jitter))
+            XCTAssertEqual(expanded, before + 1)
+        }
+        for delta in [NSPoint(x: 8, y: 0), NSPoint(x: 6, y: -6)] {
+            moves.removeAll()
+            button.mouseDown(with: try event(.leftMouseDown, point))
+            let moved = NSPoint(x: point.x + delta.x, y: point.y + delta.y)
+            button.mouseDragged(with: try event(.leftMouseDragged, moved))
+            XCTAssertEqual(moves.last, NSPoint(x: 300 + delta.x, y: 200 + delta.y))
+            let before = expanded
+            button.mouseUp(with: try event(.leftMouseUp, moved))
+            XCTAssertEqual(expanded, before, "crossing eight points must not expand on release")
+        }
+        moves.removeAll(); expanded = 0
         button.mouseDown(with: try event(.leftMouseDown, point))
         button.mouseExited(with: try event(.leftMouseDragged, point))
         XCTAssertTrue(panel.previewView.pileHovered, "Press retains hover outside the front card")
