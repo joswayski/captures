@@ -716,6 +716,41 @@ final class MiniPreviewTests: XCTestCase {
         try write(render(panel), name: "mini-preview-reveal-missing-export.png")
     }
 
+    func testSavedFeedbackSurvivesAnArrivalWithoutExtendingItsDeadline() throws {
+        _ = NSApplication.shared
+        let captured = artifact(id: "saved", previewPath: "/saved-preview.png")
+        let controller = try presentedController(captured)
+        defer { controller.close() }
+        let transport = MiniPreviewActionTransport()
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() })
+        actions.bind(previews: controller); actions.configure(historyRoot: "/History")
+        actions.save(captured)
+        LiveCaptureController.flush()
+        try waitUntil {
+            controller.previewView?.card(for: captured.id)?.subviews
+                .compactMap { $0 as? MiniPreviewButton }.contains { $0.title == "Saved" } == true
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+        var restored = false
+        controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
+                           settings: previewSettings()) { _ in restored = true }
+        try waitUntil { restored }
+        let view = try XCTUnwrap(controller.previewView)
+        let card = try XCTUnwrap(view.card(for: captured.id))
+        let button = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewButton }
+            .first { $0.kind == .check || $0.kind == .folder })
+        XCTAssertEqual(button.title, "Saved", "an unrelated arrival must not truncate Save confirmation")
+        let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
+        card.mouseEntered(with: try hoverEvent(for: panel))
+        try write(render(panel), name: "mini-preview-saved-after-arrival.png")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.75))
+        XCTAssertEqual(button.title, "Show in Folder", "a rebuild must not restart the one-second deadline")
+        controller.updateSettings(previewSettings())
+        let settled = try XCTUnwrap(controller.previewView?.card(for: captured.id))
+        XCTAssertFalse(settled.subviews.compactMap { $0 as? MiniPreviewButton }.contains { $0.title == "Saved" })
+    }
+
     func testSaveFailureStaysSaveAndCompletionAfterDismissalIsRejected() throws {
         _ = NSApplication.shared
         let image = solidImage(.systemBlue)
@@ -734,6 +769,18 @@ final class MiniPreviewTests: XCTestCase {
         failedActions.save(captured)
         LiveCaptureController.flush()
         try waitUntil { controller.statusText(for: captured.id) == "Save failed" }
+
+        var restored = false
+        controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
+                           settings: settings) { _ in restored = true }
+        try waitUntil { restored }
+        XCTAssertEqual(controller.statusText(for: captured.id), "Save failed",
+            "an unrelated arrival must not erase an action failure")
+        let rebuilt = try XCTUnwrap(controller.previewView?.window as? MiniPreviewPanel)
+        try write(render(rebuilt), name: "mini-preview-save-failure-after-arrival.png")
+        controller.dismiss("other", exit: nil)
+        XCTAssertEqual(controller.statusText(for: captured.id), "Save failed",
+            "removing a sibling must not erase the survivor's action failure")
 
         let blockedTransport = MiniPreviewActionTransport()
         blockedTransport.gate = DispatchSemaphore(value: 0)
