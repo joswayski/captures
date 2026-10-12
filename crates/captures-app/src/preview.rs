@@ -33,17 +33,13 @@ pub enum PreviewDragOutcome {
     Dismiss,
 }
 
-/// Hosts classify the final pointer/window landing only after the OS accepts
-/// a COPY. Cancellation never dismisses or animates the source card.
+/// Reject a self-drop even when the OS refuses COPY, as shipping does.
+/// Only an accepted external COPY dismisses; other cancellations retain.
 pub fn preview_drag_outcome(accepted: bool, landing: PreviewDropLanding) -> PreviewDragOutcome {
-    if !accepted {
-        PreviewDragOutcome::Retain
-    } else {
-        match landing {
-            PreviewDropLanding::PreviewStack => PreviewDragOutcome::Reject,
-            PreviewDropLanding::AppWindow => PreviewDragOutcome::Retain,
-            PreviewDropLanding::External => PreviewDragOutcome::Dismiss,
-        }
+    match (landing, accepted) {
+        (PreviewDropLanding::PreviewStack, _) => PreviewDragOutcome::Reject,
+        (PreviewDropLanding::External, true) => PreviewDragOutcome::Dismiss,
+        _ => PreviewDragOutcome::Retain,
     }
 }
 
@@ -1067,7 +1063,8 @@ mod tests {
         use PreviewDragOutcome::{Dismiss, Reject, Retain};
         use PreviewDropLanding::{AppWindow, External, PreviewStack};
         assert_eq!(preview_drag_outcome(false, External), Retain);
-        assert_eq!(preview_drag_outcome(false, PreviewStack), Retain);
+        assert_eq!(preview_drag_outcome(false, PreviewStack), Reject);
+        assert_eq!(preview_drag_outcome(false, AppWindow), Retain);
         assert_eq!(preview_drag_outcome(true, AppWindow), Retain);
         assert_eq!(preview_drag_outcome(true, PreviewStack), Reject);
         assert_eq!(preview_drag_outcome(true, External), Dismiss);
