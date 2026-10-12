@@ -880,6 +880,17 @@ def main():
                         "-geometry", "220x70+900+20", "Keep this application focused"])
                     other = wait(lambda: windows("Preview action focus fixture"), "other app focus")[0]
                     run("xdotool", "windowactivate", "--sync", other, "windowfocus", "--sync", other)
+                    copy_recording = None
+                    if args.record_stack_motion:
+                        frame = window_geometry(preview)
+                        copy_recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                            "-video_size", "340x240", "-framerate", "30", "-i",
+                            env["DISPLAY"] + f"+{frame['X']},{frame['Y']}",
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                            str(output / f"{prefix}-copy.mp4")], env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-copy.ffmpeg.log").open("w"))
+                        children.append(copy_recording)
+                        time.sleep(.5)
                     click(preview, 170, 89, activate=False)  # Centered Copy, not a footer.
 
                     def clipboard_png():
@@ -893,6 +904,23 @@ def main():
                     pixels = subprocess.check_output(["convert", "png:-", "-depth", "8", "rgb:-"], input=clipboard)
                     assert pixels == rgb(first.parent / "capture.png"), "Copy changed full-resolution pixels"
                     assert run("xdotool", "getwindowfocus").decode().strip() == other, "Copy activated Captures"
+
+                    # The fixture's horizontal quadrant edge sits 85px into
+                    # the 160px media. A 12px upward scroll puts its lower color
+                    # at +78 instead of the expected dark upper quadrant. Stay
+                    # outside the centered actions and clipboard chip, while
+                    # allowing the shipping hover brightness and blur to settle.
+                    def copied_media():
+                        return run("import", "-window", preview, "-crop",
+                                   f"1x1+80+{card_top + 78}", "-depth", "8", "rgb:-")
+
+                    shot(preview, f"{prefix}-copied")
+                    if copy_recording:
+                        time.sleep(1)
+                        copy_recording.communicate(input=b"q\n", timeout=10)
+                        assert copy_recording.returncode == 0, "Copy recording failed"
+                    wait(lambda: all(abs(b - a * .5) <= 2 for a, b in zip(idle_pixel, copied_media())),
+                         "clipboard confirmation keeps the media in its original card slot")
 
                     click(preview, 170, second_action_y(first), activate=False)  # Centered Save file.
                     exported = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"), "saved export metadata"))
@@ -1003,9 +1031,10 @@ def main():
                     shot(preview, f"{prefix}-in-editor")
                     run("xdotool", "mousemove", "--sync", "--window", preview, "290", "50")
                     def lifted_editor_pill():
-                        # The focused saved preview has scrolled its card to
-                        # y=16: the resting pill starts at 24, above its label.
-                        return max(abs(a - b) for a, b in zip(pixel(254, 23), bytes.fromhex("ffca28"))) <= 2
+                        # Copy must preserve card_top=28. The resting pill starts
+                        # at +8; sample above it and outside the scaled label.
+                        return max(abs(a - b) for a, b in zip(
+                            pixel(254, card_top + 7), bytes.fromhex("ffca28"))) <= 2
 
                     wait(lifted_editor_pill, "Show in editor lifts the accent pill above its resting border")
                     shot(preview, f"{prefix}-editor-hover")
@@ -1023,7 +1052,8 @@ def main():
                     assert not windows("Capture History"), "repeated Edit restored minimized workspace"
                     assert entries() == preserved and private_files(first) == preserved_private, (
                         "repeated Edit changed the artifact or History")
-                    wait(lambda: max(abs(a - b) for a, b in zip(pixel(254, 24), pixel(254, 28))) <= 2
+                    wait(lambda: max(abs(a - b) for a, b in zip(
+                        pixel(254, card_top + 8), pixel(254, card_top + 12))) <= 2
                          and not lifted_editor_pill(),
                          "just-opened keeps the lifted pose but restores the passive glass fill")
                     shot(preview, f"{prefix}-editor-just-opened")
