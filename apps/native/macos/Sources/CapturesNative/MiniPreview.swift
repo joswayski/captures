@@ -555,7 +555,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private(set) var isExiting = false
     /// The capture highlight is still fading.
     var isHighlighting: Bool { highlightRing.animation(forKey: "preview-capture-highlight") != nil }
-    private var savedFeedbackActive = false
+    private var savedFeedbackSince: CFTimeInterval?
     private var savedFeedbackToken = 0
     private var highlightToken = 0
     private var saved = false
@@ -1065,22 +1065,33 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     /// Brief shipping "Saved" confirmation on the Save/Show in Folder action.
-    func showSavedFeedback() {
+    func showSavedFeedback(startedAgo: Double = 0) {
+        let remaining = Self.savedFeedbackDuration - startedAgo
+        guard remaining > 0 else { return }
         savedFeedbackToken &+= 1
         let token = savedFeedbackToken
-        savedFeedbackActive = true
+        savedFeedbackSince = CACurrentMediaTime() - startedAgo
         updateSaveButton(saved: saved)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.savedFeedbackDuration) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
             guard let self, self.savedFeedbackToken == token else { return }
-            self.savedFeedbackActive = false
+            self.savedFeedbackSince = nil
             self.updateSaveButton(saved: self.saved)
         }
     }
 
+    /// Rebuilding a surviving card must not erase its error or restart Saved.
+    func continueFeedback(from previous: MiniPreviewCardView) {
+        setStatus(previous.status.stringValue, detail: previous.status.toolTip)
+        if let since = previous.savedFeedbackSince {
+            showSavedFeedback(startedAgo: CACurrentMediaTime() - since)
+        }
+    }
+
     func updateSaveButton(saved: Bool) {
-        let title = savedFeedbackActive ? "Saved" : saved ? "Show in Folder" : "Save file"
+        let confirming = savedFeedbackSince != nil
+        let title = confirming ? "Saved" : saved ? "Show in Folder" : "Save file"
         saveButton?.title = title
-        saveButton?.kind = savedFeedbackActive ? .check : saved ? .folder : .save
+        saveButton?.kind = confirming ? .check : saved ? .folder : .save
         saveButton?.setAccessibilityLabel(title)
         self.saved = saved
         let step = 28 + tokens.number("s-3")
@@ -2041,6 +2052,13 @@ final class MiniPreviewView: NSView {
 
     func showSavedFeedback(for artifactID: String) { cards[artifactID]?.showSavedFeedback() }
 
+    func continueFeedback(from previous: MiniPreviewView) {
+        for (id, card) in cards {
+            guard let old = previous.cards[id], !old.isExiting else { continue }
+            card.continueFeedback(from: old)
+        }
+    }
+
     func setClipboardOwner(_ owner: String?, continuing previous: MiniPreviewView? = nil) {
         for (id, card) in cards {
             let old = previous?.cards[id]
@@ -2980,6 +2998,7 @@ final class MiniPreviewController {
             next.previewView.continueExits(from: view, retaining: exits)
             scheduleRebuild(after: max(0, (exitDeadlines.values.max() ?? 0) - CACurrentMediaTime()))
         }
+        if let view = previous?.previewView { next.previewView.continueFeedback(from: view) }
         previous?.close()
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
         for id in liveIDs {
