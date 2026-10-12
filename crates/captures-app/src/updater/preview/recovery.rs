@@ -29,6 +29,14 @@ pub struct Startup {
     pub acknowledgement: HealthAcknowledgement,
 }
 
+impl Drop for Startup {
+    fn drop(&mut self) {
+        // A concurrent spawn can inherit this open-file description until exec.
+        // Release this host's lease even while that inherited descriptor exists.
+        let _ = self._lifetime.unlock();
+    }
+}
+
 impl Startup {
     /// Called by installed hosts before profile import. Failures here must not
     /// prevent an otherwise working app from starting. Development is a no-op.
