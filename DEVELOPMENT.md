@@ -687,6 +687,20 @@ Use `--history-shortcuts-only` for document Undo/Redo keys, exact restored layer
 duplicate offsets/selection, Delete/Backspace, locked-layer protection,
 text-field and confirmation focus, and unchanged source bytes.
 
+For macOS VideoToolbox failures, run this with a new output directory:
+
+```sh
+python3 apps/native/macos/encoder_probe.py --output /tmp/native-encoder-probe
+```
+
+It records encoder selection, actual session hardware status and Quality/AverageBitRate property
+support, then runs synthetic 160×90 and 640×360 H.264 exports under hardware-only,
+software-allowed and software-only policies. `--ffmpeg` / `--ffprobe` select the
+tools being investigated. Native macOS CI publishes the same diagnostic as
+`native-encoder-macos`, including failed commands and logs; its results are not
+acceptance tests or permission to change the production encoder. It uses no
+capture data, profiles or screen-capture access. It is explicitly macOS-only.
+
 Native Record verifies FFmpeg and FFprobe on its worker before starting. Both hosts
 resolve overrides, bundled development-package tools, prepared checkout sidecars
 and `PATH`, in that order; see the staging instructions above. Recording uses separate development
