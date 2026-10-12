@@ -180,16 +180,27 @@ pub struct View<'a> {
     pub depth_blurred: [(f32, Option<&'a egui::TextureHandle>); 2],
 }
 
-pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
-    let duration = captures_app::preview::PREVIEW_DROP_REJECT_MS as f32 / 1000.;
+pub fn reject_offset(tokens: &Tokens, elapsed_seconds: f32, reduced_motion: bool) -> f32 {
+    let duration = tokens.number("thumbnail-drop-reject-duration") / 1000.;
     if reduced_motion || elapsed_seconds >= duration {
         return 0.;
     }
     let progress = (elapsed_seconds / duration).clamp(0., 1.);
-    let stops = [0., -8., 7., -5., 3., 0.];
-    let position = progress * 5.;
-    let index = (position as usize).min(4);
-    egui::lerp(stops[index]..=stops[index + 1], position - index as f32)
+    let stops = [
+        (0., 0.),
+        (0.1, -tokens.number("thumbnail-drop-reject-x-1")),
+        (0.3, tokens.number("thumbnail-drop-reject-x-1")),
+        (0.5, -tokens.number("thumbnail-drop-reject-x-2")),
+        (0.65, tokens.number("thumbnail-drop-reject-x-3")),
+        (0.8, -tokens.number("thumbnail-drop-reject-x-4")),
+        (0.9, tokens.number("thumbnail-drop-reject-x-4")),
+        (1., 0.),
+    ];
+    let segment = stops.windows(2).find(|pair| progress <= pair[1].0).unwrap();
+    egui::lerp(
+        segment[0].1..=segment[1].1,
+        (progress - segment[0].0) / (segment[1].0 - segment[0].0),
+    )
 }
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Action>, Presentation) {
@@ -2482,13 +2493,25 @@ mod tests {
 
     #[test]
     fn self_drop_shake_settles_at_420ms_and_obeys_reduced_motion() {
-        assert_eq!(reject_offset(0., false), 0.);
-        assert!((reject_offset(0.084, false) + 8.).abs() < 0.001);
-        assert!((reject_offset(0.168, false) - 7.).abs() < 0.001);
-        assert_ne!(reject_offset(0.419, false), 0.);
-        assert_eq!(reject_offset(0.420, false), 0.);
-        assert_eq!(reject_offset(1., false), 0.);
-        assert_eq!(reject_offset(0.084, true), 0.);
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        assert_eq!(reject_offset(&tokens, 0., false), 0.);
+        // Shipping CSS: 10/30/50/65/80/90% of 420ms, not equal intervals.
+        for (seconds, expected) in [
+            (0.042, -12.),
+            (0.126, 12.),
+            (0.210, -8.),
+            (0.273, 6.),
+            (0.336, -4.),
+            (0.378, 4.),
+            (0.084, 0.),
+        ] {
+            assert!((reject_offset(&tokens, seconds, false) - expected).abs() < 0.001);
+            assert_eq!(reject_offset(&tokens, seconds, true), 0.);
+        }
+        assert_ne!(reject_offset(&tokens, 0.419, false), 0.);
+        assert_eq!(reject_offset(&tokens, 0.420, false), 0.);
+        assert_eq!(reject_offset(&tokens, 1., false), 0.);
+        assert_eq!(reject_offset(&tokens, 0.084, true), 0.);
     }
 
     fn raw(screen: egui::Rect, events: Vec<egui::Event>) -> egui::RawInput {

@@ -575,6 +575,43 @@ final class MiniPreviewTests: XCTestCase {
             "an accepted external copy dismisses the exact source card")
     }
 
+    func testSelfDropRejectionMatchesShippingPresentationAndReducedMotion() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        defer { NativeMotion.motionPreference = preference }
+        for reduced in [false, true] {
+            NativeMotion.motionPreference = { reduced }
+            let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
+            defer { controller.close() }
+            let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+                .first { $0.isVisible && $0.previewView === controller.previewView })
+            let card = try XCTUnwrap(panel.previewView.card(for: "source"))
+            let layer = try XCTUnwrap(card.layer)
+            CATransaction.flush()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            for operation in [NSDragOperation(), .copy] {
+                // Hold the real layer clock so slow CI rendering cannot skip a peak.
+                let started = layer.convertTime(CACurrentMediaTime(), from: nil)
+                layer.speed = 0; layer.timeOffset = started
+                card.finishDrag(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY), operation: operation)
+                XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
+                    "a self-drop is rejected even when the OS refuses COPY")
+                // Independently sampled from shipping CSS's uneven keyframe times.
+                for (seconds, offset) in [(0.042, -12.0), (0.126, 12.0), (0.210, -8.0),
+                                          (0.273, 6.0), (0.336, -4.0), (0.378, 4.0), (0.420, 0.0)] {
+                    layer.timeOffset = started + seconds
+                    let bitmap = try XCTUnwrap(renderPresentation(panel))
+                    XCTAssertEqual(try XCTUnwrap(layer.presentation()).transform.m41,
+                                   reduced ? 0 : CGFloat(offset), accuracy: 0.2,
+                                   "self-drop at \(seconds)s, reduced motion \(reduced), operation \(operation)")
+                    if seconds == 0.042 && operation.isEmpty {
+                        try write(bitmap, name: "mini-preview-self-drop-\(reduced ? "reduced" : "shake").png")
+                    }
+                }
+            }
+        }
+    }
+
     func testPendingFirstDecodeIsInvalidatedWhenHistoryIsCleared() throws {
         _ = NSApplication.shared
         let releaseDecode = DispatchSemaphore(value: 0)

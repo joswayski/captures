@@ -1224,11 +1224,16 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     func rejectDrop() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard !NativeMotion.reduceMotion, let layer else { return }
         let shake = CAKeyframeAnimation(keyPath: "transform.translation.x")
-        shake.values = [0, -8, 7, -5, 3, 0]
-        shake.duration = 0.42
-        layer?.add(shake, forKey: "preview-drop-reject")
+        shake.values = [0, -tokens.number("thumbnail-drop-reject-x-1"), tokens.number("thumbnail-drop-reject-x-1"),
+                        -tokens.number("thumbnail-drop-reject-x-2"), tokens.number("thumbnail-drop-reject-x-3"),
+                        -tokens.number("thumbnail-drop-reject-x-4"), tokens.number("thumbnail-drop-reject-x-4"), 0]
+        shake.keyTimes = [0, 0.1, 0.3, 0.5, 0.65, 0.8, 0.9, 1]
+        shake.duration = Double(tokens.number("thumbnail-drop-reject-duration")) / 1000
+        shake.timingFunction = CAMediaTimingFunction(name: .linear)
+        shake.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil)
+        layer.add(shake, forKey: "preview-drop-reject")
     }
 }
 
@@ -2986,7 +2991,7 @@ final class MiniPreviewController {
         next.previewView.setDragEnded { [weak self] id, point, operation in
             guard let self, let source = sourceArtifacts[id], self.contains(source),
                   self.cardGenerations[id] == sourceGenerations[id] else { return }
-            if operation.contains(.copy), self.panel?.frame.contains(point) == true {
+            if self.panel?.frame.contains(point) == true {
                 self.panel?.previewView.rejectDrop(for: id)
             } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
                 $0 !== self.panel && $0.isVisible && $0.frame.contains(point)
