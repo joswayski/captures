@@ -1338,15 +1338,15 @@ final class MiniPreviewView: NSView {
     private let scroll = NSScrollView()
     private let document = MiniPreviewDocumentView()
     private var cards: [String: MiniPreviewCardView] = [:]
-    private let restLayouts: [String: CapturesPreviewCardLayout]
-    private let hoverLayouts: [String: CapturesPreviewCardLayout]
+    private var restLayouts: [String: CapturesPreviewCardLayout]
+    private var hoverLayouts: [String: CapturesPreviewCardLayout]
     private(set) var pileHovered = false
     private var pileExpandButton: MiniPreviewExpandButton?
     private var collapseButton: MiniPreviewButton?
     private var clearButton: MiniPreviewButton?
     private var overflowCues: [MiniPreviewOverflowCue] = []
     /// Top-anchored stacks open icon tips below (not `topAnchor`, an NSView member).
-    private let anchoredAtTop: Bool
+    private var anchoredAtTop: Bool
     /// Right-anchored stacks mirror the Close streak.
     private let anchoredRight: Bool
     /// One card slot (card plus gap), for survivors settling into a hole.
@@ -2075,12 +2075,23 @@ final class MiniPreviewView: NSView {
 
     /// Dragging the pile re-derives gravity (shipping updates it per move),
     /// so the spin fades in toward the middle of the screen.
-    func updatePileGravity(_ gravity: Double) {
-        guard stackCollapsed, gravity != pileGravity else { return }
+    func updatePileGravity(_ gravity: Double, topAnchor: Bool,
+                           layouts: [String: CapturesPreviewCardLayout],
+                           hoverLayouts: [String: CapturesPreviewCardLayout]) {
+        guard stackCollapsed, gravity != pileGravity || topAnchor != anchoredAtTop else { return }
+        anchoredAtTop = topAnchor; restLayouts = layouts; self.hoverLayouts = hoverLayouts
         pileGravity = gravity
         for (id, card) in cards {
             guard let layout = (pileHovered ? hoverLayouts[id] : restLayouts[id]) else { continue }
+            card.layer?.removeAnimation(forKey: "pile-pose")
+            card.layer?.removeAnimation(forKey: "pile-fan-position")
             card.setFrameOrigin(pileOrigin(id, layout: layout, hovered: pileHovered))
+        }
+        if let sparkles, let front = pileExpandButton {
+            let tables = PreviewMotionTables.shared
+            let above = topAnchor ? tables.near : tables.reach
+            sparkles.setFrameOrigin(NSPoint(x: front.frame.minX - tables.side,
+                                           y: front.frame.minY - above))
         }
         applyPilePoses(hovered: pileHovered, duration: 0)
         if carryReady { applyCarryPoses() }
@@ -2326,6 +2337,8 @@ final class MiniPreviewController {
                                                includeInCaptures: false)
     private var screenID: String?
     private(set) var stackOrigin: CapturesPreviewOrigin?
+    private var draggedPlacement: String?
+    private var stackPlacement: String { stackOrigin == nil ? settings.placement : draggedPlacement ?? settings.placement }
     private var pendingDecodes: [String: Int] = [:]
     private var cardGenerations: [String: Int] = [:]
     private var preparedDrags: [String: (imagePath: String, previewPath: String, path: String)] = [:]
@@ -2353,7 +2366,7 @@ final class MiniPreviewController {
     /// Saved cards whose Delete dissolved before their export moves to the
     /// Trash (shipping's order); a failed Trash puts them back in their slot.
     private var trashing: [String: (resource: MiniPreviewResource, index: Int, generation: Int?,
-                                    screenID: String?, origin: CapturesPreviewOrigin?)] = [:]
+                                    screenID: String?, origin: CapturesPreviewOrigin?, placement: String?)] = [:]
     var copyArtifact: ArtifactAction = { _ in }
     var saveArtifact: ArtifactAction = { _ in }
     var openArtifact: ArtifactAction = { _ in }
@@ -2722,7 +2735,7 @@ final class MiniPreviewController {
         precondition(Thread.isMainThread)
         guard let resource = resources[artifactID],
               let index = stack.ids.firstIndex(of: artifactID) else { return nil }
-        trashing[artifactID] = (resource, index, cardGenerations[artifactID], screenID, stackOrigin)
+        trashing[artifactID] = (resource, index, cardGenerations[artifactID], screenID, stackOrigin, draggedPlacement)
         return dismiss(artifactID, exit: .dust)
     }
 
@@ -2743,7 +2756,7 @@ final class MiniPreviewController {
         resources[artifactID] = pending.resource
         cardGenerations[artifactID] = pending.generation
         if screenID == nil { screenID = pending.screenID }
-        if stackOrigin == nil { stackOrigin = pending.origin }
+        if stackOrigin == nil { stackOrigin = pending.origin; draggedPlacement = pending.placement }
         makePanel(preservingExits: true); updateVisibility()
         prepareFileDrag(for: pending.resource.artifact)
         setStatus(status, detail: detail, for: artifactID)
@@ -2766,7 +2779,7 @@ final class MiniPreviewController {
            policy.stopWaiting() {
             visibilityPendingArtifactID = nil
         }
-        let topAnchor = settings.placement.hasPrefix("top_")
+        let topAnchor = stackPlacement.hasPrefix("top_")
         var hold: Double?
         if let view = panel?.previewView {
             for (index, id) in snapshot.enumerated() {
@@ -2817,9 +2830,9 @@ final class MiniPreviewController {
         let ids = stack.ids
         guard !ids.isEmpty, let screen = targetScreen(), let monitor = Self.monitor(for: screen),
               let geometry = NativePreviewLayout.geometry(monitor: monitor, count: ids.count,
-                  collapsed: true, origin: stackOrigin, placement: settings.placement) else { return nil }
+                  collapsed: true, origin: stackOrigin, placement: stackPlacement) else { return nil }
         let frame = Self.appKitFrame(geometry: geometry, monitor: monitor, screenFrame: screen.frame)
-        let topAnchor = settings.placement.hasPrefix("top_")
+        let topAnchor = stackPlacement.hasPrefix("top_")
         let padding = CGFloat(geometry.padding), height = CGFloat(geometry.card_height)
         var frames: [String: NSRect] = [:]
         for (index, id) in ids.enumerated() {
@@ -2874,9 +2887,9 @@ final class MiniPreviewController {
               let monitor = Self.monitor(for: screen),
               let geometry = NativePreviewLayout.geometry(monitor: monitor, count: ids.count,
                   collapsed: stack.isCollapsed, origin: stackOrigin,
-                  placement: settings.placement) else { previous?.close(); return }
-        let topAnchor = settings.placement.hasPrefix("top_")
-        let rightAnchor = settings.placement.hasSuffix("_right")
+                  placement: stackPlacement) else { previous?.close(); return }
+        let topAnchor = stackPlacement.hasPrefix("top_")
+        let rightAnchor = stackPlacement.hasSuffix("_right")
         let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
             layoutStack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
         })
@@ -2886,7 +2899,7 @@ final class MiniPreviewController {
         let frame = Self.appKitFrame(geometry: geometry, monitor: monitor,
                                      screenFrame: screen.frame)
         let gravity = NativePreviewLayout.gravity(monitor: monitor, count: ids.count,
-            origin: stackOrigin, placement: settings.placement)
+            origin: stackOrigin, placement: stackPlacement)
         let sourceArtifacts = resources.mapValues(\.artifact)
         let sourceGenerations = cardGenerations
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
@@ -2973,7 +2986,7 @@ final class MiniPreviewController {
         guard let monitor = Self.monitor(for: screen),
               let geometry = NativePreviewLayout.geometry(monitor: monitor, count: stack.ids.count,
                   collapsed: stack.isCollapsed, origin: stackOrigin,
-                  placement: settings.placement) else { return }
+                  placement: stackPlacement) else { return }
         panel.setFrame(Self.appKitFrame(geometry: geometry, monitor: monitor,
                                        screenFrame: screen.frame), display: panel.isVisible)
     }
@@ -2985,12 +2998,21 @@ final class MiniPreviewController {
         let scale = max(1, monitor.scale_factor)
         let logical = NSPoint(x: Double(monitor.full_x) / scale + position.x - screen.frame.minX,
             y: Double(monitor.full_y) / scale + screen.frame.maxY - position.y - panel.frame.height)
+        var placement = stackPlacement
         stackOrigin = NativePreviewLayout.movedOrigin(monitor: monitor, count: stack.ids.count,
-            frameOrigin: logical, placement: settings.placement)
+            frameOrigin: logical, placement: &placement)
+        draggedPlacement = placement
         self.position(panel: panel, on: screen)
         if let gravity = NativePreviewLayout.gravity(monitor: monitor, count: stack.ids.count,
-                                                     origin: stackOrigin, placement: settings.placement) {
-            panel.previewView.updatePileGravity(gravity)
+                                                     origin: stackOrigin, placement: stackPlacement) {
+            let top = placement.hasPrefix("top_")
+            let layouts = Dictionary(uniqueKeysWithValues: stack.ids.enumerated().compactMap { index, id in
+                stack.cardLayout(index: index, topAnchor: top).map { (id, $0) }
+            })
+            let hovered = Dictionary(uniqueKeysWithValues: stack.ids.enumerated().compactMap { index, id in
+                stack.cardLayout(index: index, topAnchor: top, hovered: true).map { (id, $0) }
+            })
+            panel.previewView.updatePileGravity(gravity, topAnchor: top, layouts: layouts, hoverLayouts: hovered)
         }
     }
 

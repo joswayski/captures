@@ -191,6 +191,68 @@ pub unsafe extern "C" fn captures_preview_gravity_v1(
     )
 }
 
+/// Move a compact native frame and choose its session-only expansion corner.
+///
+/// # Safety
+/// Outputs point to aligned writable storage during this call. False leaves
+/// both outputs untouched. Monitor coordinates are physical; x/y are logical.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_move_v1(
+    monitor: CapturesPreviewMonitor,
+    count: usize,
+    x: f64,
+    y: f64,
+    placement: u32,
+    origin: *mut CapturesPreviewOrigin,
+    next_placement: *mut u32,
+) -> bool {
+    let mut geometry = CapturesPreviewGeometry::default();
+    if origin.is_null() || next_placement.is_null() || !x.is_finite() || !y.is_finite()
+        // SAFETY: Local output; null origin is allowed. Validate monitor/code.
+        || !unsafe { captures_preview_geometry_v1(monitor, count, true, std::ptr::null(), placement, &mut geometry) }
+    {
+        return false;
+    }
+    let placement = match placement {
+        0 => MiniPreviewPlacement::BottomLeft,
+        1 => MiniPreviewPlacement::BottomRight,
+        2 => MiniPreviewPlacement::TopLeft,
+        _ => MiniPreviewPlacement::TopRight,
+    };
+    let (moved, next) = preview::move_collapsed_stack(
+        ThumbnailMonitorBounds {
+            work_x: monitor.work_x,
+            work_y: monitor.work_y,
+            work_width: monitor.work_width,
+            work_height: monitor.work_height,
+            full_x: monitor.full_x,
+            full_y: monitor.full_y,
+            full_width: monitor.full_width,
+            full_height: monitor.full_height,
+            scale_factor: monitor.scale_factor,
+        },
+        count,
+        x,
+        y,
+        placement,
+    );
+    // SAFETY: Validated non-null outputs are writable for one value each.
+    unsafe {
+        origin.write(CapturesPreviewOrigin {
+            x: moved.x,
+            edge: moved.edge,
+            anchor: u32::from(moved.anchor.is_top()),
+        });
+        next_placement.write(match next {
+            MiniPreviewPlacement::BottomLeft => 0,
+            MiniPreviewPlacement::BottomRight => 1,
+            MiniPreviewPlacement::TopLeft => 2,
+            MiniPreviewPlacement::TopRight => 3,
+        });
+    }
+    true
+}
+
 /// Shipping rear-card pile pose (spin, recession, jitter, tilt) in 2D.
 ///
 /// # Safety
@@ -1167,6 +1229,56 @@ mod tests {
             assert_eq!(captures_preview_gravity_v1(monitor, 3, null(), 0), 1.);
             assert_eq!(captures_preview_gravity_v1(monitor, 3, null(), 3), -1.);
             assert!(captures_preview_gravity_v1(monitor, 3, null(), 9).is_nan());
+            let mut moved = CapturesPreviewOrigin {
+                x: -7.,
+                edge: -8.,
+                anchor: 0,
+            };
+            let mut placement = 0;
+            assert!(captures_preview_move_v1(
+                monitor,
+                2,
+                9000.,
+                -9000.,
+                0,
+                &mut moved,
+                &mut placement
+            ));
+            assert_eq!(
+                (moved.x, moved.edge, moved.anchor, placement),
+                (1100., 25., 1, 3)
+            );
+            assert!(!captures_preview_move_v1(
+                monitor,
+                2,
+                0.,
+                0.,
+                0,
+                &mut moved,
+                null_mut()
+            ));
+            assert!(!captures_preview_move_v1(
+                monitor,
+                2,
+                f64::NAN,
+                0.,
+                0,
+                &mut moved,
+                &mut placement
+            ));
+            assert!(!captures_preview_move_v1(
+                monitor,
+                2,
+                0.,
+                0.,
+                9,
+                &mut moved,
+                &mut placement
+            ));
+            assert_eq!(
+                (moved.x, moved.edge, moved.anchor, placement),
+                (1100., 25., 1, 3)
+            );
             let low = CapturesPreviewOrigin {
                 x: 0.,
                 edge: 5_000.,

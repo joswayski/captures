@@ -267,7 +267,15 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertEqual(front.depthBlurRadius, 0)
             XCTAssertEqual(front.layer?.sublayers?.filter { $0.name == BoxShadowLayers.layerName }.count, 2,
                            "--thumbnail-card-shadow has two layers")
-            view.updatePileGravity(0)
+            let stack = NativePreviewStack()
+            ids.forEach { stack.insert($0) }; stack.setCollapsed(true)
+            let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
+                stack.cardLayout(index: index, topAnchor: top).map { (id, $0) }
+            })
+            let hoverLayouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
+                stack.cardLayout(index: index, topAnchor: top, hovered: true).map { (id, $0) }
+            })
+            view.updatePileGravity(0, topAnchor: top, layouts: layouts, hoverLayouts: hoverLayouts)
             let middle = try XCTUnwrap(view.pilePose(for: "middle", depth: 1, hovered: false))
             XCTAssertGreaterThanOrEqual(abs(middle.rotation_deg), 2.7)
             XCTAssertLessThanOrEqual(abs(middle.rotation_deg), 3)
@@ -1269,6 +1277,51 @@ final class MiniPreviewTests: XCTestCase {
         controller.moveStack(to: NSPoint(x: 270, y: 250))
         XCTAssertNotNil(controller.stackOrigin)
         controller.clearAll()
+        XCTAssertNil(controller.stackOrigin)
+    }
+
+    func testMovedPileChangesExpansionCornerWithoutMovingItsFrontCard() throws {
+        _ = NSApplication.shared
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { path in
+            self.solidImage(path.contains("older") ? .systemRed : .systemBlue)
+        })
+        defer { controller.close() }
+        let settings = MiniPreviewSettings(enabled: true, placement: "bottom_left", includeInCaptures: false)
+        for id in ["older", "latest"] {
+            let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
+            controller.present(artifact(id: id, previewPath: "/\(id)-preview.png"),
+                               on: screenID(), settings: settings, generation: generation)
+            try waitUntil { controller.decodedArtifactIDs.contains(id) && controller.isPanelVisible }
+        }
+        for top in [true, false] {
+            controller.setCollapsed(true)
+            try waitUntil { controller.previewView?.pileExpandAccessibilityLabel == "Expand 2 previews" }
+            let compact = try XCTUnwrap(controller.previewView?.window)
+            let work = screen.visibleFrame
+            controller.moveStack(to: NSPoint(x: top ? work.maxX - compact.frame.width : work.minX,
+                y: top ? work.maxY - compact.frame.height - 20 : work.minY + 20))
+            let origin = try XCTUnwrap(controller.stackOrigin)
+            XCTAssertEqual(origin.anchor, top ? 1 : 0)
+            let front = try XCTUnwrap(controller.previewView?.cardScreenFrames()["latest"])
+            controller.setCollapsed(false)
+            let view = try XCTUnwrap(controller.previewView)
+            let expandedFront = try XCTUnwrap(view.cardScreenFrames()["latest"])
+            XCTAssertEqual(expandedFront.minX, front.minX, accuracy: 0.001)
+            XCTAssertEqual(expandedFront.minY, front.minY, accuracy: 0.001)
+            let clear = try XCTUnwrap(view.stackToolbarButtons.first { $0.kind == .clear })
+            XCTAssertEqual(clear.frame.minX, top ? view.bounds.width - 56 : 28)
+            XCTAssertEqual(clear.frame.minY, top ? 16 : view.bounds.height - 44)
+            let older = try XCTUnwrap(view.card(for: "older"))
+            let latest = try XCTUnwrap(view.card(for: "latest"))
+            XCTAssertEqual(latest.frame.minY, top ? 52 : 212)
+            XCTAssertEqual(older.frame.minY, top ? 236 : 28)
+            let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
+            try write(render(panel), name: top ? "mini-preview-moved-expanded-top-right.png"
+                                              : "mini-preview-moved-expanded-bottom-left.png")
+        }
+        controller.clearAll()
+        controller.updateSettings(settings)
         XCTAssertNil(controller.stackOrigin)
     }
 

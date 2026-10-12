@@ -136,19 +136,28 @@ final class NativePreviewPolicy {
 
 enum NativePreviewLayout {
     /// Convert a dragged compact window into the shared pile edge. Always save
-    /// the clamped result, so later expansion/arrival retains the visible pile.
+    /// the clamped result and session corner, preserving the front-card origin.
     static func movedOrigin(monitor: CapturesPreviewMonitor, count: Int,
-                            frameOrigin: NSPoint, placement: String) -> CapturesPreviewOrigin? {
-        guard let base = geometry(monitor: monitor, count: count, collapsed: true,
-                                  placement: placement) else { return nil }
-        let top = placement.hasPrefix("top_")
-        let offset = (base.height - base.card_height) / 2
-            + (top ? -base.control_gutter : base.card_height + base.control_gutter)
-        var origin = CapturesPreviewOrigin(x: frameOrigin.x, edge: frameOrigin.y + offset,
-                                            anchor: top ? 1 : 0)
-        guard let clamped = geometry(monitor: monitor, count: count, collapsed: true,
-                                    origin: origin, placement: placement) else { return nil }
-        origin.x = clamped.x; origin.edge = clamped.y + offset
+                            frameOrigin: NSPoint, placement: inout String) -> CapturesPreviewOrigin? {
+        let code: UInt32
+        switch placement {
+        case "bottom_left": code = 0
+        case "bottom_right": code = 1
+        case "top_left": code = 2
+        case "top_right": code = 3
+        default: return nil
+        }
+        guard count >= 0 else { return nil }
+        var origin = CapturesPreviewOrigin()
+        var next: UInt32 = code
+        guard captures_preview_move_v1(monitor, count, frameOrigin.x, frameOrigin.y,
+                                      code, &origin, &next) else { return nil }
+        switch next {
+        case 0: placement = "bottom_left"
+        case 1: placement = "bottom_right"
+        case 2: placement = "top_left"
+        default: placement = "top_right"
+        }
         return origin
     }
 

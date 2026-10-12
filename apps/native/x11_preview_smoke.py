@@ -1230,8 +1230,13 @@ def main():
                     wait(lambda: fan_pixels() == rest, "leaving restores the exact rest pose")
                     before_drag = window_geometry(preview)
                     start_x, start_y = int(before_drag["X"]), int(before_drag["Y"])
-                    dx = -780 if placement.endswith("right") else 160
-                    dy = 80 if placement.startswith("top") else -80
+                    dx = -780 if placement.endswith("right") else 780
+                    # Cross both orientation thresholds, retaining one bottom
+                    # case for the existing oldest-first overflow pixel check.
+                    dy = -80 if placement == "bottom_left" else (
+                        520 if placement.startswith("top") else -520)
+                    moved_top = not placement.startswith("top") if abs(dy) > 80 else False
+                    moved_right = not placement.endswith("right")
                     other_app = spawn(f"{prefix}-drag-focus", ["xmessage", "-title", "Preview drag focus",
                         "-geometry", "240x30+580+850", "Keep this app focused"])
                     other = wait(lambda: windows("Preview drag focus"), "drag focus fixture")[0]
@@ -1279,6 +1284,17 @@ def main():
                     click(preview, 170, 132, activate=False)
                     wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 608, "front card expands all previews")
                     assert int(window_geometry(preview)["X"]) == start_x + dx, "expansion reset dragged x"
+                    # Screen edge, not the saved preference, owns the expanded
+                    # order. Copy distinct oldest/newest pixels through real UI.
+                    time.sleep(.7)  # The 520ms expansion flight rejects actions.
+                    for index in (0, 2):
+                        slot = 2 - index if moved_top else index
+                        y = (52 if moved_top else 28) + slot * 184 + 61
+                        click(preview, 170, y, activate=False)
+                        expected_pixels = rgb(stack_entries[index].parent / "capture.png")
+                        wait(lambda: clipboard_pixels() == expected_pixels,
+                             f"moved pile Copy routes to card {index} from its new anchor")
+                    shot(preview, f"{prefix}-moved-expanded")
 
                     if placement == "bottom_left":
                         # Overflow is not a membership cap. Reveal newest, then
@@ -1341,8 +1357,8 @@ def main():
                             stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-clear.ffmpeg.log").open("w"))
                         children.append(recording)
                         time.sleep(.3)
-                    click(preview, 298 if placement.endswith("right") else 42,
-                          26 if placement.startswith("top") else height - 26, activate=False)
+                    click(preview, 298 if moved_right else 42,
+                          26 if moved_top else height - 26, activate=False)
                     if cue_background is not None:
                         # Input delivery is asynchronous. The cue must vanish
                         # while the exit viewport is still mapped, not merely

@@ -373,6 +373,14 @@ bool captures_preview_stack_card_v2(const CapturesPreviewStack *handle, size_t i
  * exactly -1/1. NaN for invalid input. No allocation or OS access. */
 double captures_preview_gravity_v1(CapturesPreviewMonitor monitor, size_t count,
     const CapturesPreviewOrigin *origin, uint32_t placement);
+/* Move a compact native frame at logical x/y; clamp and choose the session-only
+ * expansion anchor and side with shipping hysteresis. Current/next placement:
+ * 0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right. The front card stays
+ * pinned when the anchor changes. Aligned writable outputs; false leaves both
+ * untouched. No allocation, settings mutation or OS access. */
+bool captures_preview_move_v1(CapturesPreviewMonitor monitor, size_t count,
+    double x, double y, uint32_t placement, CapturesPreviewOrigin *origin,
+    uint32_t *next_placement);
 /* Shipping rear-card pile pose flattened to 2D: centre offset from the front
  * card (dx, dy) and from the card's stack_card slot (slot_dy), logical points
  * with y down; clockwise rotation; scale (scale_y includes the tilt).
