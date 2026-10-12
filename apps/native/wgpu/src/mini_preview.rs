@@ -250,30 +250,43 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
             let drag_id = response.id.with("desktop-drag");
             // winit can retain old local coordinates after moving the window.
             // Keep the original grab offset and use an OS desktop pointer sample.
-            if response.is_pointer_button_down_on() {
-                if ui.input(|input| input.pointer.primary_pressed()) {
-                    ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
-                }
-                let press = ui.input(|input| input.pointer.press_origin());
-                if let Some(press) = press {
+            if response.is_pointer_button_down_on()
+                && ui.input(|input| input.pointer.primary_pressed())
+                && let Some(press) = ui.input(|input| input.pointer.press_origin())
+            {
+                ui.data_mut(|data| data.insert_temp(drag_id, (press, false, None::<egui::Pos2>)));
+            }
+            if let Some((press, mut dragging, mut previous)) =
+                ui.data(|data| data.get_temp::<(egui::Pos2, bool, Option<egui::Pos2>)>(drag_id))
+            {
+                // Shipping's eight-point radial threshold belongs to this
+                // widget, not egui's generic click distance or hold timeout.
+                dragging |= ui.input(|input| {
+                    input
+                        .pointer
+                        .interact_pos()
+                        .is_some_and(|point| point.distance(press) >= 8.)
+                });
+                if ui.input(|input| input.pointer.primary_down()) {
+                    if dragging && let Some(pointer) = view.desktop_pointer {
+                        let position = pointer - press.to_vec2();
+                        if previous != Some(position) {
+                            previous = Some(position);
+                            action = Some(Action::MoveStack(position));
+                        }
+                    }
+                    ui.data_mut(|data| data.insert_temp(drag_id, (press, dragging, previous)));
+                } else {
+                    if !dragging
+                        && response.contains_pointer()
+                        && ui.input(|input| input.pointer.primary_released())
+                    {
+                        action = Some(Action::ExpandStack);
+                    }
                     ui.data_mut(|data| {
-                        data.get_temp_mut_or_insert_with(drag_id, || (press, None::<egui::Pos2>));
+                        data.remove::<(egui::Pos2, bool, Option<egui::Pos2>)>(drag_id)
                     });
                 }
-            }
-            if response.dragged_by(egui::PointerButton::Primary)
-                && let Some(pointer) = view.desktop_pointer
-                && let Some((press, previous)) =
-                    ui.data(|data| data.get_temp::<(egui::Pos2, Option<egui::Pos2>)>(drag_id))
-            {
-                let position = pointer - press.to_vec2();
-                if previous != Some(position) {
-                    ui.data_mut(|data| data.insert_temp(drag_id, (press, Some(position))));
-                    action = Some(Action::MoveStack(position));
-                }
-            }
-            if !ui.input(|input| input.pointer.primary_down()) {
-                ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
             }
             // Shipping's collapsed hit target has no tooltip.
             response.on_hover_cursor(egui::CursorIcon::Grab);
@@ -4298,7 +4311,10 @@ mod tests {
         for delta in [egui::vec2(7., 0.), egui::vec2(5., -5.)] {
             run_card(&ctx, &texture, moved(press), true, true);
             run_card(&ctx, &texture, pointer(press, true), true, true);
-            assert_eq!(run_card(&ctx, &texture, moved(press + delta), true, true), None);
+            assert_eq!(
+                run_card(&ctx, &texture, moved(press + delta), true, true),
+                None
+            );
             assert_eq!(
                 run_card(&ctx, &texture, pointer(press + delta, false), true, true),
                 Some(Action::ExpandStack)
