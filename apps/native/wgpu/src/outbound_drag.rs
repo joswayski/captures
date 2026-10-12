@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(outcome(true, false, false), PreviewDragOutcome::Dismiss);
         assert_eq!(outcome(true, true, false), PreviewDragOutcome::Retain);
         assert_eq!(outcome(true, true, true), PreviewDragOutcome::Reject);
-        assert_eq!(outcome(false, true, true), PreviewDragOutcome::Retain);
+        assert_eq!(outcome(false, true, true), PreviewDragOutcome::Reject);
         assert_eq!(outcome(false, false, false), PreviewDragOutcome::Retain);
     }
 

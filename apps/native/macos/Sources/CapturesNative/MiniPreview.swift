@@ -555,7 +555,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private(set) var isExiting = false
     /// The capture highlight is still fading.
     var isHighlighting: Bool { highlightRing.animation(forKey: "preview-capture-highlight") != nil }
-    private var savedFeedbackActive = false
+    private var savedFeedbackSince: CFTimeInterval?
     private var savedFeedbackToken = 0
     private var highlightToken = 0
     private var saved = false
@@ -1065,22 +1065,33 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     /// Brief shipping "Saved" confirmation on the Save/Show in Folder action.
-    func showSavedFeedback() {
+    func showSavedFeedback(startedAgo: Double = 0) {
+        let remaining = Self.savedFeedbackDuration - startedAgo
+        guard remaining > 0 else { return }
         savedFeedbackToken &+= 1
         let token = savedFeedbackToken
-        savedFeedbackActive = true
+        savedFeedbackSince = CACurrentMediaTime() - startedAgo
         updateSaveButton(saved: saved)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.savedFeedbackDuration) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
             guard let self, self.savedFeedbackToken == token else { return }
-            self.savedFeedbackActive = false
+            self.savedFeedbackSince = nil
             self.updateSaveButton(saved: self.saved)
         }
     }
 
+    /// Rebuilding a surviving card must not erase its error or restart Saved.
+    func continueFeedback(from previous: MiniPreviewCardView) {
+        setStatus(previous.status.stringValue, detail: previous.status.toolTip)
+        if let since = previous.savedFeedbackSince {
+            showSavedFeedback(startedAgo: CACurrentMediaTime() - since)
+        }
+    }
+
     func updateSaveButton(saved: Bool) {
-        let title = savedFeedbackActive ? "Saved" : saved ? "Show in Folder" : "Save file"
+        let confirming = savedFeedbackSince != nil
+        let title = confirming ? "Saved" : saved ? "Show in Folder" : "Save file"
         saveButton?.title = title
-        saveButton?.kind = savedFeedbackActive ? .check : saved ? .folder : .save
+        saveButton?.kind = confirming ? .check : saved ? .folder : .save
         saveButton?.setAccessibilityLabel(title)
         self.saved = saved
         let step = 28 + tokens.number("s-3")
@@ -1224,11 +1235,16 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     }
 
     func rejectDrop() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard !NativeMotion.reduceMotion, let layer else { return }
         let shake = CAKeyframeAnimation(keyPath: "transform.translation.x")
-        shake.values = [0, -8, 7, -5, 3, 0]
-        shake.duration = 0.42
-        layer?.add(shake, forKey: "preview-drop-reject")
+        shake.values = [0, -tokens.number("thumbnail-drop-reject-x-1"), tokens.number("thumbnail-drop-reject-x-1"),
+                        -tokens.number("thumbnail-drop-reject-x-2"), tokens.number("thumbnail-drop-reject-x-3"),
+                        -tokens.number("thumbnail-drop-reject-x-4"), tokens.number("thumbnail-drop-reject-x-4"), 0]
+        shake.keyTimes = [0, 0.1, 0.3, 0.5, 0.65, 0.8, 0.9, 1]
+        shake.duration = Double(tokens.number("thumbnail-drop-reject-duration")) / 1000
+        shake.timingFunction = CAMediaTimingFunction(name: .linear)
+        shake.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil)
+        layer.add(shake, forKey: "preview-drop-reject")
     }
 }
 
@@ -1284,7 +1300,8 @@ private final class MiniPreviewExpandButton: NSButton {
         guard let window, let press else { return }
         let current = window.convertPoint(toScreen: event.locationInWindow)
         let delta = NSSize(width: current.x - press.x, height: current.y - press.y)
-        guard dragging || max(abs(delta.width), abs(delta.height)) >= 4 else { return }
+        // Shipping's collapsed-pile threshold is eight logical points, radial.
+        guard dragging || hypot(delta.width, delta.height) >= 8 else { return }
         dragging = true
         move(NSPoint(x: frameOrigin.x + delta.width, y: frameOrigin.y + delta.height))
         carry(current)
@@ -2034,6 +2051,13 @@ final class MiniPreviewView: NSView {
     }
 
     func showSavedFeedback(for artifactID: String) { cards[artifactID]?.showSavedFeedback() }
+
+    func continueFeedback(from previous: MiniPreviewView) {
+        for (id, card) in cards {
+            guard let old = previous.cards[id], !old.isExiting else { continue }
+            card.continueFeedback(from: old)
+        }
+    }
 
     func setClipboardOwner(_ owner: String?, continuing previous: MiniPreviewView? = nil) {
         for (id, card) in cards {
@@ -2974,6 +2998,7 @@ final class MiniPreviewController {
             next.previewView.continueExits(from: view, retaining: exits)
             scheduleRebuild(after: max(0, (exitDeadlines.values.max() ?? 0) - CACurrentMediaTime()))
         }
+        if let view = previous?.previewView { next.previewView.continueFeedback(from: view) }
         previous?.close()
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
         for id in liveIDs {
@@ -2985,7 +3010,7 @@ final class MiniPreviewController {
         next.previewView.setDragEnded { [weak self] id, point, operation in
             guard let self, let source = sourceArtifacts[id], self.contains(source),
                   self.cardGenerations[id] == sourceGenerations[id] else { return }
-            if operation.contains(.copy), self.panel?.frame.contains(point) == true {
+            if self.panel?.frame.contains(point) == true {
                 self.panel?.previewView.rejectDrop(for: id)
             } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
                 $0 !== self.panel && $0.isVisible && $0.frame.contains(point)

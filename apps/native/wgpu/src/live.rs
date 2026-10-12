@@ -7437,10 +7437,12 @@ impl Live {
                     );
                     let reject_offset = card.rejected_at.map_or(0., |start| {
                         let elapsed = start.elapsed().as_secs_f32();
-                        if !reduced_motion && elapsed < 0.420 {
+                        if !reduced_motion
+                            && elapsed < tokens.number("thumbnail-drop-reject-duration") / 1000.
+                        {
                             ui.ctx().request_repaint();
                         }
-                        crate::mini_preview::reject_offset(elapsed, reduced_motion)
+                        crate::mini_preview::reject_offset(&tokens, elapsed, reduced_motion)
                     });
                     if let Some(saved_at) = card.saved_at {
                         // Clear "Saved" when the shipping confirmation window ends.

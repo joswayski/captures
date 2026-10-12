@@ -180,16 +180,27 @@ pub struct View<'a> {
     pub depth_blurred: [(f32, Option<&'a egui::TextureHandle>); 2],
 }
 
-pub fn reject_offset(elapsed_seconds: f32, reduced_motion: bool) -> f32 {
-    let duration = captures_app::preview::PREVIEW_DROP_REJECT_MS as f32 / 1000.;
+pub fn reject_offset(tokens: &Tokens, elapsed_seconds: f32, reduced_motion: bool) -> f32 {
+    let duration = tokens.number("thumbnail-drop-reject-duration") / 1000.;
     if reduced_motion || elapsed_seconds >= duration {
         return 0.;
     }
     let progress = (elapsed_seconds / duration).clamp(0., 1.);
-    let stops = [0., -8., 7., -5., 3., 0.];
-    let position = progress * 5.;
-    let index = (position as usize).min(4);
-    egui::lerp(stops[index]..=stops[index + 1], position - index as f32)
+    let stops = [
+        (0., 0.),
+        (0.1, -tokens.number("thumbnail-drop-reject-x-1")),
+        (0.3, tokens.number("thumbnail-drop-reject-x-1")),
+        (0.5, -tokens.number("thumbnail-drop-reject-x-2")),
+        (0.65, tokens.number("thumbnail-drop-reject-x-3")),
+        (0.8, -tokens.number("thumbnail-drop-reject-x-4")),
+        (0.9, tokens.number("thumbnail-drop-reject-x-4")),
+        (1., 0.),
+    ];
+    let segment = stops.windows(2).find(|pair| progress <= pair[1].0).unwrap();
+    egui::lerp(
+        segment[0].1..=segment[1].1,
+        (progress - segment[0].0) / (segment[1].0 - segment[0].0),
+    )
 }
 
 pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Action>, Presentation) {
@@ -250,30 +261,43 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
             let drag_id = response.id.with("desktop-drag");
             // winit can retain old local coordinates after moving the window.
             // Keep the original grab offset and use an OS desktop pointer sample.
-            if response.is_pointer_button_down_on() {
-                if ui.input(|input| input.pointer.primary_pressed()) {
-                    ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
-                }
-                let press = ui.input(|input| input.pointer.press_origin());
-                if let Some(press) = press {
+            if response.is_pointer_button_down_on()
+                && ui.input(|input| input.pointer.primary_pressed())
+                && let Some(press) = ui.input(|input| input.pointer.press_origin())
+            {
+                ui.data_mut(|data| data.insert_temp(drag_id, (press, false, None::<egui::Pos2>)));
+            }
+            if let Some((press, mut dragging, mut previous)) =
+                ui.data(|data| data.get_temp::<(egui::Pos2, bool, Option<egui::Pos2>)>(drag_id))
+            {
+                // Shipping's eight-point radial threshold belongs to this
+                // widget, not egui's generic click distance or hold timeout.
+                dragging |= ui.input(|input| {
+                    input
+                        .pointer
+                        .interact_pos()
+                        .is_some_and(|point| point.distance(press) >= 8.)
+                });
+                if ui.input(|input| input.pointer.primary_down()) {
+                    if dragging && let Some(pointer) = view.desktop_pointer {
+                        let position = pointer - press.to_vec2();
+                        if previous != Some(position) {
+                            previous = Some(position);
+                            action = Some(Action::MoveStack(position));
+                        }
+                    }
+                    ui.data_mut(|data| data.insert_temp(drag_id, (press, dragging, previous)));
+                } else {
+                    if !dragging
+                        && response.contains_pointer()
+                        && ui.input(|input| input.pointer.primary_released())
+                    {
+                        action = Some(Action::ExpandStack);
+                    }
                     ui.data_mut(|data| {
-                        data.get_temp_mut_or_insert_with(drag_id, || (press, None::<egui::Pos2>));
+                        data.remove::<(egui::Pos2, bool, Option<egui::Pos2>)>(drag_id)
                     });
                 }
-            }
-            if response.dragged_by(egui::PointerButton::Primary)
-                && let Some(pointer) = view.desktop_pointer
-                && let Some((press, previous)) =
-                    ui.data(|data| data.get_temp::<(egui::Pos2, Option<egui::Pos2>)>(drag_id))
-            {
-                let position = pointer - press.to_vec2();
-                if previous != Some(position) {
-                    ui.data_mut(|data| data.insert_temp(drag_id, (press, Some(position))));
-                    action = Some(Action::MoveStack(position));
-                }
-            }
-            if !ui.input(|input| input.pointer.primary_down()) {
-                ui.data_mut(|data| data.remove::<(egui::Pos2, Option<egui::Pos2>)>(drag_id));
             }
             // Shipping's collapsed hit target has no tooltip.
             response.on_hover_cursor(egui::CursorIcon::Grab);
@@ -2469,13 +2493,25 @@ mod tests {
 
     #[test]
     fn self_drop_shake_settles_at_420ms_and_obeys_reduced_motion() {
-        assert_eq!(reject_offset(0., false), 0.);
-        assert!((reject_offset(0.084, false) + 8.).abs() < 0.001);
-        assert!((reject_offset(0.168, false) - 7.).abs() < 0.001);
-        assert_ne!(reject_offset(0.419, false), 0.);
-        assert_eq!(reject_offset(0.420, false), 0.);
-        assert_eq!(reject_offset(1., false), 0.);
-        assert_eq!(reject_offset(0.084, true), 0.);
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        assert_eq!(reject_offset(&tokens, 0., false), 0.);
+        // Shipping CSS: 10/30/50/65/80/90% of 420ms, not equal intervals.
+        for (seconds, expected) in [
+            (0.042, -12.),
+            (0.126, 12.),
+            (0.210, -8.),
+            (0.273, 6.),
+            (0.336, -4.),
+            (0.378, 4.),
+            (0.084, 0.),
+        ] {
+            assert!((reject_offset(&tokens, seconds, false) - expected).abs() < 0.001);
+            assert_eq!(reject_offset(&tokens, seconds, true), 0.);
+        }
+        assert_ne!(reject_offset(&tokens, 0.419, false), 0.);
+        assert_eq!(reject_offset(&tokens, 0.420, false), 0.);
+        assert_eq!(reject_offset(&tokens, 1., false), 0.);
+        assert_eq!(reject_offset(&tokens, 0.084, true), 0.);
     }
 
     fn raw(screen: egui::Rect, events: Vec<egui::Event>) -> egui::RawInput {
@@ -4293,6 +4329,33 @@ mod tests {
             egui::TextureOptions::LINEAR,
         );
         let press = egui::pos2(100., 80.);
+        // Shipping treats sub-eight-point jitter as a click, including a
+        // diagonal that exceeds egui's generic click-and-drag threshold.
+        for delta in [egui::vec2(7., 0.), egui::vec2(5., -5.)] {
+            run_card(&ctx, &texture, moved(press), true, true);
+            run_card(&ctx, &texture, pointer(press, true), true, true);
+            assert_eq!(
+                run_card(&ctx, &texture, moved(press + delta), true, true),
+                None
+            );
+            assert_eq!(
+                run_card(&ctx, &texture, pointer(press + delta, false), true, true),
+                Some(Action::ExpandStack)
+            );
+        }
+        // The boundary is inclusive and uses distance, not the largest axis.
+        for delta in [egui::vec2(8., 0.), egui::vec2(6., -6.)] {
+            run_card(&ctx, &texture, moved(press), true, true);
+            run_card(&ctx, &texture, pointer(press, true), true, true);
+            assert_eq!(
+                run_card(&ctx, &texture, moved(press + delta), true, true),
+                Some(Action::MoveStack(egui::Pos2::ZERO + delta))
+            );
+            assert_eq!(
+                run_card(&ctx, &texture, pointer(press + delta, false), true, true),
+                None
+            );
+        }
         run_card(&ctx, &texture, moved(press), true, true);
         run_card(&ctx, &texture, pointer(press, true), true, true);
         assert_eq!(

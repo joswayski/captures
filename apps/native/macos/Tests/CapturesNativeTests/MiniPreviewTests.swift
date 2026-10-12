@@ -190,6 +190,27 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(rear.pileGlowOpacity, 1, "the hovered pile takes its accent ring and glow")
         XCTAssertEqual(rear.depthBlurRadius, captures_preview_pile_media_blur_v1(1, true), accuracy: 1e-9)
         try write(render(panel), name: "mini-preview-stack-hovered.png")
+        for delta in [NSPoint(x: 7, y: 0), NSPoint(x: 5, y: -5)] {
+            moves.removeAll()
+            button.mouseDown(with: try event(.leftMouseDown, point))
+            let jitter = NSPoint(x: point.x + delta.x, y: point.y + delta.y)
+            button.mouseDragged(with: try event(.leftMouseDragged, jitter))
+            XCTAssertTrue(moves.isEmpty, "sub-eight-point jitter must remain an Expand click")
+            let before = expanded
+            button.mouseUp(with: try event(.leftMouseUp, jitter))
+            XCTAssertEqual(expanded, before + 1)
+        }
+        for delta in [NSPoint(x: 8, y: 0), NSPoint(x: 6, y: -6)] {
+            moves.removeAll()
+            button.mouseDown(with: try event(.leftMouseDown, point))
+            let moved = NSPoint(x: point.x + delta.x, y: point.y + delta.y)
+            button.mouseDragged(with: try event(.leftMouseDragged, moved))
+            XCTAssertEqual(moves.last, NSPoint(x: 300 + delta.x, y: 200 + delta.y))
+            let before = expanded
+            button.mouseUp(with: try event(.leftMouseUp, moved))
+            XCTAssertEqual(expanded, before, "crossing eight points must not expand on release")
+        }
+        moves.removeAll(); expanded = 0
         button.mouseDown(with: try event(.leftMouseDown, point))
         button.mouseExited(with: try event(.leftMouseDragged, point))
         XCTAssertTrue(panel.previewView.pileHovered, "Press retains hover outside the front card")
@@ -554,6 +575,43 @@ final class MiniPreviewTests: XCTestCase {
             "an accepted external copy dismisses the exact source card")
     }
 
+    func testSelfDropRejectionMatchesShippingPresentationAndReducedMotion() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        defer { NativeMotion.motionPreference = preference }
+        for reduced in [false, true] {
+            NativeMotion.motionPreference = { reduced }
+            let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
+            defer { controller.close() }
+            let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+                .first { $0.isVisible && $0.previewView === controller.previewView })
+            let card = try XCTUnwrap(panel.previewView.card(for: "source"))
+            let layer = try XCTUnwrap(card.layer)
+            CATransaction.flush()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            for operation in [NSDragOperation(), .copy] {
+                // Hold the real layer clock so slow CI rendering cannot skip a peak.
+                let started = layer.convertTime(CACurrentMediaTime(), from: nil)
+                layer.speed = 0; layer.timeOffset = started
+                card.finishDrag(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY), operation: operation)
+                XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
+                    "a self-drop is rejected even when the OS refuses COPY")
+                // Independently sampled from shipping CSS's uneven keyframe times.
+                for (seconds, offset) in [(0.042, -12.0), (0.126, 12.0), (0.210, -8.0),
+                                          (0.273, 6.0), (0.336, -4.0), (0.378, 4.0), (0.420, 0.0)] {
+                    layer.timeOffset = started + seconds
+                    let bitmap = try XCTUnwrap(renderPresentation(panel))
+                    XCTAssertEqual(try XCTUnwrap(layer.presentation()).transform.m41,
+                                   reduced ? 0 : CGFloat(offset), accuracy: 0.2,
+                                   "self-drop at \(seconds)s, reduced motion \(reduced), operation \(operation)")
+                    if seconds == 0.042 && operation.isEmpty {
+                        try write(bitmap, name: "mini-preview-self-drop-\(reduced ? "reduced" : "shake").png")
+                    }
+                }
+            }
+        }
+    }
+
     func testPendingFirstDecodeIsInvalidatedWhenHistoryIsCleared() throws {
         _ = NSApplication.shared
         let releaseDecode = DispatchSemaphore(value: 0)
@@ -781,6 +839,44 @@ final class MiniPreviewTests: XCTestCase {
         try write(render(panel), name: "mini-preview-reveal-missing-export.png")
     }
 
+    func testSavedFeedbackSurvivesAnArrivalWithoutExtendingItsDeadline() throws {
+        _ = NSApplication.shared
+        let captured = artifact(id: "saved", previewPath: "/saved-preview.png")
+        let controller = try presentedController(captured)
+        defer { controller.close() }
+        let transport = MiniPreviewActionTransport()
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() })
+        actions.bind(previews: controller); actions.configure(historyRoot: "/History")
+        actions.save(captured)
+        LiveCaptureController.flush()
+        try waitUntil {
+            controller.previewView?.card(for: captured.id)?.subviews
+                .compactMap { $0 as? MiniPreviewButton }.contains { $0.title == "Saved" } == true
+        }
+        let confirmedAt = Date()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+        var restored = false
+        controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
+                           settings: previewSettings()) { _ in restored = true }
+        try waitUntil { restored }
+        let view = try XCTUnwrap(controller.previewView)
+        let card = try XCTUnwrap(view.card(for: captured.id))
+        let button = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewButton }
+            .first { $0.kind == .check || $0.kind == .folder })
+        XCTAssertEqual(button.title, "Saved", "an unrelated arrival must not truncate Save confirmation")
+        let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
+        card.mouseEntered(with: try hoverEvent(for: panel))
+        try write(render(panel), name: "mini-preview-saved-after-arrival.png")
+        RunLoop.current.run(until: confirmedAt.addingTimeInterval(1.1))
+        XCTAssertLessThan(Date().timeIntervalSince(confirmedAt), 1.25,
+            "the expiry probe must precede a wrongly restarted 1.35-second deadline")
+        XCTAssertEqual(button.title, "Show in Folder", "a rebuild must not restart the one-second deadline")
+        controller.updateSettings(previewSettings())
+        let settled = try XCTUnwrap(controller.previewView?.card(for: captured.id))
+        XCTAssertFalse(settled.subviews.compactMap { $0 as? MiniPreviewButton }.contains { $0.title == "Saved" })
+    }
+
     func testSaveFailureStaysSaveAndCompletionAfterDismissalIsRejected() throws {
         _ = NSApplication.shared
         let image = solidImage(.systemBlue)
@@ -799,6 +895,18 @@ final class MiniPreviewTests: XCTestCase {
         failedActions.save(captured)
         LiveCaptureController.flush()
         try waitUntil { controller.statusText(for: captured.id) == "Save failed" }
+
+        var restored = false
+        controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
+                           settings: settings) { _ in restored = true }
+        try waitUntil { restored }
+        XCTAssertEqual(controller.statusText(for: captured.id), "Save failed",
+            "an unrelated arrival must not erase an action failure")
+        let rebuilt = try XCTUnwrap(controller.previewView?.window as? MiniPreviewPanel)
+        try write(render(rebuilt), name: "mini-preview-save-failure-after-arrival.png")
+        controller.dismiss("other", exit: nil)
+        XCTAssertEqual(controller.statusText(for: captured.id), "Save failed",
+            "removing a sibling must not erase the survivor's action failure")
 
         let blockedTransport = MiniPreviewActionTransport()
         blockedTransport.gate = DispatchSemaphore(value: 0)
