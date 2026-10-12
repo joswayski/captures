@@ -1330,6 +1330,25 @@ final class MiniPreviewTests: XCTestCase {
         let single = fixturePanel(ids: ["asymmetric"], images: ["asymmetric": asymmetric])
         defer { single.close() }
         try write(render(single), name: "mini-preview-single-asymmetric.png")
+        single.orderFrontRegardless()
+        let presentation = try XCTUnwrap(renderPresentation(single))
+        XCTAssertEqual(presentation.pixelsWide,
+                       Int(single.previewView.bounds.width * single.backingScaleFactor))
+        XCTAssertEqual(presentation.pixelsHigh,
+                       Int(single.previewView.bounds.height * single.backingScaleFactor))
+        // Independent asymmetric landmarks catch both a second backing-scale
+        // transform and an upside-down layer capture before trusting motion PNGs.
+        let landmarks: [(CGFloat, CGFloat, [Int])] = [(100, 110, [217, 84, 105]),
+            (260, 65, [245, 189, 74]), (260, 170, [51, 122, 102])]
+        for (x, y, expected) in landmarks {
+            var pixel = [Int](repeating: 0, count: presentation.samplesPerPixel)
+            let point = bitmapPoint(in: presentation, of: single, x: x, y: y)
+            presentation.getPixel(&pixel, atX: point.x, y: point.y)
+            for channel in 0..<3 {
+                XCTAssertEqual(Double(pixel[channel]), Double(expected[channel]), accuracy: 3)
+            }
+        }
+        try write(presentation, name: "mini-preview-single-presentation-asymmetric.png")
 
         let white = fixturePanel(ids: ["white"], images: ["white": solidImage(.white)])
         defer { white.close() }
@@ -1752,16 +1771,24 @@ final class MiniPreviewTests: XCTestCase {
     /// Core Graphics does not reproduce compositor filters/backdrop materials;
     /// this records dust's prefiltered chips, transforms, clipping and opacity.
     private func renderPresentation(_ panel: MiniPreviewPanel) throws -> NSBitmapImageRep? {
-        let bitmap = try render(panel)
+        panel.display(); panel.previewView.layoutSubtreeIfNeeded()
         CATransaction.flush()
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
         guard let presentation = panel.previewView.layer?.presentation() else { return nil }
-        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap)?.cgContext)
-        context.clear(CGRect(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
-        let scale = CGFloat(bitmap.pixelsWide) / panel.previewView.bounds.width
-        context.scaleBy(x: scale, y: scale)
+        // Use an explicit point-to-pixel transform instead of relying on
+        // NSGraphicsContext's display-dependent bitmap transform. Start from
+        // identity and apply backing scale and top-left orientation once.
+        let scale = panel.backingScaleFactor
+        let width = Int(ceil(panel.previewView.bounds.width * scale))
+        let height = Int(ceil(panel.previewView.bounds.height * scale))
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
         presentation.render(in: context)
-        return bitmap
+        return NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
     }
 
     /// The bitmap pixel under view point (`x`, `y`) from the top left. `render`
