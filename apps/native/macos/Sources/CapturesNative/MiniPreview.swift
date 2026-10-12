@@ -2548,7 +2548,9 @@ final class MiniPreviewController {
         }
         self.settings = settings
         guard stack.insert(artifact.id) else { completion(.alreadyShowing); return }
-        decode(artifact, completion: completion)
+        var restored = artifact
+        restored.savedPath = artifact.availableSavedPath
+        decode(restored, completion: completion)
     }
 
     /// Decode a card just inserted into `stack` and present it.
@@ -2647,9 +2649,9 @@ final class MiniPreviewController {
         for artifact in artifacts {
             guard var resource = resources[artifact.id] else { continue }
             var refreshed = artifact
-            // A History request may have started before an export completed. Do not let
-            // that stale response turn a freshly saved preview back into Save.
-            if refreshed.savedPath == nil { refreshed.savedPath = resource.artifact.savedPath }
+            // A reload must neither reattach a missing export on Restore nor
+            // erase an accepted Save with an older History snapshot.
+            refreshed.savedPath = artifact.availableSavedPath ?? resource.artifact.savedPath
             let changedExport = refreshed.savedPath != resource.artifact.savedPath
             resource.artifact = refreshed
             resources[artifact.id] = resource

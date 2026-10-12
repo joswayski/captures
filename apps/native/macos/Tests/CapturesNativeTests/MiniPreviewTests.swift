@@ -430,7 +430,37 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(outcomes.last, "cancelled")
         XCTAssertEqual(controller.presentedArtifactIDs, ["captured"])
         // Restore never begins a capture: the next capture still arrives.
-        XCTAssertNotNil(controller.beginCapture(settings: previewSettings()))
+        let nextCapture = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.restoreCapture(generation: nextCapture)
+
+        let export = FileManager.default.temporaryDirectory.appendingPathComponent("Café-\(UUID()).png")
+        defer { try? FileManager.default.removeItem(at: export) }
+        let retained = artifact(id: "retained", previewPath: "/retained.png", savedPath: export.path)
+        controller.restore(retained, on: nil, settings: previewSettings()) { _ in }
+        try waitUntil { controller.decodedArtifactIDs.contains(retained.id) }
+        func saveTitle() throws -> String {
+            let card = try XCTUnwrap(controller.previewView?.card(for: retained.id))
+            return try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewButton }
+                .first { $0.kind == .save || $0.kind == .folder }).title
+        }
+        XCTAssertEqual(try saveTitle(), "Save file", "a missing export does not remove the retained capture")
+        controller.refreshArtifacts([retained])
+        XCTAssertEqual(try saveTitle(), "Save file", "raw History metadata cannot reattach a missing file")
+        XCTAssertEqual(retained.savedPath, export.path, "Restore does not mutate History's snapshot")
+
+        _ = controller.dismiss(retained.id, exit: nil)
+        try Data([1, 2, 3]).write(to: export)
+        controller.restore(retained, on: nil, settings: previewSettings()) { _ in }
+        try waitUntil { controller.decodedArtifactIDs.contains(retained.id) }
+        XCTAssertEqual(try saveTitle(), "Show in Folder", "an existing export keeps Reveal")
+        try FileManager.default.removeItem(at: export)
+        controller.restore(retained, on: nil, settings: previewSettings()) { _ in }
+        XCTAssertEqual(try saveTitle(), "Show in Folder", "an existing card retains Export missing behavior")
+        _ = controller.dismiss(retained.id, exit: nil)
+        try FileManager.default.createDirectory(at: export, withIntermediateDirectories: false)
+        controller.restore(retained, on: nil, settings: previewSettings()) { _ in }
+        try waitUntil { controller.decodedArtifactIDs.contains(retained.id) }
+        XCTAssertEqual(try saveTitle(), "Save file", "a directory is not a saved screenshot")
     }
 
     func testStaleAsyncDragPreparationCannotAttachToReplacementIdentity() throws {
@@ -1005,18 +1035,21 @@ final class MiniPreviewTests: XCTestCase {
         let original = artifact(id: "snapshot", previewPath: "/preview.png", savedPath: "/old.png")
         let controller = try presentedController(original)
         defer { controller.close() }
+        let currentExport = FileManager.default.temporaryDirectory.appendingPathComponent("new-\(UUID()).png")
+        try Data([1, 2, 3]).write(to: currentExport)
+        defer { try? FileManager.default.removeItem(at: currentExport) }
         let transport = MiniPreviewActionTransport()
         let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
             loadPreferences: { try self.preferences() })
         actions.bind(previews: controller); actions.configure(historyRoot: "/History")
         controller.refreshArtifacts([
-            artifact(id: "snapshot", previewPath: "/preview.png", savedPath: "/new.png"),
+            artifact(id: "snapshot", previewPath: "/preview.png", savedPath: currentExport.path),
         ])
         actions.trash(original)
         XCTAssertEqual(transport.requestCount, 0, "stale saved-path snapshots cannot dispatch")
 
         transport.malformed = true
-        let current = artifact(id: "snapshot", previewPath: "/preview.png", savedPath: "/new.png")
+        let current = artifact(id: "snapshot", previewPath: "/preview.png", savedPath: currentExport.path)
         actions.trash(current); LiveCaptureController.flush()
         try waitUntil { controller.statusText(for: current.id) == "Trash failed" }
         XCTAssertEqual(controller.presentedArtifactIDs, [current.id],
