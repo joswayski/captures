@@ -1372,7 +1372,7 @@ final class MiniPreviewView: NSView {
     private let tooltipView: GlassTooltipView
     private weak var tooltipOwner: MiniPreviewButton?
     /// The styled tooltip currently shown, for tests and accessibility checks.
-    var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.label.stringValue }
+    var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.text }
     var visibleTooltipFrame: NSRect? { tooltipView.isHidden ? nil : tooltipView.frame }
     /// Shipping stale-pointer suppression (`data-thumbnail-suppress-card-hover`).
     private var hoverLock = CapturesCardHoverLock()
@@ -1879,8 +1879,8 @@ final class MiniPreviewView: NSView {
             return
         }
         tooltipOwner = button
-        tooltipView.label.stringValue = text
-        let size = tooltipView.label.intrinsicContentSize
+        tooltipView.text = text
+        let size = tooltipView.textSize
         let anchor = button.convert(button.bounds, to: self)
         // Shared rule: bottom-anchored stacks open tips above their icons.
         let above = !anchoredAtTop
