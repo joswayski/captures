@@ -29,6 +29,8 @@ pub fn transform(pose: Pose, rect: egui::Rect) -> TSTransform {
 /// Paint `add_contents` with `pose` applied to everything it draws in this
 /// layer. The wrapper's child scope is always present, resting or not, so
 /// widget ids (and a press that spans the end of an animation) stay stable.
+/// It also advances parent layout. Paint-only overlays in an allocated slot
+/// must use an isolated `Ui::new_child` or transform their painter directly.
 pub fn with_pose<R>(
     ui: &mut egui::Ui,
     pose: Pose,

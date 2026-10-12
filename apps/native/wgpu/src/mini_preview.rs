@@ -712,7 +712,10 @@ pub fn show_exit(ui: &mut egui::Ui, tokens: &Tokens, card: egui::Rect, view: Exi
             } else {
                 captures_app::motion::Pose { scale: 1., ..pose }
             };
-            crate::motion::with_pose(ui, pose, card, |ui| {
+            // The stack already allocated every held slot. Keep the visual
+            // scope's item spacing out of its scrollable content height.
+            let mut painting = ui.new_child(egui::UiBuilder::new().max_rect(card));
+            crate::motion::with_pose(&mut painting, pose, card, |ui| {
                 crate::effects::paint_box_shadows(
                     ui.painter(),
                     card,
@@ -3418,6 +3421,7 @@ mod tests {
     fn warning_chip_follows_metadata_and_exits_paint_without_chrome() {
         let ctx = egui::Context::default();
         let tokens = crate::tokens::load()["dark-mustard"].clone();
+        tokens.apply(&ctx, false);
         let texture = ctx.load_texture(
             "warning-exit",
             egui::ColorImage::filled([4, 4], Color32::WHITE),
@@ -3479,6 +3483,11 @@ mod tests {
         for (kind, elapsed, mesh) in [
             (captures_app::preview_motion::ExitKind::Dust, 1_000., true),
             (captures_app::preview_motion::ExitKind::Dismiss, 100., false),
+            (
+                captures_app::preview_motion::ExitKind::DeleteFallback,
+                50.,
+                false,
+            ),
         ] {
             ctx.begin_pass(raw(screen, Vec::new()));
             let mut ui = egui::Ui::new(
@@ -3486,6 +3495,9 @@ mod tests {
                 egui::Id::unique("exit-test"),
                 egui::UiBuilder::new().max_rect(screen),
             );
+            // The stack owns its held slots before painting exits over them.
+            ui.allocate_exact_size(screen.size(), egui::Sense::hover());
+            let allocated = ui.min_rect();
             assert!(show_exit(
                 &mut ui,
                 &tokens,
@@ -3504,6 +3516,11 @@ mod tests {
                     reduced_motion: false,
                 },
             ));
+            assert_eq!(
+                ui.min_rect(),
+                allocated,
+                "{kind:?} must not add scrollable space below held slots"
+            );
             let mut output = ctx.end_pass();
             assert!(painted_texts(&output).is_empty(), "exits paint no chrome");
             let chips = output.shapes.iter().any(
