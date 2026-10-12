@@ -7435,14 +7435,18 @@ impl Live {
                             captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
                         ),
                     );
-                    let reject_offset = card.rejected_at.map_or(0., |start| {
+                    let (drop_rejected, reject_offset) = card.rejected_at.map_or((false, 0.), |start| {
                         let elapsed = start.elapsed().as_secs_f32();
-                        if !reduced_motion
-                            && elapsed < tokens.number("thumbnail-drop-reject-duration") / 1000.
-                        {
-                            ui.ctx().request_repaint();
+                        let duration = tokens.number("thumbnail-drop-reject-duration") / 1000.;
+                        let active = elapsed < duration;
+                        if active {
+                            if reduced_motion {
+                                ui.ctx().request_repaint_after(Duration::from_secs_f32(duration - elapsed));
+                            } else {
+                                ui.ctx().request_repaint();
+                            }
                         }
-                        crate::mini_preview::reject_offset(&tokens, elapsed, reduced_motion)
+                        (active, crate::mini_preview::reject_offset(&tokens, elapsed, reduced_motion))
                     });
                     if let Some(saved_at) = card.saved_at {
                         // Clear "Saved" when the shipping confirmation window ends.
@@ -7487,6 +7491,7 @@ impl Live {
                                 stack_count: count,
                                 depth: card.layout.depth,
                                 desktop_pointer,
+                                drop_rejected,
                                 reject_offset,
                                 right_anchor: placement.is_right(),
                                 top_anchor,

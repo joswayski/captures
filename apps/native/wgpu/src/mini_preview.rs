@@ -149,6 +149,8 @@ pub struct View<'a> {
     pub stack_count: usize,
     pub depth: usize,
     pub desktop_pointer: Option<egui::Pos2>,
+    /// The rejection phase includes zero crossings and reduced-motion drops.
+    pub drop_rejected: bool,
     pub reject_offset: f32,
     pub right_anchor: bool,
     pub top_anchor: bool,
@@ -1053,14 +1055,14 @@ fn media_hover_progress(
     use captures_app::motion::Transition;
     let progress = |transition: Transition, name: &str| {
         let tween = tokens.transition(transition);
-        let seconds = if view.reduced_motion {
+        let seconds = if view.reduced_motion || view.drop_rejected {
             0.
         } else {
             tween.duration_ms as f32 / 1000.
         };
         let linear = ui.ctx().animate_bool_with_time(
             ui.scope_id().with((name, view.artifact_id)),
-            reveal,
+            reveal && !view.drop_rejected,
             seconds,
         );
         tween.easing.ease(f64::from(linear)) as f32
@@ -2630,6 +2632,7 @@ mod tests {
                 stack_count: 3,
                 depth: usize::from(!interactive),
                 desktop_pointer,
+                drop_rejected: false,
                 reject_offset: 0.,
                 right_anchor: false,
                 top_anchor: false,
@@ -2689,6 +2692,7 @@ mod tests {
                     stack_count: 1,
                     depth: 0,
                     desktop_pointer: None,
+                    drop_rejected: false,
                     reject_offset: 0.,
                     right_anchor,
                     top_anchor: false,
@@ -2953,6 +2957,7 @@ mod tests {
                     stack_count: 1,
                     depth: 0,
                     desktop_pointer: None,
+                    drop_rejected: false,
                     reject_offset: 0.,
                     right_anchor: true,
                     top_anchor: false,
@@ -3033,6 +3038,7 @@ mod tests {
                         stack_count: 1,
                         depth: 0,
                         desktop_pointer: None,
+                        drop_rejected: false,
                         reject_offset: 0.,
                         right_anchor: true,
                         top_anchor: false,
@@ -3112,6 +3118,7 @@ mod tests {
                     stack_count: 1,
                     depth: 0,
                     desktop_pointer: None,
+                    drop_rejected: false,
                     reject_offset: 0.,
                     right_anchor: false,
                     top_anchor: false,
@@ -3490,6 +3497,7 @@ mod tests {
                 stack_count: 1,
                 depth: 0,
                 desktop_pointer: None,
+                drop_rejected: false,
                 reject_offset: 0.,
                 right_anchor: false,
                 top_anchor: false,
@@ -3873,6 +3881,7 @@ mod tests {
                     stack_count: 2,
                     depth,
                     desktop_pointer: None,
+                    drop_rejected: false,
                     reject_offset: 0.,
                     right_anchor: false,
                     top_anchor: false,
@@ -3976,6 +3985,7 @@ mod tests {
         pointer: egui::Pos2,
         editor: EditorPhase,
         hover_locked: bool,
+        drop_rejected: bool,
         top_anchor: bool,
         blurred: bool,
     }
@@ -4028,6 +4038,7 @@ mod tests {
                 stack_count: 1,
                 depth: 0,
                 desktop_pointer: None,
+                drop_rejected: case.drop_rejected,
                 reject_offset: 0.,
                 right_anchor: false,
                 top_anchor: case.top_anchor,
@@ -4054,6 +4065,7 @@ mod tests {
             pointer,
             editor: EditorPhase::Idle,
             hover_locked: false,
+            drop_rejected: false,
             top_anchor: false,
             blurred: true,
         }
@@ -4077,10 +4089,11 @@ mod tests {
     #[test]
     fn hover_blurs_and_darkens_media_but_the_stale_pointer_lock_holds_it_off() {
         let center = egui::pos2(142., 120.);
-        for locked in [false, true] {
+        for (locked, rejected) in [(false, false), (true, false), (false, true)] {
             let ctx = egui::Context::default();
             let mut hover = case(center);
             hover.hover_locked = locked;
+            hover.drop_rejected = rejected;
             chrome_frame(&ctx, &hover);
             let (texts, mut output, blurred) = chrome_frame(&ctx, &hover);
             assert_eq!(
@@ -4092,7 +4105,7 @@ mod tests {
                 texts.iter().any(|text| text == "391 × 207 · 246 KB"),
                 locked
             );
-            assert_eq!(uses_texture(&output, blurred), !locked);
+            assert_eq!(uses_texture(&output, blurred), !locked && !rejected);
             // The sharp media scales 1.015 and darkens to brightness .5.
             let sharp = output.shapes.iter().find_map(|shape| match &shape.shape {
                 egui::Shape::Rect(rect)
@@ -4104,7 +4117,7 @@ mod tests {
                 _ => None,
             });
             let sharp = sharp.expect("sharp media");
-            if locked {
+            if locked || rejected {
                 assert_eq!(sharp.rect.width(), 284.);
                 assert_eq!(sharp.fill, Color32::WHITE);
             } else {
