@@ -667,13 +667,13 @@ final class MiniPreviewTests: XCTestCase {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
         pasteboard.clearContents(); pasteboard.setString("capture", forType: .string)
         controller.recordClipboardCopy(artifactID: "owned", pasteboard: pasteboard)
+        CATransaction.flush()
         // Opacity has reached 1, but the 1.15-second scale bounce is still running.
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
         let original = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
             .first { $0.isVisible && $0.previewView === controller.previewView })
         let chip = try XCTUnwrap(original.previewView.card(for: "owned")?.subviews
             .compactMap { $0 as? MiniPreviewClipboardChip }.first)
-        try write(XCTUnwrap(renderPresentation(original)), name: "mini-preview-clipboard-before-rebuild.png")
         XCTAssertEqual(try XCTUnwrap(chip.layer?.presentation()).opacity, 1, accuracy: 0.01)
 
         var restored = false
@@ -684,6 +684,10 @@ final class MiniPreviewTests: XCTestCase {
             .first { $0.isVisible && $0.previewView === controller.previewView })
         let continued = try XCTUnwrap(arrival.previewView.card(for: "owned")?.subviews
             .compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        // Hold the sampled pose before slow bitmap rendering can age the bounce.
+        let continuedLayer = try XCTUnwrap(continued.layer)
+        let continuedTime = continuedLayer.convertTime(CACurrentMediaTime(), from: nil) + 0.03
+        continuedLayer.speed = 0; continuedLayer.timeOffset = continuedTime
         try write(XCTUnwrap(renderPresentation(arrival)), name: "mini-preview-clipboard-after-arrival.png")
         let continuedPose = try XCTUnwrap(continued.layer?.presentation())
         XCTAssertEqual(continuedPose.opacity, 1, accuracy: 0.01,
@@ -708,6 +712,9 @@ final class MiniPreviewTests: XCTestCase {
         controller.recordClipboardCopy(artifactID: "other", pasteboard: pasteboard)
         let fresh = try XCTUnwrap(settled.previewView.card(for: "other")?.subviews
             .compactMap { $0 as? MiniPreviewClipboardChip }.first)
+        let freshLayer = try XCTUnwrap(fresh.layer)
+        let freshTime = freshLayer.convertTime(CACurrentMediaTime(), from: nil) + 0.03
+        freshLayer.speed = 0; freshLayer.timeOffset = freshTime
         try write(XCTUnwrap(renderPresentation(settled)), name: "mini-preview-clipboard-new-owner.png")
         XCTAssertFalse(controller.isClipboardCurrent(for: "owned"))
         XCTAssertTrue(controller.isClipboardCurrent(for: "other"))
