@@ -1417,6 +1417,37 @@ def main():
                     assert unmoved(fan_pixels(), hovered), "stationary hover never settled"
                     run("xdotool", "mousemove", "0", "0")
                     wait(lambda: fan_pixels() == rest, "leaving restores the exact rest pose")
+                    # Shipping's click-versus-carry boundary is eight logical
+                    # pixels, not egui's generic click threshold. Test both
+                    # axes and diagonals through real OS pointer delivery.
+                    inward_x = -1 if placement.endswith("right") else 1
+                    inward_y = 1 if placement.startswith("top") else -1
+                    for jitter_x, jitter_y in [(7 * inward_x, 0), (5 * inward_x, 5 * inward_y)]:
+                        before = window_geometry(preview)
+                        run("xdotool", "mousemove", "--window", preview, "170", "132",
+                            "sleep", ".15", "mousedown", "1", "sleep", ".15",
+                            "mousemove", "--sync", str(int(before["X"]) + 170 + jitter_x),
+                            str(int(before["Y"]) + 132 + jitter_y), "sleep", ".15")
+                        assert window_geometry(preview) == before, "sub-eight-pixel jitter moved the pile"
+                        run("xdotool", "mouseup", "1")
+                        wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 424,
+                             "jitter release still expands")
+                        time.sleep(.7)
+                        toggle()
+                        wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 264, "re-collapse after jitter")
+                        time.sleep(.7)
+                    for drag_x, drag_y in [(8 * inward_x, 0), (6 * inward_x, 6 * inward_y)]:
+                        before = window_geometry(preview)
+                        run("xdotool", "mousemove", "--window", preview, "170", "132",
+                            "sleep", ".15", "mousedown", "1", "sleep", ".15",
+                            "mousemove", "--sync", str(int(before["X"]) + 170 + drag_x),
+                            str(int(before["Y"]) + 132 + drag_y))
+                        wait(lambda: (int(window_geometry(preview)["X"]), int(window_geometry(preview)["Y"]))
+                             == (int(before["X"]) + drag_x, int(before["Y"]) + drag_y),
+                             "eight-pixel radial boundary moves the pile")
+                        run("xdotool", "mouseup", "1")
+                        time.sleep(.2)
+                        assert int(window_geometry(preview)["HEIGHT"]) == 264, "boundary drag expanded the pile"
                     before_drag = window_geometry(preview)
                     start_x, start_y = int(before_drag["X"]), int(before_drag["Y"])
                     dx = -780 if placement.endswith("right") else 780

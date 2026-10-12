@@ -1284,7 +1284,8 @@ private final class MiniPreviewExpandButton: NSButton {
         guard let window, let press else { return }
         let current = window.convertPoint(toScreen: event.locationInWindow)
         let delta = NSSize(width: current.x - press.x, height: current.y - press.y)
-        guard dragging || max(abs(delta.width), abs(delta.height)) >= 4 else { return }
+        // Shipping's collapsed-pile threshold is eight logical points, radial.
+        guard dragging || hypot(delta.width, delta.height) >= 8 else { return }
         dragging = true
         move(NSPoint(x: frameOrigin.x + delta.width, y: frameOrigin.y + delta.height))
         carry(current)
