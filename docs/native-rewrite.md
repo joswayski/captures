@@ -3962,7 +3962,9 @@ cleanup, the inline error line and tooltip placement. Behavior now matches shipp
 - **Styled tooltips.** A fixed-glass tooltip replaces system/egui hover text. It uses
   shipping copy ("Stop and save", "Retry recording", "Hide controls"…) and appears
   under the hovered or focused button, disabled buttons included, with no delay. It
-  fades and slides 3 pt over `--dur-1`, and the last three right-align. Inline errors
+  fades and slides 3 pt over `--dur-1` with `--ease-standard`, and the last three
+  right-align. Reduce Motion makes both showing and hiding immediate on AppKit
+  and wgpu; normal motion keeps the fade and slide. Inline errors
   do not suppress tooltips: like shipping and AppKit, the tooltip may temporarily
   cover part of the error, which stays intact and reappears when hover/focus ends.
 - wgpu also keeps the HUD window alive, with controls disabled, while pausing,
@@ -3974,6 +3976,11 @@ disabled controls, the tooltip, a failing and a succeeding Retry and Delete in
 dark/light CI. Before a second recording, it waits for rendered History actions
 to become enabled: recorder retirement/recovery refresh can outlast window
 restoration, and shortcuts deliberately remain blocked until that work finishes.
+`--reduced-motion` selects the live host's explicit motion preference, while
+`--record-tooltip-motion` records repeated hover/leave over Retry and disabled Stop
+in that failed-HUD scenario. The egui rendered-output regression covers reduced
+hover/focus and immediate leave in both appearances, with normal motion as a
+positive control; AppKit's visible-window regression checks immediate show/hide.
 `--device-change explicit` now covers a paused take with the inline error that is
 then saved. macOS AppKit has XCTest coverage but no physical-host run, and Windows
 is implemented but unverified. Wayland stays gated. Onboarding/selector permission

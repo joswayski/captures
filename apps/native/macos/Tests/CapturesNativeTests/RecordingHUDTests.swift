@@ -459,6 +459,32 @@ final class RecordingHUDTests: XCTestCase {
         XCTAssertNil(hud.visibleTooltip)
     }
 
+    func testReducedMotionTooltipsShowAndHideImmediatelyInVisibleHUD() throws {
+        _ = NSApplication.shared
+        let previous = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { true }
+        defer { NativeMotion.motionPreference = previous }
+        for appearance in ["dark", "light"] {
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
+            let window = NSWindow(contentRect: hud.bounds, styleMask: [.borderless],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hud; window.orderFrontRegardless()
+            defer { window.close() }
+            let hide = try XCTUnwrap(hud.subviews.compactMap { $0 as? CaptureButton }
+                .first { $0.accessibilityLabel() == "Hide recording controls" })
+            let tooltip = try XCTUnwrap(hud.subviews.first { $0 is RecordingHUDTooltipView })
+            let event = try hoverEvent()
+            hide.mouseEntered(with: event)
+            XCTAssertEqual(hud.visibleTooltip, "Hide controls")
+            XCTAssertEqual(tooltip.alphaValue, 1)
+            try render(hud, window: window, name: "recording-hud-\(appearance)-tooltip-reduced")
+            hide.mouseExited(with: event)
+            XCTAssertNil(hud.visibleTooltip, "Reduce Motion must not leave a fading tooltip")
+        }
+    }
+
     private func hoverEvent() throws -> NSEvent {
         try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,

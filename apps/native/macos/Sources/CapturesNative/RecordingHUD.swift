@@ -391,8 +391,9 @@ final class RecordingHUDView: NSView {
     /// included, with no delay; it fades and slides 3 pt over `--dur-1`.
     private func setTooltip(for button: CaptureButton, visible: Bool, animated: Bool = true) {
         // Offscreen (tests, hidden panels) there is nothing to animate.
+        let spec = NativeMotion.transition("tooltip", tokens: tokens)
         let duration = animated && window?.isVisible == true
-            ? Double(tokens.number("dur-1")) / 1000 : 0
+            ? spec.duration : 0
         guard visible, let tooltip = tooltips[ObjectIdentifier(button)] else {
             guard tooltipOwner === button else { return }
             tooltipOwner = nil
@@ -401,7 +402,7 @@ final class RecordingHUDView: NSView {
                 return
             }
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = duration
+                context.duration = duration; context.timingFunction = spec.timing
                 tooltipView.animator().alphaValue = 0
             }, completionHandler: { [weak self] in
                 guard let self, self.tooltipOwner == nil else { return }
@@ -425,7 +426,7 @@ final class RecordingHUDView: NSView {
         }
         if wasHidden { tooltipView.frame = hidden; tooltipView.alphaValue = 0 }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
+            context.duration = duration; context.timingFunction = spec.timing
             tooltipView.animator().frame = shown
             tooltipView.animator().alphaValue = 1
         }
