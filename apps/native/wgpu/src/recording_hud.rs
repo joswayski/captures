@@ -301,7 +301,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> Option<Action
                                         ui.add_space(tokens.number("s-9"));
                                     }
                                 }
-                                let (response, progress) = control_button(ui, control, tokens);
+                                let (response, progress) = control_button(ui, control, tokens, view.reduced_motion);
                                 if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
                                     println!("{}", serde_json::json!({"event":"recording-hud-control-layout",
                                         "detail":{"control":control.control, "label":control.label,
@@ -421,6 +421,7 @@ fn control_button(
     ui: &mut egui::Ui,
     control: &ControlView,
     tokens: &Tokens,
+    reduced_motion: bool,
 ) -> (egui::Response, f32) {
     let signal = control.control == Control::Stop;
     let enabled = control.enabled;
@@ -485,11 +486,12 @@ fn control_button(
     // Shipping shows the tooltip on hover or keyboard focus, disabled buttons
     // included, with no delay; it fades and slides in over `--dur-1`.
     let showing = ui.rect_contains_pointer(response.rect) || response.has_focus();
-    let progress = ui.ctx().animate_bool_with_time(
-        response.id.with("tooltip"),
-        showing,
-        tokens.number("dur-1") / 1000.,
-    );
+    let mut tween = tokens.transition(captures_app::motion::Transition::Tooltip);
+    if reduced_motion {
+        tween.duration_ms = 0.;
+    }
+    let progress =
+        crate::motion::eased_bool(ui.ctx(), response.id.with("tooltip"), showing, &tween);
     (response, progress)
 }
 
@@ -908,15 +910,18 @@ mod tests {
     fn inline_errors_do_not_suppress_hover_or_focus_tooltips() {
         for appearance in ["dark-mustard", "light-mustard"] {
             let tokens = crate::tokens::load().remove(appearance).unwrap();
-            for (state, index, focused, expected) in [
-                (RecordingState::Failed, 2, false, "Retry recording"),
-                (RecordingState::Failed, 0, false, "Stop and save"),
-                (RecordingState::Paused, 1, false, "Resume recording"),
-                (RecordingState::Failed, 2, true, "Retry recording"),
+            for (state, index, focused, reduced_motion, expected) in [
+                (RecordingState::Failed, 2, false, true, "Retry recording"),
+                (RecordingState::Failed, 0, false, true, "Stop and save"),
+                (RecordingState::Paused, 1, false, true, "Resume recording"),
+                (RecordingState::Failed, 2, true, true, "Retry recording"),
+                (RecordingState::Paused, 1, false, false, "Resume recording"),
             ] {
                 let ctx = egui::Context::default();
+                let mut hud = view(state, Some("The microphone disconnected"));
+                hud.reduced_motion = reduced_motion;
                 let mut target = egui::Pos2::ZERO;
-                for frame in 0..5 {
+                for frame in 0..6 {
                     let events = if focused && (frame == 1 || frame == 2) {
                         // Tab past the draggable background to the first
                         // enabled button (Retry) in a failed take.
@@ -929,22 +934,20 @@ mod tests {
                         }]
                     } else if !focused && frame == 1 {
                         vec![egui::Event::PointerMoved(target)]
+                    } else if !focused && frame == 5 {
+                        vec![egui::Event::PointerMoved(egui::pos2(1000., 1000.))]
                     } else {
                         vec![]
                     };
                     let mut output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
-                            time: Some(f64::from(frame) * 0.2),
+                            time: Some(f64::from(frame) * 0.01),
                             events,
                             ..Default::default()
                         },
                         |ui| {
-                            show(
-                                ui,
-                                &tokens,
-                                view(state, Some("The microphone disconnected")),
-                            );
+                            show(ui, &tokens, hud);
                         },
                     );
                     output.textures_delta.clear();
@@ -964,6 +967,34 @@ mod tests {
                         assert!(
                             texts.contains(&expected),
                             "{appearance} {focused}: {texts:?}"
+                        );
+                        let tooltip = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text() == expected => {
+                                    Some(text)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        if reduced_motion {
+                            assert_eq!(
+                                tooltip.fallback_color,
+                                tokens.color("glass-text"),
+                                "Reduce Motion shows the tooltip fully without fading"
+                            );
+                        } else {
+                            assert!(
+                                (1..255).contains(&tooltip.fallback_color.a()),
+                                "Normal motion must keep the tooltip fade"
+                            );
+                        }
+                    } else if frame == 5 && !focused && reduced_motion {
+                        assert!(
+                            !output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text() == expected)),
+                            "Reduce Motion hides the tooltip on the pointer-leave frame"
                         );
                     }
                 }

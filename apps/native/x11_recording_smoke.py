@@ -44,11 +44,17 @@ def main():
     parser.add_argument("--ready-notice-only", action="store_true",
                         help="exercise recording-ready save/retry/reveal, expiry and dismissal")
     parser.add_argument("--appearance", choices=("dark", "light"), default="dark")
+    parser.add_argument("--reduced-motion", action="store_true",
+                        help="run the live host with Reduce Motion enabled")
+    parser.add_argument("--record-tooltip-motion", action="store_true",
+                        help="record repeated tooltip hover/leave in the failed HUD")
     parser.add_argument("--virtual-microphone", action="store_true",
                         help="use a disposable PulseAudio microphone to verify live meter and mute segments")
     parser.add_argument("--start-failure", action="store_true",
                         help="start with the selected microphone missing: failed HUD, Retry recording and Delete")
     args = parser.parse_args()
+    if args.record_tooltip_motion and not args.start_failure:
+        parser.error("--record-tooltip-motion requires --start-failure")
     if args.device_change or args.start_failure:
         args.virtual_microphone = True
     binary = args.binary.resolve(strict=True)
@@ -382,7 +388,8 @@ pcm.!pulse {
             env["PATH"] = str(tools) + os.pathsep + env["PATH"]
             env["CAPTURES_TEST_REVEAL"] = str(output / "revealed-path.txt")
         app = spawn("app", [str(binary), "--live", "--open-history", "--history-root", str(output / "history"),
-                            "--settings-file", str(settings), "--quit-after", "120"])
+                            "--settings-file", str(settings), "--quit-after", "120"]
+                    + (["--reduced-motion"] if args.reduced_motion else []))
         root = wait(lambda: windows("Capture History"), "capture workspace")[0]
         time.sleep(1)
         run("xdotool", "key", "ctrl+alt+w")
@@ -416,6 +423,24 @@ pcm.!pulse {
             # The styled tooltip appears under Retry on hover, without a delay.
             run("xdotool", "mousemove", "--sync", "0", "0", "sleep", ".3")
             bare = tooltip_band(hud)
+            if args.record_tooltip_motion:
+                stderr = (output / "hud-tooltip-motion.ffmpeg.log").open("w")
+                logs.append(stderr)
+                recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                    "-video_size", "1280x900", "-framerate", "60", "-i", env["DISPLAY"],
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                    str(output / "hud-tooltip-motion.mp4")], env=env, stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL, stderr=stderr)
+                children.append(recording)
+                time.sleep(.5)
+                for x in (218, 142, 218):
+                    run("xdotool", "mousemove", "--sync", "--window", hud, str(x), "54")
+                    time.sleep(.3)
+                    run("xdotool", "mousemove", "--sync", "0", "0")
+                    time.sleep(.3)
+                recording.communicate(input=b"q\n", timeout=10)
+                assert recording.returncode == 0, "tooltip motion recording failed"
+                wait(lambda: tooltip_band(hud) == bare, "tooltip stress restores the inline error")
             run("xdotool", "mousemove", "--sync", "--window", hud, "218", "54")
             wait(lambda: tooltip_band(hud) != bare, "Retry recording tooltip")
             time.sleep(.2)
@@ -463,6 +488,8 @@ pcm.!pulse {
             (output / "acceptance-start-failure.json").write_text(json.dumps({
                 "failed_hud": True, "inline_error": True, "disabled_controls": True,
                 "styled_tooltip": True, "retry_without_confirmation": True,
+                "reduced_motion": args.reduced_motion,
+                "tooltip_motion_recorded": args.record_tooltip_motion,
                 "repeated_failure": True, "retry_publication": True, "failed_delete": True,
                 "scope": "Private X11/PulseAudio missing microphone; not physical devices",
             }, indent=2))
