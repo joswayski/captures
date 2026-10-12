@@ -41,7 +41,7 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--record-clear", action="store_true", help="Record Clear all presentation in the stack smoke")
-    parser.add_argument("--record-stack-motion", action="store_true", help="Record collapse/expand with interrupted toolbar hover")
+    parser.add_argument("--record-stack-motion", action="store_true", help="Record collapse/expand and interrupted icon/toolbar hover")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
     parser.add_argument("--record-retarget", action="store_true", help="Record overlapping exits in the retarget smoke")
@@ -742,6 +742,17 @@ def main():
                 # must use mustard's signal fill (#ef4650), not raised glass.
                 delete_x = 28 + (248 if placement.endswith("right") else 8)
                 delete_y = card_top + 8
+                icon_recording = None
+                if args.record_stack_motion:
+                    frame = window_geometry(preview)
+                    icon_recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
+                        "-video_size", "340x240", "-framerate", "30", "-i",
+                        env["DISPLAY"] + f"+{frame['X']},{frame['Y']}",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p",
+                        str(output / f"{prefix}-icon-hover.mp4")], env=env, stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-icon-hover.ffmpeg.log").open("w"))
+                    children.append(icon_recording)
+                    time.sleep(.3)
                 run("xdotool", "mousemove", "--sync", "--window", preview,
                     str(delete_x + 14), str(delete_y + 14))
                 def delete_fill():
@@ -751,11 +762,28 @@ def main():
                 wait(lambda: all(abs(a - b) <= 2 for a, b in zip(delete_fill(), signal)),
                      "Delete hover uses the signal background")
                 shot(preview, f"{prefix}-delete-hover")
+                # CSS lifts by 1px and scales to 104%: the old top border is
+                # now inside the opaque face, not still a glass-border pixel.
+                def lifted_delete_fill():
+                    return run("import", "-window", preview, "-crop",
+                               f"1x1+{delete_x + 14}+{delete_y}", "-depth", "8", "rgb:-")
+                wait(lambda: all(abs(a - b) <= 2 for a, b in zip(lifted_delete_fill(), signal)),
+                     "Delete hover lifts the face above its resting border")
+                if icon_recording:
+                    for _ in range(3):
+                        run("xdotool", "mousemove", "--window", preview, "60", str(card_top + 72),
+                            "sleep", ".04", "mousemove", "--window", preview,
+                            str(delete_x + 14), str(delete_y + 14), "sleep", ".035")
+                    wait(lambda: all(abs(a - b) <= 2 for a, b in zip(lifted_delete_fill(), signal)),
+                         "rapid hover reversals return to the lifted signal face")
                 run("xdotool", "mousemove", "--sync", "--window", preview, "60", str(card_top + 72))
                 wait(lambda: max(abs(a - b) for a, b in zip(delete_fill(), signal)) > 40,
                      "Delete loses destructive fill when the pointer leaves")
                 run("xdotool", "mousemove", "--sync", "640", "440")
                 wait(lambda: sample() == idle_pixel, "preview media returns to idle after hover")
+                if icon_recording:
+                    icon_recording.communicate(input=b"q\n", timeout=10)
+                    assert icon_recording.returncode == 0, "icon-hover recording failed"
                 if args.drag_only:
                     # Reject our own source without importing it into an editor.
                     # Record the real 420ms shake and settled pointer recovery.
@@ -1899,6 +1927,7 @@ def main():
             "multiCard": args.stack or args.retarget_only, "residentLifecycle": args.lifecycle, "shortcutEditing": args.shortcut_editing,
             "recordedStackMotion": any(output.glob("*-collapse.mp4")) and any(output.glob("*-expand.mp4")),
             "checks": ["selected corner positions and dimensions", "nonactivating map",
+                "Delete hover signal fill and lifted icon face",
                 "minimized-root full-pixel Copy and Save without activation",
                 "Save becomes Reveal; exact Unicode folder delivery, missing export and retry preserve files",
                 "Reveal selects the exact file URI through FileManager1.ShowItems when available",
