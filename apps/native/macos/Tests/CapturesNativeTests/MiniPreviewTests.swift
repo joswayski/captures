@@ -786,6 +786,143 @@ final class MiniPreviewTests: XCTestCase {
                   name: "mini-preview-reentrant-settled.png")
     }
 
+    func testArrivalsRetainDustAndCloseSlotsWithoutRestartingTheirDeadlineAtEveryCorner() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        for placement in ["bottom_left", "bottom_right", "top_left", "top_right"] {
+            let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in
+                NSImage(cgImage: PreviewView.fixtureImage(scale: 1), size: NSSize(width: 284, height: 160))
+            })
+            defer { controller.close() }
+            let settings = MiniPreviewSettings(enabled: true, placement: placement, includeInCaptures: false)
+            func capture(_ id: String) throws {
+                let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
+                controller.present(artifact(id: id, previewPath: "/\(id).png"), on: screenID(),
+                                   settings: settings, generation: generation)
+                try waitUntil { controller.decodedArtifactIDs.contains(id) && controller.isPanelVisible }
+            }
+            for id in ["older", "dust", "close"] { try capture(id) }
+            controller.recordCopyResult(artifactID: "older", succeeded: false)
+            XCTAssertEqual(controller.dismiss("dust", exit: .dust), 2.9, accuracy: 0.01)
+            let started = CACurrentMediaTime()
+            XCTAssertGreaterThan(controller.dismiss("close"), 0)
+            let chips = try XCTUnwrap(controller.previewView).dustChipCount
+            XCTAssertGreaterThan(chips, 0, "exercise real dust, not the fallback")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            try capture("incoming")
+            let view = try XCTUnwrap(controller.previewView)
+            XCTAssertEqual(view.renderedArtifactIDs, ["older", "dust", "close", "incoming"])
+            XCTAssertEqual(view.dustChipCount, chips, "the existing chips must survive the arrival")
+            XCTAssertTrue(controller.isTransitioning)
+            XCTAssertEqual(controller.warningText(for: "older"), "Clipboard unavailable")
+            for id in ["dust", "close"] {
+                let card = try XCTUnwrap(view.card(for: id))
+                XCTAssertNil(card.hitTest(.zero), "ghosts cannot intercept input")
+                for button in card.subviews.compactMap({ $0 as? MiniPreviewButton }) {
+                    XCTAssertFalse(button.acceptsFirstResponder)
+                    XCTAssertFalse(button.canBecomeKeyView, "Tab must skip every exiting control")
+                }
+            }
+            try write(render(try XCTUnwrap(view.window as? MiniPreviewPanel)),
+                      name: "mini-preview-overlap-arrival-\(placement).png")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            try capture("again")
+            XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, chips)
+            try waitUntil { !controller.isTransitioning }
+            XCTAssertLessThan(CACurrentMediaTime() - started, 3.4, "arrivals must not restart a 2.9 s exit")
+            XCTAssertEqual(controller.presentedArtifactIDs, ["older", "incoming", "again"])
+            let final = try XCTUnwrap(controller.previewView)
+            XCTAssertEqual(final.renderedArtifactIDs, controller.presentedArtifactIDs)
+            XCTAssertEqual(final.dustChipCount, 0)
+            try write(render(try XCTUnwrap(final.window as? MiniPreviewPanel)),
+                      name: "mini-preview-overlap-settled-\(placement).png")
+        }
+    }
+
+    func testRestoreCancelsOnlyItsOwnExitAndRetainsPendingTrashRecovery() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.systemBlue) })
+        defer { controller.close() }
+        let settings = previewSettings()
+        let captures = ["older", "restore", "trash"].map {
+            artifact(id: $0, previewPath: "/\($0).png", savedPath: "/exports/\($0).png")
+        }
+        for captured in captures {
+            controller.restore(captured, on: screenID(), settings: settings) { _ in }
+            try waitUntil { controller.decodedArtifactIDs.contains(captured.id) }
+        }
+        XCTAssertEqual(controller.dismiss("restore", exit: .dust), 2.9, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(controller.beginTrash("trash")), 2.9, accuracy: 0.01)
+        controller.restore(captures[1], on: screenID(), settings: settings) { _ in }
+        try waitUntil { controller.decodedArtifactIDs.contains("restore") }
+        let view = try XCTUnwrap(controller.previewView)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["older", "restore"])
+        XCTAssertEqual(view.renderedArtifactIDs, ["older", "trash", "restore"])
+        XCTAssertFalse(try XCTUnwrap(view.card(for: "restore")).isExiting)
+        XCTAssertTrue(try XCTUnwrap(view.card(for: "trash")).isExiting)
+        XCTAssertGreaterThan(view.dustChipCount, 0)
+        XCTAssertTrue(controller.isTransitioning)
+        XCTAssertTrue(controller.restoreTrashed("trash", status: "Trash failed"))
+        XCTAssertEqual(controller.presentedArtifactIDs, ["older", "restore", "trash"])
+        XCTAssertEqual(controller.statusText(for: "trash"), "Trash failed")
+        XCTAssertFalse(controller.isTransitioning)
+        XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, 0)
+        XCTAssertTrue(controller.isPanelVisible)
+    }
+
+    func testArrivalCancelsClearSlotsButNotAnEarlierSavedDelete() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.systemOrange) })
+        defer { controller.close() }
+        let settings = previewSettings()
+        for id in ["clear", "saved"] {
+            controller.restore(artifact(id: id, previewPath: "/\(id).png", savedPath: "/exports/\(id).png"),
+                               on: screenID(), settings: settings) { _ in }
+            try waitUntil { controller.decodedArtifactIDs.contains(id) }
+        }
+        XCTAssertEqual(try XCTUnwrap(controller.beginTrash("saved")), 2.9, accuracy: 0.01)
+        controller.clearAll()
+        controller.restore(artifact(id: "incoming", previewPath: "/incoming.png"),
+                           on: screenID(), settings: settings) { _ in }
+        try waitUntil { controller.decodedArtifactIDs == ["incoming"] && controller.isPanelVisible }
+        let view = try XCTUnwrap(controller.previewView)
+        XCTAssertEqual(view.renderedArtifactIDs, ["saved", "incoming"])
+        XCTAssertGreaterThan(view.dustChipCount, 0)
+        XCTAssertTrue(view.stackToolbarButtons.isEmpty, "one live card must not inherit a ghost toolbar")
+        controller.finishTrash("saved")
+        try waitUntil { !controller.isTransitioning }
+        XCTAssertEqual(controller.presentedArtifactIDs, ["incoming"])
+        XCTAssertEqual(try XCTUnwrap(controller.previewView).renderedArtifactIDs, ["incoming"])
+        XCTAssertFalse(controller.restoreTrashed("saved", status: "must not return"))
+    }
+
+    func testReducedMotionArrivalDoesNotRetainGhostsOrHoldSlots() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { true }
+        defer { NativeMotion.motionPreference = preference }
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.systemPurple) })
+        defer { controller.close() }
+        for id in ["old", "new"] {
+            controller.restore(artifact(id: id, previewPath: "/\(id).png"),
+                               on: screenID(), settings: previewSettings()) { _ in }
+            try waitUntil { controller.decodedArtifactIDs.contains(id) }
+            if id == "old" { XCTAssertEqual(controller.dismiss(id, exit: .dust), 0) }
+        }
+        XCTAssertFalse(controller.isTransitioning)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["new"])
+        XCTAssertEqual(try XCTUnwrap(controller.previewView).renderedArtifactIDs, ["new"])
+        XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, 0)
+    }
+
     func testZeroPresentationRetargetsBothHeldSlotsForEitherAnchor() throws {
         _ = NSApplication.shared
         let motionPreference = NativeMotion.motionPreference

@@ -105,6 +105,15 @@ final class MiniPreviewButton: NSButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { ticker?.invalidate() }
 
+    // A retained exit is decorative, including to keyboard and accessibility
+    // activation. Disabling NSButton would alter its frozen hover appearance.
+    override var acceptsFirstResponder: Bool {
+        (superview as? MiniPreviewCardView)?.isExiting != true && super.acceptsFirstResponder
+    }
+    override var canBecomeKeyView: Bool {
+        (superview as? MiniPreviewCardView)?.isExiting != true && super.canBecomeKeyView
+    }
+
     /// The CSS `box-shadow` token under this control: `shadow-sm` on
     /// `.icon-button`s, `shadow-md` on the main actions and
     /// `thumbnail-card-shadow` on the stack toolbar.
@@ -129,6 +138,7 @@ final class MiniPreviewButton: NSButton {
     }
 
     @objc private func activate() {
+        guard (superview as? MiniPreviewCardView)?.isExiting != true else { return }
         if kind == .edit { editorJustOpened = true; needsDisplay = true }
         actionBlock()
     }
@@ -1348,11 +1358,13 @@ final class MiniPreviewView: NSView {
     private(set) var pileGravity: Double
     /// Cards playing an exit in place, and their dust overlays.
     private(set) var exitingArtifactIDs: Set<String> = []
-    private var dustOverlays: [PreviewMotionOverlay] = []
+    private var clearingArtifactIDs: Set<String> = []
+    var ordinaryExitingArtifactIDs: Set<String> { exitingArtifactIDs.subtracting(clearingArtifactIDs) }
+    private var dustOverlays: [String: PreviewMotionOverlay] = [:]
     /// The latest list <-> pile flight; an older flight's end never lands.
     private var flyToken = 0
     /// Dust chips on screen, for tests.
-    var dustChipCount: Int { dustOverlays.reduce(0) { $0 + ($1.content.sublayers?.count ?? 0) } }
+    var dustChipCount: Int { dustOverlays.values.reduce(0) { $0 + ($1.content.sublayers?.count ?? 0) } }
     /// `.thumbnail-collapsed-hit-target::before/::after` sparkles.
     private var sparkles: PreviewMotionOverlay?
     private(set) var sparkling = false
@@ -1512,7 +1524,7 @@ final class MiniPreviewView: NSView {
         }
 
         let controlY = topAnchor ? 16 : bounds.height - 44
-        if !collapsed && ids.count >= 2 {
+        if !collapsed && resources.count >= 2 {
             let outerX = rightAnchor ? bounds.width - padding - 28 : padding
             let step = 28 + tokens.number("s-1")
             let adjacentX = rightAnchor ? outerX - step : outerX + step
@@ -1545,7 +1557,7 @@ final class MiniPreviewView: NSView {
         }
         addSubview(tooltipView)
         setAccessibilityRole(.group)
-        setAccessibilityLabel(ids.count == 1 ? "Screenshot mini preview" : "\(ids.count) screenshot mini previews")
+        setAccessibilityLabel(resources.count == 1 ? "Screenshot mini preview" : "\(resources.count) screenshot mini previews")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { carryTimer?.invalidate() }
@@ -1583,6 +1595,7 @@ final class MiniPreviewView: NSView {
         }
         card.beginExit(preserveAppearance: preserveAppearance)
         exitingArtifactIDs.insert(id)
+        if preserveAppearance { clearingArtifactIDs.insert(id) }
         switch kind {
         case .dismiss:
             NativeMotion.play("preview_dismiss", on: card, tokens: tokens, holdEnd: true, delay: delay,
@@ -1614,8 +1627,75 @@ final class MiniPreviewView: NSView {
         DustDissolve.play(in: overlay.content, chips: chips, particles: particles, pad: pad,
                           radius: tokens.number("thumbnail-card-radius"), scale: scale)
         card.fadeForDust()
-        dustOverlays.append(overlay)
+        dustOverlays[card.artifactID] = overlay
         return true
+    }
+
+    /// An arrival cancels Clear-owned exits only. Move ordinary exits and
+    /// settlers into the new layout without restarting their layer clocks.
+    func continueExits(from previous: MiniPreviewView, retaining exits: Set<String>) {
+        exitingArtifactIDs = exits
+        let cancelled = previous.ordinaryExitingArtifactIDs.subtracting(exits)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        for (index, id) in artifactIDs.enumerated() {
+            guard let card = previous.cards[id], let oldLayout = previous.restLayouts[id],
+                  let layout = restLayouts[id], let layer = card.layer,
+                  !card.isExiting || exits.contains(id) else { continue }
+            let shift = CGFloat(layout.y - oldLayout.y)
+            let oldPosition = layer.position
+            let presentation = (layer.presentation() ?? layer).position
+            let move = layer.animation(forKey: "preview-settle-position") as? CABasicAnimation
+            let cancelledSettle = previous.artifactIDs.drop(while: { $0 != id }).dropFirst()
+                .contains(where: { cancelled.contains($0) })
+            var origin = card.frame.origin
+            if card.isExiting {
+                origin.y += shift
+            } else {
+                let holes = artifactIDs.dropFirst(index + 1).filter { exits.contains($0) }.count
+                origin.y = CGFloat(layout.y) + CGFloat(holes) * (anchoredAtTop ? -cardSlot : cardSlot)
+            }
+            cards[id]?.removeFromSuperview()
+            card.removeFromSuperview(); document.addSubview(card); cards[id] = card
+            card.setFrameOrigin(origin)
+            if let move {
+                // AppKit may remove backing-layer animations during reparenting.
+                // Reinstall the same absolute-time move in the translated slot.
+                if cancelledSettle {
+                    let now = layer.convertTime(CACurrentMediaTime(), from: nil)
+                    move.duration = max(0, move.duration - max(0, now - move.beginTime))
+                    move.beginTime = max(now, move.beginTime)
+                    move.fromValue = NSValue(point: NSPoint(x: presentation.x, y: presentation.y + shift))
+                } else if let from = move.fromValue as? NSValue {
+                    move.fromValue = NSValue(point: NSPoint(x: from.pointValue.x, y: from.pointValue.y + shift))
+                }
+                move.toValue = NSValue(point: layer.position)
+                if move.duration > 0 { layer.add(move, forKey: "preview-settle-position") }
+                else { layer.removeAnimation(forKey: "preview-settle-position") }
+            }
+            card.isHoverLocked = { [weak self] in self?.hoverLock.locked == true }
+            for button in card.iconButtons {
+                button.tooltipChanged = { [weak self] owner, visible in
+                    self?.setTooltip(for: owner, visible: visible)
+                }
+            }
+            if let overlay = previous.dustOverlays[id], exits.contains(id) {
+                overlay.removeFromSuperview()
+                overlay.setFrameOrigin(NSPoint(x: overlay.frame.minX,
+                    y: overlay.frame.minY + layer.position.y - oldPosition.y))
+                document.addSubview(overlay, positioned: .above, relativeTo: card)
+                dustOverlays[id] = overlay
+            }
+        }
+        // Exits paint over every live card, including newly arriving ones.
+        for id in artifactIDs where exits.contains(id) {
+            guard let card = cards[id] else { continue }
+            document.addSubview(card, positioned: .above, relativeTo: nil)
+            if let overlay = dustOverlays[id] {
+                document.addSubview(overlay, positioned: .above, relativeTo: nil)
+            }
+        }
+        CATransaction.commit()
+        if let window { installKeyViewLoop(in: window) }
     }
 
     /// Older cards slide one slot toward the stack anchor into `id`'s slot
@@ -1773,7 +1853,8 @@ final class MiniPreviewView: NSView {
         let spec = NativeMotion.transition(button.kind == .clear ? "preview_stack_tooltip"
                                            : "preview_icon_tooltip", tokens: tokens)
         let duration = window?.isVisible == true ? spec.duration : 0
-        guard visible, let text = button.tooltipText, !button.isHidden else {
+        guard visible, let text = button.tooltipText, !button.isHidden,
+              (button.superview as? MiniPreviewCardView)?.isExiting != true else {
             guard tooltipOwner === button else { return }
             tooltipOwner = nil
             guard duration > 0 else {
@@ -2253,6 +2334,8 @@ final class MiniPreviewController {
     /// old layout until then), and when it is due.
     private var viewTransition: DispatchWorkItem?
     private var viewTransitionDeadline: CFTimeInterval = 0
+    /// Ordinary exits survive arrivals; Clear-owned holds and flights do not.
+    private var exitDeadlines: [String: CFTimeInterval] = [:]
     /// When each card arrived, so a rebuilt stack resumes its highlight.
     private var arrivals: [String: CFTimeInterval] = [:]
     /// Captures whose last clipboard copy failed ("Clipboard unavailable").
@@ -2337,6 +2420,7 @@ final class MiniPreviewController {
 
     /// Show the stack as it now is: rebuilt, or closed when empty.
     private func finishView() {
+        exitDeadlines.removeAll()
         if stack.ids.isEmpty { panel?.close(); panel = nil; screenID = nil; stackOrigin = nil }
         else { makePanel(); updateVisibility() }
     }
@@ -2481,7 +2565,7 @@ final class MiniPreviewController {
                     }
                     self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
                     self.arrivals[artifact.id] = CACurrentMediaTime()
-                    self.makePanel()
+                    self.makePanel(preservingExits: true)
                     self.updateVisibility()
                     self.panel?.previewView.playArrival(for: artifact.id)
                     // A card appearing under a resting pointer waits for it to move.
@@ -2495,7 +2579,7 @@ final class MiniPreviewController {
                     }
                     _ = self.stack.remove(artifact.id)
                     self.resources[artifact.id] = nil
-                    self.makePanel()
+                    self.makePanel(preservingExits: true)
                     self.updateVisibility()
                     completion(.failed(error))
                 }
@@ -2612,6 +2696,7 @@ final class MiniPreviewController {
             if liveBefore >= 2 && stack.ids.count < 2 { view.playToolbar("preview_toolbar_exit", holdEnd: true) }
             view.settleSurvivors(into: artifactID, after: played.settleDelay)
             if stack.ids.isEmpty { screenID = nil; stackOrigin = nil }
+            exitDeadlines[artifactID] = CACurrentMediaTime() + played.hold
             scheduleRebuild(after: played.hold)
             return played.hold
         }
@@ -2649,7 +2734,7 @@ final class MiniPreviewController {
         cardGenerations[artifactID] = pending.generation
         if screenID == nil { screenID = pending.screenID }
         if stackOrigin == nil { stackOrigin = pending.origin }
-        if viewTransition != nil { settleTransitions() } else { finishView() }
+        makePanel(preservingExits: true); updateVisibility()
         prepareFileDrag(for: pending.resource.artifact)
         setStatus(status, detail: detail, for: artifactID)
         return true
@@ -2743,28 +2828,50 @@ final class MiniPreviewController {
         let ids = stack.ids; _ = stack.removeAll(ids)
         resources.removeAll(); pendingDecodes.removeAll()
         preparedDrags.removeAll(); cardGenerations.removeAll()
-        arrivals.removeAll(); copyFailures.removeAll()
+        arrivals.removeAll(); copyFailures.removeAll(); exitDeadlines.removeAll()
         panel?.close(); panel = nil
     }
 
-    private func makePanel() {
-        // A rebuild shows the current stack, ending any exit or flight.
+    private func makePanel(preservingExits: Bool = false) {
+        let previous = panel
+        let liveIDs = stack.ids
+        var exits = preservingExits ? previous?.previewView.ordinaryExitingArtifactIDs ?? [] : []
+        exits.subtract(liveIDs)
+        exitDeadlines = exitDeadlines.filter { exits.contains($0.key) }
+        let remaining = (exitDeadlines.values.max() ?? 0) - CACurrentMediaTime()
+        if remaining <= 0 { exits.removeAll(); exitDeadlines.removeAll() }
         viewTransition?.cancel(); viewTransition = nil
-        panel?.close(); panel = nil
-        let ids = stack.ids
+        panel = nil
+        var ids = liveIDs
+        if let view = previous?.previewView, !exits.isEmpty {
+            // Keep ghosts in chronological slots without reordering Rust's live
+            // membership. Restoring an exiting ID uses its new live position.
+            let old = view.artifactIDs
+            let new = Set(liveIDs).subtracting(old.filter { !view.exitingArtifactIDs.contains($0) })
+            for (index, id) in old.enumerated().reversed() where exits.contains(id) {
+                let successor = old.dropFirst(index + 1).first { ids.contains($0) && !new.contains($0) }
+                let insertion = successor.flatMap { ids.firstIndex(of: $0) }
+                    ?? ids.firstIndex(where: { new.contains($0) }) ?? ids.endIndex
+                ids.insert(id, at: insertion)
+            }
+        }
+        // Layout-only stack: ghosts must never regain controller membership.
+        let layoutStack = NativePreviewStack()
+        ids.forEach { layoutStack.insert($0) }
+        layoutStack.setCollapsed(stack.isCollapsed)
         if ids.isEmpty { stackOrigin = nil }
         guard !ids.isEmpty, let screen = targetScreen(),
               let monitor = Self.monitor(for: screen),
               let geometry = NativePreviewLayout.geometry(monitor: monitor, count: ids.count,
                   collapsed: stack.isCollapsed, origin: stackOrigin,
-                  placement: settings.placement) else { return }
+                  placement: settings.placement) else { previous?.close(); return }
         let topAnchor = settings.placement.hasPrefix("top_")
         let rightAnchor = settings.placement.hasSuffix("_right")
         let layouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
-            stack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
+            layoutStack.cardLayout(index: index, topAnchor: topAnchor).map { (id, $0) }
         })
         let hoverLayouts = Dictionary(uniqueKeysWithValues: ids.enumerated().compactMap { index, id in
-            stack.cardLayout(index: index, topAnchor: topAnchor, hovered: true).map { (id, $0) }
+            layoutStack.cardLayout(index: index, topAnchor: topAnchor, hovered: true).map { (id, $0) }
         })
         let frame = Self.appKitFrame(geometry: geometry, monitor: monitor,
                                      screenFrame: screen.frame)
@@ -2773,7 +2880,7 @@ final class MiniPreviewController {
         let sourceArtifacts = resources.mapValues(\.artifact)
         let sourceGenerations = cardGenerations
         let next = MiniPreviewPanel(frame: frame, geometry: geometry,
-            contentHeight: stack.contentHeight,
+            contentHeight: layoutStack.contentHeight,
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts,
             collapsed: stack.isCollapsed, topAnchor: topAnchor, rightAnchor: rightAnchor, tokens: tokens,
             pileGravity: gravity,
@@ -2786,8 +2893,13 @@ final class MiniPreviewController {
             setCollapsed: { [weak self] in self?.setCollapsed($0) },
             clearAll: { [weak self] in self?.clearAll() },
             move: { [weak self] in self?.moveStack(to: $0) })
+        if let view = previous?.previewView, !exits.isEmpty {
+            next.previewView.continueExits(from: view, retaining: exits)
+            scheduleRebuild(after: max(0, (exitDeadlines.values.max() ?? 0) - CACurrentMediaTime()))
+        }
+        previous?.close()
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
-        for id in ids {
+        for id in liveIDs {
             guard let artifact = resources[id]?.artifact, let prepared = preparedDrags[id],
                   prepared.imagePath == artifact.imagePath,
                   prepared.previewPath == artifact.previewPath else { continue }
@@ -2807,10 +2919,10 @@ final class MiniPreviewController {
         panel = next
         refreshClipboardOwner()
         updateEditorPresence(animated: false)
-        for id in ids { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
+        for id in liveIDs { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
         let now = CACurrentMediaTime()
         let highlight = NativeMotion.duration("preview_capture_highlight", tokens: tokens)
-        for id in ids {
+        for id in liveIDs {
             next.previewView.setCopyFailed(copyFailures.contains(id), for: id)
             // A card keeps its capture highlight across rebuilds.
             if let arrived = arrivals[id], now - arrived < highlight {
@@ -2838,7 +2950,8 @@ final class MiniPreviewController {
         panel.sharingType = settings.includeInCaptures ? .readOnly : .none
         // A panel playing exits or a flight keeps its frame until it rebuilds.
         if viewTransition == nil, let screen = targetScreen() { position(panel: panel, on: screen) }
-        if policy.visible(count: stack.ids.count, enabled: settings.enabled,
+        let count = max(stack.ids.count, isTransitioning ? panel.previewView.exitingArtifactIDs.count : 0)
+        if policy.visible(count: count, enabled: settings.enabled,
                           includeInCaptures: settings.includeInCaptures) {
             panel.orderFrontRegardless()
         } else {
