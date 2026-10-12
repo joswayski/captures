@@ -1426,7 +1426,8 @@ def main():
                         before = window_geometry(preview)
                         run("xdotool", "mousemove", "--window", preview, "170", "132",
                             "sleep", ".15", "mousedown", "1", "sleep", ".15",
-                            "mousemove_relative", "--sync", str(jitter_x), str(jitter_y), "sleep", ".15")
+                            "mousemove", "--sync", str(int(before["X"]) + 170 + jitter_x),
+                            str(int(before["Y"]) + 132 + jitter_y), "sleep", ".15")
                         assert window_geometry(preview) == before, "sub-eight-pixel jitter moved the pile"
                         run("xdotool", "mouseup", "1")
                         wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 424,
@@ -1439,7 +1440,8 @@ def main():
                         before = window_geometry(preview)
                         run("xdotool", "mousemove", "--window", preview, "170", "132",
                             "sleep", ".15", "mousedown", "1", "sleep", ".15",
-                            "mousemove_relative", "--sync", str(drag_x), str(drag_y))
+                            "mousemove", "--sync", str(int(before["X"]) + 170 + drag_x),
+                            str(int(before["Y"]) + 132 + drag_y))
                         wait(lambda: (int(window_geometry(preview)["X"]), int(window_geometry(preview)["Y"]))
                              == (int(before["X"]) + drag_x, int(before["Y"]) + drag_y),
                              "eight-pixel radial boundary moves the pile")
