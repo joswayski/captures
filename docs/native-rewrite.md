@@ -3447,6 +3447,16 @@ held-hover expansion scenarios on the disposable desktop. AppKit CI must exercis
 its window regressions; Windows/Wayland share the egui path but physical input,
 presentation and accessibility acceptance remain open. This does not close the
 visual parity gate.
+
+The idle-hover follow-up fixes wgpu's interrupted Show less morph: leaving
+mid-animation previously switched easing formulas and jumped the drawn width
+from about 77 pt to 28 pt, then jumped back on reentry. Width and label opacity now
+retarget from their sampled presentation values, following AppKit's existing
+behavior. Lifecycle overrides and Reduce Motion still snap to their forced shapes.
+The existing rendered-output regression checks both reversal directions for
+width and opacity, and the same X11 recording now includes three rapid
+hover/leave/reentry cycles at each corner. AppKit is unchanged; Windows and
+Wayland share the corrected wgpu path but host acceptance remains open.
 Share/sign-in UI is deliberately outside this slice.
 Show less/expand preserves capture order, overflow scrolls without a
 count cap, and Clear all dismisses only snapshotted IDs, not later captures.
