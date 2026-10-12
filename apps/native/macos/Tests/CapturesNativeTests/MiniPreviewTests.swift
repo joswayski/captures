@@ -685,8 +685,12 @@ final class MiniPreviewTests: XCTestCase {
         let continued = try XCTUnwrap(arrival.previewView.card(for: "owned")?.subviews
             .compactMap { $0 as? MiniPreviewClipboardChip }.first)
         try write(XCTUnwrap(renderPresentation(arrival)), name: "mini-preview-clipboard-after-arrival.png")
-        XCTAssertEqual(try XCTUnwrap(continued.layer?.presentation()).opacity, 1, accuracy: 0.01,
+        let continuedPose = try XCTUnwrap(continued.layer?.presentation())
+        XCTAssertEqual(continuedPose.opacity, 1, accuracy: 0.01,
             "an unrelated arrival must not fade the surviving clipboard badge in again")
+        XCTAssertGreaterThan(continuedPose.transform.m11, 0.985)
+        XCTAssertLessThan(continuedPose.transform.m11, 0.999,
+            "the original scale bounce must finish, not snap to its resting scale")
         XCTAssertTrue(controller.isClipboardCurrent(for: "owned"))
         XCTAssertFalse(controller.isClipboardCurrent(for: "other"))
 
