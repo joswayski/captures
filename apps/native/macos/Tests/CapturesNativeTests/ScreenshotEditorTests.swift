@@ -7735,6 +7735,37 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-rounded-box-saved-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             try render(controller.root, name: "screenshot-editor-rounded-box-saved-minimum-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 1200, height: 820))
+            try showLayers(in: controller.root)
+            let family = try popup("Text font", in: controller.root)
+            family.selectItem(withTitle: "Serif")
+            _ = family.sendAction(family.action, to: family.target)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle?.fontFamily == "serif" }
+            let serif = try XCTUnwrap(controller.state.snapshot?.layers.first?.textStyle)
+            XCTAssertFalse(serif.roundedBackground)
+            XCTAssertEqual(serif.text, style.text); XCTAssertEqual(serif.fontSize, style.fontSize)
+            XCTAssertEqual(serif.color, style.color); XCTAssertEqual(serif.background, style.background)
+            XCTAssertEqual(serif.align, style.align); XCTAssertEqual(serif.bold, style.bold)
+            XCTAssertEqual(serif.italic, style.italic); XCTAssertEqual(serif.outlined, style.outlined)
+            XCTAssertEqual(serif.dropShadow, style.dropShadow)
+            try render(controller.root, name: "screenshot-editor-boxed-serif-\(appearance)")
+            try press("Undo", in: controller.root)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle == style }
+            try press("Redo", in: controller.root)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle == serif }
+            family.selectItem(withTitle: "Rounded")
+            _ = family.sendAction(family.action, to: family.target)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle?.fontFamily == "rounded" }
+            let roundFace = try XCTUnwrap(controller.state.snapshot?.layers.first?.textStyle)
+            XCTAssertFalse(roundFace.roundedBackground, "manual Rounded does not reapply Rounded Box")
+            XCTAssertEqual(roundFace.background, style.background)
+            try render(controller.root, name: "screenshot-editor-manual-rounded-normal-\(appearance)")
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            try render(controller.root, name: "screenshot-editor-manual-rounded-minimum-\(appearance)")
+            try press("Undo", in: controller.root)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle == serif }
+            try press("Undo", in: controller.root)
+            waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle == style }
             controller.window.orderOut(nil); reopened.close(); EditorWorker.flush()
         }
     }

@@ -6090,6 +6090,11 @@ fn show_text(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Jo
                     .chosen;
                 drop(choices);
                 if let Some(family) = chosen {
+                    // Keep staging in sync with shipping's font-change policy,
+                    // so later edits cannot reapply a Rounded Box's old corners.
+                    if family != "rounded" {
+                        fields.staged.rounded_background = false;
+                    }
                     fields.staged.font_family = family;
                 }
             });
