@@ -63,6 +63,9 @@ class GlassTooltipView: NSView {
 
     override func layout() {
         super.layout()
-        label.frame = bounds.insetBy(dx: chipStyle.inset.width, dy: chipStyle.inset.height)
+        // AppKit lays out this hidden, zero-sized chip before its first hover.
+        // An oversized CGRect inset is null, with infinite x/y origins.
+        let content = bounds.insetBy(dx: chipStyle.inset.width, dy: chipStyle.inset.height)
+        label.frame = content.isNull ? .zero : content
     }
 }

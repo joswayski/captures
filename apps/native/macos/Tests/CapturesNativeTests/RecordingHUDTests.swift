@@ -366,6 +366,37 @@ final class RecordingHUDTests: XCTestCase {
         XCTAssertNil(hud.errorText)
     }
 
+    func testGlassTooltipLabelsStayFiniteUntilSizedAndRetainTheirShippingInsets() throws {
+        _ = NSApplication.shared
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        for (style, minimum, expected) in [
+            (GlassTooltipView.Style.previewIcon, NSSize(width: 14, height: 8),
+             NSRect(x: 7, y: 4, width: 33, height: 25)),
+            (GlassTooltipView.Style.recordingHUD, NSSize(width: 18, height: 12),
+             NSRect(x: 9, y: 6, width: 29, height: 21))
+        ] {
+            let tooltip = GlassTooltipView(tokens: tokens, style: style)
+            for size in [NSSize.zero, NSSize(width: 1, height: 33),
+                         NSSize(width: 47, height: 1), NSSize(width: 1, height: 1)] {
+                tooltip.setFrameSize(size)
+                tooltip.layout()
+                XCTAssertEqual(tooltip.label.frame, .zero,
+                    "an unsized or undersized chip has no label area, not a null rectangle")
+            }
+            tooltip.setFrameSize(minimum)
+            tooltip.layout()
+            XCTAssertFalse(tooltip.label.frame.isNull, "exact padding dimensions are still finite")
+            XCTAssertEqual(tooltip.label.frame.size, .zero)
+            tooltip.setFrameSize(NSSize(width: 47, height: 33))
+            tooltip.layout()
+            XCTAssertEqual(tooltip.label.frame, expected,
+                "a normally sized chip keeps the preview/HUD text padding")
+            tooltip.setFrameSize(.zero)
+            tooltip.layout()
+            XCTAssertEqual(tooltip.label.frame, .zero, "shrinking after hover remains safe")
+        }
+    }
+
     func testStyledTooltipsFollowShippingCopyPlacementAndDisabledButtons() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
