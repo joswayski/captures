@@ -4293,6 +4293,30 @@ mod tests {
             egui::TextureOptions::LINEAR,
         );
         let press = egui::pos2(100., 80.);
+        // Shipping treats sub-eight-point jitter as a click, including a
+        // diagonal that exceeds egui's generic click-and-drag threshold.
+        for delta in [egui::vec2(7., 0.), egui::vec2(5., -5.)] {
+            run_card(&ctx, &texture, moved(press), true, true);
+            run_card(&ctx, &texture, pointer(press, true), true, true);
+            assert_eq!(run_card(&ctx, &texture, moved(press + delta), true, true), None);
+            assert_eq!(
+                run_card(&ctx, &texture, pointer(press + delta, false), true, true),
+                Some(Action::ExpandStack)
+            );
+        }
+        // The boundary is inclusive and uses distance, not the largest axis.
+        for delta in [egui::vec2(8., 0.), egui::vec2(6., -6.)] {
+            run_card(&ctx, &texture, moved(press), true, true);
+            run_card(&ctx, &texture, pointer(press, true), true, true);
+            assert_eq!(
+                run_card(&ctx, &texture, moved(press + delta), true, true),
+                Some(Action::MoveStack(egui::Pos2::ZERO + delta))
+            );
+            assert_eq!(
+                run_card(&ctx, &texture, pointer(press + delta, false), true, true),
+                None
+            );
+        }
         run_card(&ctx, &texture, moved(press), true, true);
         run_card(&ctx, &texture, pointer(press, true), true, true);
         assert_eq!(
