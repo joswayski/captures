@@ -283,6 +283,14 @@ def main():
                 str((page[1] + page[3]) // 2), "click", wheel, "sleep", ".35")
         raise AssertionError(f"{name} never scrolled into view")
 
+    def estimate_shot(window, name):
+        # The estimate lives in the scrollable Save quality card, not the
+        # fixed Save footer. Capture its pixels, rather than the top of the page.
+        visible_rect(window, "Est. size", whole_control=True)
+        if "Est. size delta" in controls(window):
+            visible_rect(window, "Est. size delta", whole_control=True)
+        shot(window, name)
+
     def center(window, name, prefix=False):
         left, top, right, bottom = visible_rect(window, name, prefix)
         return (left + right) // 2, (top + bottom) // 2
@@ -2192,20 +2200,20 @@ def main():
             # Shipping estimates automatically, debounced after edits; there
             # is no Estimate size button.
             settle(editor)
-            shot(editor, "delta-original-zero")
+            estimate_shot(editor, "delta-original-zero")
             choose(editor, "Format", ".gif")
             settle(editor)
-            shot(editor, "delta-sampled")
+            estimate_shot(editor, "delta-sampled")
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
-            shot(editor, "delta-sampled-minimum")
+            estimate_shot(editor, "delta-sampled-minimum")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             fill(editor, "Start (ms)", 1000)
             fill(editor, "End (ms)", 4000)
             settle(editor)
-            shot(editor, "delta-exact")
+            estimate_shot(editor, "delta-exact")
             assert len(list(history.glob("*/metadata.json"))) == 1 and not exported()
             run("xdotool", "windowsize", "--sync", editor, "760", "580", "sleep", ".5")
-            shot(editor, "delta-exact-minimum")
+            estimate_shot(editor, "delta-exact-minimum")
             run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
             destination = exports / "delta.gif"
             set_destination(editor, destination)
@@ -2231,18 +2239,18 @@ def main():
         if args.estimate:
             # The original's estimate runs on its own once the editor opens.
             settle(editor)
-            shot(editor, "estimate-original")
+            estimate_shot(editor, "estimate-original")
             estimate_expectations["estimate-original.png"] = expected_estimate(len(original))
             assert len(list(history.glob("*/metadata.json"))) == 1 and not exported()
             if args.audio:
                 run("xdotool", "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
                 volume(editor, "System audio", 50)
                 settle(editor)
-                shot(editor, "estimate-audio-approximate")
+                estimate_shot(editor, "estimate-audio-approximate")
                 estimate_expectations["estimate-audio-approximate.png"] = expected_estimate(len(original), exact=False)
                 volume(editor, "System audio", 100)
                 settle(editor)
-                shot(editor, "estimate-retried")
+                estimate_shot(editor, "estimate-retried")
                 estimate_expectations["estimate-retried.png"] = expected_estimate(len(original))
                 run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
         if args.crop_aspect:
@@ -2309,7 +2317,7 @@ def main():
         shot(editor, "trimmed")
         dominant(output / "trimmed.png", 1)
         if args.estimate:
-            shot(editor, "estimate-trimmed")
+            estimate_shot(editor, "estimate-trimmed")
             assert len(list(history.glob("*/metadata.json"))) == 1 and not exported()
         close(root)
         assert app.poll() is None and windows("Captures Editor"), "dirty editor blocks quit"
@@ -2339,7 +2347,7 @@ def main():
         choose(editor, "Format", ".gif")
         settle(editor)
         if args.estimate:
-            shot(editor, "estimate-gif")
+            estimate_shot(editor, "estimate-gif")
         save_copy(editor)
         wait(lambda: len(list(history.glob("*/metadata.json"))) == 3, "GIF published in History")
         gif = destination.with_suffix(".gif")
