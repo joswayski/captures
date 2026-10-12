@@ -83,7 +83,8 @@ final class MiniPreviewButton: NSButton {
             let pose = MotionKeyframes.Frame(offset: 0, opacity: 1, translateY: -iconHover,
                                              scale: 1 + 0.04 * iconHover)
             CATransaction.begin(); CATransaction.setDisableActions(true)
-            layer.transform = NativeMotion.transform(pose, layer: layer, down: isFlipped ? 1 : -1)
+            layer.transform = NativeMotion.transform(pose, layer: layer,
+                                                      down: superview?.isFlipped == true ? 1 : -1)
             CATransaction.commit()
         }
     }
