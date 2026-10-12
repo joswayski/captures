@@ -1,7 +1,7 @@
 //! Bridges a child viewport gesture to the owning native event loop. File I/O
 //! happens on a worker; a released/replaced press can never start a late drag.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
 };
@@ -33,7 +33,7 @@ struct State {
     presses: HashMap<WindowId, u64>,
     next_press: u64,
     preparing: bool,
-    reset_pointer: HashSet<egui::ViewportId>,
+    reset_pointer: HashMap<egui::ViewportId, Option<(i32, i32)>>,
     #[cfg(target_os = "windows")]
     window: Option<std::sync::Weak<winit::window::Window>>,
 }
@@ -123,11 +123,23 @@ impl Bridge {
             };
             let state = self.state.clone();
             let wake = prepared.ctx.clone();
+            #[cfg(target_os = "linux")]
+            let sample_pointer = {
+                use winit::platform::x11::ActiveEventLoopExtX11;
+                _event_loop.is_x11()
+            };
+            #[cfg(not(target_os = "linux"))]
+            let sample_pointer = true;
             let completion: Completion = Box::new(move |result| {
+                // One real desktop sample on completion, not idle polling.
+                // Never use XWayland coordinates for a native Wayland source.
+                let pointer = sample_pointer
+                    .then(captures_capture::pointer_position)
+                    .flatten();
                 {
                     let mut state = state.lock().unwrap();
                     state.presses.remove(&prepared.source);
-                    state.reset_pointer.insert(prepared.viewport);
+                    state.reset_pointer.insert(prepared.viewport, pointer);
                 }
                 (prepared.completion)(result);
                 wake.request_repaint_of(prepared.viewport);
@@ -272,13 +284,27 @@ pub fn request(
 
 pub fn append(ctx: &egui::Context, input: &mut egui::RawInput) {
     if let Some(bridge) = ctx.data(|data| data.get_temp::<Bridge>(key()))
-        && bridge
+        && let Some(pointer) = bridge
             .state
             .lock()
             .unwrap()
             .reset_pointer
             .remove(&input.viewport_id)
     {
+        if let Some((x, y)) = pointer
+            && let Some(viewport) = input.viewports.get(&input.viewport_id)
+            && let Some(rect) = viewport.inner_rect
+        {
+            let scale = viewport.native_pixels_per_point.unwrap_or(1.);
+            let desktop = egui::pos2(x as f32 / scale, y as f32 / scale);
+            if rect.contains(desktop) {
+                // Queue before newer native input so it wins if the pointer
+                // moved again, but a stationary landing still restores hover.
+                input
+                    .events
+                    .insert(0, egui::Event::PointerMoved(desktop - rect.min.to_vec2()));
+            }
+        }
         // Native drag loops can consume the initiating release. End egui's
         // gesture before any newly queued press, without synthesizing a click.
         input.events.insert(0, egui::Event::PointerGone);
@@ -339,7 +365,12 @@ mod tests {
         let bridge = Bridge::default();
         bridge.install(&ctx);
         let source = egui::ViewportId::from_hash_of("source");
-        bridge.state.lock().unwrap().reset_pointer.insert(source);
+        bridge
+            .state
+            .lock()
+            .unwrap()
+            .reset_pointer
+            .insert(source, None);
         let mut other = egui::RawInput::default();
         append(&ctx, &mut other);
         assert!(other.events.is_empty());
@@ -358,5 +389,44 @@ mod tests {
         assert_eq!(input.events[2], next);
         append(&ctx, &mut input);
         assert_eq!(input.events.len(), 3);
+
+        for (desktop, queued, expected) in [
+            (Some((-100, 170)), None, Some(egui::pos2(40., 55.))),
+            (
+                Some((-100, 170)),
+                Some(egui::pos2(12., 19.)),
+                Some(egui::pos2(12., 19.)),
+            ),
+            (Some((300, 170)), None, None),
+            (None, None, None),
+        ] {
+            bridge
+                .state
+                .lock()
+                .unwrap()
+                .reset_pointer
+                .insert(source, desktop);
+            let mut input = egui::RawInput {
+                viewport_id: source,
+                events: queued.map(egui::Event::PointerMoved).into_iter().collect(),
+                ..Default::default()
+            };
+            input.viewports.insert(
+                source,
+                egui::ViewportInfo {
+                    inner_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(-90., 30.),
+                        egui::vec2(100., 80.),
+                    )),
+                    native_pixels_per_point: Some(2.),
+                    ..Default::default()
+                },
+            );
+            append(&ctx, &mut input);
+            ctx.begin_pass(input);
+            assert_eq!(ctx.input(|input| input.pointer.hover_pos()), expected);
+            assert!(!ctx.input(|input| input.pointer.primary_down()));
+            ctx.end_pass().textures_delta.clear();
+        }
     }
 }

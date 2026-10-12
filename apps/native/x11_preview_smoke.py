@@ -883,6 +883,15 @@ def main():
                     assert windows(PREVIEW) and not windows(EDITOR), "self drop must retain, not reimport"
                     assert recording.wait(timeout=10) == 0
                     shot(preview, "self-drop-settled")
+                    # No new pointer event after this release: the source must
+                    # recover hover on its own, not wait for the user to move.
+                    run("xdotool", "mousemove", "--sync", "--window", preview, "60", "90", "mousedown", "1",
+                        "sleep", ".2", "mousemove", "--sync", "--window", preview, "90", "90", "sleep", ".5",
+                        "mousemove", "--sync", "--window", preview, "200", "90", "sleep", ".3", "mouseup", "1")
+                    time.sleep(.7)  # Do not accept the pre-release hover frame.
+                    wait(lambda: all(abs(b - a * .5) <= 2 for a, b in zip(idle_pixel, sample())),
+                         "stationary self-drop restores hover after rejection")
+                    shot(preview, "self-drop-stationary-hover")
                     for mode in ("cancel", "reject", "nofinish", "disappear", "accept"):
                         if mode == "accept":
                             click(preview, 170, second_action_y(first), activate=False)

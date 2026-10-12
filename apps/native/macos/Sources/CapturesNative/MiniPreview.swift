@@ -1233,7 +1233,11 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     func finishDrag(at screenPoint: NSPoint, operation: NSDragOperation) {
         press = nil
         fileDragStarted = false
+        if let window {
+            pointerInside = bounds.contains(convert(window.convertPoint(fromScreen: screenPoint), from: nil))
+        }
         dragEnded?(screenPoint, operation)
+        refreshChrome()
     }
 
     func rejectDrop(startedAt: CFTimeInterval? = nil) {

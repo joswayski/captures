@@ -590,12 +590,17 @@ final class MiniPreviewTests: XCTestCase {
             CATransaction.flush()
             RunLoop.current.run(until: Date().addingTimeInterval(0.6))
             for operation in [NSDragOperation(), .copy] {
+                panel.previewView.samplePointer(nil) // A real drag has released the stale-pointer lock.
+                card.mouseExited(with: try hoverEvent(for: panel))
                 // Hold the real layer clock so slow CI rendering cannot skip a peak.
                 let started = layer.convertTime(CACurrentMediaTime(), from: nil)
                 layer.speed = 0; layer.timeOffset = started
                 card.finishDrag(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY), operation: operation)
                 XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
                     "a self-drop is rejected even when the OS refuses COPY")
+                XCTAssertTrue(panel.previewView.visibleCardActionTitles.contains("Copy"),
+                    "the drop point restores hover without another mouse-enter event")
+                XCTAssertFalse(card.mediaHovered, "rejection keeps the restored action overlay's media sharp")
                 // Independently sampled from shipping CSS's uneven keyframe times.
                 for (seconds, offset) in [(0.042, -12.0), (0.126, 12.0), (0.210, -8.0),
                                           (0.273, 6.0), (0.336, -4.0), (0.378, 4.0), (0.420, 0.0)] {
@@ -609,6 +614,9 @@ final class MiniPreviewTests: XCTestCase {
                     }
                 }
             }
+            card.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
+            XCTAssertFalse(panel.previewView.visibleCardActionTitles.contains("Copy"),
+                "a cancelled external landing must not leave source hover stuck on")
         }
     }
 
