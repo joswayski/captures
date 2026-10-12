@@ -1375,20 +1375,21 @@ pcm.!pulse {
         published = history()
         run("xdotool", "key", "ctrl+alt+r")
         selector = wait(lambda: windows("Captures Capture Controls"), "Record Region shortcut")[0]
-        time.sleep(.5)
         # On this fixed 1280x900 fixture only Record's taller toolbar covers
         # (250,770); (100,770) is the same solid desktop outside either toolbar.
         # Compare pixels before moving the pointer: stale child painting used
         # to persist until a mouse event even though the mode had changed.
         probe = "%[pixel:p{250,770}]|%[pixel:p{100,770}]"
-        before = run("import", "-window", selector, "-format", probe, "info:").split(b"|")
-        assert before[0] != before[1], "Record shortcut did not present recording controls"
-        run("xdotool", "key", "ctrl+shift+F7")
-        assert windows("Captures Capture Controls") == [selector]
 
         def screenshot_toolbar_painted():
             after = run("import", "-window", selector, "-format", probe, "info:").split(b"|")
             return after[0] == after[1]
+
+        # Mapping a window does not mean its first frame is presented, especially
+        # on software GL. Require Record's pixels before testing their removal.
+        wait(lambda: not screenshot_toolbar_painted(), "Record shortcut paints its taller toolbar")
+        run("xdotool", "key", "ctrl+shift+F7")
+        assert windows("Captures Capture Controls") == [selector]
 
         # Observe asynchronous shortcut delivery and deferred-child painting,
         # without a second key or pointer event that could hide a missed repaint.
