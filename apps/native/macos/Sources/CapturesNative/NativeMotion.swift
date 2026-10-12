@@ -227,6 +227,7 @@ enum NativeMotion {
     static func play(_ name: String, on view: NSView, tokens: Tokens,
                      segment: ClosedRange<Double> = 0...1, holdEnd: Bool = false,
                      delay extraDelay: Double = 0, mirrorX: Bool = false,
+                     startedAgo: Double = 0,
                      key: String = NativeMotion.animationKey,
                      reduced: Bool = NativeMotion.reduceMotion,
                      preservePresentation: Bool = false) -> Double {
@@ -236,7 +237,8 @@ enum NativeMotion {
         guard let layer = view.layer else { return 0 }
         let flipped = layer.superlayer?.contentsAreFlipped() ?? view.superview?.isFlipped ?? false
         return play(name, onLayer: layer, down: flipped ? 1 : -1, tokens: tokens, segment: segment,
-                    holdEnd: holdEnd, delay: extraDelay, mirrorX: mirrorX, key: key, reduced: reduced,
+                    holdEnd: holdEnd, delay: extraDelay, mirrorX: mirrorX,
+                    startedAgo: startedAgo, key: key, reduced: reduced,
                     preservePresentation: preservePresentation)
     }
 
