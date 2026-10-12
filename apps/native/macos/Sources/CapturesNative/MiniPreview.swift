@@ -543,8 +543,6 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private let clipboardChip: MiniPreviewClipboardChip
     /// The clipboard still holds this capture: Copy hides and the chip shows.
     private(set) var clipboardCurrent = false
-    /// Surviving cards keep the chip's entrance age when the panel rebuilds.
-    private(set) var clipboardArrivedAt: CFTimeInterval?
     /// The last copy of this capture failed ("Clipboard unavailable").
     var copyFailed = false { didSet { updateWarning() } }
     /// The shown warning chip, for tests and accessibility checks.
@@ -1040,10 +1038,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     var metadataText: String { dimensions.stringValue }
 
-    func setClipboardCurrent(_ current: Bool, startedAt: CFTimeInterval? = nil) {
+    func setClipboardCurrent(_ current: Bool) {
         guard clipboardCurrent != current else { return }
         clipboardCurrent = current
-        clipboardArrivedAt = current ? (startedAt ?? CACurrentMediaTime()) : nil
         // With Copy hidden, the remaining centered action sits at the card center.
         let gap = tokens.number("s-3")
         saveButton?.frame.origin.y = current ? (bounds.height - 32) / 2
@@ -1051,13 +1048,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         copyButton?.isHidden = compact || !chromeVisible || current
         clipboardChip.isHidden = compact || !current
         // `clipboard-confirmation-arrive`; a returning Copy remounts its glyph.
-        let elapsed = clipboardArrivedAt.map { CACurrentMediaTime() - $0 } ?? 0
         if current && !compact {
-            clipboardChip.wantsLayer = true
-            if elapsed < NativeMotion.duration("preview_clipboard_chip_arrive", tokens: tokens) {
-                NativeMotion.play("preview_clipboard_chip_arrive", on: clipboardChip, tokens: tokens,
-                                  startedAgo: elapsed, key: "preview-clipboard-arrive")
-            }
+            NativeMotion.play("preview_clipboard_chip_arrive", on: clipboardChip, tokens: tokens,
+                              key: "preview-clipboard-arrive")
         } else if !current {
             copyButton?.popIcon()
         }
@@ -2035,12 +2028,8 @@ final class MiniPreviewView: NSView {
 
     func showSavedFeedback(for artifactID: String) { cards[artifactID]?.showSavedFeedback() }
 
-    func setClipboardOwner(_ owner: String?, continuing previous: MiniPreviewView? = nil) {
-        for (id, card) in cards {
-            let old = previous?.cards[id]
-            let started = old?.isExiting == false ? old?.clipboardArrivedAt : nil
-            card.setClipboardCurrent(id == owner, startedAt: started)
-        }
+    func setClipboardOwner(_ owner: String?) {
+        for (id, card) in cards { card.setClipboardCurrent(id == owner) }
     }
 
     func isClipboardCurrent(for artifactID: String) -> Bool { cards[artifactID]?.clipboardCurrent == true }
@@ -2540,11 +2529,11 @@ final class MiniPreviewController {
 
     /// Forget ownership once another write changes the pasteboard, then show
     /// the shipping chip only on the card that still owns it.
-    func refreshClipboardOwner(continuing previous: MiniPreviewView? = nil) {
+    func refreshClipboardOwner() {
         if let owner = clipboardOwner, owner.pasteboard.changeCount != owner.changeCount {
             clipboardOwner = nil
         }
-        panel?.previewView.setClipboardOwner(clipboardOwner?.artifactID, continuing: previous)
+        panel?.previewView.setClipboardOwner(clipboardOwner?.artifactID)
         if clipboardOwner != nil, panel != nil {
             guard clipboardTimer == nil else { return }
             let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
@@ -2994,7 +2983,7 @@ final class MiniPreviewController {
             }
         }
         panel = next
-        refreshClipboardOwner(continuing: previous?.previewView)
+        refreshClipboardOwner()
         updateEditorPresence(animated: false)
         for id in liveIDs { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
         let now = CACurrentMediaTime()
