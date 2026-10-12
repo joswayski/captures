@@ -877,7 +877,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(ScreenshotEditorController.sidebarWidth, 320)
             XCTAssertEqual(layersSection.frame, NSRect(x: 892, y: 64, width: 308, height: 188))
             XCTAssertFalse(layersSection.isHidden, "Layers shows whatever the tool")
-            XCTAssertEqual(inspector.frame, NSRect(x: 892, y: 252, width: 308, height: 142))
+            XCTAssertEqual(inspector.frame, NSRect(x: 892, y: 252, width: 308, height: 268))
             XCTAssertFalse(undo.isHidden)
             let zoomGroup = try XCTUnwrap(descendants(in: controller.root)
                 .first { $0.accessibilityLabel() == "Canvas zoom controls" })
@@ -885,7 +885,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.presentedImageRect, NSRect(x: 60, y: 24, width: 640, height: 360))
             XCTAssertEqual(bar.frame, NSRect(x: 0, y: 520, width: 1200, height: 80))
             for control in descendants(in: controller.root) where
-                ["Canvas zoom", "Canvas zoom preset", "Canvas width", "Screenshot editor status"]
+                ["Canvas zoom", "Canvas zoom preset", "Canvas width"]
                     .contains(control.accessibilityLabel() ?? "") {
                 let frame = control.convert(control.bounds, to: controller.root)
                 XCTAssertTrue(controller.root.bounds.contains(frame))
@@ -897,7 +897,7 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { controller.presentedImageRect.width == 320 }
             XCTAssertEqual(input.bounds.size, NSSize(width: 320, height: 348))
             XCTAssertEqual(layersSection.frame, NSRect(x: 452, y: 64, width: 308, height: 188))
-            XCTAssertEqual(inspector.frame, NSRect(x: 452, y: 252, width: 308, height: 82))
+            XCTAssertEqual(inspector.frame, NSRect(x: 452, y: 252, width: 308, height: 208))
             XCTAssertTrue(undo.isHidden)
             XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 84, width: 320, height: 180))
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
@@ -2168,7 +2168,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(controller.compareView.afterImage === encoded, "Copy must not replace the comparison")
             XCTAssertEqual(worker.compares.count, compared)
             XCTAssertEqual(writes.count, 1)
-            XCTAssertTrue(labels(in: controller.root).contains { $0.contains("Edited image copied") })
+            XCTAssertEqual(copy.accessibilityLabel(), "Copied", "Copy confirms on its button, like shipping")
             try render(controller.root, name: "screenshot-editor-clipboard-success-\(appearance)")
 
             let format = try popup("Format", in: controller.root)
@@ -4402,9 +4402,8 @@ final class ScreenshotEditorTests: XCTestCase {
                               "\(row.fieldLabel) tiles stay inside their row")
             }
             try render(controller.root, name: "screenshot-editor-style-\(appearance)")
-            // At 600pt with the restored-draft notice, Properties is ~100pt tall,
-            // and the rotation-snap rows below the style form fill the scrolled
-            // end. Reaching the last field means scrolling can reveal it.
+            // Short windows still scroll the style form. Reaching the last
+            // field means scrolling can reveal it below the pinned heading.
             XCTAssertGreaterThan(document.bounds.height, scroll.contentView.bounds.height,
                                  "the style form scrolls in the short window")
             _ = shadowY.scrollToVisible(shadowY.bounds)
@@ -5832,7 +5831,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-text-default-rounded-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             let scroll = try XCTUnwrap(size.enclosingScrollView)
-            // Layers keeps its 188pt row, so the 82pt Properties area scrolls
+            // Layers keeps its 188pt row, so the Properties area scrolls
             // to each default in turn, like shipping's sidebar. New text has
             // no Color row: it shares the (hidden) drawing Color.
             XCTAssertTrue(color.isHiddenOrHasHiddenAncestor)
@@ -6801,7 +6800,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             let scroll = try XCTUnwrap(future.enclosingScrollView)
-            // The 82pt Properties area below Layers scrolls to each carried value.
+            // The Properties area below Layers scrolls to each carried value.
             // Shipping's Text section has no Color row: new text takes the
             // drawing Color, which keeps its value while hidden.
             XCTAssertEqual(futureColor.selectedHex, "#ff3b5c")
@@ -7103,9 +7102,28 @@ final class ScreenshotEditorTests: XCTestCase {
             let last = try field("Text shadow y offset", in: controller.root)
             let scroll = try XCTUnwrap(inputScroll.enclosingScrollView)
             let document = try XCTUnwrap(scroll.documentView)
+            let bar = try XCTUnwrap(descendants(in: controller.root).first { $0.accessibilityLabel() == "Export bar" })
+            let preset = try popup("Text style preset", in: controller.root)
+            let family = try popup("Text font", in: controller.root)
+            let size = try field("Text size", in: controller.root)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
+            XCTAssertEqual(properties.frame.maxY, bar.frame.minY,
+                           "editor status must not take space from Properties")
+            preset.scrollToVisible(preset.bounds)
             try render(controller.root, name: "screenshot-editor-text-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 1000, height: 780))
+            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            XCTAssertEqual(properties.frame.maxY, bar.frame.minY)
+            for control in [preset, inputScroll, family, size, last] as [NSView] {
+                control.scrollToVisible(control.bounds)
+                controller.root.layoutSubtreeIfNeeded()
+                XCTAssertFalse(control.isHiddenOrHasHiddenAncestor)
+                XCTAssertTrue(scroll.contentView.bounds.contains(control.convert(control.bounds, to: scroll.contentView)))
+                // NSView.hitTest expects the receiver's superview coordinates.
+                let center = control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: controller.root.superview)
+                let hit = try XCTUnwrap(controller.root.hitTest(center))
+                XCTAssertTrue(hit === control || hit.isDescendant(of: control),
+                              "\(control.accessibilityLabel() ?? "text control") must receive pointer input after scrolling")
+            }
             scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
             scroll.reflectScrolledClipView(scroll.contentView)
             controller.root.layoutSubtreeIfNeeded()
@@ -7117,7 +7135,17 @@ final class ScreenshotEditorTests: XCTestCase {
             editor.string = "Unaccepted text"
             controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
             XCTAssertEqual(editor.string, "Unaccepted text")
+            let footer = try field("Export status", in: controller.root)
+            XCTAssertTrue(footer.isDescendant(of: bar))
+            XCTAssertFalse(footer.isHiddenOrHasHiddenAncestor)
+            XCTAssertTrue(footer.stringValue.contains(worker.failureMessage))
+            XCTAssertEqual(footer.toolTip, footer.stringValue, "a truncated failure keeps its full explanation")
+            XCTAssertEqual(properties.frame.maxY, bar.frame.minY, "failures must not shrink Properties")
             try render(controller.root, name: "screenshot-editor-text-error-minimum-\(appearance)")
+            worker.failOperation = nil
+            editor.string = "Recovered text"
+            controller.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+            XCTAssertFalse(footer.stringValue.contains(worker.failureMessage), "an accepted retry clears the editor error")
         }
     }
 
@@ -7738,6 +7766,12 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try showLayers(in: controller.root)
             let family = try popup("Text font", in: controller.root)
+            family.scrollToVisible(family.bounds)
+            controller.root.layoutSubtreeIfNeeded()
+            XCTAssertTrue(family.visibleRect.contains(family.bounds), "the real worker’s font control must be visible")
+            let point = family.convert(NSPoint(x: family.bounds.midX, y: family.bounds.midY), to: controller.root.superview)
+            let hit = try XCTUnwrap(controller.root.hitTest(point))
+            XCTAssertTrue(hit === family || hit.isDescendant(of: family))
             family.selectItem(withTitle: "Serif")
             _ = family.sendAction(family.action, to: family.target)
             waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle?.fontFamily == "serif" }
