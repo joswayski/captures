@@ -42,7 +42,6 @@ def main():
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--record-clear", action="store_true", help="Record Clear all presentation in the stack smoke")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
-    parser.add_argument("--sharing-only", action="store_true", help="Exercise Share lifetime and exact capture exclusion")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
     parser.add_argument("--record-retarget", action="store_true", help="Record overlapping exits in the retarget smoke")
     parser.add_argument("--reduced-motion", action="store_true", help="Disable native preview motion")
@@ -530,8 +529,6 @@ def main():
         cases += [("bottom_left", True, True), ("bottom_left", False, False)]
         if args.lifecycle or args.drag_only:
             cases = cases[:1]
-        if args.sharing_only:
-            cases = [("bottom_left", True, False), ("bottom_left", True, True)]
         if args.retarget_only:
             assert not args.reduced_motion, "retarget requires animated dust"
             cases = cases[:4]
@@ -824,7 +821,7 @@ def main():
                     assert first.exists(), "drag dismissal does not delete History"
                     print("PASS native outbound drag: self drop, original bytes, saved Unicode path, cancellation, rejection, timeout, target loss and repeat")
                     return
-                if placement == "bottom_left" and not include and not args.sharing_only:
+                if placement == "bottom_left" and not include:
                     run("xdotool", "windowminimize", root)
                     wait(lambda: not windows("Capture History"), "minimized workspace")
                     other_app = spawn("preview-action-focus", ["xmessage", "-title", "Preview action focus fixture",
@@ -1091,41 +1088,13 @@ def main():
                     before = output / f"{prefix}-before.png"
                     run("import", "-window", "root", "-crop", "360x330+8+552", str(before))
                     assert rgb(before) != wallpaper_crop(8, 552, 360, 330), "preview was not on desktop"
-                    # This private bus must have no real credential service:
-                    # opening Share tests local lifetime/exclusion, never a
-                    # developer's vault or the production account API.
-                    assert not bus.name_has_owner("org.freedesktop.secrets")
-                    assert "org.freedesktop.secrets" not in bus.list_activatable_names()
-                    sharing_source = stack_entries[-1].parent / "capture.png"
-                    sharing_bytes = sharing_source.read_bytes()
-                    click(preview, 50, 166, activate=False)
-                    sharing = wait(lambda: windows("Share capture"), "selected preview opens native Share")[0]
-                    wait(lambda: active_window() == sharing, "Share action focuses the native popup")
-                    wait(lambda: run("import", "-window", sharing, "-crop", "1x1+460+20", "-depth", "8", "rgb:-") == bytes.fromhex("101014"),
-                         "native Share paints its dark canvas before testing exclusion")
-                    shot(sharing, f"{prefix}-sharing")
-                    run("xdotool", "mousemove", "--sync", "--window", sharing, "350", "400",
-                        "click", "--repeat", "6", "--delay", "100", "5", "sleep", ".2")
-                    shot(sharing, f"{prefix}-sharing-settings")
-                    # Cover the independent pixel-oracle crop. Share must be
-                    # excluded even when mini previews are included in captures.
-                    run("xdotool", "windowmove", "--sync", sharing, "8", "552")
-                    wait(lambda: wallpaper_sample() != rgb(before), "painted Share covers the capture pixel oracle")
-                    saved_before_share = entries()
-                    selector = begin()
-                    wait(lambda: not windows("Share capture"), "capture unmaps native Share")
-                    assert entries() == saved_before_share, "opening Share uploaded or replaced local history"
-                    run("xdotool", "key", "Escape")
-                    wait(lambda: windows("Share capture") and not windows(SELECTOR), "cancel restores native Share")
+                    original = stack_entries[-1].parent / "capture.png"
+                    original_bytes = original.read_bytes()
                     second = capture((8, 552, 360, 330))
                     stack_entries.append(second)
                     expected = rgb(before) if include else wallpaper_crop(8, 552, 360, 330)
                     assert rgb(second.parent / "capture.png") == expected, "preview capture inclusion mismatch"
-                    wait(lambda: windows("Share capture"), "completed capture restores native Share")
-                    assert sharing_source.read_bytes() == sharing_bytes, "sharing/capture changed the accepted original"
-                    assert not (history / "native-share-associations.json").exists(), "opening Share must not create an upload"
-                    run("xdotool", "windowactivate", "--sync", sharing, "key", "alt+F4")
-                    wait(lambda: not windows("Share capture"), "closing Share keeps worker owned by the host")
+                    assert original.read_bytes() == original_bytes, "capture changed the retained original"
                     wait(lambda: windows(PREVIEW), "replacement preview")
                 saved = entries()
                 begin()
@@ -1844,7 +1813,6 @@ def main():
                 "Edit opens and refocuses one editor without restoring root or changing artifact, History or drafts",
                 "Dismiss preserves history and export",
                 "new capture after dismissal", "exact inclusion and exclusion pixels",
-                "native Share opens selected capture without uploading; excluded from capture and restored on cancel/completion",
                 "Escape and simulated-lock restoration", "clean exit"] +
                 ([] if args.lifecycle else ["disabled previews"]) +
                 (["three-card retention and per-card Copy", "middle-card dismissal preserves files",
@@ -1867,11 +1835,6 @@ def main():
                   "edited New Capture launches unified controls after restart and blur",
                   "hidden root creates first selector and mini preview without reopening"] if args.shortcut_editing else []),
             "scope": "Private X11/software GL, simulated session; not hardware, real lock, Wayland or accessibility acceptance."}
-        if args.sharing_only:
-            result["checks"] = ["Share action focuses and paints selected capture without uploading",
-                "Share is excluded with mini previews both included and excluded",
-                "capture cancel/completion restore Share and retain original bytes",
-                "popup closure retains worker; clean exit"]
         (output / "result.json").write_text(json.dumps(result, indent=2))
     finally:
         for child in reversed(children):

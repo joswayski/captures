@@ -12,7 +12,6 @@ pub enum Action {
     Save,
     Reveal,
     Edit,
-    Share,
     Trash,
     Dismiss,
     /// An unsaved card's Delete: the preview dissolves; History keeps it.
@@ -308,10 +307,6 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
     );
     let editor_id = ui.scope_id().with(("edit", view.artifact_id));
     let edit_rect = editor_control_rect(ui, tokens, card, inset, &view, editor_id);
-    let share_rect = egui::Rect::from_min_size(
-        egui::pos2(card.left() + inset, card.bottom() - inset - icon_size.y),
-        icon_size,
-    );
     let destructive_count: usize = if view.saved { 2 } else { 1 };
     let destructive_width =
         icon_size.x * destructive_count as f32 + gap * (destructive_count.saturating_sub(1)) as f32;
@@ -337,7 +332,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
             }
         })
         .is_some_and(|pointer| {
-            [save_rect, edit_rect, delete_rect, share_rect]
+            [save_rect, edit_rect, delete_rect]
                 .iter()
                 .any(|rect| rect.contains(pointer))
                 || (!view.clipboard_current && copy_rect.contains(pointer))
@@ -348,7 +343,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
         .input(|input| input.pointer.hover_pos())
         .is_some_and(|pointer| card.contains(pointer));
     let any_focused = ui.memory(|memory| {
-        ["close", "delete", "edit", "share", "copy", "save-reveal"]
+        ["close", "delete", "edit", "copy", "save-reveal"]
             .iter()
             .any(|name| memory.has_focus(ui.scope_id().with((name, view.artifact_id))))
     });
@@ -489,20 +484,6 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
         tooltip_above,
     ) {
         action = Some(Action::Edit);
-    }
-    if control(
-        ui,
-        tokens,
-        share_rect,
-        ("share", view.artifact_id),
-        "Share capture",
-        Icon::Share,
-        reveal,
-        enabled,
-        false,
-        Some((tooltip_above, view.reduced_motion)),
-    ) {
-        action = Some(Action::Share);
     }
     if !view.clipboard_current
         && control(
@@ -1920,7 +1901,6 @@ enum Icon {
     Close,
     Trash,
     Edit,
-    Share,
     Copy,
     Save,
     Folder,
@@ -2122,7 +2102,6 @@ fn paint_icon_with(p: &egui::Painter, icon: Icon, rect: egui::Rect, color: Color
         Icon::Close => "close",
         Icon::Check => "check",
         Icon::Edit => "edit",
-        Icon::Share => "share",
         Icon::Trash => "trash",
         Icon::Copy => "copy",
         Icon::Save => "save",
@@ -2946,14 +2925,7 @@ mod tests {
         };
         let (_, copy, size) = frame(vec![]);
         assert!(!copy && size, "idle chrome stays hidden");
-        for label in [
-            "Close",
-            "Delete",
-            "Edit",
-            "Share capture",
-            "Copy",
-            "Show in Folder",
-        ] {
+        for label in ["Close", "Delete", "Edit", "Copy", "Show in Folder"] {
             frame(vec![tab.clone()]);
             let (focused, copy, size) = frame(vec![]);
             assert_eq!(focused.as_deref(), Some(label));

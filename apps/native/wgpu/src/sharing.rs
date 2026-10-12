@@ -70,6 +70,8 @@ impl Window {
         self.form.lock().unwrap().selection.clone()
     }
 
+    // Live entry points stay off while matching the shipping Tauri app.
+    #[cfg(test)]
     pub fn open(
         &self,
         ctx: &egui::Context,

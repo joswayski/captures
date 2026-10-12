@@ -8,7 +8,7 @@ final class MiniPreviewTests: XCTestCase {
 
     func testPreviewKindsResolveSharedShippingGeometry() {
         XCTAssertEqual(MiniPreviewButtonKind.allCases.map(\.iconName),
-                       ["close", "trash", "edit", "share", "copy", "save", "folder", "preview-stack", "close", "check"])
+                       ["close", "trash", "edit", "copy", "save", "folder", "preview-stack", "close", "check"])
         for kind in MiniPreviewButtonKind.allCases {
             XCTAssertFalse(ShippingIcons.polylines(kind.iconName).isEmpty, kind.iconName)
         }
@@ -37,8 +37,7 @@ final class MiniPreviewTests: XCTestCase {
         let panel = fixturePanel(ids: ["latest"], images: ["latest": image],
             copy: { _ in actions.append("copy") }, save: { _ in actions.append("save") },
             open: { _ in actions.append("open") }, trash: { _ in actions.append("trash") },
-            dismiss: { _ in actions.append("dismiss") }, discard: { _ in actions.append("discard") },
-            share: { id in actions.append("share:\(id)") })
+            dismiss: { _ in actions.append("dismiss") }, discard: { _ in actions.append("discard") })
         defer { panel.close() }
 
         XCTAssertEqual(panel.canBecomeKey, NSApp.isActive, "Keyboard focus only while Captures is active")
@@ -46,13 +45,12 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
         XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
-        XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Share capture", "Copy", "Save file"])
+        XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Copy", "Save file"])
         XCTAssertEqual(buttons.first { $0.title == "Edit" }?.accessibilityLabel(), "Edit")
-        XCTAssertEqual(buttons.first { $0.title == "Share capture" }?.accessibilityLabel(), "Share capture")
         XCTAssertTrue(buttons.allSatisfy(\.isHidden), "idle chrome must not leave click traps")
         buttons.forEach { $0.performClick(nil) }
         // An unsaved card's Delete discards (dissolves) only the preview.
-        XCTAssertEqual(actions, ["dismiss", "discard", "open", "share:latest", "copy", "save"])
+        XCTAssertEqual(actions, ["dismiss", "discard", "open", "copy", "save"])
         try write(render(panel), name: "mini-preview-single-unsaved-edit-trash.png")
     }
 
@@ -63,13 +61,13 @@ final class MiniPreviewTests: XCTestCase {
         defer { panel.close() }
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
         let reveal = try XCTUnwrap(buttons.first { $0.title == "Show in Folder" })
-        XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Share capture", "Copy", "Show in Folder"])
+        XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Copy", "Show in Folder"])
         XCTAssertEqual(reveal.accessibilityLabel(), "Show in Folder")
         // Labelled actions carry no tooltip, and no control uses the system one.
         XCTAssertNil(reveal.tooltipText)
         XCTAssertTrue(buttons.allSatisfy { $0.toolTip == nil })
         // Shipping icon buttons use short glass tips that match their names.
-        for name in ["Close", "Delete", "Edit", "Share capture"] {
+        for name in ["Close", "Delete", "Edit"] {
             XCTAssertEqual(buttons.first { $0.title == name }?.tooltipText, name)
         }
         try write(render(panel), name: "mini-preview-single-saved-reveal.png")
@@ -132,10 +130,9 @@ final class MiniPreviewTests: XCTestCase {
                 eventNumber: 0, clickCount: 0, pressure: 0))
             XCTAssertTrue(controls.allSatisfy(\.isHidden))
             card.mouseEntered(with: event)
-            XCTAssertEqual(controls.filter { !$0.isHidden }.map(\.title), ["Delete", "Edit", "Share capture", "Copy", "Save file"])
+            XCTAssertEqual(controls.filter { !$0.isHidden }.map(\.title), ["Delete", "Edit", "Copy", "Save file"])
             XCTAssertEqual(try button("Delete").frame, NSRect(x: right ? 248 : 8, y: 8, width: 28, height: 28))
             XCTAssertEqual(try button("Edit").frame.minX, right ? 8 : 248)
-            XCTAssertEqual(try button("Share capture").frame, NSRect(x: 8, y: 124, width: 28, height: 28))
             XCTAssertEqual(try button("Copy").frame, NSRect(x: 72, y: 45, width: 140, height: 32))
             let saveFrame = try button("Save file").frame
             XCTAssertEqual(saveFrame, NSRect(x: 72, y: 83, width: 140, height: 32))
@@ -312,7 +309,7 @@ final class MiniPreviewTests: XCTestCase {
         let card = try XCTUnwrap(panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewCardView }.first)
         XCTAssertTrue(panel.initialFirstResponder === card)
         XCTAssertEqual(KeyViewLoop.order(from: card).compactMap { ($0 as? MiniPreviewButton)?.title },
-                       ["Close", "Delete", "Edit", "Share capture", "Copy", "Save file"])
+                       ["Close", "Delete", "Edit", "Copy", "Save file"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
         XCTAssertTrue(buttons.allSatisfy(\.isHidden))
         XCTAssertFalse(panel.isKeyWindow)
@@ -1431,7 +1428,7 @@ final class MiniPreviewTests: XCTestCase {
         view.samplePointer(NSPoint(x: 100, y: 105))
         XCTAssertFalse(view.isCardHoverLocked)
         XCTAssertTrue(card.mediaHovered)
-        XCTAssertEqual(Set(view.visibleCardActionTitles), ["Delete", "Edit", "Share capture", "Copy", "Save file"])
+        XCTAssertEqual(Set(view.visibleCardActionTitles), ["Delete", "Edit", "Copy", "Save file"])
         // Leaving the stack releases a lock too.
         card.mouseExited(with: hover)
         view.lockCardHover(releaseIfPointerOutside: false)
@@ -1532,7 +1529,6 @@ final class MiniPreviewTests: XCTestCase {
                               trash: @escaping (String) -> Void = { _ in },
                               dismiss: @escaping (String) -> Void = { _ in },
                               discard: @escaping (String) -> Void = { _ in },
-                              share: @escaping (String) -> Void = { _ in },
                               setCollapsed: @escaping (Bool) -> Void = { _ in },
                               move: @escaping (NSPoint) -> Void = { _ in }) -> MiniPreviewPanel {
         let stack = NativePreviewStack()
@@ -1560,7 +1556,7 @@ final class MiniPreviewTests: XCTestCase {
             resources: resources, ids: ids, layouts: layouts, hoverLayouts: hoverLayouts, collapsed: collapsed,
             topAnchor: topAnchor, rightAnchor: placement.hasSuffix("_right"), tokens: tokens,
             copy: copy, save: save, open: open,
-            trash: trash, dismiss: dismiss, discard: discard, share: share, setCollapsed: setCollapsed,
+            trash: trash, dismiss: dismiss, discard: discard, setCollapsed: setCollapsed,
             clearAll: {}, move: move)
     }
 

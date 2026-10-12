@@ -45,8 +45,9 @@ migrations and tests, and [`apps/web/README.md`](apps/web/README.md#optional-acc
 for the account placeholder. Sign-in is unavailable. `npm run check` verifies
 that account requests fail closed and the built public website still works.
 
-Both native development hosts connect `captures-account::native::Worker` to
-their sharing windows; AppKit uses an opaque, nonblocking C ABI. The worker owns the
+Native mini previews and History expose no Share entry point, matching Tauri.
+Experimental sharing fixtures and tests retain `captures-account::native::Worker`;
+AppKit uses an opaque, nonblocking C ABI. The worker owns the
 selected original bytes, OTP challenge and account session across popup/preview
 closure. Opening or signing in never uploads. At the lower-level client boundary,
 construct `AccountClient::production()` on a serialized worker without

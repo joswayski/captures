@@ -2996,15 +2996,21 @@ must be explicit, not silently successful.
 
 ## Mini-preview sharing integration — acceptance open
 
-The primary desktop cloud flow is capture → mini-preview Share icon → native
+**Live entry points removed for Tauri parity.** Neither mini previews nor History
+offers Share on either native host. Shipping Tauri has no such action, and the
+account service is unavailable. The experimental worker, popup and isolated tests
+remain; the earlier integration notes below describe that retained work, not a
+live feature. This correction does not promote native builds or close any parity gate.
+
+The proposed desktop cloud flow is capture → mini-preview Share icon → native
 upload/share-settings popup. Track this as a separate cross-platform slice even
 if the accounts/API PR or rewrite merges first; neither merge completes this
 feature. API/web implementation: [#613](https://github.com/joswayski/captures/pull/613).
 Do not ship a decorative Share action or substitute a website handoff for the
 native flow. Local capture remains signed-out and never uploads automatically.
 
-Both hosts connect mini-preview Share and a selected-History action to
-native controls. The shared `captures-account::native::Worker` owns the session,
+Both hosts previously connected mini-preview Share and a selected-History action to
+native controls; those entry points are now absent. The shared `captures-account::native::Worker` owns the session,
 OTP challenge and a private temporary exact-byte snapshot independently of the
 popup/preview. Open/sign-in/refresh never upload; Upload is explicit. Completion
 and configuration retry reuse the same account/profile/artifact association.
