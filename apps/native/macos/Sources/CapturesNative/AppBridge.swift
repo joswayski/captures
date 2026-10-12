@@ -417,5 +417,14 @@ struct CaptureArtifact {
         sizeBytes = (entry["size_bytes"] as? NSNumber)?.uint64Value ?? 0
     }
 
+    /// A fresh History restore may retain an export only while its file exists.
+    /// Resolve the active artifact without rewriting the persisted History entry.
+    var availableSavedPath: String? {
+        guard let savedPath else { return nil }
+        var directory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: savedPath, isDirectory: &directory)
+            && !directory.boolValue ? savedPath : nil
+    }
+
     var isRecording: Bool { kind != "screenshot" }
 }

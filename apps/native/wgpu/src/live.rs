@@ -1086,6 +1086,13 @@ impl MiniPreviews {
         }
         let now_ms = crate::motion::elapsed_ms(self.epoch, Instant::now());
         let guard = self.insert_card(artifact, editor_open, now_ms);
+        // Like Tauri, fresh History restores retain only a real exported file.
+        // The on-disk History entry still remembers the old path.
+        let card = self
+            .cards
+            .get_mut(&guard.artifact_id)
+            .expect("inserted restore");
+        card.saved_path = card.saved_path.take().filter(|path| path.is_file());
         Ok(RestoreStart::Decode(guard, artifact.preview_path.clone()))
     }
 
@@ -6814,7 +6821,13 @@ impl Live {
                         .iter()
                         .find(|artifact| artifact.entry.id == card.artifact_id)
                     {
-                        card.saved_path = artifact.entry.saved_path.as_deref().map(PathBuf::from);
+                        // A reload must neither resurrect a missing export on
+                        // Restore nor erase an already-accepted Save result.
+                        if let Some(path) = artifact.entry.saved_path.as_deref()
+                            && Path::new(path).is_file()
+                        {
+                            card.saved_path = Some(PathBuf::from(path));
+                        }
                     }
                 }
                 self.artifacts = artifacts;
@@ -11455,6 +11468,19 @@ mod tests {
                 .as_deref(),
             Some(current.as_path())
         );
+        live.apply(
+            Response::History {
+                artifacts: captures_app::list(root.path()).unwrap(),
+            },
+            false,
+        );
+        assert_eq!(
+            live.previews.cards[&guard.artifact_id]
+                .saved_path
+                .as_deref(),
+            Some(current.as_path()),
+            "an older unsaved History snapshot cannot erase Save"
+        );
         live.flush();
     }
 
@@ -13061,7 +13087,9 @@ mod tests {
     fn history_restore_reopens_a_screenshot_preview_once() {
         use captures_app::history_view::CardAction;
         let root = tempfile::tempdir().unwrap();
-        let artifact = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let mut artifact = preview_artifact(root.path(), [10, 20, 30, 255]);
+        let missing_export = root.path().join("Missing Café export.png");
+        artifact.entry.saved_path = Some(missing_export.to_string_lossy().into_owned());
         let id = artifact.entry.id.clone();
         let ctx = egui::Context::default();
         let mut frame = eframe::Frame::_new_kittest();
@@ -13128,6 +13156,21 @@ mod tests {
         live.logic(&ctx, &mut frame);
         assert!(live.card_restoring.is_none());
         assert!(live.previews.cards[&id].texture.is_some());
+        assert!(
+            live.previews.cards[&id].saved_path.is_none(),
+            "Restore must offer Save when the old export is gone"
+        );
+        let artifacts = std::mem::take(&mut live.artifacts);
+        live.apply(Response::History { artifacts }, false);
+        assert!(
+            live.previews.cards[&id].saved_path.is_none(),
+            "History metadata cannot reattach an unavailable export"
+        );
+        assert_eq!(
+            live.artifacts[0].entry.saved_path.as_deref(),
+            missing_export.to_str(),
+            "retained History metadata stays unchanged"
+        );
         let now = Instant::now();
         assert_eq!(live.restored_feedback(&ctx, now), Some(id.clone()));
         let expiry = Duration::from_millis(captures_app::history_view::ACTION_FEEDBACK_MS);
@@ -13249,6 +13292,31 @@ mod tests {
                 .is_some_and(|error| error.contains("unreadable"))
         );
         assert!(live.error.is_none());
+        // The same retained export becomes available again; a fresh Restore
+        // keeps Show in Folder. Directories still cannot masquerade as files.
+        std::fs::write(&missing_export, b"restored export").unwrap();
+        live.restore(&ctx, &id, &settings, Some(preview_target()));
+        let (generation, _) = decode_job();
+        results.send(decoded(generation, &id)).unwrap();
+        live.logic(&ctx, &mut frame);
+        assert_eq!(
+            live.previews.cards[&id].saved_path.as_deref(),
+            Some(missing_export.as_path())
+        );
+        std::fs::remove_file(&missing_export).unwrap();
+        live.restore(&ctx, &id, &settings, None);
+        assert_eq!(
+            live.previews.cards[&id].saved_path.as_deref(),
+            Some(missing_export.as_path()),
+            "an already-visible card keeps shipping's Export missing behavior"
+        );
+        assert!(live.previews.dismiss(&id, generation));
+        std::fs::create_dir(&missing_export).unwrap();
+        live.restore(&ctx, &id, &settings, Some(preview_target()));
+        let (generation, _) = decode_job();
+        results.send(decoded(generation, &id)).unwrap();
+        live.logic(&ctx, &mut frame);
+        assert!(live.previews.cards[&id].saved_path.is_none());
         live.flush();
     }
 
