@@ -620,6 +620,37 @@ final class MiniPreviewTests: XCTestCase {
         }
     }
 
+    func testFileDragConcealsOnlySourceMediaAndRestoresRebuiltSurvivor() throws {
+        _ = NSApplication.shared
+        let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
+        defer { controller.close() }
+        func panel() throws -> MiniPreviewPanel {
+            try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+                .first { $0.isVisible && $0.previewView === controller.previewView })
+        }
+        func mediaPixel(_ panel: MiniPreviewPanel) throws -> NSColor {
+            let card = try XCTUnwrap(panel.previewView.card(for: "source"))
+            let point = card.convert(NSPoint(x: 30, y: 70), to: panel.previewView)
+            return try XCTUnwrap(pixelColor(in: render(panel), of: panel, x: point.x, y: point.y))
+        }
+        let original = try panel()
+        let source = try XCTUnwrap(original.previewView.card(for: "source"))
+        let visible = try mediaPixel(original)
+        source.setFileDragging(true)
+        let concealed = try mediaPixel(original)
+        XCTAssertNotEqual(concealed, visible, "the capture does not paint under its OS drag ghost")
+        XCTAssertLessThan(concealed.alphaComponent, 0.01, "shipping leaves the source media area transparent")
+        XCTAssertTrue(source.hasVisibleLabels, "concealing media retains its metadata")
+        try write(render(original), name: "mini-preview-file-drag-source-hidden.png")
+        controller.updateSettings(previewSettings())
+        let rebuilt = try panel()
+        XCTAssertEqual(try mediaPixel(rebuilt), concealed, "settings must not reintroduce the source media")
+        source.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
+        XCTAssertEqual(try mediaPixel(rebuilt), visible, "the original source completion restores its survivor")
+        XCTAssertEqual(controller.presentedArtifactIDs, ["source"])
+        try write(render(rebuilt), name: "mini-preview-file-drag-source-restored.png")
+    }
+
     func testSelfDropSurvivesSettingsRebuildWithoutReplayingItsShake() throws {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference

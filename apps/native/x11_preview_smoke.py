@@ -875,9 +875,10 @@ def main():
                         "sleep", ".05", "mousemove", "--sync", "--window", preview, "201", "90", "sleep", ".1")
                     # Recover hover during rejection: the media must stay sharp
                     # and at brightness 1, not ease back to the hovered .5.
-                    rejected_pixel = sample()
-                    assert all(abs(a - b) <= 2 for a, b in zip(rejected_pixel, idle_pixel)), (
-                        "self-drop rejection must override hovered media", tuple(rejected_pixel), tuple(idle_pixel))
+                    # XSync confirms release delivery, not the drag callback's
+                    # next paint; the preceding frame still has hidden media.
+                    wait(lambda: all(abs(a - b) <= 2 for a, b in zip(sample(), idle_pixel)),
+                         "self-drop rejection must override hovered media")
                     shot(preview, "self-drop-hover-rejected")
                     time.sleep(.7)
                     assert windows(PREVIEW) and not windows(EDITOR), "self drop must retain, not reimport"
@@ -910,6 +911,25 @@ def main():
                                 "print(owner.id if owner else 0)")
                             return owner.decode().strip() == preview
                         wait(started, "preview owns the native file drag")
+                        def source_media_hidden():
+                            # The capture's central quadrant edge is above the
+                            # action group. It disappears when source media hides.
+                            raw = run("import", "-window", preview, "-crop", f"23x1+164+{card_top + 32}",
+                                      "-depth", "8", "rgb:-")
+                            return max(abs(a - b) for a, b in zip(raw[:3], raw[-3:])) <= 4
+                        wait(source_media_hidden, "native file drag hides source media")
+                        # Sample the composited desktop, not the ARGB window's
+                        # uncomposited pixels: a dark blank card is not parity.
+                        source_x = int(geometry["X"]) + 164
+                        source_y = int(geometry["Y"]) + card_top + 32
+                        wait(lambda: all(abs(a - b) <= 2 for a, b in zip(
+                             run("import", "-window", "root", "-crop",
+                                 f"23x1+{source_x}+{source_y}", "-depth", "8", "rgb:-"),
+                             wallpaper_crop(source_x, source_y, 23, 1))),
+                             "source media area reveals the desktop during drag")
+                        shot(preview, f"outbound-source-hidden-{mode}")
+                        if mode == "cancel":
+                            shot("root", "outbound-source-transparent")
                         run("xdotool", "mousemove", "--sync", "700", "550", "sleep", ".3")
                         events = destination.with_suffix(".jsonl")
                         def negotiated():
