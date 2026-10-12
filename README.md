@@ -814,6 +814,8 @@ as shipping does; shared Rust owns style defaults, rendering, undo folding and d
 persistence.
 Both native hosts keep the Properties title visible while its fields scroll,
 including at the minimum window size; the title does not cover the controls.
+Editor errors share the export footer rather than shrinking the inspector;
+the full explanation remains available when the footer text is truncated.
 In both native hosts, **Layers** supports clicking the edited preview to select an
 unlocked visible layer, or empty space to clear selection. Move, rotate, resize and
 curve-dot drags show edited pixels while held, with selection guides over them.

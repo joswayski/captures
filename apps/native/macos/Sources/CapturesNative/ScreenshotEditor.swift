@@ -1321,7 +1321,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// A live background change made while other work runs; only the latest
     /// is applied once the editor is free (one undo step).
     private var queuedBackground: String??
-    private let status = NSTextField(wrappingLabelWithString: "")
+    /// Editor failures share the export footer, like shipping and wgpu;
+    /// progress and autosave copy must not reserve sidebar space.
+    private var editorError: String? { didSet { publishExportBar() } }
     private let geometryPanel = Surface()
     private let geometryContent = Surface()
     private let layersPanel = Surface()
@@ -1753,7 +1755,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         resetExportState(originalBytes: artifact.sizeBytes)
         selectedLayerID = nil; selectedLayerIndex = 0; preferredLayerID = nil
         editedImage = nil; invalidateOutput(); preview.image = nil; window.title = EditorWindowTitle.screenshot
-        status.stringValue = "Opening screenshot…"; updateControls()
+        editorError = nil; updateControls()
         fitWindowToScreen()
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         publishPresence()
@@ -1775,9 +1777,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.publishInitialDrawingDefaults(presentation.snapshot)
                 self.publish(presentation, resetCrop: true)
                 self.startExportTarget(presentation.snapshot)
-                self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = presentation.snapshot.hasDraft
-                    ? "Draft restored." : "Ready. Changes save automatically as a draft."
+                self.editorError = nil
             case .failure(let error):
                 guard self.state.fail(generation: generation) else {
                     completion?(false); return
@@ -2004,12 +2004,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             recenterButton.frame.origin = NSPoint(
                 x: (previewPanel.bounds.width - recenterButton.frame.width) / 2, y: gap)
         }
-        let statusY = root.bounds.height - bar - 16 - 96
         sectionControl?.frame.origin.x = inspectorX
-        status.frame = NSRect(x: inspectorX, y: statusY, width: Self.contentWidth, height: 96)
         // Shipping `.screenshot-sidebar` rows: minmax(188px, 40%) for Layers,
-        // the rest for the tool's Properties.
-        let column = max(0, statusY - 14 - top - gap)
+        // the rest for the tool's Properties, all the way to the export bar.
+        let column = max(0, root.bounds.height - bar - top - gap)
         let layersHeight = min(column, max(188, (column * 0.4).rounded()))
         layersPanel.frame = NSRect(x: inspectorX, y: top + gap, width: Self.panelWidth, height: layersHeight)
         for panel in [geometryPanel, layerPropertiesPanel, drawPanel] {
@@ -2521,9 +2519,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         buildLayersPanel()
         buildDrawPanel()
 
-        status.frame = NSRect(x: 688, y: 524, width: Self.panelWidth, height: 96)
-        status.maximumNumberOfLines = 5; status.setAccessibilityLabel("Screenshot editor status")
-        root.addSubview(status)
         buildExportBar()
         // Floating chrome stays above the canvas, inspector and export bar.
         root.addSubview(backgroundCard)
@@ -4436,7 +4431,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func copyEditedImage() {
         guard let artifactID = state.artifactID, let generation = state.beginCommand() else { return }
         exportError = nil; copyInFlight = true
-        status.stringValue = "Copying edited image…"; updateControls()
+        editorError = nil; updateControls()
         // Copy the published edited frame, never the selected encoded preview or
         // export budget. Encoding stays on the existing serialized editor worker.
         worker.encode(["format": "png", "quality": "preserve", "quality_value": 100,
@@ -4446,8 +4441,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             case .success(let output):
                 guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
                 if self.writeClipboard(output.data) {
-                    self.status.textColor = self.tokens.color("text-muted")
-                    self.status.stringValue = "Edited image copied. No file or draft was saved."
+                    self.editorError = nil
                     self.confirmCopy()
                 } else {
                     self.showExportError("Couldn’t copy the edited image. The clipboard is unavailable; try again.")
@@ -4521,6 +4515,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Forget the previous screenshot's target, saved file and estimate.
     private func resetExportState(originalBytes: UInt64) {
         exportTarget = nil; exportBarState = nil
+        editorError = nil
         exportError = nil; exportNotice = nil; exportNoticeToken += 1
         copyConfirmed = false; copyConfirmToken += 1
         lastSavedPath = nil
@@ -4628,6 +4623,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let message: (String, String)
         if let exportError {
             message = (exportError, "danger-text")
+        } else if let editorError {
+            message = (editorError, "danger-text")
         } else if let error = exportOptionsError ?? bar?.error {
             message = (error, "danger-text")
         } else if let exportNotice {
@@ -4658,8 +4655,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         lastSavedPath = nil
         exportNotice = nil; exportNoticeToken += 1
         // The footer echoes a failed save; a new name or folder retires it too.
-        if let exportError, status.stringValue == exportError {
-            status.stringValue = ""; status.textColor = tokens.color("text-muted")
+        if let exportError, editorError == exportError {
+            editorError = nil
         }
         exportError = nil
         publishExportBar()
@@ -4728,8 +4725,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             "history_root": historyRoot, "plan": plan, "options": options, "mode": captureMode,
         ]
         exportError = nil; exportNotice = nil; saveInFlight = true
-        status.textColor = tokens.color("text-muted")
-        status.stringValue = "Saving…"; updateControls(); publishExportBar()
+        editorError = nil; updateControls(); publishExportBar()
         worker.save(request) { [weak self] result in
             guard let self else { return }
             self.saveInFlight = false
@@ -4738,7 +4734,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.completeOutput(generation: generation, artifactID: artifactID) else { return }
                 self.lastSavedPath = saved.path
                 self.showExportNotice(saved.notice)
-                self.status.stringValue = saved.notice
                 // Shipping `saveEditedImage` reveals the saved file after every
                 // Save, overwrite or new file (Finder has no failure to report).
                 self.revealFiles([URL(fileURLWithPath: saved.path)])
@@ -5077,8 +5072,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         input.inputID = UUID().uuidString.lowercased()
         input.requestInFlight = true
         inlineTextInput = input
-        status.textColor = tokens.color("text-muted")
-        status.stringValue = "Starting inline text input…"
+        editorError = nil
         updateControls()
         worker.request(["operation": "begin_text_input", "input_id": input.inputID, "target": target]) {
             [weak self] result in
@@ -5108,7 +5102,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.selectedLayerID = active.layerID
                 self.publishTextInputPresentation(presentation)
                 self.showInlineTextEditor()
-                self.status.stringValue = "Editing text inline. Return inserts a line; Escape or click away finishes."
+                self.editorError = nil
                 if current.bufferedText != current.acceptedText {
                     self.sendBufferedTextUpdateIfNeeded()
                 } else if current.finishRequested != nil {
@@ -5230,7 +5224,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         input.requestInFlight = true
         input.finishInFlight = true
         inlineTextInput = input
-        status.stringValue = commit ? "Finishing text…" : "Cancelling text…"
+        editorError = nil
         updateControls()
         worker.request(["operation": "finish_text_input", "input_id": input.inputID,
                         "commit": commit]) { [weak self] result in
@@ -5254,10 +5248,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.hideInlineTextEditor()
                 self.publishTextInputPresentation(presentation)
                 if commit { self.invalidateOutput() }
-                self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = commit
-                    ? (presentation.snapshot.unsavedChanges ? "Changes save automatically." : "Text finished.")
-                    : "Text input cancelled."
+                self.editorError = nil
                 self.updateControls()
                 if let tool = current.nextTool {
                     self.activateTool(section: tool.section, shape: tool.shape)
@@ -5283,8 +5274,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let nextTool = inlineTextInput?.nextTool
         inlineTextInput = nil
         hideInlineTextEditor()
-        status.textColor = tokens.color("text-muted")
-        status.stringValue = "Text input cancelled."
+        editorError = nil
         closeAfterTextInput = false
         updateControls()
         if let tool = nextTool {
@@ -6155,8 +6145,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func decodeImport(_ url: URL, point: CGPoint?, token: Int, generation: Int, artifactID: String) {
         guard importToken == token, state.generation == generation, state.artifactID == artifactID else { return }
         importLoading = true
-        status.textColor = tokens.color("text-muted")
-        status.stringValue = "Reading image…"
+        editorError = nil
         updateControls()
         let decoder = imageDecoder
         Self.imageDecodeQueue.async {
@@ -6201,8 +6190,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         self.pendingImport = nil
         let token = importToken
         let selectedID = selectedLayerID
-        status.textColor = tokens.color("text-muted")
-        status.stringValue = "Adding image layer…"
+        editorError = nil
         updateControls()
         worker.importImage(pendingImport.image, selectedID: selectedID, point: pendingImport.point) { [weak self] result in
             guard let self, self.importToken == token else { return }
@@ -6214,8 +6202,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.invalidateOutput()
                 self.preferredLayerID = imported.layerID
                 self.publish(imported.presentation, resetCrop: false)
-                self.status.textColor = self.tokens.color("text-muted")
-                self.status.stringValue = "Image added. Changes save automatically."
+                self.editorError = nil
                 if !self.pendingDropURLs.isEmpty, let artifactID = self.state.artifactID {
                     // Later files in one drop stack below the layer just added.
                     let next = self.pendingDropURLs.removeFirst()
@@ -6548,7 +6535,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         cancelDrawingPreview()
         if !preserveOutputAndStatus { invalidateOutput() }
         preferredLayerID = preferredSelection
-        if !preserveOutputAndStatus { status.stringValue = message }
+        if !preserveOutputAndStatus { editorError = nil }
         updateControls()
         worker.request(object) { [weak self] result in
             guard let self else { return }
@@ -6563,9 +6550,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     self.preferredLayerID = nil
                 } else {
                     self.publish(presentation, resetCrop: resetCrop)
-                    self.status.textColor = self.tokens.color("text-muted")
-                    self.status.stringValue = presentation.snapshot.unsavedChanges
-                        ? "Changes save automatically." : presentation.snapshot.hasDraft ? "Draft saved." : "Original restored."
+                    self.editorError = nil
                 }
                 if selectToolOnSuccess { self.activateTool(section: Section.layers, shape: nil) }
             case .failure(let error):
@@ -6912,7 +6897,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             label.textColor = tokens.color(label.identifier?.rawValue == "editor-muted"
                 ? "text-muted" : "text")
         }
-        status.textColor = tokens.color("text-muted")
         restyleChrome()
         exportBar.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         exportBarRule.layer?.backgroundColor = tokens.color("border-subtle").cgColor
@@ -7068,7 +7052,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             publishPresence()
         }
-        status.stringValue = message; status.textColor = tokens.color("danger-text")
+        editorError = message
         reportError(message)
     }
 
