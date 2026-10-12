@@ -661,6 +661,8 @@ Like the shipping editor's browser fallback, a character the chosen font lacks
 the fonts installed on the computer, rather than failing; installed fonts are
 never copied into drafts.
 Selected-text named styles use those fonts, including Rounded and Rounded Box.
+Choosing a non-rounded font clears the box's rounded corners; choosing Rounded
+afterward keeps those corners square until you explicitly choose Rounded Box.
 In both native editors, explicitly choosing a named style for selected text also makes that
 style the next new-text choice for this editor. Undo or a failed edit does not
 undo that future choice; size, color and manual font edits do not carry forward.

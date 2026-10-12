@@ -3212,6 +3212,38 @@ def main():
             run("xdotool", "key", "Escape")
             # Shipping applies every text property as it changes: a typing burst
             # in one field is one undo step, each toggle or menu choice another.
+            prop_click(95, TEXT["style"])
+            prop_click(60, TEXT_STYLE_ROWS["rounded-box"])
+            rounded = save_layers(lambda values: values[-1]["fontFamily"] == "rounded"
+                                  and values[-1]["roundedBackground"], "Rounded Box applied")[-1]
+            shot(editor, f"text-rounded-font-{args.appearance}")
+            prop_click(60, TEXT["font"])
+            prop_click(40, TEXT["font"] + 69)  # Serif leaves the plate, clears rounding.
+            serif = save_layers(lambda values: values[-1]["fontFamily"] == "serif",
+                                "boxed font family applied live")[-1]
+            shot(editor, f"text-boxed-serif-{args.appearance}")
+            assert not serif["roundedBackground"], serif
+            for key in ("text", "color", "fontSize", "background", "align", "bold", "italic",
+                        "outlined", "dropShadow"):
+                assert serif.get(key) == rounded.get(key), (key, serif, rounded)
+            toolbar_click("undo")
+            save_layers(lambda values: values[-1] == rounded, "font and corners undo together")
+            toolbar_click("redo")
+            save_layers(lambda values: values[-1] == serif, "font and corners redo together")
+            # Choosing Rounded alone does not recreate the preset's corner flag.
+            prop_click(60, TEXT["font"])
+            prop_click(40, TEXT["font"] + 125)
+            round_face = save_layers(lambda values: values[-1]["fontFamily"] == "rounded",
+                                     "manual Rounded font applied")[-1]
+            shot(editor, f"text-manual-rounded-{args.appearance}")
+            assert not round_face["roundedBackground"], round_face
+            assert round_face["background"] == rounded["background"]
+            toolbar_click("undo")
+            save_layers(lambda values: values[-1] == serif, "manual Rounded undone")
+            toolbar_click("undo")
+            save_layers(lambda values: values[-1] == rounded, "boxed font change undone")
+            toolbar_click("undo")
+            save_layers(lambda values: values[-1] == created, "Rounded Box preset undone")
             prop_click(60, TEXT["font"])
             shot(editor, f"text-font-menu-{args.appearance}")
             # The token Font listbox opens below: Sans serif, Serif, Monospace,
@@ -3374,7 +3406,9 @@ def main():
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
                 "checks": ["text-click-once-fresh-selection", "text-readable-live-apply",
-                           "text-font-family", "text-typing-one-undo-step", "text-bold-italic-plate",
+                           "text-font-family", "text-font-corners-one-undo-redo",
+                           "text-manual-rounded-keeps-square-plate",
+                           "text-typing-one-undo-step", "text-bold-italic-plate",
                            "text-glyph-shadow-pixels", "text-shadow-field-undo",
                            "text-custom-shadow-settings-reopen",
                            "text-named-style-live", "text-named-style-preserve-undo-redo",

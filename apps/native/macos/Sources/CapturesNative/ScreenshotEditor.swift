@@ -3058,7 +3058,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textFamily.tokens = tokens
         textFamily.frame = NSRect(x: 0, y: 378, width: Self.pairWidth, height: 32)
         textFamily.setAccessibilityLabel("Text font")
-        textFamily.target = self; textFamily.action = #selector(textControlToggled)
+        textFamily.target = self; textFamily.action = #selector(textFamilyChanged)
         content.addSubview(textFamily)
         textContentLabel = panelFieldLabel("Text", x: 0, y: 416, parent: content)
         let textScroll = NSScrollView(frame: NSRect(x: 0, y: 438, width: width, height: 82))
@@ -5319,6 +5319,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     @objc private func textControlToggled() {
         layoutLayerInspectorTail()
         textControlsChanged(field: nil)
+    }
+
+    @objc private func textFamilyChanged() {
+        // Shipping clears the preset's corners on non-rounded font choices;
+        // choosing Rounded alone must not restore that old staged flag.
+        if let family = textFamily.selectedItem?.representedObject as? String, family != "rounded" {
+            textPresetRounded = false
+        }
+        textControlToggled()
     }
 
     /// Shipping "Text background": on adds the `#111318` plate and clears
