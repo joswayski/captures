@@ -188,7 +188,7 @@ final class RecordingHUDView: NSView {
     /// A failed take retries at once; a running take asks first (shared policy).
     var restartConfirms: Bool { policy?.restartConfirms ?? true }
     /// The styled tooltip currently shown, for tests and accessibility checks.
-    var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.label.stringValue }
+    var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.text }
 
     init(frame: NSRect, tokens: Tokens, excludedFromCapture: Bool = true) {
         self.tokens = tokens
@@ -410,8 +410,8 @@ final class RecordingHUDView: NSView {
             return
         }
         tooltipOwner = button
-        tooltipView.label.stringValue = tooltip.text
-        let textSize = tooltipView.label.intrinsicContentSize
+        tooltipView.text = tooltip.text
+        let textSize = tooltipView.textSize
         guard let hidden = RecordingHUDPolicy.tooltipFrame(anchor: button.frame, textSize: textSize,
                   rightAligned: tooltip.rightAligned, progress: 0, bounds: bounds),
               let shown = RecordingHUDPolicy.tooltipFrame(anchor: button.frame, textSize: textSize,

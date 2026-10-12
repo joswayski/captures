@@ -366,7 +366,7 @@ final class RecordingHUDTests: XCTestCase {
         XCTAssertNil(hud.errorText)
     }
 
-    func testGlassTooltipLabelsStayFiniteUntilSizedAndRetainTheirShippingInsets() throws {
+    func testGlassTooltipTextBoundsStayFiniteUntilSizedAndRetainTheirShippingInsets() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
         for (style, minimum, expected) in [
@@ -380,20 +380,20 @@ final class RecordingHUDTests: XCTestCase {
                          NSSize(width: 47, height: 1), NSSize(width: 1, height: 1)] {
                 tooltip.setFrameSize(size)
                 tooltip.layout()
-                XCTAssertEqual(tooltip.label.frame, .zero,
-                    "an unsized or undersized chip has no label area, not a null rectangle")
+                XCTAssertEqual(tooltip.textBounds, .zero,
+                    "an unsized or undersized chip has no text area, not a null rectangle")
             }
             tooltip.setFrameSize(minimum)
             tooltip.layout()
-            XCTAssertFalse(tooltip.label.frame.isNull, "exact padding dimensions are still finite")
-            XCTAssertEqual(tooltip.label.frame.size, .zero)
+            XCTAssertFalse(tooltip.textBounds.isNull, "exact padding dimensions are still finite")
+            XCTAssertEqual(tooltip.textBounds.size, .zero)
             tooltip.setFrameSize(NSSize(width: 47, height: 33))
             tooltip.layout()
-            XCTAssertEqual(tooltip.label.frame, expected,
+            XCTAssertEqual(tooltip.textBounds, expected,
                 "a normally sized chip keeps the preview/HUD text padding")
             tooltip.setFrameSize(.zero)
             tooltip.layout()
-            XCTAssertEqual(tooltip.label.frame, .zero, "shrinking after hover remains safe")
+            XCTAssertEqual(tooltip.textBounds, .zero, "shrinking after hover remains safe")
         }
     }
 
@@ -436,6 +436,24 @@ final class RecordingHUDTests: XCTestCase {
         XCTAssertEqual(tooltip.frame.maxX, hide.frame.maxX, accuracy: 0.5,
             "the last three tooltips right-align like shipping")
         try render(hud, window: window, name: "recording-hud-dark-tooltip")
+        // A stored "Hide controls" string used to paint "Hide contr…". Inspect
+        // the rightmost glyph: the final s has a full-height body, not low dots.
+        let bitmap = try XCTUnwrap(tooltip.bitmapImageRepForCachingDisplay(in: tooltip.bounds))
+        tooltip.cacheDisplay(in: tooltip.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / tooltip.bounds.width
+        var ink: [(x: Int, y: Int)] = []
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                if color.alphaComponent > 0.7 && min(color.redComponent,
+                    color.greenComponent, color.blueComponent) > 0.7 { ink.append((x, y)) }
+            }
+        }
+        let right = try XCTUnwrap(ink.map(\.x).max())
+        let tail = ink.filter { $0.x > right - Int(4 * scale) }.map(\.y)
+        let height = try XCTUnwrap(tail.max()) - XCTUnwrap(tail.min()) + 1
+        XCTAssertGreaterThan(CGFloat(height) / scale, 3,
+            "Hide controls must paint its final letter, not an ellipsis")
         hide.mouseExited(with: event)
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         XCTAssertNil(hud.visibleTooltip)

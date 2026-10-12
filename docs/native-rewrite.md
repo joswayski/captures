@@ -3376,6 +3376,14 @@ the recording HUD's tooltip; the system/egui hover texts are gone, including
 the native-only "Click to expand; drag to move the preview pile", "Drag the
 original file to another app", overflow-cue, metadata and Copy/Save tips that
 shipping lacks. `captures_app::preview_chrome` owns the tip geometry.
+AppKit's glass chips now measure and paint one attributed string rather than
+placing a separate truncating text-field cell inside the measured chip. The
+mini-preview Delete and recording-HUD Hide controls fixtures exposed visible
+ellipses despite correct stored copy; the HUD regression now inspects the final
+letter's painted height. Font/padding tokens, placement, mouse transparency and
+hover animations remain unchanged. macOS CI must verify the rendered correction;
+Windows, X11 and Wayland retain the unchanged egui tooltip path. Physical
+cross-platform text/accessibility acceptance remains open.
 When an expanded stack overflows, centered chevron cues at the window edges
 ("Show older captures" / "Show newer captures", swapped for top placements)
 scroll one card slot; `captures_app::preview` owns the edge tolerance, slot

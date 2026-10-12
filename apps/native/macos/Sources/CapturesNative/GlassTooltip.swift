@@ -25,12 +25,23 @@ class GlassTooltipView: NSView {
                                        bordered: false, shadowed: true)
     }
 
-    let label = NSTextField(labelWithString: "")
+    var text = "" { didSet { needsDisplay = true } }
     private let chipStyle: Style
+    private let textAttributes: [NSAttributedString.Key: Any]
+    private var attributedText: NSAttributedString { NSAttributedString(string: text, attributes: textAttributes) }
+    var textSize: NSSize {
+        let measured = attributedText.size()
+        return NSSize(width: ceil(measured.width), height: ceil(measured.height))
+    }
     override var isFlipped: Bool { true }
 
     init(tokens: Tokens, style: Style) {
         chipStyle = style
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingTail
+        textAttributes = [.font: NSFont.systemFont(ofSize: tokens.number(style.fontToken), weight: .medium),
+                          .foregroundColor: tokens.color("glass-text"), .paragraphStyle: paragraph]
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
@@ -47,25 +58,26 @@ class GlassTooltipView: NSView {
             layer?.shadowRadius = 3
             layer?.shadowOffset = CGSize(width: 0, height: -2)
         }
-        label.font = .systemFont(ofSize: tokens.number(style.fontToken), weight: .medium)
-        label.textColor = tokens.color("glass-text")
-        label.alignment = .center
-        label.lineBreakMode = .byTruncatingTail
-        addSubview(label)
         isHidden = true
         alphaValue = 0
         setAccessibilityElement(false)
-        label.setAccessibilityElement(false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    override func layout() {
-        super.layout()
-        // AppKit lays out this hidden, zero-sized chip before its first hover.
-        // An oversized CGRect inset is null, with infinite x/y origins.
+    var textBounds: NSRect {
+        // An oversized CGRect inset is null, with infinite x/y origins. Hidden,
+        // unsized chips have no drawable text area.
         let content = bounds.insetBy(dx: chipStyle.inset.width, dy: chipStyle.inset.height)
-        label.frame = content.isNull ? .zero : content
+        return content.isNull ? .zero : content
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let content = textBounds
+        guard content.width > 0, content.height > 0 else { return }
+        // Measure and paint the same glyphs. A separate NSTextField cell can
+        // truncate even when its intrinsic width was used to place this chip.
+        attributedText.draw(in: content)
     }
 }
