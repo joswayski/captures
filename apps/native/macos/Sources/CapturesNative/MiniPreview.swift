@@ -1642,12 +1642,13 @@ final class MiniPreviewView: NSView {
                   let layout = restLayouts[id], let layer = card.layer,
                   !card.isExiting || exits.contains(id) else { continue }
             let shift = CGFloat(layout.y - oldLayout.y)
-            let oldPosition = layer.position
-            let presentation = (layer.presentation() ?? layer).position
-            let move = layer.animation(forKey: "preview-settle-position") as? CABasicAnimation
+            let oldOrigin = card.frame.origin
+            let presentation = layer.presentation()?.position
+            // CALayer's installed animations are read-only. Retarget a copy.
+            let move = layer.animation(forKey: "preview-settle-position")?.copy() as? CABasicAnimation
             let cancelledSettle = previous.artifactIDs.drop(while: { $0 != id }).dropFirst()
                 .contains(where: { cancelled.contains($0) })
-            var origin = card.frame.origin
+            var origin = oldOrigin
             if card.isExiting {
                 origin.y += shift
             } else {
@@ -1655,22 +1656,30 @@ final class MiniPreviewView: NSView {
                 origin.y = CGFloat(layout.y) + CGFloat(holes) * (anchoredAtTop ? -cardSlot : cardSlot)
             }
             cards[id]?.removeFromSuperview()
-            card.removeFromSuperview(); document.addSubview(card); cards[id] = card
+            document.addSubview(card); cards[id] = card
             card.setFrameOrigin(origin)
-            if let move {
-                // AppKit may remove backing-layer animations during reparenting.
-                // Reinstall the same absolute-time move in the translated slot.
+            if let move, let destination = card.layer,
+               let from = move.fromValue as? NSValue, let to = move.toValue as? NSValue {
+                // Hidden/reattaching backing layers can have infinite positions.
+                // The owned animation endpoints and NSView frames stay finite.
                 if cancelledSettle {
-                    let now = layer.convertTime(CACurrentMediaTime(), from: nil)
+                    let now = destination.convertTime(CACurrentMediaTime(), from: nil)
+                    let elapsed = max(0, now - move.beginTime)
+                    let progress = min(1, elapsed / move.duration)
+                    let eased = NativeMotion.ease(move.timingFunction ?? CAMediaTimingFunction(name: .default), progress)
+                    let sampled = NSPoint(x: from.pointValue.x + (to.pointValue.x - from.pointValue.x) * eased,
+                        y: from.pointValue.y + (to.pointValue.y - from.pointValue.y) * eased)
+                    let current = presentation.flatMap { $0.x.isFinite && $0.y.isFinite ? $0 : nil } ?? sampled
                     move.duration = max(0, move.duration - max(0, now - move.beginTime))
                     move.beginTime = max(now, move.beginTime)
-                    move.fromValue = NSValue(point: NSPoint(x: presentation.x, y: presentation.y + shift))
-                } else if let from = move.fromValue as? NSValue {
+                    move.fromValue = NSValue(point: NSPoint(x: current.x, y: current.y + shift))
+                } else {
                     move.fromValue = NSValue(point: NSPoint(x: from.pointValue.x, y: from.pointValue.y + shift))
                 }
-                move.toValue = NSValue(point: layer.position)
-                if move.duration > 0 { layer.add(move, forKey: "preview-settle-position") }
-                else { layer.removeAnimation(forKey: "preview-settle-position") }
+                move.toValue = NSValue(point: NSPoint(x: to.pointValue.x + origin.x - oldOrigin.x,
+                    y: to.pointValue.y + origin.y - oldOrigin.y))
+                if move.duration > 0 { destination.add(move, forKey: "preview-settle-position") }
+                else { destination.removeAnimation(forKey: "preview-settle-position") }
             }
             card.isHoverLocked = { [weak self] in self?.hoverLock.locked == true }
             for button in card.iconButtons {
@@ -1679,10 +1688,9 @@ final class MiniPreviewView: NSView {
                 }
             }
             if let overlay = previous.dustOverlays[id], exits.contains(id) {
-                overlay.removeFromSuperview()
-                overlay.setFrameOrigin(NSPoint(x: overlay.frame.minX,
-                    y: overlay.frame.minY + layer.position.y - oldPosition.y))
+                let frame = overlay.frame
                 document.addSubview(overlay, positioned: .above, relativeTo: card)
+                overlay.setFrameOrigin(NSPoint(x: frame.minX, y: frame.minY + shift))
                 dustOverlays[id] = overlay
             }
         }
