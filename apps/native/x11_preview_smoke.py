@@ -1325,6 +1325,14 @@ def main():
                         shot("root", f"{prefix}-expand-held-hover")
                         time.sleep(.8)
                         shot(preview, f"{prefix}-expand-hover-settled")
+                        # Reverse an idle hover before the width/swap settle,
+                        # then reenter while they are still returning.
+                        run("xdotool", "mousemove", "0", "0", "sleep", ".4")
+                        for _ in range(3):
+                            run("xdotool", "mousemove", "--window", preview, str(x), str(y),
+                                "sleep", ".07", "mousemove", "0", "0", "sleep", ".06",
+                                "mousemove", "--window", preview, str(x), str(y),
+                                "sleep", ".04", "mousemove", "0", "0", "sleep", ".3")
                         recording.communicate(input=b"q\n", timeout=10)
                         assert recording.returncode == 0, "expand recording failed"
                     else:

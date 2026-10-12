@@ -1615,13 +1615,6 @@ pub fn show_stack_controls(
     // The pill keeps its hover width until the pointer leaves the wide
     // bounds, so growing under a stationary pointer cannot flicker.
     let minimize_id = ui.scope_id().with("show-less");
-    let expanded = minimize_override.unwrap_or_else(|| {
-        ui.data(|data| data.get_temp::<bool>(minimize_id.with("expanded"))) == Some(true)
-            || ui.memory(|memory| memory.has_focus(minimize_id))
-    });
-    if minimize_override.is_some() {
-        ui.data_mut(|data| data.insert_temp(minimize_id.with("expanded"), expanded));
-    }
     let anchored = |width: f32| {
         if right_anchor {
             egui::Rect::from_min_max(
@@ -1632,6 +1625,16 @@ pub fn show_stack_controls(
             egui::Rect::from_min_size(egui::pos2(inner_x, y), egui::vec2(width, 28.))
         }
     };
+    let was_expanded =
+        ui.data(|data| data.get_temp::<bool>(minimize_id.with("expanded"))) == Some(true);
+    let expanded = minimize_override.unwrap_or_else(|| {
+        ui.rect_contains_pointer(anchored(if was_expanded {
+            STACK_MINIMIZE_HOVER_WIDTH as f32
+        } else {
+            28.
+        })) || ui.memory(|memory| memory.has_focus(minimize_id))
+    });
+    ui.data_mut(|data| data.insert_temp(minimize_id.with("expanded"), expanded));
     let minimize = anchored(if expanded {
         STACK_MINIMIZE_HOVER_WIDTH as f32
     } else {
@@ -1711,8 +1714,8 @@ pub fn show_stack_controls(
     action
 }
 
-/// 0…1 progress of a toggled transition, eased in its direction of travel
-/// like a CSS transition (reversing plays the curve backward from 1).
+/// Retarget from the sampled presentation value, as AppKit does. Switching
+/// easing formulas on reversal would jump between two different curve values.
 fn eased_toggle(
     ui: &egui::Ui,
     id: egui::Id,
@@ -1722,17 +1725,26 @@ fn eased_toggle(
     reduced_motion: bool,
 ) -> f64 {
     let tween = tokens.transition(transition);
-    let seconds = if reduced_motion {
-        0.
-    } else {
-        tween.duration_ms as f32 / 1000.
-    };
-    let linear = f64::from(ui.ctx().animate_bool_with_time(id, on, seconds));
-    if on {
-        tween.easing.ease(linear)
-    } else {
-        1. - tween.easing.ease(1. - linear)
+    let now = ui.input(|input| input.time);
+    let target = if on { 1. } else { 0. };
+    let (mut from, mut to, mut started) = ui
+        .data(|data| data.get_temp::<(f64, f64, f64)>(id))
+        .unwrap_or((target, target, now));
+    if reduced_motion {
+        from = target;
+        to = target;
+        started = now;
+    } else if to != target {
+        from = tween.value(from, to, (now - started) * 1000., false);
+        to = target;
+        started = now;
     }
+    ui.data_mut(|data| data.insert_temp(id, (from, to, started)));
+    let elapsed = (now - started) * 1000.;
+    if from != to && tween.running(elapsed, reduced_motion) {
+        ui.ctx().request_repaint();
+    }
+    tween.value(from, to, elapsed, reduced_motion)
 }
 
 /// Shipping `.thumbnail-stack-control`: solid glass square, raised on hover
@@ -3216,6 +3228,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(284., 52.));
         let pointer = egui::pos2(46., 26.);
         let mut widths = Vec::new();
+        let mut label_alpha = Vec::new();
         let outside = egui::pos2(500., 500.);
         for (time, position, minimize_override) in [
             (0., outside, None),
@@ -3227,6 +3240,16 @@ mod tests {
             (0.9, outside, Some(true)),
             (1., pointer, Some(false)),
             (1.1, outside, None), // no stale hover after the transition
+            (2., outside, None),
+            (2.01, pointer, None),
+            (2.05, pointer, None),
+            (2.06, pointer, None),
+            (2.06001, outside, None),
+            (2.06002, outside, None),
+            (2.06003, pointer, None),
+            (2.06004, pointer, None),
+            (2.5, outside, None),
+            (3., outside, None),
         ] {
             ctx.begin_pass(egui::RawInput {
                 time: Some(time),
@@ -3259,12 +3282,45 @@ mod tests {
                 })
                 .fold(0., f32::max);
             widths.push(width);
+            label_alpha.push(
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Show less" => {
+                            Some(text.fallback_color.a())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(0),
+            );
             output.textures_delta.clear();
         }
         assert_eq!(widths[0], 28.);
         assert!(widths[2] > 28. && widths[2] < 92., "mid-morph {widths:?}");
         assert_eq!(widths[3], 92.);
-        assert_eq!(&widths[4..], &[28., 92., 92., 28., 28.]);
+        assert_eq!(&widths[4..9], &[28., 92., 92., 28., 28.]);
+        assert!(
+            widths[12] > 28. && widths[12] < 92.,
+            "interrupted hover {widths:?}"
+        );
+        assert!(
+            (widths[14] - widths[13]).abs() < 0.25,
+            "Leaving mid-morph must retarget without a width jump: {widths:?}"
+        );
+        assert!(
+            (widths[16] - widths[15]).abs() < 0.25,
+            "Reentering mid-morph must retarget without a width jump: {widths:?}"
+        );
+        assert!(
+            label_alpha[14].abs_diff(label_alpha[13]) <= 1,
+            "Leaving mid-morph must preserve label opacity: {label_alpha:?}"
+        );
+        assert!(
+            label_alpha[16].abs_diff(label_alpha[15]) <= 1,
+            "Reentering mid-morph must preserve label opacity: {label_alpha:?}"
+        );
+        assert_eq!(widths[18], 28.);
     }
 
     #[test]
