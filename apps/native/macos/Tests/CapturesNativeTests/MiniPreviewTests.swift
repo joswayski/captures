@@ -815,6 +815,11 @@ final class MiniPreviewTests: XCTestCase {
             let view = try XCTUnwrap(controller.previewView)
             XCTAssertEqual(view.renderedArtifactIDs, ["older", "dust", "close", "incoming"])
             XCTAssertEqual(view.dustChipCount, chips, "the existing chips must survive the arrival")
+            for overlay in view.subviewsRecursive.compactMap({ $0 as? PreviewMotionOverlay }) {
+                XCTAssertTrue(overlay.frame.minX.isFinite && overlay.frame.minY.isFinite,
+                              "hidden/reattaching layer positions must not move dust to infinity")
+                XCTAssertTrue(overlay.content.superlayer === overlay.layer, "retained dust must still paint")
+            }
             XCTAssertTrue(controller.isTransitioning)
             XCTAssertEqual(controller.warningText(for: "older"), "Clipboard unavailable")
             for id in ["dust", "close"] {
@@ -827,6 +832,9 @@ final class MiniPreviewTests: XCTestCase {
             }
             try write(render(try XCTUnwrap(view.window as? MiniPreviewPanel)),
                       name: "mini-preview-overlap-arrival-\(placement).png")
+            if let bitmap = try renderPresentation(try XCTUnwrap(view.window as? MiniPreviewPanel)) {
+                try write(bitmap, name: "mini-preview-overlap-presentation-\(placement).png")
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
             try capture("again")
             XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, chips)
@@ -1736,6 +1744,22 @@ final class MiniPreviewTests: XCTestCase {
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds)?
             .retagging(with: .sRGB))
         view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
+    /// A current layer-tree fixture, not cacheDisplay's model-only drawing.
+    /// Core Graphics does not reproduce compositor filters/backdrop materials;
+    /// this records dust's prefiltered chips, transforms, clipping and opacity.
+    private func renderPresentation(_ panel: MiniPreviewPanel) throws -> NSBitmapImageRep? {
+        let bitmap = try render(panel)
+        CATransaction.flush()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        guard let presentation = panel.previewView.layer?.presentation() else { return nil }
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap)?.cgContext)
+        context.clear(CGRect(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
+        let scale = CGFloat(bitmap.pixelsWide) / panel.previewView.bounds.width
+        context.scaleBy(x: scale, y: scale)
+        presentation.render(in: context)
         return bitmap
     }
 
