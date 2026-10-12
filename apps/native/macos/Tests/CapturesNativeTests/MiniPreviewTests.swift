@@ -1735,20 +1735,41 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertTrue(card.hasVisibleLabels, "idle metadata stays beside the pill")
             try write(render(panel), name: "mini-preview-in-editor-\(right ? "right" : "left").png")
             let hover = try hoverEvent(for: panel)
+            let pillFrame = edit.frame
             edit.mouseEntered(with: hover)
+            try waitUntil { edit.iconHover == 1 }
             XCTAssertEqual(edit.editorLabel, "Show in editor")
+            XCTAssertEqual(edit.frame, pillFrame, "hover keeps the pill's hit target fixed")
+            let lifted = try XCTUnwrap(renderPresentation(panel))
+            let anchor = edit.convert(edit.bounds, to: view)
+            let top = try XCTUnwrap(pixelColor(in: lifted, of: panel, x: anchor.midX, y: anchor.minY)?.usingColorSpace(.sRGB))
+            let accent = try XCTUnwrap(tokens.color("theme-accent").usingColorSpace(.sRGB))
+            XCTAssertEqual(top.redComponent, accent.redComponent, accuracy: 0.01, "the resting border is inside the lifted face")
+            XCTAssertEqual(top.greenComponent, accent.greenComponent, accuracy: 0.01)
+            XCTAssertEqual(top.blueComponent, accent.blueComponent, accuracy: 0.01)
+            try write(lifted, name: "mini-preview-editor-hover-\(right ? "right" : "left").png")
             edit.performClick(nil)
             XCTAssertEqual(edit.editorLabel, "In editor", "the opening click keeps the passive label")
+            XCTAssertEqual(edit.iconHover, 1, "just-opened mutes the action, not the hover pose")
+            let passive = try XCTUnwrap(renderPresentation(panel))
+            let passiveTop = try XCTUnwrap(pixelColor(in: passive, of: panel, x: anchor.midX, y: anchor.minY)?.usingColorSpace(.sRGB))
+            let passiveInside = try XCTUnwrap(pixelColor(in: passive, of: panel, x: anchor.midX, y: anchor.minY + 4)?.usingColorSpace(.sRGB))
+            XCTAssertEqual(passiveTop.redComponent, passiveInside.redComponent, accuracy: 0.01)
+            XCTAssertEqual(passiveTop.greenComponent, passiveInside.greenComponent, accuracy: 0.01)
+            XCTAssertEqual(passiveTop.blueComponent, passiveInside.blueComponent, accuracy: 0.01)
+            try write(passive, name: "mini-preview-editor-just-opened-\(right ? "right" : "left").png")
             edit.mouseExited(with: hover)
             edit.mouseEntered(with: hover)
             XCTAssertEqual(edit.editorLabel, "Show in editor")
-            edit.mouseExited(with: hover)
+            try waitUntil { edit.iconHover == 1 }
 
             view.setEditorPhase(UInt32(CAPTURES_EDITOR_PHASE_LEAVING), for: "card", animated: false)
             XCTAssertFalse(edit.isHidden)
             XCTAssertFalse(edit.isEnabled, "a leaving pill ignores clicks")
+            XCTAssertEqual(edit.iconHover, 0, "leaving clears the lifted pose even with the pointer held")
             XCTAssertEqual(card.editorRingOpacity, 0)
             XCTAssertEqual(edit.frame, rest)
+            edit.mouseExited(with: hover)
             view.setEditorPhase(UInt32(CAPTURES_EDITOR_PHASE_LINGERING), for: "card", animated: false)
             XCTAssertFalse(edit.isHidden, "the Edit icon lingers without hover")
             XCTAssertTrue(edit.isEnabled)
@@ -1897,7 +1918,16 @@ final class MiniPreviewTests: XCTestCase {
     private func pixelColor(in bitmap: NSBitmapImageRep, of panel: MiniPreviewPanel,
                             x: CGFloat, y: CGFloat) -> NSColor? {
         let point = bitmapPoint(in: bitmap, of: panel, x: x, y: y)
-        return bitmap.colorAt(x: point.x, y: point.y)
+        // Both renderers produce 8-bit sRGB pixels. colorAt returns a calibrated
+        // NSColor; converting it to sRGB again changes the already-correct bytes.
+        var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+        bitmap.getPixel(&pixel, atX: point.x, y: point.y)
+        let alpha = CGFloat(pixel[3]) / 255
+        let divisor = bitmap.bitmapFormat.contains(.alphaNonpremultiplied)
+            ? CGFloat(255) : CGFloat(max(1, pixel[3]))
+        return NSColor(srgbRed: CGFloat(pixel[0]) / divisor,
+                       green: CGFloat(pixel[1]) / divisor,
+                       blue: CGFloat(pixel[2]) / divisor, alpha: alpha)
     }
 
     private func write(_ bitmap: NSBitmapImageRep, name: String) throws {
