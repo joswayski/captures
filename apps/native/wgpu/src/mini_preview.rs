@@ -530,9 +530,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
     let chip_pose = clipboard_chip_pose(ui, tokens, &view);
     if view.clipboard_current {
         let chip = clipboard_chip_rect(ui, tokens, card, inset);
-        crate::motion::with_pose(ui, chip_pose, chip, |ui| {
-            clipboard_chip(ui, tokens, chip);
-        });
+        clipboard_chip(ui, tokens, chip, chip_pose);
     }
     let label = view.message.map(str::to_owned).unwrap_or_else(|| {
         captures_app::preview::card_metadata(view.width, view.height, view.size_bytes)
@@ -1551,8 +1549,18 @@ fn clipboard_chip_rect(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, inset: 
 }
 
 /// Shipping `.clipboard-confirmation`: a green-edged pill at the bottom right.
-fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, rect: egui::Rect) {
-    let text = ui.painter().layout_no_wrap(
+fn clipboard_chip(
+    ui: &egui::Ui,
+    tokens: &Tokens,
+    rect: egui::Rect,
+    pose: captures_app::motion::Pose,
+) {
+    // This overlay must not allocate a child scope below the already laid-out
+    // card: its extra item spacing would scroll a bottom-stuck stack upward.
+    let transform = crate::motion::transform(pose, rect);
+    let mut painter = ui.painter().clone();
+    painter.multiply_opacity(pose.opacity.clamp(0., 1.) as f32);
+    let text = painter.layout_no_wrap(
         "Copied to clipboard".to_owned(),
         egui::FontId::proportional(tokens.number("text-2xs")),
         Color32::from_rgb(0xea, 0xff, 0xf0),
@@ -1561,11 +1569,14 @@ fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, rect: egui::Rect) {
     let icon = 12.;
     let gap = tokens.number("s-2");
     let size = rect.size();
-    ui.painter().rect(
-        rect,
-        size.y / 2.,
+    painter.rect(
+        transform * rect,
+        size.y / 2. * transform.scaling,
         Color32::from_rgba_unmultiplied(10, 22, 15, 230),
-        Stroke::new(1., Color32::from_rgba_unmultiplied(53, 163, 93, 140)),
+        Stroke::new(
+            transform.scaling,
+            Color32::from_rgba_unmultiplied(53, 163, 93, 140),
+        ),
         egui::StrokeKind::Inside,
     );
     let icon_rect = egui::Rect::from_min_size(
@@ -1573,13 +1584,13 @@ fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, rect: egui::Rect) {
         egui::vec2(icon, icon),
     );
     paint_icon_with(
-        ui.painter(),
+        &painter,
         Icon::Check,
-        icon_rect,
+        transform * icon_rect,
         Color32::from_rgb(0x7f, 0xd7, 0x9c),
-        2.4 * icon / 24.,
+        2.4 * icon / 24. * transform.scaling,
     );
-    ui.painter().galley(
+    let mut label = egui::epaint::TextShape::new(
         egui::pos2(
             icon_rect.right() + gap,
             rect.center().y - text.size().y / 2.,
@@ -1587,6 +1598,8 @@ fn clipboard_chip(ui: &egui::Ui, tokens: &Tokens, rect: egui::Rect) {
         text,
         Color32::from_rgb(0xea, 0xff, 0xf0),
     );
+    label.transform(transform);
+    painter.add(label);
 }
 
 pub fn show_stack_controls(
@@ -3026,6 +3039,7 @@ mod tests {
     fn clipboard_owner_hides_copy_shows_chip_and_saved_confirms() {
         let ctx = egui::Context::default();
         let tokens = crate::tokens::load()["dark-mustard"].clone();
+        tokens.apply(&ctx, false);
         let texture = ctx.load_texture(
             "clipboard-chip",
             egui::ColorImage::filled([2, 2], Color32::WHITE),
@@ -3075,6 +3089,11 @@ mod tests {
                     arrive_blur: (0., None),
                     depth_blurred: [(0., None); 2],
                 },
+            );
+            assert_eq!(
+                ui.min_size().y,
+                160.,
+                "clipboard feedback must not add scrollable space below the card"
             );
             let mut output = ctx.end_pass();
             let has = |label: &str| {
