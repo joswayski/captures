@@ -540,7 +540,7 @@ final class MiniPreviewTests: XCTestCase {
         func card() throws -> (MiniPreviewPanel, MiniPreviewCardView) {
             // Closed panels stay in NSApp.windows while this test still holds them.
             let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-                .first { $0.isVisible && $0.previewView.artifactIDs == ["source"] })
+                .first { $0.isVisible && $0.previewView === controller.previewView })
             return (panel, try XCTUnwrap(panel.previewView.subviewsRecursive
                 .compactMap { $0 as? MiniPreviewCardView }.first))
         }
@@ -559,17 +559,27 @@ final class MiniPreviewTests: XCTestCase {
         current.1.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
         XCTAssertEqual(controller.presentedArtifactIDs, ["source"], "cancelled external drags keep the card")
 
-        let staleCard = current.1
-        controller.dismiss("source")
-        let replacement = artifact(id: "source", previewPath: "/replacement.png")
-        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
-        controller.present(replacement, on: screenID(), settings: previewSettings(), generation: generation)
-        try waitUntil { controller.isPanelVisible }
-        staleCard.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
-        XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
-            "late completion from a different source identity cannot dismiss its replacement")
+        // The second replacement has the same path but a new source generation.
+        for path in ["/replacement.png", "/replacement.png"] {
+            let staleCard = current.1
+            staleCard.setFileDragging(true)
+            controller.dismiss("source")
+            let replacement = artifact(id: "source", previewPath: path)
+            var restored = false
+            controller.restore(replacement, on: screenID(), settings: previewSettings()) {
+                if case .shown = $0 { restored = true }
+            }
+            try waitUntil { restored }
+            staleCard.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
+            XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
+                "late completion cannot dismiss a different path or a new generation of the same path")
+            current = try card()
+            let point = current.1.convert(NSPoint(x: 30, y: 70), to: current.0.previewView)
+            let pixel = try XCTUnwrap(pixelColor(in: render(current.0), of: current.0, x: point.x, y: point.y))
+            XCTAssertGreaterThan(pixel.alphaComponent, 0.99,
+                "a replacement must not inherit concealment from the stale OS drag")
+        }
 
-        current = try card()
         current.1.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
         XCTAssertTrue(controller.presentedArtifactIDs.isEmpty,
             "an accepted external copy dismisses the exact source card")

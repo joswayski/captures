@@ -1277,6 +1277,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 struct MiniPreviewResource {
     var artifact: CaptureArtifact
     let image: NSImage
+    var generation = 0
 }
 
 private final class MiniPreviewDocumentView: NSView {
@@ -1419,6 +1420,7 @@ final class MiniPreviewView: NSView {
     private let scroll = NSScrollView()
     private let document = MiniPreviewDocumentView()
     private var cards: [String: MiniPreviewCardView] = [:]
+    private let generations: [String: Int]
     private var restLayouts: [String: CapturesPreviewCardLayout]
     private var hoverLayouts: [String: CapturesPreviewCardLayout]
     private(set) var pileHovered = false
@@ -1497,6 +1499,7 @@ final class MiniPreviewView: NSView {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
         self.hoverLayouts = hoverLayouts; anchoredAtTop = topAnchor
         anchoredRight = rightAnchor; stackCollapsed = collapsed
+        generations = resources.mapValues(\.generation)
         self.pileGravity = pileGravity ?? (topAnchor ? -1 : 1)
         let slots = ids.compactMap { id in layouts[id].map { CGFloat($0.y) } }.sorted()
         cardSlot = slots.count >= 2 ? slots[1] - slots[0] : CGFloat(geometry.card_height)
@@ -2114,7 +2117,8 @@ final class MiniPreviewView: NSView {
     func setFileDragging(_ active: Bool, for artifactID: String) { cards[artifactID]?.setFileDragging(active) }
 
     func continueFileDrags(from previous: MiniPreviewView) {
-        for (id, card) in cards where previous.cards[id]?.fileDragStarted == true {
+        for (id, card) in cards where previous.cards[id]?.fileDragStarted == true
+            && generations[id] == previous.generations[id] {
             card.setFileDragging(true)
         }
     }
@@ -2705,7 +2709,7 @@ final class MiniPreviewController {
                     if self.policy.ready(artifact: artifact.id) {
                         self.visibilityPendingArtifactID = nil
                     }
-                    self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
+                    self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image, generation: decodeToken)
                     self.arrivals[artifact.id] = CACurrentMediaTime()
                     self.makePanel(preservingExits: true)
                     self.updateVisibility()
