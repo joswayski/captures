@@ -20,6 +20,9 @@ fn startup_health_and_secondary_quit_stop_monitoring_but_unacknowledged_exit_fai
     for outcome in ["ready", "normal", "crash"] {
         let directory = tempfile::tempdir().unwrap();
         let host = host(directory.path());
+        // A concurrent Unix spawn inherits this open-file description until
+        // exec, even with CLOEXEC. It must not extend a finished host's lease.
+        let inherited = host._lifetime.try_clone().unwrap();
         let mut monitor = Monitor::open(directory.path(), &host.acknowledgement).unwrap();
         assert_eq!(monitor.state().unwrap(), State::Starting);
         fs::write(&host.acknowledgement.file, b"not the readiness token\n").unwrap();
@@ -41,6 +44,7 @@ fn startup_health_and_secondary_quit_stop_monitoring_but_unacknowledged_exit_fai
                 }
             );
         }
+        drop(inherited);
     }
 }
 
