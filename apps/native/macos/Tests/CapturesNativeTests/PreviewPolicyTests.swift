@@ -65,8 +65,10 @@ final class PreviewPolicyTests: XCTestCase {
             work_width: 2400, work_height: 1500, full_x: -2400, full_y: 40,
             full_width: 2400, full_height: 1660, scale_factor: 2)
         for (placement, edge) in [("top_left", 250.0), ("bottom_right", 514.0)] {
+            var movedPlacement = placement
             let origin = try XCTUnwrap(NativePreviewLayout.movedOrigin(monitor: monitor, count: 2,
-                frameOrigin: NSPoint(x: -700, y: 250), placement: placement))
+                frameOrigin: NSPoint(x: -700, y: 250), placement: &movedPlacement))
+            XCTAssertEqual(movedPlacement, placement, "the center band retains the previous corner")
             XCTAssertEqual(origin.x, -700); XCTAssertEqual(origin.edge, edge)
             let compact = try XCTUnwrap(NativePreviewLayout.geometry(monitor: monitor, count: 3,
                 collapsed: true, origin: origin, placement: placement))
@@ -77,11 +79,17 @@ final class PreviewPolicyTests: XCTestCase {
             XCTAssertEqual(expanded.x, -700)
             XCTAssertEqual(expanded.y + (origin.anchor == 0 ? expanded.height : 0), edge)
         }
+        var bottomPlacement = "top_left"
         let bottom = try XCTUnwrap(NativePreviewLayout.movedOrigin(monitor: monitor, count: 2,
-            frameOrigin: NSPoint(x: 9000, y: 9000), placement: "bottom_left"))
+            frameOrigin: NSPoint(x: 9000, y: 9000), placement: &bottomPlacement))
+        XCTAssertEqual(bottomPlacement, "bottom_right")
+        XCTAssertEqual(bottom.anchor, 0)
         XCTAssertEqual(bottom.x, -340); XCTAssertEqual(bottom.edge, 798)
+        var topPlacement = "bottom_right"
         let top = try XCTUnwrap(NativePreviewLayout.movedOrigin(monitor: monitor, count: 2,
-            frameOrigin: NSPoint(x: -9000, y: -9000), placement: "top_right"))
+            frameOrigin: NSPoint(x: -9000, y: -9000), placement: &topPlacement))
+        XCTAssertEqual(topPlacement, "top_left")
+        XCTAssertEqual(top.anchor, 1)
         // Dragging reaches the work-area edge (120 physical pixels / 2),
         // unlike the default placement, which starts with a 12-point inset.
         XCTAssertEqual(top.x, -1200); XCTAssertEqual(top.edge, 60)

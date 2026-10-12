@@ -518,6 +518,61 @@ pub fn collapsed_stack_gravity(
     )
 }
 
+/// Drag a native compact frame without moving the front card when its expansion
+/// anchor changes. Shipping switches anchor/side at ±0.2, retaining the previous
+/// direction through the middle band. Preferences remain the session default.
+pub fn move_collapsed_stack(
+    bounds: ThumbnailMonitorBounds,
+    count: usize,
+    x: f64,
+    y: f64,
+    placement: MiniPreviewPlacement,
+) -> (ThumbnailStackOrigin, MiniPreviewPlacement) {
+    let padding = collapsed_padding(count);
+    let edge_offset = padding
+        + if placement.is_top() {
+            -THUMBNAIL_CONTROL_GUTTER
+        } else {
+            THUMBNAIL_CARD_HEIGHT + THUMBNAIL_CONTROL_GUTTER
+        };
+    let mut origin = ThumbnailStackOrigin {
+        x,
+        edge: y + edge_offset,
+        anchor: placement.into(),
+    };
+    let geometry = thumbnail_geometry(bounds, count, true, Some(origin), placement);
+    origin.x = geometry.x;
+    origin.edge = geometry.y + edge_offset;
+    let gravity = collapsed_stack_gravity(bounds, count, Some(origin), placement);
+    let work = work_area(bounds);
+    let bias = 2.0 * (geometry.x - work.left) / (work.width - THUMBNAIL_WIDTH).max(1.0) - 1.0;
+    let top = if placement.is_top() {
+        gravity < 0.2
+    } else {
+        gravity <= -0.2
+    };
+    let right = if placement.is_right() {
+        bias > -0.2
+    } else {
+        bias >= 0.2
+    };
+    let next = match (top, right) {
+        (true, false) => MiniPreviewPlacement::TopLeft,
+        (true, true) => MiniPreviewPlacement::TopRight,
+        (false, false) => MiniPreviewPlacement::BottomLeft,
+        (false, true) => MiniPreviewPlacement::BottomRight,
+    };
+    origin.anchor = next.into();
+    origin.edge = geometry.y
+        + padding
+        + if top {
+            -THUMBNAIL_CONTROL_GUTTER
+        } else {
+            THUMBNAIL_CARD_HEIGHT + THUMBNAIL_CONTROL_GUTTER
+        };
+    (origin, next)
+}
+
 /// A rear card's shipping 3D pile pose on the 2D screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CollapsedCardPose {
@@ -1225,6 +1280,38 @@ mod tests {
             collapsed_stack_gravity(monitor, 3, Some(low), BottomLeft),
             1.0
         );
+    }
+
+    #[test]
+    fn moved_pile_switches_edges_with_shipping_hysteresis_without_jumping() {
+        use MiniPreviewPlacement::{BottomLeft, BottomRight, TopLeft, TopRight};
+        // Exactly 1000 points of horizontal/vertical travel, no auto-hide reserve.
+        let monitor = bounds((0, 0, 1340, 1276), (0, 0, 1400, 1400), 1.0);
+        for (current, x, y, expected) in [
+            (BottomLeft, 600.01, 399.99, TopRight),
+            (BottomLeft, 599.99, 400.01, BottomLeft),
+            (TopRight, 399.99, 600.01, BottomLeft),
+            (TopRight, 400.01, 599.99, TopRight),
+            (TopLeft, 500.0, 500.0, TopLeft),
+            (TopRight, 500.0, 500.0, TopRight),
+            (BottomLeft, 500.0, 500.0, BottomLeft),
+            (BottomRight, 500.0, 500.0, BottomRight),
+        ] {
+            let (origin, next) = move_collapsed_stack(monitor, 2, x, y, current);
+            assert_eq!(next, expected);
+            assert_eq!(origin.anchor.is_top(), expected.is_top());
+            assert_eq!(origin.x, x);
+            for count in [2, 3, 8] {
+                let compact = thumbnail_geometry(monitor, count, true, Some(origin), next);
+                assert!(
+                    (compact.y + collapsed_padding(count) - (y + 52.0)).abs() < 1e-9,
+                    "changing anchor/count must keep the front card pinned"
+                );
+            }
+            let expanded = thumbnail_geometry(monitor, 2, false, Some(origin), next);
+            let newest = card_layout_in(2, 1, false, next.is_top(), false).unwrap();
+            assert_eq!(expanded.y + newest.y, y + 52.0);
+        }
     }
 
     #[test]

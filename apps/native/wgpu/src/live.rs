@@ -896,6 +896,7 @@ struct MiniPreviews {
     show: bool,
     include_in_captures: bool,
     placement: captures_settings::MiniPreviewPlacement,
+    dragged_placement: Option<captures_settings::MiniPreviewPlacement>,
     omission_frame: Option<u64>,
     /// Monotonic origin for the shared editor-presence clock.
     epoch: Instant,
@@ -937,6 +938,7 @@ impl Default for MiniPreviews {
             show: true,
             include_in_captures: false,
             placement: captures_settings::MiniPreviewPlacement::default(),
+            dragged_placement: None,
             omission_frame: None,
             epoch: Instant::now(),
             hover_lock_generation: 0,
@@ -950,6 +952,14 @@ impl Default for MiniPreviews {
 }
 
 impl MiniPreviews {
+    fn stack_placement(&self) -> captures_settings::MiniPreviewPlacement {
+        if self.visibility.stack_origin().is_some() {
+            self.dragged_placement.unwrap_or(self.placement)
+        } else {
+            self.placement
+        }
+    }
+
     fn begin_capture(
         &mut self,
         settings: &AppSettings,
@@ -1204,7 +1214,7 @@ impl MiniPreviews {
                     preview_motion::delete_origin_x(
                         width,
                         card.saved_path.is_some(),
-                        self.placement.is_right(),
+                        self.stack_placement().is_right(),
                     ),
                     preview_motion::DELETE_ORIGIN_Y,
                 ),
@@ -1384,7 +1394,7 @@ impl MiniPreviews {
         reduced_motion: bool,
     ) -> usize {
         let live = self.stack.ids().to_vec();
-        let top_anchor = self.placement.is_top();
+        let top_anchor = self.stack_placement().is_top();
         for (index, artifact_id) in live.iter().enumerate() {
             if artifact_ids.contains(artifact_id) {
                 let delay =
@@ -1464,37 +1474,21 @@ impl MiniPreviews {
     }
 
     fn move_stack(&mut self, position: egui::Pos2) {
-        use captures_app::preview::{self, ThumbnailStackOrigin};
         if !self.stack.is_collapsed() || !self.is_visible() {
             return;
         }
         let Some(bounds) = self.stack_target.and_then(|target| target.preview_bounds) else {
             return;
         };
-        let count = self.stack.ids().len();
-        let anchor = self.placement.into();
-        let edge_offset = preview::collapsed_padding(count)
-            + if self.placement.is_top() {
-                -preview::THUMBNAIL_CONTROL_GUTTER
-            } else {
-                preview::THUMBNAIL_CARD_HEIGHT + preview::THUMBNAIL_CONTROL_GUTTER
-            };
-        let geometry = preview::thumbnail_geometry(
+        let (origin, placement) = captures_app::preview::move_collapsed_stack(
             bounds,
-            count,
-            true,
-            Some(ThumbnailStackOrigin {
-                x: position.x as f64,
-                edge: position.y as f64 + edge_offset,
-                anchor,
-            }),
-            self.placement,
+            self.stack.ids().len(),
+            f64::from(position.x),
+            f64::from(position.y),
+            self.stack_placement(),
         );
-        self.visibility.set_stack_origin(ThumbnailStackOrigin {
-            x: geometry.x,
-            edge: geometry.y + edge_offset,
-            anchor,
-        });
+        self.visibility.set_stack_origin(origin);
+        self.dragged_placement = Some(placement);
     }
 
     fn mark_ready(&mut self, artifact_id: &str) {
@@ -7057,7 +7051,7 @@ impl Live {
         // A collapsing stack keeps its list window until the fly lands.
         let collapsed =
             self.previews.stack.is_collapsed() && !fly.is_some_and(|fly| fly.collapsing);
-        let placement = self.previews.placement;
+        let placement = self.previews.stack_placement();
         let top_anchor = placement.is_top();
         let display = if collapsed {
             self.previews.stack.ids().to_vec()
@@ -12401,8 +12395,8 @@ mod tests {
             egui::TextureOptions::LINEAR,
         );
         for (placement, edge) in [
-            (MiniPreviewPlacement::TopLeft, 170.),
-            (MiniPreviewPlacement::BottomRight, 434.),
+            (MiniPreviewPlacement::TopLeft, 80.),
+            (MiniPreviewPlacement::BottomRight, 80.),
         ] {
             let settings = AppSettings {
                 mini_preview_placement: placement,
@@ -12416,9 +12410,13 @@ mod tests {
             previews.cards.get_mut(&guard.artifact_id).unwrap().texture = Some(texture.clone());
             previews.mark_ready(&guard.artifact_id);
             previews.stack.set_collapsed(true);
-            previews.move_stack(egui::pos2(240., 170.));
+            previews.move_stack(egui::pos2(240., 80.));
             let origin = previews.visibility.stack_origin().unwrap();
             assert_eq!((origin.x, origin.edge), (240., edge));
+            assert!(
+                origin.anchor.is_top(),
+                "a moved pile opens away from the top edge"
+            );
             previews.stack.set_collapsed(false);
             previews.move_stack(egui::pos2(100., 100.));
             assert_eq!(previews.visibility.stack_origin().unwrap().edge, edge);

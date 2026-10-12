@@ -3351,6 +3351,16 @@ pending crop edits; wgpu tests exercise the dispatcher, stale/busy guards, targe
 identity and root visibility commands. Private-X11 checks direct editor focus,
 repeat activation, unchanged History and clean close. Physical-platform focus,
 accessibility and Wayland live acceptance remain open.
+Dragging a collapsed pile now changes its expansion anchor and control side on
+both native hosts through `preview::move_collapsed_stack` (AppKit uses
+`captures_preview_move_v1`). The shipping ±0.2 gravity/side thresholds retain the
+previous corner through the center band. Anchor conversion keeps the front card
+fixed; arrival, cancellation and expansion retain the dragged position, while an
+empty stack or changed placement preference returns to the configured corner.
+The private-X11 stack smoke crosses the screen thresholds, copies distinct oldest
+and newest pixels from the new order and clears through the relocated toolbar,
+without deleting History or exports. AppKit has window/ABI regressions and fixtures;
+physical macOS/Windows/X11, Wayland placement and accessibility acceptance remain open.
 The native chrome now follows the shipping Tauri card rather than a permanent
 button footer: full-bleed cover images, idle dimensions, hover-revealed corner
 icons and centered Copy/Save file/Show in Folder controls. Saved cards expose
