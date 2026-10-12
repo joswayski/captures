@@ -1003,7 +1003,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         miniPreviews.copyArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.copy(artifact) }
         miniPreviews.saveArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.save(artifact) }
         miniPreviews.openArtifact = { [weak self] artifact in self?.openPreview(artifact) }
-        miniPreviews.shareArtifact = { [weak self] artifact in self?.showSharing(artifact) }
         miniPreviews.trashArtifact = { [weak miniPreviewActions] artifact in miniPreviewActions?.trash(artifact) }
         miniPreviews.prepareDrag = { [weak miniPreviewActions] artifact, completion in
             miniPreviewActions?.prepareDrag(artifact, completion: completion)
@@ -1685,7 +1684,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             liveController?.workspaceHidden = { [weak self] hidden in
                 self?.setCompanionWindowsHidden(hidden)
             }
-            liveController?.showSharing = { [weak self] artifact in self?.showSharing(artifact) }
             renderedLiveStyleRevision = liveStyleRevision
             drainOpenImages()
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
@@ -1936,14 +1934,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func openPreview(_ artifact: CaptureArtifact) {
         if permissionSheet != nil || liveController?.externalOpenPending == true { return }
         liveController?.openPreview(artifact)
-    }
-
-    private func showSharing(_ artifact: CaptureArtifact) {
-        guard options.live, onboardingReady, !terminating, !captureBusy, permissionSheet == nil,
-              let liveController, liveController.historyIdle, let root = liveController.nativeProfileRoot else { return }
-        if sharingController == nil { sharingController = SharingController(tokens: tokens, root: root) }
-        sharingController?.restyle(tokens)
-        sharingController?.present(artifact)
     }
 
     private func installStatusItem() {

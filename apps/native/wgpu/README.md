@@ -54,16 +54,9 @@ their screenshot editor is open, a pre-blurred darkened hover image, hover held
 off after an expand or a new card until the pointer moves, and instant glass
 icon tooltips.
 
-Mini-preview **Share capture** and History's **Share selected capture…** open
-native email-code sign-in and upload/link settings. The shared Rust worker owns
-the isolated OS-vault session and exact original bytes, independently of popup
-and preview dismissal. Upload is explicit; progress/cancel/retry, password/expiry,
-Copy/Open link, Stop sharing and confirmed cloud Trash/Restore are connected.
-Configuration retries never repeat a completed upload. These development controls
-depend on the still-disabled #613 API; they do not activate or deploy it. AppKit
-controls are connected through the same worker. Its seven sharing regressions
-passed in macOS CI and light/dark minimum-size renders were inspected; physical
-vault/object-store/compositor acceptance remains open.
+Mini previews and History match the shipping Tauri action set without Share
+controls. The experimental account worker and sharing UI remain isolated in
+tests and disabled fixtures; the account service is unavailable.
 
 `--scene sharing` renders without vault/network operations. Set
 `CAPTURES_NATIVE_SHARE_FIXTURE` to `otp`, `vault`, `shared`, `uploading`, `trash`

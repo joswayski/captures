@@ -618,13 +618,16 @@ acceptance remain open.
 
 ## Native sharing controls
 
-Both hosts connect mini-preview Share and selected History to the shared Rust
-account/upload worker. AppKit uses an opaque C handle and safe presentation
+Live mini previews and History have no Share controls, matching the shipping
+Tauri baseline. The experimental account/upload worker and sharing UI remain
+available to isolated tests and disabled fixtures, not through the live app.
+AppKit uses an opaque C handle and safe presentation
 events; bearer tokens, challenge IDs and snapshot paths do not cross into Swift.
 Opening/sign-in never upload. Password/expiry, progress/cancel/retry, link
 management and confirmed cloud Trash/Restore are explicit actions. Closing the
 window retains accepted work; Quit and permission recovery drain it before
-releasing the isolated profile. Capture hides Share regardless of preview inclusion.
+releasing the isolated profile. These lifecycle contracts are tested separately
+from the live capture workflow.
 
 AppKit `--scene sharing` renders disabled controls without a worker. Set
 `CAPTURES_NATIVE_SHARE_FIXTURE` to `otp`, `vault`, `shared`, `uploading`, `trash`

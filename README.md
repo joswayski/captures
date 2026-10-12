@@ -900,18 +900,10 @@ Preview controls, History actions and screenshot-editor tools use shared shippin
 icon paths on both native hosts, rather than platform-specific approximations.
 The inspector follows the shipping sections, controls, labels and spacing in the
 shipping 320 px sidebar column on both hosts.
-Both experimental native hosts connect mini-preview **Share capture** and History's
-**Share selected capture…** to native email-code sign-in, OS credential storage,
-upload progress/cancel/retry, and password/expiry/link management. Opening a popup
-never uploads. Their shared Rust worker retains the selected original bytes
-through sign-in and preview dismissal; completed uploads are not duplicated when
-link configuration retries. Closing Share retains work; Quit drains the worker
-before releasing the development profile. The seven AppKit sharing regressions
-passed in macOS CI; light/dark minimum-size fixture renders were inspected.
-Physical platform/vault/object-store acceptance remains open in the
-[sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--acceptance-open).
-The account API is still in development and disabled; these native development
-controls do not enable hosted sharing in the shipping app or deploy its service.
+Native mini previews and History use the shipping Tauri action set, without
+Share controls. Experimental account/upload code and disabled sharing fixtures
+remain separate from the live app; the account service is unavailable.
+See the [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--acceptance-open).
 Both hosts can copy the full-resolution edited image without saving a file or draft;
 copy ignores export format and quality settings.
 The **Background color** card offers a Solid background toggle, the shipping eight
