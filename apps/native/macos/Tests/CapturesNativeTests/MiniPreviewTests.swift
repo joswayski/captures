@@ -876,7 +876,8 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertGreaterThan(view.dustChipCount, 0)
         XCTAssertTrue(controller.isTransitioning)
         XCTAssertTrue(controller.restoreTrashed("trash", status: "Trash failed"))
-        XCTAssertEqual(controller.presentedArtifactIDs, ["older", "restore", "trash"])
+        XCTAssertEqual(controller.presentedArtifactIDs, ["older", "trash", "restore"],
+                       "Trash restores slot 1, recorded after the earlier dismissal; History Restore is new")
         XCTAssertEqual(controller.statusText(for: "trash"), "Trash failed")
         XCTAssertFalse(controller.isTransitioning)
         XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, 0)
