@@ -2082,7 +2082,10 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.state.snapshot?.background, "#f7f7f5", "opening the card is not an edit")
             XCTAssertFalse(blue.active)
             blue.performClick(nil)
-            XCTAssertTrue(controller.state.busy, "a swatch applies at once, without Apply")
+            // performClick pumps AppKit; a fast real worker can finish before
+            // it returns. Accepted pending work and already-applied work are valid.
+            XCTAssertTrue(controller.state.busy || controller.state.snapshot?.background == "#2d9cff",
+                          "a swatch applies at once, without Apply")
             XCTAssertTrue(solid.isEnabled, "the card stays live while a change applies")
             waitUntil { !controller.state.busy }
             XCTAssertEqual(controller.state.snapshot?.background, "#2d9cff")
@@ -2098,7 +2101,7 @@ final class ScreenshotEditorTests: XCTestCase {
             blue.performClick(nil)
             waitUntil { !controller.state.busy }
             red.performClick(nil)
-            XCTAssertTrue(controller.state.busy)
+            XCTAssertTrue(controller.state.busy || controller.state.snapshot?.background == "#ff3b5c")
             white.performClick(nil)
             XCTAssertTrue(white.active, "the queued choice shows at once")
             waitUntil(timeout: 5) {
