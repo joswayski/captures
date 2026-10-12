@@ -1918,7 +1918,16 @@ final class MiniPreviewTests: XCTestCase {
     private func pixelColor(in bitmap: NSBitmapImageRep, of panel: MiniPreviewPanel,
                             x: CGFloat, y: CGFloat) -> NSColor? {
         let point = bitmapPoint(in: bitmap, of: panel, x: x, y: y)
-        return bitmap.colorAt(x: point.x, y: point.y)
+        // Both renderers produce 8-bit sRGB pixels. colorAt returns a calibrated
+        // NSColor; converting it to sRGB again changes the already-correct bytes.
+        var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+        bitmap.getPixel(&pixel, atX: point.x, y: point.y)
+        let alpha = CGFloat(pixel[3]) / 255
+        let divisor = bitmap.bitmapFormat.contains(.alphaNonpremultiplied)
+            ? CGFloat(255) : CGFloat(max(1, pixel[3]))
+        return NSColor(srgbRed: CGFloat(pixel[0]) / divisor,
+                       green: CGFloat(pixel[1]) / divisor,
+                       blue: CGFloat(pixel[2]) / divisor, alpha: alpha)
     }
 
     private func write(_ bitmap: NSBitmapImageRep, name: String) throws {
