@@ -1,17 +1,20 @@
 name: Captures Preview
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      channel_only:
+        description: Refresh the approved public downloads without building a native release
+        required: false
+        type: boolean
+        default: false
       target_sha:
         description: Optional main-branch commit to rebuild as a historical release
         required: false
         type: string
 
-# Finish the active release; replace pending runs with the newest request.
-# The next run snapshots main once, so skipped runs' changes ship together.
+# Native releases are opt-in while parity is unfinished. Public promotion uses
+# the separately approved tag in scripts/preview-release.mjs, never newest-native.
 # Omitting queue uses GitHub's default single pending slot.
 concurrency:
   group: captures-preview-main
@@ -22,11 +25,13 @@ permissions:
 
 jobs:
   route:
+    if: ${{ !inputs.channel_only }}
     uses: ./.github/workflows/mac-route.yml
     secrets: inherit
 
   queue:
     name: Select the next Preview batch
+    if: ${{ !inputs.channel_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -705,18 +710,21 @@ jobs:
           fi
 
   channel:
-    name: Update latest Preview
+    name: Update approved public Preview
     needs: publish
+    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && (needs.publish.result == 'success' || inputs.channel_only) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Publish the greatest Preview on the permanent download page
+      - name: Publish the approved Preview on the permanent download page
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -770,13 +778,14 @@ jobs:
             --pattern latest.json \
             --dir "$channel_assets"
           # Rename versioned packages to stable channel names so README and
-          # release-page download links always point at the latest Preview.
+          # release-page download links point at the approved public Preview.
           preview_assets="$(
             node scripts/preview-release-assets.mjs prepare "$channel_assets"
           )"
           node scripts/preview-changelog.mjs apply \
             "$channel_assets/latest.json" \
-            "$releases_file"
+            "$releases_file" \
+            "$newest_tag"
           newest_id="$(jq -er .id <<< "$newest_release")"
           node scripts/github-release-assets.mjs rewrite-updater-urls \
             "$newest_id" \
@@ -800,7 +809,7 @@ jobs:
             echo "> [!WARNING]"
             echo "> Captures Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
             echo
-            echo "Download the latest validated build (these links always track the newest Preview):"
+            echo "These downloads are pinned to the approved Tauri Preview while native parity work continues separately. Newer native builds in the archive are opt-in, not public-channel updates."
             echo
             echo "- [macOS 13+ — Apple silicon (.dmg)]($(asset_url "$macos_asset"))"
             echo "- [Windows 11 — x64 installer (.exe)]($(asset_url "$windows_asset"))"

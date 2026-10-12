@@ -13,7 +13,23 @@ import {
   releaseReadiness,
   verifyChecksum,
 } from "./install-latest-release.mjs";
-import { latestPreviewRelease, previewVersion } from "./preview-release.mjs";
+import { latestPreviewRelease, previewVersion, publicPreviewRelease } from "./preview-release.mjs";
+
+test("public downloads stay on the approved Tauri release and never fall forward to native", () => {
+  const tauri = { tag_name: "v2026.10.11.4", draft: false, prerelease: true };
+  const native = { tag_name: "v2026.10.11.7", draft: false, prerelease: true };
+  assert.equal(publicPreviewRelease([native, tauri]), tauri);
+  for (const releases of [
+    [native],
+    [native, { ...tauri, draft: true }],
+    [native, { ...tauri, prerelease: false }],
+  ]) {
+    assert.throws(
+      () => publicPreviewRelease(releases),
+      /approved public Preview .* is not published/u,
+    );
+  }
+});
 
 test("selects the greatest published Preview version instead of the last one published", () => {
   const release = latestPreviewRelease([
