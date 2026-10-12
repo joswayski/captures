@@ -2060,19 +2060,56 @@ final class MiniPreviewTests: XCTestCase {
 
     func testControllerFollowsOpenEditorsThenLeavesAndLingers() throws {
         _ = NSApplication.shared
-        let captured = artifact(id: "edited", previewPath: "/edited-preview.png")
-        let controller = try presentedController(captured)
-        defer { controller.close() }
-        let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
-        let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
-        XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
-        controller.setEditorArtifacts(["edited"])
-        XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
-        controller.setEditorArtifacts([])
-        XCTAssertTrue([UInt32(CAPTURES_EDITOR_PHASE_LEAVING), lingering]
-            .contains(controller.editorPhase(for: "edited")))
-        try waitUntil { controller.editorPhase(for: "edited") == lingering }
-        try waitUntil { controller.editorPhase(for: "edited") == idle }
+        let preference = NativeMotion.motionPreference
+        defer { NativeMotion.motionPreference = preference }
+        for reduced in [false, true] {
+            NativeMotion.motionPreference = { reduced }
+            let captured = artifact(id: "edited", previewPath: "/edited-preview.png")
+            let controller = try presentedController(captured)
+            defer { controller.close() }
+            func panel() throws -> MiniPreviewPanel {
+                try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+                    .first { $0.isVisible && $0.previewView === controller.previewView })
+            }
+            func width() throws -> CGFloat {
+                let edit = try XCTUnwrap(controller.previewView?.editControl(for: "edited"))
+                CATransaction.flush()
+                return edit.layer?.presentation()?.bounds.width ?? edit.frame.width
+            }
+            let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
+            let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
+            XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
+            controller.setEditorArtifacts(["edited"])
+            XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.07))
+            let enteringWidth = try width()
+            XCTAssertGreaterThan(enteringWidth, 28)
+            controller.updateSettings(previewSettings())
+            XCTAssertEqual(try width(), enteringWidth, accuracy: 1,
+                "rebuilding a survivor must not finish or restart its entering badge")
+            try write(XCTUnwrap(renderPresentation(panel())),
+                      name: "mini-preview-editor-enter-rebuild-\(reduced ? "reduced" : "motion").png")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+            let fullWidth = try width()
+            let leaveStarted = Date()
+            controller.setEditorArtifacts([])
+            XCTAssertTrue([UInt32(CAPTURES_EDITOR_PHASE_LEAVING), lingering]
+                .contains(controller.editorPhase(for: "edited")))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.07))
+            let leavingWidth = try width()
+            if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
+            else { XCTAssertGreaterThan(leavingWidth, 28); XCTAssertLessThan(leavingWidth, fullWidth) }
+            controller.updateSettings(previewSettings())
+            XCTAssertEqual(try width(), leavingWidth, accuracy: 1,
+                "rebuilding a survivor must not finish or restart its leaving badge")
+            RunLoop.current.run(until: leaveStarted.addingTimeInterval(0.30))
+            XCTAssertEqual(try width(), 28, accuracy: 0.1,
+                "the 280 ms morph ends on the original clock, not 280 ms after rebuilding")
+            try write(XCTUnwrap(renderPresentation(panel())),
+                      name: "mini-preview-editor-leave-rebuild-\(reduced ? "reduced" : "motion").png")
+            if !reduced { try waitUntil { controller.editorPhase(for: "edited") == lingering } }
+            try waitUntil { controller.editorPhase(for: "edited") == idle }
+        }
     }
 
     private func hoverEvent(for panel: NSWindow) throws -> NSEvent {

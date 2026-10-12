@@ -93,6 +93,7 @@ final class MiniPreviewButton: NSButton {
     /// pill passive ("In editor") until the pointer leaves it.
     private(set) var editorJustOpened = false
     private var editorRestFrame: NSRect?
+    private var editorMorph: (start: CFTimeInterval, from: CGFloat, target: CGFloat)?
     var editorPresent: Bool { editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) }
     /// The pill's current label, for tests and accessibility checks.
     var editorLabel: String {
@@ -212,6 +213,16 @@ final class MiniPreviewButton: NSButton {
             }
             layoutMorph()
         }
+        if let morph = editorMorph, let rest = editorRestFrame {
+            let spec = NativeMotion.transition("preview_editor_morph", tokens: tokens)
+            let elapsed = now - morph.start
+            let progress = spec.duration > 0 ? min(1, elapsed / spec.duration) : 1
+            let width = morph.from + (morph.target - morph.from) * CGFloat(NativeMotion.ease(spec.timing, progress))
+            frame = NSRect(x: growsFromTrailingEdge ? rest.maxX - width : rest.minX,
+                           y: rest.minY, width: width, height: rest.height)
+            if progress < 1 { running = true } else { editorMorph = nil }
+            needsDisplay = true
+        }
         if let start = iconPopStart {
             if now - start < NativeMotion.duration("preview_action_icon_pop", tokens: tokens) {
                 running = true
@@ -235,7 +246,7 @@ final class MiniPreviewButton: NSButton {
     /// Shipping `.thumbnail-editor-control`: the compact Edit icon, or while an
     /// editor shows this capture the "In editor" pill, widening away from its
     /// corner over the shipping morph. Leaving ignores clicks.
-    func setEditorPhase(_ phase: UInt32, animated: Bool) {
+    func setEditorPhase(_ phase: UInt32, animated: Bool, continuing previous: MiniPreviewButton? = nil) {
         guard kind == .edit else { return }
         editorPhase = phase
         let rest = editorRestFrame ?? frame
@@ -258,14 +269,19 @@ final class MiniPreviewButton: NSButton {
         applyIconHover()
         let morph = NativeMotion.transition("preview_editor_morph", tokens: tokens)
         if animated, window?.isVisible == true, morph.duration > 0, frame != next {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = morph.duration
-                context.timingFunction = morph.timing
-                animator().frame = next
-            }
-        } else if frame != next {
+            editorMorph = (CACurrentMediaTime(), frame.width, width)
+            startTicker()
+        } else if let previous, let motion = previous.editorMorph, morph.duration > 0 {
+            editorMorph = motion
+            let carriedWidth = previous.frame.width
+            frame = NSRect(x: growsFromTrailingEdge ? rest.maxX - carriedWidth : rest.minX,
+                           y: rest.minY, width: carriedWidth, height: rest.height)
+            startTicker()
+        } else {
+            editorMorph = nil
             frame = next
         }
+        if let previous { editorJustOpened = previous.editorJustOpened }
         if showsTooltip { tooltipChanged?(self, true) } else { tooltipChanged?(self, false) }
         needsDisplay = true
     }
@@ -940,19 +956,26 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// Apply the shared editor presence: the Edit control morphs into the
     /// "In editor" pill, stays pinned while leaving and lingering, and the card
     /// ring arrives over `0.22s ease` and eases out over the 550 ms leave.
-    func setEditorPhase(_ phase: UInt32, animated: Bool) {
+    func setEditorPhase(_ phase: UInt32, animated: Bool, continuing previous: MiniPreviewCardView? = nil) {
         editorPhase = phase
-        editButton?.setEditorPhase(phase, animated: animated)
+        let survivor = !compact && previous?.compact == false && !NativeMotion.reduceMotion ? previous : nil
+        editButton?.setEditorPhase(phase, animated: animated, continuing: survivor?.editButton)
         let present = phase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT)
         let target: Float = present && !compact ? 1 : 0
         let spec = NativeMotion.transition(present ? "preview_editor_ring" : "preview_editor_ring_leave",
                                            tokens: tokens)
+        let from = (editorRing.presentation() ?? editorRing).opacity
+        editorRing.removeAnimation(forKey: "preview-editor-ring")
         if animated, window?.isVisible == true, spec.duration > 0, editorRing.opacity != target {
             let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = (editorRing.presentation() ?? editorRing).opacity
+            fade.fromValue = from
             fade.toValue = target
             fade.duration = spec.duration
             fade.timingFunction = spec.timing
+            fade.beginTime = editorRing.convertTime(CACurrentMediaTime(), from: nil)
+            editorRing.add(fade, forKey: "preview-editor-ring")
+        } else if let survivor, let fade = survivor.editorRing.animation(forKey: "preview-editor-ring") {
+            fade.beginTime = editorRing.convertTime(survivor.editorRing.convertTime(fade.beginTime, to: nil), from: nil)
             editorRing.add(fade, forKey: "preview-editor-ring")
         }
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -1939,8 +1962,12 @@ final class MiniPreviewView: NSView {
         KeyViewLoop.install(order, window: window, initial: card)
     }
 
-    func setEditorPhase(_ phase: UInt32, for artifactID: String, animated: Bool) {
-        cards[artifactID]?.setEditorPhase(phase, animated: animated)
+    func setEditorPhase(_ phase: UInt32, for artifactID: String, animated: Bool,
+                        continuing previous: MiniPreviewView? = nil) {
+        let old = previous?.cards[artifactID]
+        let survivor = old?.isExiting == false && old?.editorPhase == phase
+            && generations[artifactID] == previous?.generations[artifactID] ? old : nil
+        cards[artifactID]?.setEditorPhase(phase, animated: animated, continuing: survivor)
     }
 
     func editControl(for artifactID: String) -> MiniPreviewButton? { cards[artifactID]?.editControl }
@@ -3068,7 +3095,10 @@ final class MiniPreviewController {
             next.previewView.continueFileDrags(from: previous.previewView)
             next.previewView.continueRejections(from: previous.previewView)
         }
-        for id in liveIDs { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
+        for id in liveIDs {
+            next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false,
+                                           continuing: previous?.previewView)
+        }
         let now = CACurrentMediaTime()
         let highlight = NativeMotion.duration("preview_capture_highlight", tokens: tokens)
         for id in liveIDs {
