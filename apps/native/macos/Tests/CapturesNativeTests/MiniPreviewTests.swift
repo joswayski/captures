@@ -796,6 +796,7 @@ final class MiniPreviewTests: XCTestCase {
             controller.previewView?.card(for: captured.id)?.subviews
                 .compactMap { $0 as? MiniPreviewButton }.contains { $0.title == "Saved" } == true
         }
+        let confirmedAt = Date()
         RunLoop.current.run(until: Date().addingTimeInterval(0.35))
         var restored = false
         controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
@@ -809,7 +810,9 @@ final class MiniPreviewTests: XCTestCase {
         let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
         card.mouseEntered(with: try hoverEvent(for: panel))
         try write(render(panel), name: "mini-preview-saved-after-arrival.png")
-        RunLoop.current.run(until: Date().addingTimeInterval(0.75))
+        RunLoop.current.run(until: confirmedAt.addingTimeInterval(1.1))
+        XCTAssertLessThan(Date().timeIntervalSince(confirmedAt), 1.25,
+            "the expiry probe must precede a wrongly restarted 1.35-second deadline")
         XCTAssertEqual(button.title, "Show in Folder", "a rebuild must not restart the one-second deadline")
         controller.updateSettings(previewSettings())
         let settled = try XCTUnwrap(controller.previewView?.card(for: captured.id))
