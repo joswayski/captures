@@ -426,7 +426,7 @@ mod tests {
             ctx.begin_pass(input);
             assert_eq!(ctx.input(|input| input.pointer.hover_pos()), expected);
             assert!(!ctx.input(|input| input.pointer.primary_down()));
-            let _ = ctx.end_pass();
+            ctx.end_pass().textures_delta.clear();
         }
     }
 }
