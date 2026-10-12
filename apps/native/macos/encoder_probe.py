@@ -12,6 +12,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 
 
 SESSION_PROBE = r"""
@@ -101,12 +102,17 @@ def main():
                            f"testsrc2=size={width}x{height}:rate=12", "-frames:v", "3", "-pix_fmt",
                            "yuv420p", "-an", "-c:v", "h264_videotoolbox", *options, *rate,
                            "-movflags", "+faststart", "-y", str(destination)]
+                started = time.monotonic()
                 try:
-                    encoded = subprocess.run(command, capture_output=True, text=True, timeout=20)
+                    # The VM's existing VideoToolbox failures return after ~30 s.
+                    encoded = subprocess.run(command, capture_output=True, text=True, timeout=45)
                     case = {"name": name, "command": command, "exitCode": encoded.returncode,
                             "stderr": encoded.stderr}
-                except subprocess.TimeoutExpired:
-                    case = {"name": name, "command": command, "timedOut": True}
+                except subprocess.TimeoutExpired as error:
+                    case = {"name": name, "command": command, "timedOut": True,
+                            "stdout": (error.stdout or b"").decode(errors="replace"),
+                            "stderr": (error.stderr or b"").decode(errors="replace")}
+                case["elapsedSeconds"] = time.monotonic() - started
                 if case.get("exitCode") == 0:
                     inspected = subprocess.run([args.ffprobe, "-v", "error", "-show_streams", "-of",
                                                 "json", str(destination)], capture_output=True,
