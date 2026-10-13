@@ -3417,6 +3417,17 @@ clipboard sequence number, or on Linux a host write counter plus a throttled
 pixel comparison that notices other apps replacing the clipboard. New cards play
 the shipping arrival (see the motion slice).
 
+Windows/Linux mini-preview Edit no longer waits for Copy, Save or Show in Folder,
+on the same card or another card. Main actions still wait for their busy state;
+the OS file-drag and Trash gates are unchanged. Editor admission still rejects
+stale generations, capture selection/acquisition and recording startup/restart,
+recovery and an external-media import whose open-editor snapshot is in flight.
+Active and paused recording do not block Edit. Renderer-input and runtime
+regressions exercise these states with real screenshot-editor source loading;
+their held worker states are injected, not physical clipboard/export timing.
+AppKit is unchanged by this slice. Windows/Wayland and physical acceptance
+remain separate from the shared code and private-X11 checks.
+
 Editor presence, hover media and stale-pointer suppression now follow the
 shipping `ThumbnailCard`, with rules in `captures_app::preview_chrome` (AppKit
 through the `captures_preview_editor_*`, `_hover_lock_v1`,

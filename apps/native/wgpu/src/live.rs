@@ -4494,8 +4494,21 @@ impl Live {
                     generation,
                     directory,
                 } if self.previews.accepts(&artifact_id, generation) => {
-                    if self.previews.cards[&artifact_id].busy.is_some()
-                        || self.pending > 0
+                    if matches!(
+                        self.previews.cards[&artifact_id].busy,
+                        Some(crate::mini_preview::Busy::Drag | crate::mini_preview::Busy::Trash)
+                    ) || self.opening_media
+                        || self.capture_activity() != captures_app::capture_error::Activity::Idle
+                        || matches!(
+                            self.capture_phase,
+                            Some(
+                                CapturePhase::RecordingPreparing { .. }
+                                    | CapturePhase::RecordingCountdown
+                                    | CapturePhase::RecordingStarting
+                                    | CapturePhase::RecordingRestarting
+                            )
+                        )
+                        || self.requested_capture.is_some()
                         || self.recovery.blocking()
                         || self.permission_recovery_visible
                     {
@@ -11844,36 +11857,103 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(5));
         }
-        for busy in [true, false] {
-            live.previews.cards.get_mut(&id).unwrap().busy =
-                busy.then_some(crate::mini_preview::Busy::Save);
+        for (busy, opening_media, phase, capturing, permission, stale) in [
+            (
+                Some(crate::mini_preview::Busy::Drag),
+                false,
+                None,
+                false,
+                false,
+                false,
+            ),
+            (
+                Some(crate::mini_preview::Busy::Trash),
+                false,
+                None,
+                false,
+                false,
+                false,
+            ),
+            (None, true, None, false, false, false),
+            (
+                None,
+                false,
+                Some(CapturePhase::RegionSelecting),
+                false,
+                false,
+                false,
+            ),
+            (
+                None,
+                false,
+                Some(CapturePhase::RecordingCountdown),
+                false,
+                false,
+                false,
+            ),
+            (None, false, None, true, false, false),
+            (None, false, None, false, true, false),
+            (None, false, None, false, false, true),
+        ] {
+            live.previews.cards.get_mut(&id).unwrap().busy = busy;
+            live.opening_media = opening_media;
+            live.capture_phase = phase;
+            live.capture_in_flight = capturing;
+            live.permission_recovery_visible = permission;
+            live.pending = usize::from(opening_media || capturing);
             live.preview_tx
                 .send(PreviewMessage::Edit {
                     artifact_id: id.clone(),
-                    generation: guard.generation + u64::from(!busy),
+                    generation: guard.generation + u64::from(stale),
                     directory: output.path().into(),
                 })
                 .unwrap();
             live.logic(&ctx, &mut frame);
             assert!(
                 live.editors.is_empty(),
-                "busy and stale actions must not open an editor"
+                "unsafe and stale actions must not open an editor"
             );
         }
-        for _ in 0..2 {
-            live.preview_tx
-                .send(PreviewMessage::Edit {
-                    artifact_id: id.clone(),
-                    generation: guard.generation,
-                    directory: output.path().into(),
-                })
-                .unwrap();
-            live.logic(&ctx, &mut frame);
-            assert_eq!(live.editors.keys().collect::<Vec<_>>(), [&id]);
-            live.editors[&id].flush(&ctx).unwrap();
-            assert_eq!(live.selection.id.as_ref(), Some(&other_id));
-            assert_eq!(live.artifacts.len(), 2);
+        live.opening_media = false;
+        live.capture_in_flight = false;
+        live.permission_recovery_visible = false;
+        for (busy, phase, pending) in [
+            (Some(crate::mini_preview::Busy::Copy), None, 1),
+            (
+                Some(crate::mini_preview::Busy::Save),
+                Some(CapturePhase::Recording),
+                1,
+            ),
+            (
+                Some(crate::mini_preview::Busy::Reveal),
+                Some(CapturePhase::RecordingPaused),
+                1,
+            ),
+            (None, None, 1),
+            (None, None, 0),
+        ] {
+            live.editors.clear();
+            live.previews.cards.get_mut(&id).unwrap().busy = busy;
+            live.capture_phase = phase;
+            live.pending = pending;
+            for _ in 0..2 {
+                live.preview_tx
+                    .send(PreviewMessage::Edit {
+                        artifact_id: id.clone(),
+                        generation: guard.generation,
+                        directory: output.path().into(),
+                    })
+                    .unwrap();
+                live.logic(&ctx, &mut frame);
+                assert_eq!(live.editors.keys().collect::<Vec<_>>(), [&id]);
+                live.editors[&id].flush(&ctx).unwrap();
+                assert_eq!(live.selection.id.as_ref(), Some(&other_id));
+                assert_eq!(live.artifacts.len(), 2);
+                assert_eq!(live.previews.cards[&id].busy, busy);
+                assert_eq!(live.pending, pending);
+            }
         }
+        live.capture_phase = None;
         let mut output = ctx.end_pass();
         let commands = &output
             .viewport_output
