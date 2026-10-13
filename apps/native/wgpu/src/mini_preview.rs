@@ -510,7 +510,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
         editor_id,
         &view,
         reveal,
-        enabled && view.can_save,
+        view.interactive && view.can_save && !matches!(view.busy, Some(Busy::Drag | Busy::Trash)),
         tooltip_above,
     ) {
         action = Some(Action::Edit);
@@ -3230,19 +3230,30 @@ mod tests {
     }
 
     #[test]
-    fn second_button_saves_unsaved_reveals_saved_and_is_guarded_while_busy() {
+    fn main_actions_stay_guarded_while_edit_remains_available() {
         let ctx = egui::Context::default();
         let texture = ctx.load_texture(
             "save-reveal",
             egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
             egui::TextureOptions::LINEAR,
         );
-        let click = egui::pos2(142., 100.);
-        for (saved, busy, can_save, expected) in [
-            (false, None, true, Some(Action::Save)),
-            (true, None, false, Some(Action::Reveal)),
-            (false, None, false, None),
-            (true, Some(Busy::Reveal), false, None),
+        let save = egui::pos2(142., 100.);
+        let copy = egui::pos2(142., 60.);
+        let edit = egui::pos2(262., 22.);
+        for (click, saved, busy, can_save, expected) in [
+            (save, false, None, true, Some(Action::Save)),
+            (save, true, None, false, Some(Action::Reveal)),
+            (save, false, None, false, None),
+            (save, true, Some(Busy::Reveal), false, None),
+            (save, false, Some(Busy::Copy), true, None),
+            (copy, false, Some(Busy::Save), true, None),
+            (edit, false, None, true, Some(Action::Edit)),
+            (edit, false, Some(Busy::Copy), true, Some(Action::Edit)),
+            (edit, false, Some(Busy::Save), true, Some(Action::Edit)),
+            (edit, true, Some(Busy::Reveal), true, Some(Action::Edit)),
+            (edit, false, Some(Busy::Drag), true, None),
+            (edit, true, Some(Busy::Trash), true, None),
+            (edit, false, None, false, None),
         ] {
             run_card_state(
                 &ctx,
@@ -3281,7 +3292,8 @@ mod tests {
                     can_save,
                     saved,
                 ),
-                expected
+                expected,
+                "{click:?}, saved={saved}, busy={busy:?}, can_save={can_save}"
             );
         }
     }
