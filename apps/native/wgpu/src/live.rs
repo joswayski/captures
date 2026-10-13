@@ -5604,15 +5604,22 @@ impl Live {
                     result,
                 } => {
                     self.pending = self.pending.saturating_sub(1);
+                    let current = preview.as_ref().is_none_or(|preview| {
+                        self.previews
+                            .accepts(&preview.artifact_id, preview.generation)
+                    });
                     // Shipping "Clipboard unavailable": the card's last copy failed.
                     let copied_id = preview
                         .as_ref()
                         .map(|preview| preview.artifact_id.clone())
                         .or_else(|| owner.clone());
-                    if let Some(card) = copied_id.and_then(|id| self.previews.cards.get_mut(&id)) {
+                    if current
+                        && let Some(card) =
+                            copied_id.and_then(|id| self.previews.cards.get_mut(&id))
+                    {
                         card.copy_failed = result.is_err();
                     }
-                    if let (Ok(write), Some(owner)) = (&result, owner) {
+                    if current && let (Ok(write), Some(owner)) = (&result, owner) {
                         self.clipboard
                             .record(write.revision, owner, write.fingerprint);
                         request_hidden_root_paint(ctx);
@@ -11484,6 +11491,75 @@ mod tests {
             "an older unsaved History snapshot cannot erase Save"
         );
         live.flush();
+    }
+
+    #[test]
+    fn preview_copy_feedback_belongs_to_its_source_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = preview_artifact(root.path(), [12, 34, 56, 255]);
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        live.flush();
+        live.previews
+            .begin_capture(&AppSettings::default(), Some(preview_target()), 1)
+            .unwrap();
+        let (old, _) = live.previews.start_artifact(&artifact).unwrap().unwrap();
+        live.previews.dismiss(&old.artifact_id, old.generation);
+        let RestoreStart::Decode(current, _) = live
+            .previews
+            .restore_artifact(
+                &artifact,
+                &AppSettings::default(),
+                Some(preview_target()),
+                false,
+            )
+            .unwrap()
+        else {
+            panic!("replacement must decode")
+        };
+        let (results, replies) = mpsc::channel();
+        live.rx = replies;
+        ctx.begin_pass(Default::default());
+        for (guard, succeeded, expected_warning, expected_owner) in [
+            (old.clone(), false, None, None),
+            (old, true, None, None),
+            (current.clone(), false, Some("Clipboard unavailable"), None),
+            (current, true, None, Some(artifact.entry.id.as_str())),
+        ] {
+            live.pending = 1;
+            results
+                .send(Reply::Copied {
+                    owner: Some(artifact.entry.id.clone()),
+                    preview: Some(guard),
+                    result: if succeeded {
+                        Ok(ClipboardWrite {
+                            revision: 17,
+                            fingerprint: captures_app::clipboard::ClipboardFingerprint::of_rgba(
+                                1,
+                                1,
+                                &[12, 34, 56, 255],
+                            ),
+                        })
+                    } else {
+                        Err("fixture clipboard denied".into())
+                    },
+                })
+                .unwrap();
+            live.logic(&ctx, &mut frame);
+            let owner = live.clipboard.current_artifact(17);
+            assert_eq!(owner.as_deref(), expected_owner);
+            assert_eq!(
+                captures_app::preview_chrome::card_warning(
+                    owner.is_some(),
+                    true,
+                    live.previews.cards[&artifact.entry.id].copy_failed,
+                ),
+                expected_warning
+            );
+            assert_eq!(live.pending, 0);
+        }
+        ctx.end_pass().textures_delta.clear();
     }
 
     #[test]
