@@ -540,7 +540,7 @@ final class MiniPreviewTests: XCTestCase {
         func card() throws -> (MiniPreviewPanel, MiniPreviewCardView) {
             // Closed panels stay in NSApp.windows while this test still holds them.
             let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
-                .first { $0.isVisible && $0.previewView.artifactIDs == ["source"] })
+                .first { $0.isVisible && $0.previewView === controller.previewView })
             return (panel, try XCTUnwrap(panel.previewView.subviewsRecursive
                 .compactMap { $0 as? MiniPreviewCardView }.first))
         }
@@ -559,17 +559,27 @@ final class MiniPreviewTests: XCTestCase {
         current.1.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
         XCTAssertEqual(controller.presentedArtifactIDs, ["source"], "cancelled external drags keep the card")
 
-        let staleCard = current.1
-        controller.dismiss("source")
-        let replacement = artifact(id: "source", previewPath: "/replacement.png")
-        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
-        controller.present(replacement, on: screenID(), settings: previewSettings(), generation: generation)
-        try waitUntil { controller.isPanelVisible }
-        staleCard.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
-        XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
-            "late completion from a different source identity cannot dismiss its replacement")
+        // The second replacement has the same path but a new source generation.
+        for path in ["/replacement.png", "/replacement.png"] {
+            let staleCard = current.1
+            staleCard.setFileDragging(true)
+            controller.dismiss("source")
+            let replacement = artifact(id: "source", previewPath: path)
+            var restored = false
+            controller.restore(replacement, on: screenID(), settings: previewSettings()) {
+                if case .shown = $0 { restored = true }
+            }
+            try waitUntil { restored }
+            staleCard.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
+            XCTAssertEqual(controller.presentedArtifactIDs, ["source"],
+                "late completion cannot dismiss a different path or a new generation of the same path")
+            current = try card()
+            let point = current.1.convert(NSPoint(x: 30, y: 70), to: current.0.previewView)
+            let pixel = try XCTUnwrap(pixelColor(in: render(current.0), of: current.0, x: point.x, y: point.y))
+            XCTAssertGreaterThan(pixel.alphaComponent, 0.99,
+                "a replacement must not inherit concealment from the stale OS drag")
+        }
 
-        current = try card()
         current.1.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: .copy)
         XCTAssertTrue(controller.presentedArtifactIDs.isEmpty,
             "an accepted external copy dismisses the exact source card")
@@ -618,6 +628,37 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertFalse(panel.previewView.visibleCardActionTitles.contains("Copy"),
                 "a cancelled external landing must not leave source hover stuck on")
         }
+    }
+
+    func testFileDragConcealsOnlySourceMediaAndRestoresRebuiltSurvivor() throws {
+        _ = NSApplication.shared
+        let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
+        defer { controller.close() }
+        func panel() throws -> MiniPreviewPanel {
+            try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
+                .first { $0.isVisible && $0.previewView === controller.previewView })
+        }
+        func mediaPixel(_ panel: MiniPreviewPanel) throws -> NSColor {
+            let card = try XCTUnwrap(panel.previewView.card(for: "source"))
+            let point = card.convert(NSPoint(x: 30, y: 70), to: panel.previewView)
+            return try XCTUnwrap(pixelColor(in: render(panel), of: panel, x: point.x, y: point.y))
+        }
+        let original = try panel()
+        let source = try XCTUnwrap(original.previewView.card(for: "source"))
+        let visible = try mediaPixel(original)
+        source.setFileDragging(true)
+        let concealed = try mediaPixel(original)
+        XCTAssertNotEqual(concealed, visible, "the capture does not paint under its OS drag ghost")
+        XCTAssertLessThan(concealed.alphaComponent, 0.01, "shipping leaves the source media area transparent")
+        XCTAssertTrue(source.hasVisibleLabels, "concealing media retains its metadata")
+        try write(render(original), name: "mini-preview-file-drag-source-hidden.png")
+        controller.updateSettings(previewSettings())
+        let rebuilt = try panel()
+        XCTAssertEqual(try mediaPixel(rebuilt), concealed, "settings must not reintroduce the source media")
+        source.finishDrag(at: NSPoint(x: -20_000, y: -20_000), operation: [])
+        XCTAssertEqual(try mediaPixel(rebuilt), visible, "the original source completion restores its survivor")
+        XCTAssertEqual(controller.presentedArtifactIDs, ["source"])
+        try write(render(rebuilt), name: "mini-preview-file-drag-source-restored.png")
     }
 
     func testSelfDropSurvivesSettingsRebuildWithoutReplayingItsShake() throws {

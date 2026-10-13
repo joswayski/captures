@@ -399,28 +399,31 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
         &|point| point,
     );
     paint_capture_glow(ui, tokens, card, radius, view.highlight);
-    ui.painter()
-        .rect_filled(card, radius, tokens.color("glass-raised"));
     let media = media_hover_progress(ui, tokens, &view, reveal);
-    paint_media(
-        ui,
-        card,
-        radius,
-        view.texture,
-        view.blurred,
-        media.0,
-        media.1,
-    );
-    paint_arrive_blur(
-        ui,
-        card,
-        radius,
-        view.arrive_blur,
-        egui::lerp(
-            1.0..=captures_app::preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+    // Shipping hides only the source media while the OS file drag owns input.
+    if view.busy != Some(Busy::Drag) {
+        ui.painter()
+            .rect_filled(card, radius, tokens.color("glass-raised"));
+        paint_media(
+            ui,
+            card,
+            radius,
+            view.texture,
+            view.blurred,
             media.0,
-        ),
-    );
+            media.1,
+        );
+        paint_arrive_blur(
+            ui,
+            card,
+            radius,
+            view.arrive_blur,
+            egui::lerp(
+                1.0..=captures_app::preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+                media.0,
+            ),
+        );
+    }
     ui.painter().rect_stroke(
         card,
         radius,
@@ -3986,6 +3989,7 @@ mod tests {
         editor: EditorPhase,
         hover_locked: bool,
         drop_rejected: bool,
+        busy: Option<Busy>,
         top_anchor: bool,
         blurred: bool,
     }
@@ -4029,7 +4033,7 @@ mod tests {
                 size_bytes: 245_760,
                 clipboard_current: false,
                 saved_feedback: false,
-                busy: None,
+                busy: case.busy,
                 message: None,
                 can_save: true,
                 saved: true,
@@ -4066,6 +4070,7 @@ mod tests {
             editor: EditorPhase::Idle,
             hover_locked: false,
             drop_rejected: false,
+            busy: None,
             top_anchor: false,
             blurred: true,
         }
@@ -4089,11 +4094,17 @@ mod tests {
     #[test]
     fn hover_blurs_and_darkens_media_but_the_stale_pointer_lock_holds_it_off() {
         let center = egui::pos2(142., 120.);
-        for (locked, rejected) in [(false, false), (true, false), (false, true)] {
+        for (locked, rejected, dragging) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
             let ctx = egui::Context::default();
             let mut hover = case(center);
             hover.hover_locked = locked;
             hover.drop_rejected = rejected;
+            hover.busy = dragging.then_some(Busy::Drag);
             chrome_frame(&ctx, &hover);
             let (texts, mut output, blurred) = chrome_frame(&ctx, &hover);
             assert_eq!(
@@ -4105,7 +4116,10 @@ mod tests {
                 texts.iter().any(|text| text == "391 × 207 · 246 KB"),
                 locked
             );
-            assert_eq!(uses_texture(&output, blurred), !locked && !rejected);
+            assert_eq!(
+                uses_texture(&output, blurred),
+                !locked && !rejected && !dragging
+            );
             // The sharp media scales 1.015 and darkens to brightness .5.
             let sharp = output.shapes.iter().find_map(|shape| match &shape.shape {
                 egui::Shape::Rect(rect)
@@ -4116,6 +4130,13 @@ mod tests {
                 }
                 _ => None,
             });
+            if dragging {
+                assert!(
+                    sharp.is_none(),
+                    "the source media hides beneath the native drag ghost"
+                );
+                continue;
+            }
             let sharp = sharp.expect("sharp media");
             if locked || rejected {
                 assert_eq!(sharp.rect.width(), 284.);

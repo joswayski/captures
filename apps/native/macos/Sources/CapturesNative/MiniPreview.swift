@@ -578,7 +578,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var iconButtons: [MiniPreviewButton] { actionButtons.filter { $0.tooltipText != nil || $0.kind == .edit } }
     var editControl: MiniPreviewButton? { editButton }
     private var press: NSPoint?
-    private var fileDragStarted = false
+    private(set) var fileDragStarted = false
     private(set) var dropRejectedAt: CFTimeInterval?
     var preparedDragPath: String?
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
@@ -1200,14 +1200,14 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     override func mouseDown(with event: NSEvent) {
         press = event.locationInWindow
-        fileDragStarted = false
+        setFileDragging(false)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard isOutboundFileDragEnabled, !fileDragStarted, let press, let path = preparedDragPath,
               hypot(event.locationInWindow.x - press.x, event.locationInWindow.y - press.y) >= 4,
               imageView.image.size.width > 0, imageView.image.size.height > 0 else { return }
-        fileDragStarted = true
+        setFileDragging(true)
         let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
         item.setDraggingFrame(mediaClip.frame, contents: imageView.image)
         beginDraggingSession(with: [item], event: event, source: self)
@@ -1215,7 +1215,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     override func mouseUp(with event: NSEvent) {
         press = nil
-        fileDragStarted = false
+    }
+
+    /// Shipping `.thumbnail-file-dragging` conceals the source beneath the ghost.
+    func setFileDragging(_ active: Bool) {
+        fileDragStarted = active
+        mediaClip.isHidden = active
+        layer?.backgroundColor = active ? NSColor.clear.cgColor : tokens.color("glass-strong").cgColor
     }
 
     func draggingSession(_ session: NSDraggingSession,
@@ -1232,7 +1238,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     func finishDrag(at screenPoint: NSPoint, operation: NSDragOperation) {
         press = nil
-        fileDragStarted = false
+        setFileDragging(false)
         if let window {
             pointerInside = bounds.contains(convert(window.convertPoint(fromScreen: screenPoint), from: nil))
         }
@@ -1271,6 +1277,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 struct MiniPreviewResource {
     var artifact: CaptureArtifact
     let image: NSImage
+    var generation = 0
 }
 
 private final class MiniPreviewDocumentView: NSView {
@@ -1413,6 +1420,7 @@ final class MiniPreviewView: NSView {
     private let scroll = NSScrollView()
     private let document = MiniPreviewDocumentView()
     private var cards: [String: MiniPreviewCardView] = [:]
+    private let generations: [String: Int]
     private var restLayouts: [String: CapturesPreviewCardLayout]
     private var hoverLayouts: [String: CapturesPreviewCardLayout]
     private(set) var pileHovered = false
@@ -1491,6 +1499,7 @@ final class MiniPreviewView: NSView {
         self.geometry = geometry; self.tokens = tokens; self.restLayouts = layouts
         self.hoverLayouts = hoverLayouts; anchoredAtTop = topAnchor
         anchoredRight = rightAnchor; stackCollapsed = collapsed
+        generations = resources.mapValues(\.generation)
         self.pileGravity = pileGravity ?? (topAnchor ? -1 : 1)
         let slots = ids.compactMap { id in layouts[id].map { CGFloat($0.y) } }.sorted()
         cardSlot = slots.count >= 2 ? slots[1] - slots[0] : CGFloat(geometry.card_height)
@@ -2105,6 +2114,15 @@ final class MiniPreviewView: NSView {
         }
     }
 
+    func setFileDragging(_ active: Bool, for artifactID: String) { cards[artifactID]?.setFileDragging(active) }
+
+    func continueFileDrags(from previous: MiniPreviewView) {
+        for (id, card) in cards where previous.cards[id]?.fileDragStarted == true
+            && generations[id] == previous.generations[id] {
+            card.setFileDragging(true)
+        }
+    }
+
     func rejectDrop(for artifactID: String) { cards[artifactID]?.rejectDrop() }
 
     func continueRejections(from previous: MiniPreviewView) {
@@ -2691,7 +2709,7 @@ final class MiniPreviewController {
                     if self.policy.ready(artifact: artifact.id) {
                         self.visibilityPendingArtifactID = nil
                     }
-                    self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image)
+                    self.resources[artifact.id] = MiniPreviewResource(artifact: artifact, image: image, generation: decodeToken)
                     self.arrivals[artifact.id] = CACurrentMediaTime()
                     self.makePanel(preservingExits: true)
                     self.updateVisibility()
@@ -3037,6 +3055,7 @@ final class MiniPreviewController {
         next.previewView.setDragEnded { [weak self] id, point, operation in
             guard let self, let source = sourceArtifacts[id], self.contains(source),
                   self.cardGenerations[id] == sourceGenerations[id] else { return }
+            self.panel?.previewView.setFileDragging(false, for: id)
             if self.panel?.frame.contains(point) == true {
                 self.panel?.previewView.rejectDrop(for: id)
             } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
@@ -3048,7 +3067,10 @@ final class MiniPreviewController {
         panel = next
         refreshClipboardOwner(continuing: previous?.previewView)
         updateEditorPresence(animated: false)
-        if let previous { next.previewView.continueRejections(from: previous.previewView) }
+        if let previous {
+            next.previewView.continueFileDrags(from: previous.previewView)
+            next.previewView.continueRejections(from: previous.previewView)
+        }
         for id in liveIDs { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
         let now = CACurrentMediaTime()
         let highlight = NativeMotion.duration("preview_capture_highlight", tokens: tokens)

@@ -3647,6 +3647,14 @@ unless reduced motion is enabled. Native completion resets consumed pointer
 state; X11 cancellation, disappearing targets and missing Finished have bounded
 cleanup. See `apps/native/wgpu/vendor/README.md` for provenance/update obligations.
 
+Like Tauri, both hosts conceal the source media while its native file drag is
+active, leaving a transparent media area with the card's chrome and shadow.
+AppKit retains concealment across stack rebuilds and restores the current survivor
+when the original source completes. A new card generation, even at the same ID
+and path, cannot inherit the old source's concealment or completion. The private-X11 drag probe checks composited
+desktop pixels, original-file transfer and source recovery in normal/reduced motion;
+AppKit has a rebuild/pixel regression. Physical platform acceptance remains open.
+
 | Host | Implementation | Verification / remaining acceptance |
 | --- | --- | --- |
 | macOS | AppKit source, async identity guards, COPY/landing policy | XCTest lifecycle cases added; physical Finder transfer still unverified |
