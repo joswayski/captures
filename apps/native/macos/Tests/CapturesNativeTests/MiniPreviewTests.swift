@@ -2077,36 +2077,48 @@ final class MiniPreviewTests: XCTestCase {
                 // presentation can lag that frame until the next display pass.
                 return edit.frame.width
             }
+            func pump(until deadline: Date) -> Double {
+                let started = CACurrentMediaTime()
+                RunLoop.current.run(until: deadline)
+                let firstReturn = CACurrentMediaTime() - started
+                while Date() < deadline { RunLoop.current.run(until: deadline) }
+                return firstReturn
+            }
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
             let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
             XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
             controller.setEditorArtifacts(["edited"])
             XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
-            RunLoop.current.run(until: Date().addingTimeInterval(0.07))
+            let enterStarted = CACurrentMediaTime()
+            let firstReturn = pump(until: Date().addingTimeInterval(0.07))
             let enteringWidth = try width()
+            let enterElapsed = CACurrentMediaTime() - enterStarted
             try panel().previewView.layoutSubtreeIfNeeded()
             try panel().displayIfNeeded()
             CATransaction.flush()
-            XCTAssertGreaterThan(enteringWidth, 28)
+            XCTAssertGreaterThan(enteringWidth, 28,
+                "reduced=\(reduced), first run returned at \(firstReturn)s, sampled at \(enterElapsed)s")
             controller.updateSettings(previewSettings())
             XCTAssertEqual(try width(), enteringWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its entering badge")
             try write(XCTUnwrap(renderPresentation(panel())),
                       name: "mini-preview-editor-enter-rebuild-\(reduced ? "reduced" : "motion").png")
-            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+            _ = pump(until: Date().addingTimeInterval(0.35))
             let fullWidth = try width()
+            if reduced { XCTAssertEqual(enteringWidth, fullWidth, accuracy: 0.1) }
+            else { XCTAssertLessThan(enteringWidth, fullWidth, "the sample must exercise an in-flight morph") }
             let leaveStarted = Date()
             controller.setEditorArtifacts([])
             XCTAssertTrue([UInt32(CAPTURES_EDITOR_PHASE_LEAVING), lingering]
                 .contains(controller.editorPhase(for: "edited")))
-            RunLoop.current.run(until: Date().addingTimeInterval(0.07))
+            _ = pump(until: Date().addingTimeInterval(0.07))
             let leavingWidth = try width()
             if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
             else { XCTAssertGreaterThan(leavingWidth, 28); XCTAssertLessThan(leavingWidth, fullWidth) }
             controller.updateSettings(previewSettings())
             XCTAssertEqual(try width(), leavingWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its leaving badge")
-            RunLoop.current.run(until: leaveStarted.addingTimeInterval(0.30))
+            _ = pump(until: leaveStarted.addingTimeInterval(0.30))
             XCTAssertEqual(try width(), 28, accuracy: 0.1,
                 "the 280 ms morph ends on the original clock, not 280 ms after rebuilding")
             try write(XCTUnwrap(renderPresentation(panel())),
