@@ -57,6 +57,7 @@ pub struct AppSettings {
     pub include_mini_previews_in_captures: bool,
     #[serde(default)]
     pub include_recording_controls_in_captures: bool,
+    #[serde(default = "default_true")]
     pub launch_at_login: bool,
     #[serde(default)]
     pub last_screen_permission_request_id: Option<String>,
@@ -255,7 +256,7 @@ impl Default for AppSettings {
             mini_preview_placement: MiniPreviewPlacement::default(),
             include_mini_previews_in_captures: false,
             include_recording_controls_in_captures: false,
-            launch_at_login: false,
+            launch_at_login: true,
             last_screen_permission_request_id: None,
             pending_capture_after_restart: None,
             onboarding_completed: false,
@@ -665,6 +666,32 @@ fn canonical_shortcut_token(token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_at_login_defaults_on_and_preserves_saved_choices() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        assert!(load(&path).unwrap().launch_at_login);
+        assert!(load_shipping(&path).launch_at_login);
+
+        let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
+        legacy["settings_schema_version"] = 0.into();
+        legacy.as_object_mut().unwrap().remove("launch_at_login");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(load(&path).unwrap().launch_at_login);
+        assert!(load_shipping(&path).launch_at_login);
+
+        for enabled in [false, true] {
+            legacy["launch_at_login"] = enabled.into();
+            fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert_eq!(load(&path).unwrap().launch_at_login, enabled);
+            assert_eq!(load_shipping(&path).launch_at_login, enabled);
+            let saved = save(&path, &load(&path).unwrap()).unwrap();
+            assert_eq!(saved.launch_at_login, enabled);
+            assert_eq!(load(&path).unwrap().launch_at_login, enabled);
+        }
+    }
+
     #[test]
     fn persistence_and_protection() {
         let d = tempfile::tempdir().unwrap();

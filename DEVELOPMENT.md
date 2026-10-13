@@ -11,6 +11,15 @@ Ordinary `apps/native` development commands still use isolated development profi
 building with `--release` alone does not join the installed channel. Root `npm run build`
 builds the Tauri app, which remains the behavior and visual parity reference.
 
+New settings default **Start Captures on login** to On; a missing field also
+defaults to On, but saved `false` values are never migrated to On. Release Tauri
+launches register when this setting is On; debug startup does not register.
+Installed native Previews register once when creating their first profile,
+respecting imported Tauri settings (including Off). Later native launches leave
+the OS-authoritative Preferences choice alone. Registration failure does not
+block launch; enable again in Preferences to retry. Native development builds
+and fixtures never auto-register, even with an imported On value.
+
 After preparing the pinned media sidecars, build an unsigned installer on its target OS:
 
 ```sh

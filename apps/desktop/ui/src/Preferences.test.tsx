@@ -34,7 +34,7 @@ const settings: AppSettings = {
   mini_preview_placement: "bottom_left",
   include_mini_previews_in_captures: false,
   include_recording_controls_in_captures: false,
-  launch_at_login: false,
+  launch_at_login: true,
   last_screen_permission_request_id: null,
   pending_capture_after_restart: null,
   onboarding_completed: true,
@@ -137,26 +137,26 @@ describe("Preferences", () => {
   });
 
   it.each(["macos", "windows", "linux"])(
-    "can enable and disable login startup on %s",
+    "can disable and re-enable default-on login startup on %s",
     async (platform) => {
       window.history.replaceState({}, "", `/?view=preferences&platform=${platform}`);
       render(<Preferences />);
 
       const general = await screen.findByRole("region", { name: "General" });
       const login = within(general).getByRole("checkbox", { name: /Start Captures on login/ });
-      expect(login).not.toBeChecked();
+      expect(login).toBeChecked();
       expect(login).toBeEnabled();
       fireEvent.click(login);
       await waitFor(() =>
         expect(invoke).toHaveBeenCalledWith("update_settings", {
-          settings: expect.objectContaining({ launch_at_login: true }),
+          settings: expect.objectContaining({ launch_at_login: false }),
         }),
       );
 
       fireEvent.click(login);
       await waitFor(() =>
         expect(invoke).toHaveBeenCalledWith("update_settings", {
-          settings: expect.objectContaining({ launch_at_login: false }),
+          settings: expect.objectContaining({ launch_at_login: true }),
         }),
       );
     },

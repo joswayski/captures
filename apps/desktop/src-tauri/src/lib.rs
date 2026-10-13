@@ -632,8 +632,8 @@ fn refresh_autostart_registration(app: &tauri::App) {
     #[cfg(not(debug_assertions))]
     {
         let settings = app.state::<Arc<AppState>>().settings();
+        // Register new installs too, not just entries created by a manual toggle.
         if settings.launch_at_login
-            && app.autolaunch().is_enabled().unwrap_or(false)
             && let Err(error) = app.autolaunch().enable()
         {
             eprintln!("failed to refresh launch-at-login registration: {error}");
