@@ -94,11 +94,6 @@ final class MiniPreviewButton: NSButton {
     private(set) var editorJustOpened = false
     private var editorRestFrame: NSRect?
     private var editorMorph: (start: CFTimeInterval, from: CGFloat, target: CGFloat)?
-    private var editorTickCount = 0
-    private var editorLastTick: CFTimeInterval = 0
-    var editorMotionProbe: String {
-        "morph=\(String(describing: editorMorph)) ticks=\(editorTickCount) last=\(editorLastTick) now=\(CACurrentMediaTime()) ticker=\(ticker?.isValid == true)"
-    }
     var editorPresent: Bool { editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) }
     /// The pill's current label, for tests and accessibility checks.
     var editorLabel: String {
@@ -219,8 +214,6 @@ final class MiniPreviewButton: NSButton {
             layoutMorph()
         }
         if let morph = editorMorph, let rest = editorRestFrame {
-            editorTickCount += 1
-            editorLastTick = now
             let spec = NativeMotion.transition("preview_editor_morph", tokens: tokens)
             let elapsed = now - morph.start
             let progress = spec.duration > 0 ? min(1, elapsed / spec.duration) : 1
@@ -1103,10 +1096,8 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let token = savedFeedbackToken
         let deadline = DispatchTime.now() + remaining
         savedFeedbackSince = CACurrentMediaTime() - startedAgo
-        print("SAVED-PROBE schedule since=\(savedFeedbackSince!) now=\(CACurrentMediaTime()) remaining=\(remaining) deadline=\(deadline.uptimeNanoseconds) token=\(token) card=\(ObjectIdentifier(self))")
         updateSaveButton(saved: saved)
         DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
-            print("SAVED-PROBE callback now=\(CACurrentMediaTime()) token=\(token) current=\(String(describing: self?.savedFeedbackToken)) card=\(String(describing: self.map(ObjectIdentifier.init)))")
             guard let self, self.savedFeedbackToken == token else { return }
             self.savedFeedbackSince = nil
             self.updateSaveButton(saved: self.saved)

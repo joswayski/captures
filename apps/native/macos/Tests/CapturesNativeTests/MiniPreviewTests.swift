@@ -2073,29 +2073,22 @@ final class MiniPreviewTests: XCTestCase {
             }
             func width() throws -> CGFloat {
                 let edit = try XCTUnwrap(controller.previewView?.editControl(for: "edited"))
-                CATransaction.flush()
-                return edit.layer?.presentation()?.bounds.width ?? edit.frame.width
-            }
-            func probe(_ step: String) throws {
-                let edit = try XCTUnwrap(controller.previewView?.editControl(for: "edited"))
-                print("EDITOR-PROBE \(step) reduced=\(reduced) phase=\(controller.editorPhase(for: "edited")) view=\(edit.frame.width) bounds=\(edit.bounds.width) model=\(String(describing: edit.layer?.bounds.width)) presentation=\(String(describing: edit.layer?.presentation()?.bounds.width)) \(edit.editorMotionProbe)")
+                // The ticker changes the hit target directly. AppKit's backing
+                // presentation can lag that frame until the next display pass.
+                return edit.frame.width
             }
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
             let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
             XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
             controller.setEditorArtifacts(["edited"])
-            try probe("started")
             XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
             RunLoop.current.run(until: Date().addingTimeInterval(0.07))
             let enteringWidth = try width()
-            try probe("70ms-before-display")
             try panel().previewView.layoutSubtreeIfNeeded()
             try panel().displayIfNeeded()
             CATransaction.flush()
-            try probe("70ms-after-display")
             XCTAssertGreaterThan(enteringWidth, 28)
             controller.updateSettings(previewSettings())
-            try probe("rebuilt")
             XCTAssertEqual(try width(), enteringWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its entering badge")
             try write(XCTUnwrap(renderPresentation(panel())),
