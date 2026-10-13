@@ -732,25 +732,111 @@ final class MiniPreviewTests: XCTestCase {
         let imagePath = directory.appendingPathComponent("full.png")
         try png.write(to: imagePath)
         let transport = MiniPreviewActionTransport()
+        transport.cleanupGate = DispatchSemaphore(value: 0)
+        defer { transport.cleanupGate?.signal() }
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
         pasteboard.clearContents()
         let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
             loadPreferences: { try self.preferences() }, pasteboard: { pasteboard })
         actions.configure(historyRoot: directory.path)
+        XCTAssertEqual(transport.cleanupStarted.wait(timeout: .now() + 5), .success)
         var workspaceOwner: NSObject? = NSObject()
         workspaceOwner = nil // Preferences replaced the live workspace controller.
         XCTAssertNil(workspaceOwner)
         let captured = artifact(id: "latest", previewPath: imagePath.path,
                                 imagePath: imagePath.path)
+        let controller = MiniPreviewController(tokens: tokens,
+            imageLoader: { _ in self.solidImage(.systemBlue) })
+        defer { controller.close() }
+        controller.prepareDrag = { _, completion in completion(imagePath.path) }
+        let generation = try XCTUnwrap(controller.beginCapture(settings: previewSettings()))
+        controller.present(captured, on: screenID(), settings: previewSettings(), generation: generation)
+        try waitUntil { controller.previewView?.card(for: captured.id)?.isOutboundFileDragEnabled == true }
+        actions.bind(previews: controller)
+        controller.copyArtifact = { actions.copy($0) }
+        controller.saveArtifact = { actions.save($0) }
+        let panel = try XCTUnwrap(controller.previewView?.window as? MiniPreviewPanel)
+        let card = try XCTUnwrap(panel.previewView.card(for: captured.id))
+        let copy = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewButton }
+            .first { $0.kind == .copy })
 
-        actions.copy(captured)
+        copy.performClick(nil)
+        // The persistent queue is held before the real PNG read. A second
+        // main action must not be accepted while Copy owns these controls.
         actions.save(captured)
+        XCTAssertFalse(copy.isEnabled)
+        controller.updateSettings(previewSettings())
+        let rebuiltPanel = try XCTUnwrap(controller.previewView?.window as? MiniPreviewPanel)
+        let rebuiltCard = try XCTUnwrap(rebuiltPanel.previewView.card(for: captured.id))
+        let controls = rebuiltCard.subviews.compactMap { $0 as? MiniPreviewButton }
+        let save = try XCTUnwrap(controls.first { $0.kind == .save })
+        XCTAssertFalse(save.isEnabled, "Copy's busy state must survive a panel rebuild")
+        XCTAssertFalse(try XCTUnwrap(controls.first { $0.kind == .copy }).isEnabled)
+        XCTAssertTrue(controls.filter { $0.kind == .edit || $0.kind == .trash }.allSatisfy(\.isEnabled),
+            "shipping keeps Edit and removal available during main actions")
+        XCTAssertTrue(rebuiltCard.isOutboundFileDragEnabled)
+        rebuiltPanel.previewView.samplePointer(nil)
+        rebuiltCard.mouseEntered(with: try hoverEvent(for: rebuiltPanel))
+        try write(render(rebuiltPanel), name: "mini-preview-copy-busy-after-rebuild.png")
+        transport.cleanupGate?.signal()
         LiveCaptureController.flush()
-        XCTAssertEqual(transport.saveCount, 1, "Save must execute on the persistent queue")
-        XCTAssertEqual(transport.savedRoot, directory.path)
         try waitUntil { pasteboard.data(forType: .png) == png }
         XCTAssertEqual(pasteboard.data(forType: .png), png,
             "Copy must publish the full-resolution PNG, not the thumbnail")
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertEqual(transport.saveCount, 0, "Save must wait for Copy to finish")
+        save.performClick(nil)
+        XCTAssertFalse(save.isEnabled)
+        LiveCaptureController.flush()
+        try waitUntil { save.title == "Saved" }
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertEqual(transport.saveCount, 1, "a later explicit Save uses the persistent queue")
+        XCTAssertEqual(transport.savedRoot, directory.path)
+        try write(render(rebuiltPanel), name: "mini-preview-main-action-recovered.png")
+    }
+
+    func testLateCopyCannotReleaseSameIDReplacementSaveOrAdoptItsClipboardChip() throws {
+        _ = NSApplication.shared
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).png")
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: PreviewView.fixtureImage(scale: 1))
+            .representation(using: .png, properties: [:]))
+        try png.write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let captured = artifact(id: "same-id", previewPath: path.path, imagePath: path.path)
+        let controller = try presentedController(captured)
+        defer { controller.close() }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        pasteboard.clearContents()
+        let transport = MiniPreviewActionTransport()
+        transport.cleanupGate = DispatchSemaphore(value: 0)
+        transport.gate = DispatchSemaphore(value: 0)
+        defer { transport.cleanupGate?.signal(); transport.gate?.signal() }
+        let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
+            loadPreferences: { try self.preferences() }, pasteboard: { pasteboard })
+        actions.bind(previews: controller); actions.configure(historyRoot: path.deletingLastPathComponent().path)
+        XCTAssertEqual(transport.cleanupStarted.wait(timeout: .now() + 5), .success)
+        actions.copy(captured)
+        controller.dismiss(captured.id, exit: nil)
+        controller.restore(captured, on: screenID(), settings: previewSettings()) { _ in }
+        try waitUntil { controller.isPanelVisible }
+        let replacement = try XCTUnwrap(controller.previewView?.card(for: captured.id))
+        let controls = replacement.subviews.compactMap { $0 as? MiniPreviewButton }
+        let save = try XCTUnwrap(controls.first { $0.kind == .save })
+        let copy = try XCTUnwrap(controls.first { $0.kind == .copy })
+        XCTAssertTrue(save.isEnabled, "new generations do not inherit an old action lock")
+        actions.save(captured)
+        transport.cleanupGate?.signal()
+        XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
+        try waitUntil { pasteboard.data(forType: .png) == png }
+        XCTAssertFalse(save.isEnabled, "the old Copy cannot unlock the new Save")
+        let panel = try XCTUnwrap(controller.previewView?.window as? MiniPreviewPanel)
+        panel.previewView.samplePointer(nil)
+        replacement.mouseEntered(with: try hoverEvent(for: panel))
+        XCTAssertFalse(copy.isHidden, "a stale Copy cannot claim the replacement's clipboard chip")
+        transport.gate?.signal()
+        LiveCaptureController.flush()
+        try waitUntil { save.title == "Saved" }
+        XCTAssertTrue(save.isEnabled)
     }
 
     func testSavedActionRevealsExactUnicodePathWithoutSavingAgain() throws {
@@ -981,8 +1067,13 @@ final class MiniPreviewTests: XCTestCase {
                                                loadPreferences: { try self.preferences() })
         failedActions.bind(previews: controller); failedActions.configure(historyRoot: "/History")
         failedActions.save(captured)
+        let busyControls = try XCTUnwrap(controller.previewView?.card(for: captured.id))
+            .subviews.compactMap { $0 as? MiniPreviewButton }
+        XCTAssertTrue(busyControls.filter { $0.kind == .copy || $0.kind == .save }
+            .allSatisfy { !$0.isEnabled })
         LiveCaptureController.flush()
         try waitUntil { controller.statusText(for: captured.id) == "Save failed" }
+        XCTAssertTrue(busyControls.allSatisfy(\.isEnabled), "a failed Save must release the controls")
 
         var restored = false
         controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
@@ -2304,7 +2395,9 @@ private final class MiniPreviewActionTransport: AppTransport {
     var fail = false
     var malformed = false
     var gate: DispatchSemaphore?
+    var cleanupGate: DispatchSemaphore?
     let started = DispatchSemaphore(value: 0)
+    let cleanupStarted = DispatchSemaphore(value: 0)
     var saveCount: Int { lock.lock(); defer { lock.unlock() }; return saves }
     var savedRoot: String? { lock.lock(); defer { lock.unlock() }; return root }
     var trashCount: Int { lock.lock(); defer { lock.unlock() }; return trashes }
@@ -2317,6 +2410,9 @@ private final class MiniPreviewActionTransport: AppTransport {
         let operation = object["operation"] as? String
         if operation == "clear_previous_preview_drags" {
             cleanups += 1
+            let gate = cleanupGate
+            cleanupStarted.signal()
+            lock.unlock(); gate?.wait(); lock.lock()
             return ["kind": "previous_preview_drags_cleared"]
         }
         requests += 1; recordedRequest = object
