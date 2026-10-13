@@ -974,7 +974,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
             fade.timingFunction = spec.timing
             fade.beginTime = editorRing.convertTime(CACurrentMediaTime(), from: nil)
             editorRing.add(fade, forKey: "preview-editor-ring")
-        } else if let survivor, let fade = survivor.editorRing.animation(forKey: "preview-editor-ring") {
+        } else if let survivor,
+                  let fade = survivor.editorRing.animation(forKey: "preview-editor-ring")?.copy() as? CAAnimation {
+            // CALayer returns an immutable animation; retime its owned copy.
             fade.beginTime = editorRing.convertTime(survivor.editorRing.convertTime(fade.beginTime, to: nil), from: nil)
             editorRing.add(fade, forKey: "preview-editor-ring")
         }
