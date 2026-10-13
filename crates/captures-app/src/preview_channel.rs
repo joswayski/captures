@@ -179,6 +179,22 @@ fn prepare_profile(
     )
     .map_err(|e| e.to_string())?;
     validate_profile(destination)?;
+    // Empty installs have no History tree until the host opens it. Login
+    // registration needs its canonical path before that happens.
+    let history = destination.join("history");
+    fs::create_dir_all(&history).map_err(|e| e.to_string())?;
+    // Enroll only the installed channel's first profile. Subsequent launches
+    // leave the OS-authoritative Preferences Off choice alone; development
+    // imports and fixtures never change the installed Captures login entry.
+    if version().is_some()
+        && captures_settings::load(&destination.join("settings.json"))
+            .map_err(|e| e.to_string())?
+            .launch_at_login
+        && let Err(error) =
+            crate::login_item::configure(&history, &destination.join("settings.json"), Some(true))
+    {
+        eprintln!("Could not enable launch at login; retry in Preferences: {error}");
+    }
     Ok(settings_source == settings || data_source == data)
 }
 
@@ -322,6 +338,12 @@ mod tests {
         assert!(!prepare_profile(&settings, &data, &profile, || panic!("no source")).unwrap());
         assert!(!settings.exists() && !data.exists());
         assert!(profile.join("settings.json").is_file());
+        assert!(profile.join("history").is_dir());
+        assert!(
+            captures_settings::load(&profile.join("settings.json"))
+                .unwrap()
+                .launch_at_login
+        );
         let invalid = temp.path().join("unrelated");
         fs::create_dir(&invalid).unwrap();
         fs::write(invalid.join("keep.txt"), b"not ours").unwrap();

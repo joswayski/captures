@@ -999,6 +999,16 @@ state, retry and fixture isolation. Physical macOS/Windows/X11 sign-in,
 accessibility and installed-update lifecycle remain unverified. No parity gate
 closes from this development registration slice.
 
+Launch-at-login defaults to On in shared settings for new installs or a missing
+field; existing `false` values remain Off. Installed AppKit/wgpu Preview startup
+registers the first profile only, preserving an imported Off value. Subsequent
+native launches keep the OS-authoritative Off choice; development imports and
+fixtures remain opt-in and do not replace Tauri's login entry. The installed
+entry uses `--captures-autostart` and the existing quiet-launch/recovery path.
+macOS, Windows, X11 and Wayland share this startup policy and their existing
+platform registration adapters. Physical sign-in acceptance remains open on all
+four; this change does not close a native parity or promotion gate.
+
 Fresh live profiles now gate capture, shortcuts and queued external media on native
 setup. Checking never prompts; explicit macOS requests record the executable
 identity before asking, offer Settings after denial, and keep microphone optional.
