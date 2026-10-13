@@ -652,6 +652,15 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertLessThan(concealed.alphaComponent, 0.01, "shipping leaves the source media area transparent")
         XCTAssertTrue(source.hasVisibleLabels, "concealing media retains its metadata")
         try write(render(original), name: "mini-preview-file-drag-source-hidden.png")
+        controller.setEditorArtifacts(["source"])
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        let glowing = try XCTUnwrap(renderPresentation(original))
+        let inside = source.convert(NSPoint(x: 4, y: 70), to: original.previewView)
+        XCTAssertLessThan(try XCTUnwrap(pixelColor(in: glowing, of: original,
+            x: inside.x, y: inside.y)).alphaComponent, 0.01,
+            "the editor glow stays outside the concealed source, like CSS box-shadow")
+        try write(glowing, name: "mini-preview-file-drag-editor-glow.png")
+        controller.setEditorArtifacts([])
         controller.updateSettings(previewSettings())
         let rebuilt = try panel()
         XCTAssertEqual(try mediaPixel(rebuilt), concealed, "settings must not reintroduce the source media")

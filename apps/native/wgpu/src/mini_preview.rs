@@ -380,14 +380,15 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
     let ring = editor_ring_opacity(ui, tokens, &view);
     if ring > 0. {
         // `0 0 14px rgba(accent, .28)`: a glow outside the card, under it.
-        ui.painter().add(
-            egui::Shadow {
-                offset: [0, 0],
-                blur: 14,
-                spread: 0,
-                color: tokens.color("theme-accent").gamma_multiply(0.28 * ring),
-            }
-            .as_shape(card, radius),
+        crate::effects::paint_box_shadows(
+            ui.painter(),
+            card,
+            radius,
+            &[crate::effects::BoxShadow::glow(
+                14.,
+                tokens.color("theme-accent").gamma_multiply(0.28),
+            )],
+            ring,
         );
     }
     paint_card_shadow(
@@ -623,21 +624,21 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
     )
 }
 
-/// `thumbnail-capture-highlight`'s `0 0 18px rgba(accent, .24)` glow. Paint
-/// it before the card: the blurred rect also covers the card's interior,
-/// which the opaque card then hides, leaving the glow outside only.
+/// `thumbnail-capture-highlight`'s outer `0 0 18px rgba(accent, .24)` glow.
+/// The interior stays clear even when a file drag conceals the source media.
 fn paint_capture_glow(ui: &egui::Ui, tokens: &Tokens, card: egui::Rect, radius: f32, opacity: f32) {
     if opacity <= 0. {
         return;
     }
-    ui.painter().add(
-        egui::Shadow {
-            offset: [0, 0],
-            blur: 18,
-            spread: 0,
-            color: tokens.color("theme-accent").gamma_multiply(0.24 * opacity),
-        }
-        .as_shape(card, radius),
+    crate::effects::paint_box_shadows(
+        ui.painter(),
+        card,
+        radius,
+        &[crate::effects::BoxShadow::glow(
+            18.,
+            tokens.color("theme-accent").gamma_multiply(0.24),
+        )],
+        opacity,
     );
 }
 

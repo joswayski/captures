@@ -3654,6 +3654,9 @@ when the original source completes. A new card generation, even at the same ID
 and path, cannot inherit the old source's concealment or completion. The private-X11 drag probe checks composited
 desktop pixels, original-file transfer and source recovery in normal/reduced motion;
 AppKit has a rebuild/pixel regression. Physical platform acceptance remains open.
+Capture-highlight and editor-presence glows use exterior-only shadow masks, so
+they do not tint the concealed media area. The drag probe includes an open editor;
+AppKit's pixel regression also samples the transparent interior beside its ring.
 
 | Host | Implementation | Verification / remaining acceptance |
 | --- | --- | --- |

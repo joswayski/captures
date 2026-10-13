@@ -680,14 +680,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         // the media so the glow shows only outside the card.
         let radius = tokens.number("thumbnail-card-radius")
         let accent = tokens.color("theme-accent")
+        let accentRGB = Array(tokens.colors["theme-accent"]!.prefix(3))
         editorRing.frame = bounds.insetBy(dx: -2, dy: -2)
         editorRing.cornerRadius = radius + 2
         editorRing.borderWidth = 2
         editorRing.borderColor = accent.withAlphaComponent(0.9).cgColor
-        editorRing.shadowColor = accent.cgColor
-        editorRing.shadowOpacity = 0.28
-        editorRing.shadowRadius = 7
-        editorRing.shadowOffset = .zero
+        BoxShadowLayers.install([BoxShadowLayer(x: 0, y: 0, blur: 14, spread: 0, color: accentRGB + [0.28])],
+            on: editorRing, bounds: CGRect(x: 2, y: 2, width: bounds.width, height: bounds.height), radius: radius)
         editorRing.opacity = 0
         layer?.insertSublayer(editorRing, at: 0)
         // `0 0 0 1px rgba(accent, .85), 0 0 18px rgba(accent, .24)` over the card.
@@ -695,10 +694,8 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         highlightRing.cornerRadius = radius
         highlightRing.borderWidth = 1
         highlightRing.borderColor = accent.withAlphaComponent(0.85).cgColor
-        highlightRing.shadowColor = accent.cgColor
-        highlightRing.shadowOpacity = 0.24
-        highlightRing.shadowRadius = 9
-        highlightRing.shadowOffset = .zero
+        BoxShadowLayers.install([BoxShadowLayer(x: 0, y: 0, blur: 18, spread: 0, color: accentRGB + [0.24])],
+            on: highlightRing, bounds: bounds, radius: radius)
         highlightRing.opacity = 0
         layer?.addSublayer(highlightRing)
         if let layer {
