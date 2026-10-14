@@ -3450,8 +3450,14 @@ through the `captures_preview_editor_*`, `_hover_lock_v1`,
   settings/stack rebuilds rather than snapping or replaying them. Reduced motion
   settles immediately; replacement generations cannot inherit those transitions.
   The normal/reduced rebuild regression services the idle panel before starting
-  the morph, then keeps the original in-flight samples and deadlines. It checks
-  continuity on an already-serviced preview, not cold-presentation latency.
+  the morph, then observes an intermediate width between 70 and 280 ms instead
+  of assuming a timer fired before a fixed 70 ms run-loop deadline. It rebuilds
+  immediately without intervening display/flush work and checks both directions
+  against the original 280 ms clock. Missing intermediate frames and late samples
+  that cannot distinguish a restarted clock fail rather than bypass continuity.
+  Rendering follows the timing assertions. This checks an already-serviced
+  preview, not cold-presentation latency or animation smoothness; servicing idle
+  alone did not reliably prevent the hosted test's delayed first timer delivery.
   Cold-presentation latency and the reported physical-Mac suite timeouts remain
   unresolved; cross-platform presentation acceptance remains open.
 - **Hover media.** Hover or focus applies `blur(2px) brightness(.5)
