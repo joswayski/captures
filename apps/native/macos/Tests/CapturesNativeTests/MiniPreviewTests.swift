@@ -2062,6 +2062,9 @@ final class MiniPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference
         defer { NativeMotion.motionPreference = preference }
+        let trace = ProcessInfo.processInfo.environment["CAPTURES_PREVIEW_MOTION_TRACE"] == "1"
+        if trace { MiniPreviewMotionTrace.begin() }
+        defer { if trace { MiniPreviewMotionTrace.finish() } }
         for reduced in [false, true] {
             NativeMotion.motionPreference = { reduced }
             let captured = artifact(id: "edited", previewPath: "/edited-preview.png")
@@ -2087,12 +2090,28 @@ final class MiniPreviewTests: XCTestCase {
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
             let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
             XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
+            // Controlled setup variant: service the idle panel before measuring
+            // editor continuity. This does not establish acceptable cold UX.
+            do {
+                let initial = try panel()
+                let initialEdit = try XCTUnwrap(controller.previewView?.editControl(for: "edited"))
+                initialEdit.traceEditorMorph(10)
+                initial.previewView.layoutSubtreeIfNeeded()
+                initialEdit.traceEditorMorph(11)
+                initial.displayIfNeeded()
+                initialEdit.traceEditorMorph(12)
+                CATransaction.flush()
+                initialEdit.traceEditorMorph(13)
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+                initialEdit.traceEditorMorph(14)
+            }
             controller.setEditorArtifacts(["edited"])
             XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
             let enterStarted = CACurrentMediaTime()
             let firstReturn = pump(until: Date().addingTimeInterval(0.07))
             let enteringWidth = try width()
             let enterElapsed = CACurrentMediaTime() - enterStarted
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(8, requested: enteringWidth)
             try panel().previewView.layoutSubtreeIfNeeded()
             try panel().displayIfNeeded()
             CATransaction.flush()
@@ -2113,6 +2132,7 @@ final class MiniPreviewTests: XCTestCase {
                 .contains(controller.editorPhase(for: "edited")))
             _ = pump(until: Date().addingTimeInterval(0.07))
             let leavingWidth = try width()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(9, requested: leavingWidth)
             if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
             else { XCTAssertGreaterThan(leavingWidth, 28); XCTAssertLessThan(leavingWidth, fullWidth) }
             controller.updateSettings(previewSettings())
