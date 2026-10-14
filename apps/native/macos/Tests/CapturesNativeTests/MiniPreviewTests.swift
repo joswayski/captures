@@ -2087,6 +2087,16 @@ final class MiniPreviewTests: XCTestCase {
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
             let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
             XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
+            // Measure rebuild continuity on an already-serviced preview, not
+            // AppKit's first presentation. Keep setup outside the morph clock;
+            // this fixture does not establish acceptable cold-preview latency.
+            do {
+                let initial = try panel()
+                initial.previewView.layoutSubtreeIfNeeded()
+                initial.displayIfNeeded()
+                CATransaction.flush()
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
             controller.setEditorArtifacts(["edited"])
             XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
             let enterStarted = CACurrentMediaTime()

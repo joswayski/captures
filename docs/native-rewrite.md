@@ -3449,8 +3449,11 @@ through the `captures_preview_editor_*`, `_hover_lock_v1`,
   generation's in-flight badge width, original morph clock and ring fade across
   settings/stack rebuilds rather than snapping or replaying them. Reduced motion
   settles immediately; replacement generations cannot inherit those transitions.
-  The normal/reduced rebuild regression requires macOS execution; physical
-  cross-platform presentation acceptance remains open.
+  The normal/reduced rebuild regression services the idle panel before starting
+  the morph, then keeps the original in-flight samples and deadlines. It checks
+  continuity on an already-serviced preview, not cold-presentation latency.
+  Cold-presentation latency and the reported physical-Mac suite timeouts remain
+  unresolved; cross-platform presentation acceptance remains open.
 - **Hover media.** Hover or focus applies `blur(2px) brightness(.5)
   scale(1.015)` over the shipping 180/220 ms transitions. AppKit uses a Core
   Image Gaussian blur on the image layer, a 50% black layer and a clipped
