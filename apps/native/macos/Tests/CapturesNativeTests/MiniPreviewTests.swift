@@ -2168,16 +2168,42 @@ final class MiniPreviewTests: XCTestCase {
                 // presentation can lag that frame until the next display pass.
                 return edit.frame.width
             }
-            func pump(until deadline: Date) -> Double {
-                let started = CACurrentMediaTime()
-                RunLoop.current.run(until: deadline)
-                let firstReturn = CACurrentMediaTime() - started
-                while Date() < deadline { RunLoop.current.run(until: deadline) }
-                return firstReturn
+            func pump(until deadline: CFTimeInterval) {
+                while CACurrentMediaTime() < deadline {
+                    let remaining = deadline - CACurrentMediaTime()
+                    _ = RunLoop.current.run(mode: .default,
+                        before: Date().addingTimeInterval(min(0.005, max(0, remaining))))
+                }
+            }
+            func inFlightWidth(started: CFTimeInterval, fullWidth: CGFloat) throws -> CGFloat {
+                if reduced { return try width() }
+                // A run-loop deadline does not guarantee a timer delivery.
+                // Observe actual geometry within the original 280 ms morph,
+                // keeping enough distance from both endpoints to catch a snap.
+                // Do not interrupt before 70 ms: a restarted clock must still
+                // differ at the original +300 ms settlement check below.
+                while CACurrentMediaTime() - started < 0.28 {
+                    let sampled = try width()
+                    let elapsed = CACurrentMediaTime() - started
+                    if elapsed >= 0.07, elapsed < 0.28, sampled > 30, sampled < fullWidth - 2 {
+                        return sampled
+                    }
+                    pump(until: min(started + 0.28, CACurrentMediaTime() + 0.005))
+                }
+                let finalWidth = try width()
+                XCTFail("No intermediate badge frame within 280 ms; width=\(finalWidth), elapsed=\(CACurrentMediaTime() - started)s")
+                throw AppBridgeError.invalidResponse
             }
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
+            let present = UInt32(CAPTURES_EDITOR_PHASE_PRESENT)
             let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
             XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
+            // Measure this control's endpoints without starting a transition.
+            let view = try XCTUnwrap(controller.previewView)
+            view.setEditorPhase(present, for: "edited", animated: false)
+            let fullWidth = try width()
+            view.setEditorPhase(idle, for: "edited", animated: false)
+            XCTAssertEqual(try width(), 28, accuracy: 0.1)
             // Measure rebuild continuity on an already-serviced preview, not
             // AppKit's first presentation. Keep setup outside the morph clock;
             // this fixture does not establish acceptable cold-preview latency.
@@ -2188,38 +2214,41 @@ final class MiniPreviewTests: XCTestCase {
                 CATransaction.flush()
                 _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
             }
-            controller.setEditorArtifacts(["edited"])
-            XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
             let enterStarted = CACurrentMediaTime()
-            let firstReturn = pump(until: Date().addingTimeInterval(0.07))
-            let enteringWidth = try width()
-            let enterElapsed = CACurrentMediaTime() - enterStarted
-            try panel().previewView.layoutSubtreeIfNeeded()
-            try panel().displayIfNeeded()
-            CATransaction.flush()
-            XCTAssertGreaterThan(enteringWidth, 28,
-                "reduced=\(reduced), first run returned at \(firstReturn)s, sampled at \(enterElapsed)s")
+            controller.setEditorArtifacts(["edited"])
+            XCTAssertEqual(controller.editorPhase(for: "edited"), present)
+            let enteringWidth = try inFlightWidth(started: enterStarted, fullWidth: fullWidth)
+            let enterRebuilt = CACurrentMediaTime()
             controller.updateSettings(previewSettings())
             XCTAssertEqual(try width(), enteringWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its entering badge")
-            try write(XCTUnwrap(renderPresentation(panel())),
-                      name: "mini-preview-editor-enter-rebuild-\(reduced ? "reduced" : "motion").png")
-            _ = pump(until: Date().addingTimeInterval(0.35))
-            let fullWidth = try width()
             if reduced { XCTAssertEqual(enteringWidth, fullWidth, accuracy: 0.1) }
-            else { XCTAssertLessThan(enteringWidth, fullWidth, "the sample must exercise an in-flight morph") }
-            let leaveStarted = Date()
+            pump(until: enterStarted + 0.30)
+            if !reduced {
+                XCTAssertLessThan(CACurrentMediaTime(), enterRebuilt + 0.28,
+                    "an overdue sample cannot distinguish the original clock from a restarted one")
+            }
+            XCTAssertEqual(try width(), fullWidth, accuracy: 0.1,
+                "entering must finish on the original 280 ms clock")
+            // Render only after the timing assertions, never between sampling
+            // a frame and rebuilding or while checking the original deadline.
+            try write(XCTUnwrap(renderPresentation(panel())),
+                      name: "mini-preview-editor-present-rebuild-\(reduced ? "reduced" : "motion").png")
+            let leaveStarted = CACurrentMediaTime()
             controller.setEditorArtifacts([])
             XCTAssertTrue([UInt32(CAPTURES_EDITOR_PHASE_LEAVING), lingering]
                 .contains(controller.editorPhase(for: "edited")))
-            _ = pump(until: Date().addingTimeInterval(0.07))
-            let leavingWidth = try width()
-            if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
-            else { XCTAssertGreaterThan(leavingWidth, 28); XCTAssertLessThan(leavingWidth, fullWidth) }
+            let leavingWidth = try inFlightWidth(started: leaveStarted, fullWidth: fullWidth)
+            let leaveRebuilt = CACurrentMediaTime()
             controller.updateSettings(previewSettings())
             XCTAssertEqual(try width(), leavingWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its leaving badge")
-            _ = pump(until: leaveStarted.addingTimeInterval(0.30))
+            if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
+            pump(until: leaveStarted + 0.30)
+            if !reduced {
+                XCTAssertLessThan(CACurrentMediaTime(), leaveRebuilt + 0.28,
+                    "an overdue sample cannot distinguish the original clock from a restarted one")
+            }
             XCTAssertEqual(try width(), 28, accuracy: 0.1,
                 "the 280 ms morph ends on the original clock, not 280 ms after rebuilding")
             try write(XCTUnwrap(renderPresentation(panel())),
