@@ -209,12 +209,9 @@ On `main`, the tested image is published to `production/captures` in ECR as
 existing OIDC publisher role. Reruns preserve immutable tags; deploy by tag and
 digest, never `latest`.
 
-Successful publication sends a **Captures API image is ready** notification with
-an exact SHA/digest through `DEPLOY_NOTIFICATION_WEBHOOK_URL`. The **Deploy
-Captures API** button uses Godis's `captures-api` route to
-`deploy-captures-api.yml`; **Open GitHub** is the workflow fallback. Missing webhook
-configuration skips notification. A failed notification can be retried without
-overwriting the image. Publication does not deploy or configure secrets.
+After publication the image run dispatches `Ship` in `joswayski/infrastructure`,
+which rolls the API and then the website forward to the newest published images
+on `main`, never backwards. Publication does not configure secrets.
 
 - `captur.es/api/*` and `api.captur.es/api/*` route to `captures-api`, including
   feedback, Preview updater manifests, and the unavailable account endpoint.
