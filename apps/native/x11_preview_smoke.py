@@ -626,6 +626,11 @@ def main():
                 def survivor_pixels():
                     return run("import", "-window", preview, "-crop", crop, "-depth", "8", "rgb:-")
                 before = survivor_pixels()
+                def survivor_matches(pixels):
+                    # Allow one 8-bit level of raster variance, not movement:
+                    # the contrasting media edge still detects a one-pixel slide.
+                    return len(pixels) == len(before) and all(
+                        abs(actual - expected) <= 1 for actual, expected in zip(pixels, before))
                 shot(preview, f"{prefix}-retarget-three")
                 preserved = {path: (path.parent / "capture.png").read_bytes() for path in entries()}
                 recording = None
@@ -713,11 +718,12 @@ def main():
                     if second:
                         pixels = survivor_pixels()
                         observed_ms = (time.monotonic() - first_accepted) * 1000
-                        if pixels != before:
+                        unchanged = survivor_matches(pixels)
+                        if not unchanged:
                             (output / f"{prefix}-retarget-expected.rgb").write_bytes(before)
                             (output / f"{prefix}-retarget-actual.rgb").write_bytes(pixels)
                             shot(preview, f"{prefix}-retarget-boundary")
-                        assert pixels == before, (
+                        assert unchanged, (
                             f"survivor edge changed before the second input: crop={crop}, "
                             f"{observed_ms:.0f}ms after first exit receipt")
                         # Prepare the hover/pixels first, then place the 150 ms
@@ -739,7 +745,7 @@ def main():
                 shot("root", f"{prefix}-retarget-held")
                 height = int(window_geometry(preview)["HEIGHT"])
                 assert height == 608, f"held slots disappeared early: height={height}, expected 608"
-                assert survivor_pixels() == before, "survivor drifted during the reentrant dust hold"
+                assert survivor_matches(survivor_pixels()), "survivor drifted during the reentrant dust hold"
                 wait(lambda: int(window_geometry(preview)["HEIGHT"]) == 240, "one settled survivor")
                 shot(preview, f"{prefix}-retarget-settled")
                 if recording:
@@ -751,7 +757,7 @@ def main():
                 assert all((path.parent / "capture.png").read_bytes() == data for path, data in preserved.items())
                 run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
                 assert app.wait(timeout=10) == 0
-                print(f"PASS {placement}: second exit at {second_at:.0f} ms; 608px viewport holds exact survivor pixels past 2.9s; settles to actionable oldest capture", flush=True)
+                print(f"PASS {placement}: second exit at {second_at:.0f} ms; 608px viewport holds survivor edge within one 8-bit level past 2.9s; settles to actionable oldest capture", flush=True)
                 continue
             if enabled:
                 preview = wait(lambda: windows(PREVIEW), "mini preview")[0]
