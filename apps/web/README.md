@@ -82,27 +82,30 @@ process listens on port `3000` (`PORT` / `HOST` from the environment). Health
 check is `GET /health`.
 
 The `AWS image` GitHub Actions workflow builds the production Dockerfile for
-`linux/arm64` on pull requests and verifies `/health` inside the resulting
-container. After a commit reaches `main`, it uses GitHub OIDC to publish that
-same application shape to the private `production/captures` ECR repository.
+`linux/arm64` on every push to `main`, verifies `/health` inside the resulting
+container, and uses GitHub OIDC to publish that same image to the private
+`production/captures` ECR repository.
 Images use the immutable application Git SHA as the tag; Kubernetes deployments
 must also pin the ECR digest and must not use `latest` or a Docker-login Secret.
 The short-lived GitHub token used to fetch homepage history is mounted only as a
 BuildKit secret and is not stored in the image or its build arguments.
 
-Publishing does not deploy. Rollout is the `Deploy Captures` workflow in
-[`joswayski/infrastructure`](https://github.com/joswayski/infrastructure):
+After publishing, the image run dispatches `Ship` in
+[`joswayski/infrastructure`](https://github.com/joswayski/infrastructure). Ship
+rolls the API and then the web forward to the newest published images on
+`main`, never backwards. To ship by hand (it is idempotent):
 
 ```sh
-gh workflow run deploy-captures.yml \
+gh workflow run ship.yml \
   --repo joswayski/infrastructure \
-  --ref main
+  --ref main \
+  -f repository=captures
 ```
 
-Leave the SHA blank to pin the newest published ECR image. Paste
-`-f git_sha=<full-40-character-main-sha>` only for rollback; that SHA must
-already exist as an immutable ECR tag from this repository's `main` image
-pipeline. Host lookup and the bounded SSM document live in infrastructure so
+`deploy-captures.yml` there still deploys one exact image
+(`-f git_sha=<full-40-character-main-sha>`), which must already exist as an
+immutable ECR tag from this repository's `main` image pipeline. The next Ship
+rolls forward again, so follow a manual rollback with a revert or fix. Host lookup and the bounded SSM document live in infrastructure so
 they are not copied per app. The workflow writes the pin into git; Flux
 applies that image. Captures retains one steady-state replica with
 `maxSurge: 1` and `maxUnavailable: 0`, so a deploy temporarily starts one

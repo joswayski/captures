@@ -16,17 +16,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  route:
-    uses: ./.github/workflows/mac-route.yml
-    secrets: inherit
-
-  # Builds and tests the image on the Mac's arm64 Linux VM when mac-route.yml
-  # picks it, and hands the tested image to the publish job, which runs on
-  # GitHub so the ECR role never reaches a self-hosted machine.
+  # Builds and tests the image on GitHub's arm64 runners, which start in
+  # seconds (the deploy path never queues behind a self-hosted machine), and
+  # hands the tested image to the publish job.
   api-arm64:
     name: linux/arm64 API image
-    needs: route
-    runs-on: ${{ needs.route.outputs.linux_arm == 'true' && fromJSON('["self-hosted","joselinux-arm"]') || 'ubuntu-24.04-arm' }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -163,16 +158,30 @@ jobs:
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           printf '### Captures API image ready\n\n`%s@%s`\n\nPublishing does not deploy. Use the infrastructure account activation/deployment procedure.\n' \
             "$image" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/ship
+      - name: Ship to production
+        uses: ./.github/actions/ship
+        with:
+          repository: captures
+          app-id: ${{ secrets.DEPLOY_APP_ID }}
+          private-key: ${{ secrets.DEPLOY_APP_PRIVATE_KEY }}
       - name: Notify deployment webhook
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           DEPLOY_NOTIFICATION_WEBHOOK_URL: ${{ secrets.DEPLOY_NOTIFICATION_WEBHOOK_URL }}
+          SHIP_ENABLED: ${{ secrets.DEPLOY_APP_ID != '' && secrets.DEPLOY_APP_PRIVATE_KEY != '' }}
           DEPLOY_WORKFLOW_URL: https://github.com/joswayski/infrastructure/actions/workflows/deploy-captures-api.yml
           GITHUB_TOKEN: ${{ github.token }}
           IMAGE_DIGEST: ${{ steps.record.outputs.digest }}
         run: |
           set -euo pipefail
 
+          if [[ "${SHIP_ENABLED:-}" == true ]]; then
+            echo "Ship deploys this image; no Discord Deploy button."
+            exit 0
+          fi
           if [[ -z "$DEPLOY_NOTIFICATION_WEBHOOK_URL" ]]; then
             echo "DEPLOY_NOTIFICATION_WEBHOOK_URL is not configured; skipping notification."
             exit 0

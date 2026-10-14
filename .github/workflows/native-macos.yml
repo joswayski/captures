@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 # The running build always finishes and only the newest waiting run starts next
 # (GitHub replaces older pending runs in the group).
@@ -203,18 +202,6 @@ jobs:
             apps/native/macos/.build/release/CapturesNative_CapturesNative.bundle
           include-hidden-files: true
           if-no-files-found: error
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"
 
   development-package:
     needs: [route, build-and-test]
@@ -257,15 +244,3 @@ jobs:
           name: native-development-macos-${{ runner.arch }}
           path: native-development-*.zip
           if-no-files-found: error
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"

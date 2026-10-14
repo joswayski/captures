@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 # The running build always finishes and only the newest waiting run starts next
 # (GitHub replaces older pending runs in the group).
@@ -153,18 +152,6 @@ jobs:
             ${{ runner.temp }}/native-wayland-recording
             ${{ runner.temp }}/native-preview-retarget
           if-no-files-found: ignore
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"
 
   windows-release:
     name: release (windows-2025)
@@ -207,18 +194,6 @@ jobs:
             apps/native/wgpu/target/release/captures-wgpu-workbench.exe
             apps/native/wgpu/target/release/wayland_clipboard_probe
           if-no-files-found: error
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"
 
   linux-release:
     needs: route
@@ -256,18 +231,6 @@ jobs:
             apps/native/wgpu/target/release/captures-wgpu-workbench.exe
             apps/native/wgpu/target/release/wayland_clipboard_probe
           if-no-files-found: error
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"
 
   wayland-keyboard:
     needs: [linux-release, route]
@@ -346,18 +309,6 @@ jobs:
           name: native-development-windows-${{ runner.arch }}
           path: native-development-windows-x64.zip
           if-no-files-found: error
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"
 
   linux-development-package:
     needs: [linux-release, workbench, route]
@@ -395,18 +346,6 @@ jobs:
           name: native-development-linux-${{ runner.arch }}
           path: native-development-linux-x64.tar.gz
           if-no-files-found: error
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"
 
   wayland-development-updater:
     needs: [linux-development-package, route]
@@ -474,16 +413,6 @@ jobs:
             native-wayland-updater/supervised-*/*.json
             native-wayland-updater/supervised-*/helper.log
           if-no-files-found: ignore
-      - name: Stop the rest of this run after a failure
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"
 
   linux-smoke:
     needs: [linux-release, route]
@@ -725,15 +654,3 @@ jobs:
             native-smoke
             native-x11-*
           if-no-files-found: ignore
-      - name: Stop the rest of this run after a failure
-        # One failed job already fails the run; cancel the other jobs instead of
-        # letting them hold runners (and block newer pushes) until they finish.
-        if: failure()
-        shell: bash
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
-            || echo "::warning::Could not cancel the rest of this run"

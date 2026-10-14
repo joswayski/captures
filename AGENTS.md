@@ -57,15 +57,83 @@
 
 ## Shipping
 
-Speed beats ceremony: there are no real users yet, so ship, watch, and fix forward.
+`main` is production. A push to `main` reaches users within minutes, with no
+pull request, review or deploy button in between. Speed beats ceremony: there
+are no real users yet, so ship small, watch it land, and fix forward.
 
-- Commit and push straight to `main`; no pull requests. Run the local checks for what you changed first (Validation above), then `git pull --rebase origin main` and push. Never force-push `main` or rewrite other agents' commits. Write a concise commit message covering what changed, why, and what was verified.
-- Never put literal CI-skip directives in commit messages, even to explain them: `CI` and the image builds would silently not run, leaving no image to deploy for that SHA.
-- Every push to `main` runs `CI` (about 10 minutes: frontend, account API, Rust on macOS/Windows/Linux, native wgpu checks), `AWS image` (web) and `AWS API image` (about 2 minutes each, no path filters). `Native Windows shortcut ownership` runs when `shortcuts.rs` changes. `Native wgpu workbench`, `Native macOS workbench` and CI's unsigned installer builds run nightly and on demand; dispatch them (`gh workflow run <file> --repo joswayski/captures --ref main`) only when a native GUI or platform change needs that check before the nightly run.
-- After pushing, deploy what changed yourself, server before web, waiting for each step to succeed before the next. `SHA` is your pushed commit; find its runs with `gh run list --repo joswayski/captures --commit "$SHA"`, wait with `gh run watch <id> --exit-status` (infrastructure runs: `gh run list --repo joswayski/infrastructure --workflow <file> --limit 1`), and report what you deployed.
-  1. Infrastructure or secrets the change needs, in `joswayski/infrastructure`, following that repository's guidance.
-  2. If the API changed (`apps/api`, the workspace crates it builds, `Cargo.lock`), after `AWS API image` succeeds for `SHA`: `gh workflow run deploy-captures-api.yml --repo joswayski/infrastructure --ref main -f git_sha="$SHA"`. The API applies database migrations on startup.
-  3. If the website changed (`apps/web`, `shared`, `docs/images`, root package files), after `AWS image` succeeds for `SHA`: `gh workflow run deploy-captures.yml --repo joswayski/infrastructure --ref main -f git_sha="$SHA"`.
-  4. Desktop apps: `release.yml` (Captures Preview) stays manual. Dispatch it, or change the approved public tag in `scripts/preview-release.mjs`, only when the maintainer asks (see `docs/releases.md`).
-- If `CI`, an image build or a deploy fails, fix it forward with another commit. Roll back a broken server with the deploy workflow's `rollback_from_sha` input only when a fix will take longer than a few minutes.
-- Still ask the owner first for anything irreversible: destructive or data-dropping migrations, deleting infrastructure or data, rotating secrets.
+Before you push:
+
+- Run the local checks for what you changed (Validation above) and build what
+  you touched. CI on `main` is a signal, not a gate. Nothing waits for it, so
+  it cannot stop a mistake from reaching users.
+- Push only what you would be happy for users to have right now, and keep
+  every commit deployable.
+- Write database migrations to be additive and backward compatible. The API
+  applies them on startup, while the previous web still runs against it. Leave
+  dropping or rewriting data to a later, owner-approved change.
+- Push a branch and open a draft pull request instead of pushing to `main`
+  when:
+  - the work is unfinished and you have to stop (session ending, disk full,
+    missing toolchain). The draft PR is the handoff: say what is done and what
+    is left.
+  - it needs a product decision the maintainer hasn't made.
+  - it is irreversible: destructive or data-rewriting migrations, deleting
+    data or infrastructure, rotating secrets. Ask the owner first.
+
+Push and deploy:
+
+- Push with `git pull --rebase origin main` (rerun checks if that pulled in
+  changes to code you touched), then `git push origin HEAD:main`, and retry
+  the same way if the push is rejected. Never force-push `main` or rewrite
+  other agents' commits. Write a concise commit message covering what changed,
+  why, and what was verified.
+- Never put literal CI-skip directives in commit messages, even to explain
+  them: `CI` and the image builds would silently not run, leaving no image to
+  deploy for that SHA.
+- Every push to `main` runs:
+  - `CI`: about 10 minutes, covering frontend, account API, Rust on
+    macOS/Windows/Linux and native wgpu checks. The newest waiting push
+    replaces older waiting ones.
+  - `AWS image` (web) and `AWS API image`: about 2 minutes each, no path
+    filters.
+  - `Native Windows shortcut ownership`, when `shortcuts.rs` changes.
+
+  `Native wgpu workbench`, `Native macOS workbench` and CI's unsigned installer
+  builds run nightly and on demand. Dispatch them
+  (`gh workflow run <file> --repo joswayski/captures --ref main`) only when a
+  native GUI or platform change needs that check before the nightly run.
+- Each image run then dispatches `Ship` in `joswayski/infrastructure`. Ship
+  rolls production forward to the newest published images on `main`:
+  - in order: API, then web;
+  - never backwards;
+  - holding the web while a newer API build is still running or failed.
+
+  You don't coordinate deploys with other agents or the maintainer. Ship
+  serializes them. If the image run's "Ship to production" step says Ship is
+  not configured, dispatch it yourself once your image runs succeed.
+  Dispatching again is harmless:
+  `gh workflow run ship.yml --repo joswayski/infrastructure --ref main -f repository=captures`.
+  Don't run `deploy-captures*.yml` for routine changes.
+- Infrastructure or secrets the change needs go to `joswayski/infrastructure`
+  first, following that repository's guidance.
+- Desktop apps: `release.yml` (Captures Preview) stays manual. Dispatch it, or
+  change the approved public tag in `scripts/preview-release.mjs`, only when
+  the maintainer asks (see `docs/releases.md`).
+- Watch it land. `SHA` is your pushed commit:
+  - its runs: `gh run list --repo joswayski/captures --commit "$SHA"`, then
+    `gh run watch <id> --repo joswayski/captures --exit-status`;
+  - Ship runs: `gh run list --repo joswayski/infrastructure --workflow ship.yml --limit 3`.
+    Each run's summary says what shipped and what waits.
+
+  Report what reached production (your `SHA` or a newer one). Without `gh`,
+  use the GitHub MCP Actions tools; Claude sessions need
+  `joswayski/infrastructure` added to dispatch Ship.
+
+When something breaks:
+
+- If `CI`, an image build or Ship fails, fix it forward with another commit.
+  If the fix will take more than a few minutes, `git revert` the bad commit
+  and push; Ship deploys the revert like any other commit.
+- A deploy workflow's `rollback_from_sha` gives immediate relief, but only
+  until the next Ship rolls forward again. Always follow it with a revert or
+  fix.

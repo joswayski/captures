@@ -1,0 +1,52 @@
+name: Ship to production
+description: >-
+  Dispatches Ship in joswayski/infrastructure, which rolls this repository's
+  services forward to their newest published images in order and never
+  backwards. Does nothing (with a notice) until the deploy GitHub App's ID and
+  private key are configured as Actions secrets.
+inputs:
+  repository:
+    description: Ship's repository input (this repository's name)
+    required: true
+  app-id:
+    description: secrets.DEPLOY_APP_ID, the deploy GitHub App (Actions write on joswayski/infrastructure)
+    required: false
+    default: ""
+  private-key:
+    description: secrets.DEPLOY_APP_PRIVATE_KEY
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - if: inputs.app-id == '' || inputs.private-key == ''
+      shell: bash
+      env:
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        echo "::notice title=Not shipped::DEPLOY_APP_ID or DEPLOY_APP_PRIVATE_KEY is not set, so nothing deploys automatically. Dispatch Ship: gh workflow run ship.yml --repo joswayski/infrastructure --ref main -f repository=$REPOSITORY"
+    - id: token
+      if: inputs.app-id != '' && inputs.private-key != ''
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: joswayski
+        repositories: infrastructure
+        permission-actions: write
+    - if: inputs.app-id != '' && inputs.private-key != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        set -euo pipefail
+        curl --fail --show-error --silent --retry 3 --retry-all-errors --max-time 20 \
+          --request POST \
+          --header "Authorization: Bearer $GH_TOKEN" \
+          --header 'Accept: application/vnd.github+json' \
+          --header 'X-GitHub-Api-Version: 2022-11-28' \
+          --data "$(jq -cn --arg repository "$REPOSITORY" '{ref: "main", inputs: {repository: $repository}}')" \
+          "$GITHUB_API_URL/repos/joswayski/infrastructure/actions/workflows/ship.yml/dispatches"
+        echo "Dispatched Ship for $REPOSITORY: https://github.com/joswayski/infrastructure/actions/workflows/ship.yml" \
+          | tee -a "$GITHUB_STEP_SUMMARY"
