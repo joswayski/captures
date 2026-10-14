@@ -2062,6 +2062,9 @@ final class MiniPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference
         defer { NativeMotion.motionPreference = preference }
+        let trace = ProcessInfo.processInfo.environment["CAPTURES_PREVIEW_MOTION_TRACE"] == "1"
+        if trace { MiniPreviewMotionTrace.begin() }
+        defer { if trace { MiniPreviewMotionTrace.finish() } }
         for reduced in [false, true] {
             NativeMotion.motionPreference = { reduced }
             let captured = artifact(id: "edited", previewPath: "/edited-preview.png")
@@ -2093,6 +2096,7 @@ final class MiniPreviewTests: XCTestCase {
             let firstReturn = pump(until: Date().addingTimeInterval(0.07))
             let enteringWidth = try width()
             let enterElapsed = CACurrentMediaTime() - enterStarted
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(8, requested: enteringWidth)
             try panel().previewView.layoutSubtreeIfNeeded()
             try panel().displayIfNeeded()
             CATransaction.flush()
@@ -2113,6 +2117,7 @@ final class MiniPreviewTests: XCTestCase {
                 .contains(controller.editorPhase(for: "edited")))
             _ = pump(until: Date().addingTimeInterval(0.07))
             let leavingWidth = try width()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(9, requested: leavingWidth)
             if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
             else { XCTAssertGreaterThan(leavingWidth, 28); XCTAssertLessThan(leavingWidth, fullWidth) }
             controller.updateSettings(previewSettings())

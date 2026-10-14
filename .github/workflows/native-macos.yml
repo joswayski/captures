@@ -129,6 +129,7 @@ jobs:
           if-no-files-found: ignore
       - run: bash apps/native/macos/build.sh
         env:
+          CAPTURES_PREVIEW_MOTION_TRACE: '1'
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
       - name: Verify signed development updates and isolated profile import
         run: |
