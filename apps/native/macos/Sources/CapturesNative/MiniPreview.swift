@@ -1112,6 +1112,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         }
     }
 
+    func setMainActionBusy(_ busy: Bool) {
+        for button in [copyButton, saveButton].compactMap({ $0 }) {
+            button.isEnabled = !busy
+            button.alphaValue = busy ? 0.7 : 1 // Shipping main-action disabled opacity.
+        }
+    }
+
     func updateSaveButton(saved: Bool) {
         let confirming = savedFeedbackSince != nil
         let title = confirming ? "Saved" : saved ? "Show in Folder" : "Save file"
@@ -2491,6 +2498,7 @@ final class MiniPreviewController {
     private var stackPlacement: String { stackOrigin == nil ? settings.placement : draggedPlacement ?? settings.placement }
     private var pendingDecodes: [String: Int] = [:]
     private var cardGenerations: [String: Int] = [:]
+    private var busyActions: [String: Int] = [:]
     private var preparedDrags: [String: (imagePath: String, previewPath: String, path: String)] = [:]
     private var visibilityPendingArtifactID: String?
     private var nextDecodeToken = 0
@@ -2723,6 +2731,7 @@ final class MiniPreviewController {
         let decodeToken = nextDecodeToken
         pendingDecodes[artifact.id] = decodeToken
         cardGenerations[artifact.id] = decodeToken
+        busyActions[artifact.id] = nil
         preparedDrags[artifact.id] = nil
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
@@ -2843,6 +2852,23 @@ final class MiniPreviewController {
 
     func contains(_ artifact: CaptureArtifact, savedPath: String?) -> Bool {
         contains(artifact) && resources[artifact.id]?.artifact.savedPath == savedPath
+    }
+
+    /// Copy/unsaved Save share the shipping main-action gate. Completion may
+    /// still perform its accepted I/O, but only its source generation owns UI.
+    func beginMainAction(for artifact: CaptureArtifact) -> (() -> Bool)? {
+        precondition(Thread.isMainThread)
+        guard contains(artifact), let generation = cardGenerations[artifact.id],
+              busyActions[artifact.id] == nil else { return nil }
+        busyActions[artifact.id] = generation
+        panel?.previewView.card(for: artifact.id)?.setMainActionBusy(true)
+        return { [weak self] in
+            guard let self, self.busyActions[artifact.id] == generation else { return false }
+            self.busyActions[artifact.id] = nil
+            guard self.cardGenerations[artifact.id] == generation else { return false }
+            self.panel?.previewView.card(for: artifact.id)?.setMainActionBusy(false)
+            return self.contains(artifact)
+        }
     }
 
     /// Remove a card. Close plays shipping's streak and Delete its dust in
@@ -3000,7 +3026,7 @@ final class MiniPreviewController {
         stackOrigin = nil
         let ids = stack.ids; _ = stack.removeAll(ids)
         resources.removeAll(); pendingDecodes.removeAll()
-        preparedDrags.removeAll(); cardGenerations.removeAll()
+        preparedDrags.removeAll(); cardGenerations.removeAll(); busyActions.removeAll()
         arrivals.removeAll(); copyFailures.removeAll(); exitDeadlines.removeAll()
         panel?.close(); panel = nil
     }
@@ -3099,6 +3125,7 @@ final class MiniPreviewController {
             next.previewView.continueRejections(from: previous.previewView)
         }
         for id in liveIDs {
+            next.previewView.card(for: id)?.setMainActionBusy(busyActions[id] == cardGenerations[id] && busyActions[id] != nil)
             next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false,
                                            continuing: previous?.previewView)
         }
@@ -3272,15 +3299,19 @@ final class MiniPreviewActions {
     }
 
     func copy(_ artifact: CaptureArtifact) {
+        let completion: (() -> Bool)? = boundToPreviews ? previews?.beginMainAction(for: artifact) : { true }
+        guard let completion else { return }
         previews?.setStatus("", for: artifact.id)
         LiveCaptureController.queue.async { [weak self] in
             let result = Result { try Data(contentsOf: URL(fileURLWithPath: artifact.imagePath)) }
             DispatchQueue.main.async {
                 guard let self else { return }
+                let current = completion()
                 switch result {
                 case .success(let png):
                     let pasteboard = self.pasteboard(); pasteboard.clearContents()
                     let copied = pasteboard.setData(png, forType: .png)
+                    guard current else { return }
                     // Success shows the shipping "Copied to clipboard" chip.
                     self.previews?.setStatus(copied ? "" : "Copy failed", for: artifact.id)
                     self.previews?.recordCopyResult(artifactID: artifact.id, succeeded: copied)
@@ -3288,6 +3319,7 @@ final class MiniPreviewActions {
                         self.previews?.recordClipboardCopy(artifactID: artifact.id, pasteboard: pasteboard)
                     }
                 case .failure:
+                    guard current else { return }
                     self.previews?.setStatus("Copy failed", for: artifact.id)
                     self.previews?.recordCopyResult(artifactID: artifact.id, succeeded: false)
                 }
@@ -3318,8 +3350,11 @@ final class MiniPreviewActions {
             }
             return
         }
+        let completion: (() -> Bool)? = boundToPreviews ? previews?.beginMainAction(for: artifact) : { true }
+        guard let completion else { inFlight.remove(artifact.id); return }
         guard let historyRoot else {
             inFlight.remove(artifact.id)
+            _ = completion()
             previews?.setStatus("Save unavailable", for: artifact.id); return
         }
         previews?.setStatus("", for: artifact.id)
@@ -3338,7 +3373,7 @@ final class MiniPreviewActions {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight.remove(artifact.id)
-                guard !self.boundToPreviews || self.previews?.contains(artifact) == true else { return }
+                guard completion() else { return }
                 switch result {
                 case .success(let path):
                     guard !self.boundToPreviews
