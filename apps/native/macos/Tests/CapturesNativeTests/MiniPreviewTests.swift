@@ -2090,6 +2090,21 @@ final class MiniPreviewTests: XCTestCase {
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
             let lingering = UInt32(CAPTURES_EDITOR_PHASE_LINGERING)
             XCTAssertEqual(controller.editorPhase(for: "edited"), idle)
+            // Controlled setup variant: service the idle panel before measuring
+            // editor continuity. This does not establish acceptable cold UX.
+            do {
+                let initial = try panel()
+                let initialEdit = try XCTUnwrap(controller.previewView?.editControl(for: "edited"))
+                initialEdit.traceEditorMorph(10)
+                initial.previewView.layoutSubtreeIfNeeded()
+                initialEdit.traceEditorMorph(11)
+                initial.displayIfNeeded()
+                initialEdit.traceEditorMorph(12)
+                CATransaction.flush()
+                initialEdit.traceEditorMorph(13)
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+                initialEdit.traceEditorMorph(14)
+            }
             controller.setEditorArtifacts(["edited"])
             XCTAssertEqual(controller.editorPhase(for: "edited"), UInt32(CAPTURES_EDITOR_PHASE_PRESENT))
             let enterStarted = CACurrentMediaTime()

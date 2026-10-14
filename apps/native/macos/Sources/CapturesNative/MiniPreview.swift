@@ -82,6 +82,7 @@ enum MiniPreviewMotionTrace {
     static func finish() {
         active = false
         print("MOTION_TRACE codes: 1=reuse,2=registered,3=phase,4=callback,5=write,6=stop,7=deinit,8=enter-sample,9=leave-sample")
+        print("MOTION_TRACE setup codes: 10=begin,11=layout,12=display,13=flush,14=default-turn")
         for index in 0..<count {
             let e = events[index]
             print("MOTION_TRACE \(e.code) time=\(e.time) owner=\(e.owner) timer=\(e.timer) alive=\(e.alive) valid=\(e.valid) fireIn=\(e.fireIn) phase=\(e.phase) start=\(e.start) from=\(e.from) target=\(e.target) rest=\(e.rest) requested=\(e.requested) width=\(e.width) duration=\(e.duration)")
