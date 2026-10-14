@@ -27,6 +27,33 @@ pub const HOVER_MEDIA_BLUR: f64 = 2.0;
 pub const HOVER_MEDIA_BRIGHTNESS: f64 = 0.5;
 pub const HOVER_MEDIA_SCALE: f64 = 1.015;
 
+/// Shipping main-action presentation; hosts transform drawing, not hit targets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MainActionFeedback {
+    pub translate_y: f64,
+    pub scale: f64,
+    pub brightness: f64,
+    pub opacity: f64,
+}
+
+/// `.thumbnail-main-actions button`: hover brightness/lift, held scale and
+/// translation, and whole-button disabled opacity. Disabled CSS still responds
+/// to the pointer; hosts must separately prevent action dispatch.
+pub fn main_action_feedback(hovered: bool, pressed: bool, enabled: bool) -> MainActionFeedback {
+    MainActionFeedback {
+        translate_y: if pressed {
+            1.0
+        } else if hovered {
+            -1.0
+        } else {
+            0.0
+        },
+        scale: if pressed { 0.97 } else { 1.0 },
+        brightness: if hovered { 1.12 } else { 1.0 },
+        opacity: if enabled { 1.0 } else { 0.7 },
+    }
+}
+
 /// `THUMBNAIL_CARD_HOVER_LOCK_SLOP_PX`: a stationary pointer cannot unlock hover.
 pub const CARD_HOVER_LOCK_SLOP: f64 = 4.0;
 

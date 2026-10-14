@@ -1806,9 +1806,26 @@ fn eased_toggle(
     tokens: &Tokens,
     reduced_motion: bool,
 ) -> f64 {
+    eased_value(
+        ui,
+        id,
+        if on { 1. } else { 0. },
+        transition,
+        tokens,
+        reduced_motion,
+    )
+}
+
+fn eased_value(
+    ui: &egui::Ui,
+    id: egui::Id,
+    target: f64,
+    transition: captures_app::motion::Transition,
+    tokens: &Tokens,
+    reduced_motion: bool,
+) -> f64 {
     let tween = tokens.transition(transition);
     let now = ui.input(|input| input.time);
-    let target = if on { 1. } else { 0. };
     let (mut from, mut to, mut started) = ui
         .data(|data| data.get_temp::<(f64, f64, f64)>(id))
         .unwrap_or((target, target, now));
@@ -2048,14 +2065,86 @@ fn control(
             || !visible
             || !enabled,
     ) as f32;
+    let main = tooltip.is_none();
+    // CSS :active lasts until release, even outside the button. egui drops
+    // click eligibility after a long hold or drag; retain only the visual
+    // press origin, leaving response.clicked() as the action gate below.
+    let press_id = id.with("main-pressed");
+    let pressed = main
+        && visible
+        && ui.input(|input| input.pointer.primary_down())
+        && if ui.input(|input| input.pointer.primary_pressed()) {
+            response.is_pointer_button_down_on()
+        } else {
+            ui.data(|data| data.get_temp::<bool>(press_id).unwrap_or(false))
+        };
+    if main {
+        ui.data_mut(|data| data.insert_temp(press_id, pressed));
+    }
+    let feedback = captures_app::preview_chrome::main_action_feedback(
+        visible && response.contains_pointer(),
+        pressed,
+        enabled,
+    );
+    let (translate_y, scale, brightness) = if main {
+        let transition = captures_app::motion::Transition::PreviewMainAction;
+        let tween = tokens.transition(transition);
+        let reduced = crate::motion::reduced(ui.ctx()) || !visible;
+        let now = ui.input(|input| input.time);
+        let target = [feedback.translate_y, feedback.scale];
+        let pose_id = id.with("main-transform");
+        let (mut from, mut to, mut started) = ui
+            .data(|data| data.get_temp::<([f64; 2], [f64; 2], f64)>(pose_id))
+            .unwrap_or((target, target, now));
+        // Translate and scale are one CSS transform, with one clock. Filter
+        // brightness runs separately, so pressing cannot restart hover color.
+        if reduced {
+            from = target;
+            to = target;
+            started = now;
+        } else if to != target {
+            from = std::array::from_fn(|i| {
+                tween.value(from[i], to[i], (now - started) * 1000., false)
+            });
+            to = target;
+            started = now;
+        }
+        ui.data_mut(|data| data.insert_temp(pose_id, (from, to, started)));
+        let elapsed = (now - started) * 1000.;
+        if from != to && tween.running(elapsed, reduced) {
+            ui.ctx().request_repaint();
+        }
+        (
+            tween.value(from[0], to[0], elapsed, reduced),
+            tween.value(from[1], to[1], elapsed, reduced),
+            eased_value(
+                ui,
+                id.with("main-brightness"),
+                feedback.brightness,
+                transition,
+                tokens,
+                reduced,
+            ),
+        )
+    } else {
+        (
+            -f64::from(icon_hover),
+            1. + 0.04 * f64::from(icon_hover),
+            1.,
+        )
+    };
     if visible {
+        let mut painter = ui.painter().clone();
+        if main {
+            painter.multiply_opacity(feedback.opacity as f32);
+        }
         // CSS lifts/scales the whole icon face and shadow. Keep the hit target
         // and floating tooltip anchor stable; painting must not allocate a UI
         // scope, which would advance this card's parent layout cursor.
         let transform = crate::motion::transform(
             captures_app::motion::Pose {
-                translate_y: -f64::from(icon_hover),
-                scale: 1. + 0.04 * f64::from(icon_hover),
+                translate_y,
+                scale,
                 ..captures_app::motion::Pose::REST
             },
             rect,
@@ -2071,15 +2160,13 @@ fn control(
                 }),
                 icon_hover,
             )
-        } else if response.hovered() {
-            tokens.color("glass-raised")
         } else {
             tokens.color("glass-strong")
         };
         // `.icon-button` carries `--shadow-sm`, `.thumbnail-main-actions
         // button` `--shadow-md`.
         crate::effects::paint_box_shadows_mapped(
-            ui.painter(),
+            &painter,
             rect,
             tokens.number("r-md"),
             tokens.shadow(if tooltip.is_some() {
@@ -2090,17 +2177,21 @@ fn control(
             1.,
             &|point| transform * point,
         );
+        let original_rect = rect;
         let rect = transform * rect;
-        ui.painter().rect(
+        painter.rect(
             rect,
             tokens.number("r-md") * transform.scaling,
-            fill,
-            Stroke::new(transform.scaling, tokens.color("glass-border")),
+            brighten(fill, brightness),
+            Stroke::new(
+                transform.scaling,
+                brighten(tokens.color("glass-border"), brightness),
+            ),
             egui::StrokeKind::Inside,
         );
         let color = if primary {
             tokens.color("theme-accent-ink")
-        } else if enabled {
+        } else if enabled || main {
             if matches!(icon, Icon::Trash) {
                 tokens
                     .color("theme-signal-text")
@@ -2111,16 +2202,18 @@ fn control(
         } else {
             tokens.color("glass-text-muted")
         };
-        let label = (rect.width() > 40.).then(|| {
-            ui.painter().layout_no_wrap(
+        let color = brighten(color, brightness);
+        let layout_rect = if main { original_rect } else { rect };
+        let label = (layout_rect.width() > 40.).then(|| {
+            painter.layout_no_wrap(
                 label.to_owned(),
                 egui::FontId::proportional(tokens.number("text-xs")),
                 color,
             )
         });
         let gap = tokens.number("s-3");
-        let icon_center = label.as_ref().map_or(rect.center(), |text| {
-            rect.center() - egui::vec2((text.size().x + gap) / 2., 0.)
+        let icon_center = label.as_ref().map_or(layout_rect.center(), |text| {
+            layout_rect.center() - egui::vec2((text.size().x + gap) / 2., 0.)
         });
         // `.thumbnail-main-actions svg`: a new icon pops in (Save → Saved →
         // Show in Folder). Icon buttons keep a still glyph.
@@ -2130,30 +2223,41 @@ fn control(
             captures_app::motion::Pose::REST
         };
         paint_icon(
-            ui.painter(),
+            &painter,
             icon,
             egui::Rect::from_center_size(
-                icon_center,
+                if main {
+                    transform * icon_center
+                } else {
+                    icon_center
+                },
                 egui::vec2(16., 16.) * pop.scale as f32 * transform.scaling,
             ),
             color.gamma_multiply(pop.opacity as f32),
         );
         if let Some(text) = label {
-            ui.painter().galley(
+            let mut shape = egui::Shape::galley(
                 egui::pos2(
                     icon_center.x + 8. + gap,
-                    rect.center().y - text.size().y / 2.,
+                    layout_rect.center().y - text.size().y / 2.,
                 ),
                 text,
                 color,
             );
+            if main {
+                shape.transform(transform);
+            }
+            painter.add(shape);
         }
         if response.has_focus() {
             crate::primitives::focus_indicated(ui.ctx());
-            ui.painter().rect_stroke(
+            painter.rect_stroke(
                 rect.expand(2. * transform.scaling),
                 tokens.number("r-md") * transform.scaling,
-                Stroke::new(2. * transform.scaling, tokens.color("theme-accent")),
+                Stroke::new(
+                    2. * transform.scaling,
+                    brighten(tokens.color("theme-accent"), brightness),
+                ),
                 egui::StrokeKind::Outside,
             );
         }
@@ -2172,6 +2276,16 @@ fn control(
         crate::glass_tooltip::preview_icon(ui, tokens, rect, label, above, progress);
     }
     eligible && response.clicked()
+}
+
+/// CSS brightness filters operate on unpremultiplied sRGB, not linear light.
+fn brighten(color: Color32, brightness: f64) -> Color32 {
+    if brightness == 1. {
+        return color;
+    }
+    let [r, g, b, a] = color.to_srgba_unmultiplied();
+    let channel = |value: u8| (f64::from(value) * brightness).round().clamp(0., 255.) as u8;
+    Color32::from_rgba_unmultiplied(channel(r), channel(g), channel(b), a)
 }
 
 /// Shipping `thumbnail-action-pop`, timed from when `icon` replaced the
@@ -2991,11 +3105,202 @@ mod tests {
                 let save = text("Save file").unwrap();
                 assert_eq!(
                     save.fallback_color,
-                    Color32::from_rgb(23, 24, 27),
+                    Color32::from_rgb(23, 24, 27).gamma_multiply(if busy.is_some() {
+                        0.7
+                    } else {
+                        1.
+                    }),
                     "busy yellow actions must not turn white"
                 );
             }
             output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn main_action_css_feedback_preserves_hits_and_disabled_ink() {
+        for primary in [false, true] {
+            for reduced in [false, true] {
+                let ctx = egui::Context::default();
+                let tokens = crate::tokens::load()["dark-mustard"].clone();
+                let rect = egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(120., 32.));
+                let inside = rect.center();
+                let outside = egui::pos2(200., 120.);
+                let frame = |time, events, enabled, visible| {
+                    let mut input = raw(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240., 160.)),
+                        events,
+                    );
+                    input.time = Some(time);
+                    ctx.begin_pass(input);
+                    crate::motion::set_reduced(&ctx, reduced);
+                    let mut ui = egui::Ui::new(
+                        ctx.clone(),
+                        egui::Id::unique("main-test"),
+                        egui::UiBuilder::new(),
+                    );
+                    let clicked = control(
+                        &mut ui,
+                        &tokens,
+                        rect,
+                        "main",
+                        "Copy",
+                        Icon::Copy,
+                        visible,
+                        enabled,
+                        primary,
+                        None,
+                    );
+                    let mut output = ctx.end_pass();
+                    output.textures_delta.clear();
+                    let face = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(face)
+                            if face.stroke.width > 0. && face.rect.width() > 100. =>
+                        {
+                            Some(face.clone())
+                        }
+                        _ => None,
+                    });
+                    let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Copy" => {
+                            Some(text.clone())
+                        }
+                        _ => None,
+                    });
+                    (face, text, clicked)
+                };
+                let assert_geometry = |face: &egui::epaint::RectShape, y: f32, scale: f32| {
+                    assert!(
+                        (face.rect.center().y - (56. + y)).abs() < 0.002,
+                        "y={} expected={}",
+                        face.rect.center().y,
+                        56. + y
+                    );
+                    assert!((face.rect.width() - 120. * scale).abs() < 0.002);
+                };
+                let rest = frame(0., moved(outside), true, true);
+                assert_geometry(rest.0.as_ref().unwrap(), 0., 1.);
+                frame(0.01, moved(inside), true, true);
+                let half = frame(0.08, moved(inside), true, true);
+                // cubic-bezier(.25,.1,.25,1), x=.5 => y=.8024033876.
+                let progress = if reduced { 1. } else { 0.8024034 };
+                assert_geometry(half.0.as_ref().unwrap(), -progress, 1.);
+                let base = tokens.color(if primary {
+                    "theme-accent"
+                } else {
+                    "glass-strong"
+                });
+                let [r, g, b, a] = base.to_srgba_unmultiplied();
+                let brightness = 1. + 0.12 * f64::from(progress);
+                assert_eq!(
+                    half.0.as_ref().unwrap().fill,
+                    Color32::from_rgba_unmultiplied(
+                        (f64::from(r) * brightness).round().min(255.) as u8,
+                        (f64::from(g) * brightness).round().min(255.) as u8,
+                        (f64::from(b) * brightness).round().min(255.) as u8,
+                        a,
+                    )
+                );
+                if !reduced {
+                    let before = frame(0.08, moved(inside), true, true).0.unwrap();
+                    let reversed = frame(0.08, moved(outside), true, true).0.unwrap();
+                    assert_eq!(before.rect, reversed.rect);
+                    assert_eq!(before.fill, reversed.fill);
+                    let returning = frame(0.15, moved(outside), true, true).0.unwrap();
+                    assert_geometry(&returning, -0.8024034 * (1. - 0.8024034), 1.);
+                    let reentered = frame(0.15, moved(inside), true, true).0.unwrap();
+                    assert_eq!(returning.rect, reentered.rect);
+                    assert_eq!(returning.fill, reentered.fill);
+                }
+                let hovered = frame(0.3, moved(inside), true, true);
+                assert_geometry(hovered.0.as_ref().unwrap(), -1., 1.);
+                let base = tokens.color(if primary {
+                    "theme-accent"
+                } else {
+                    "glass-strong"
+                });
+                let [r, g, b, a] = base.to_srgba_unmultiplied();
+                let expected = Color32::from_rgba_unmultiplied(
+                    (f32::from(r) * 1.12).round().min(255.) as u8,
+                    (f32::from(g) * 1.12).round().min(255.) as u8,
+                    (f32::from(b) * 1.12).round().min(255.) as u8,
+                    a,
+                );
+                assert_eq!(hovered.0.unwrap().fill, expected);
+                frame(0.31, pointer(inside, true), true, true);
+                let hold = frame(0.5, moved(inside), true, true);
+                assert_geometry(hold.0.as_ref().unwrap(), 1., 0.97);
+                assert_eq!(hold.0.as_ref().unwrap().fill, expected);
+                assert!(
+                    (hold.1.unwrap().galley.rect.width()
+                        / rest.1.as_ref().unwrap().galley.rect.width()
+                        - 0.97)
+                        .abs()
+                        < 0.002
+                );
+                frame(0.51, moved(outside), true, true);
+                assert_geometry(
+                    frame(0.7, moved(outside), true, true).0.as_ref().unwrap(),
+                    1.,
+                    0.97,
+                );
+                frame(0.71, moved(inside), true, true);
+                assert_geometry(
+                    frame(0.9, moved(inside), true, true).0.as_ref().unwrap(),
+                    1.,
+                    0.97,
+                );
+                assert!(!frame(0.91, pointer(outside, false), true, true).2);
+                // Interrupt release halfway with a hover. Scale must follow
+                // the restarted transform clock, not finish its earlier one.
+                let release = frame(0.98, moved(outside), true, true).0.unwrap();
+                frame(0.98, moved(inside), false, true);
+                let interrupted = frame(1.05, moved(inside), false, true).0.unwrap();
+                let remainder = if reduced { 0. } else { 1. - 0.8024034 };
+                assert_geometry(&release, remainder, 1. - 0.03 * remainder);
+                assert_geometry(
+                    &interrupted,
+                    -1. + (remainder + 1.) * remainder,
+                    1. - 0.03 * remainder * remainder,
+                );
+                let disabled = frame(1.2, moved(inside), false, true);
+                assert_eq!(disabled.0.unwrap().fill, expected.gamma_multiply(0.7));
+                let ink = tokens.color(if primary {
+                    "theme-accent-ink"
+                } else {
+                    "glass-text"
+                });
+                let [r, g, b, a] = ink.to_srgba_unmultiplied();
+                assert_eq!(
+                    disabled.1.unwrap().fallback_color,
+                    Color32::from_rgba_unmultiplied(
+                        (f32::from(r) * 1.12).round().min(255.) as u8,
+                        (f32::from(g) * 1.12).round().min(255.) as u8,
+                        (f32::from(b) * 1.12).round().min(255.) as u8,
+                        a
+                    )
+                    .gamma_multiply(0.7)
+                );
+                frame(1.21, pointer(inside, true), false, true);
+                assert_geometry(
+                    frame(1.4, moved(inside), false, true).0.as_ref().unwrap(),
+                    1.,
+                    0.97,
+                );
+                assert!(!frame(1.41, pointer(inside, false), false, true).2);
+                assert!(frame(1.5, moved(outside), true, false).0.is_none());
+                assert_geometry(
+                    frame(1.6, moved(outside), true, true).0.as_ref().unwrap(),
+                    0.,
+                    1.,
+                );
+                // The bottom edge remains clickable even when the face lifts.
+                let edge = rect.max - egui::vec2(1., 0.25);
+                frame(2., moved(edge), true, true);
+                frame(2.2, moved(edge), true, true);
+                frame(2.21, pointer(edge, true), true, true);
+                assert!(frame(2.4, pointer(edge, false), true, true).2);
+            }
         }
     }
 

@@ -389,6 +389,16 @@ per-file errors remain in the resident host. Do not automatically retry a failed
 acknowledgement, whose delivery may be unknown. Accepted quit stops the listener
 before draining host workers and releases the election lock last.
 
+### Native mini-preview action feedback
+
+Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --main-actions-only
+--binary PATH --output NEW_DIRECTORY` to record Copy/Save hover, Save hold,
+drag-out/reentry and cancelled release at all four screen corners. Add
+`--reduced-motion` to repeat without transitions. The fixture uses disposable
+History/settings and checks drawn pixels and absence of a cancelled export.
+This is private-X11/software-rendering evidence, not macOS, Windows, Wayland
+or physical-desktop acceptance.
+
 ### Native development login items
 
 In a live native profile, Preferences → General → **Start Captures on login**
