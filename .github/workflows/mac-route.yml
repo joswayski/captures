@@ -8,7 +8,7 @@ name: Choose self-hosted runners
 # GitHub-hosted runners otherwise:
 #   - the repository variable (SELF_HOSTED_MAC for both of the Mac's outputs,
 #     SELF_HOSTED_WINDOWS or SELF_HOSTED_LINUX) is "on" (the kill switch),
-#   - the run is a push or manual run on main (never a pull request or fork),
+#   - the run is a push, nightly or manual run on main (never a pull request or fork),
 #   - it is the first attempt (re-runs, including the fallback watchdog's,
 #     go to GitHub-hosted runners),
 #   - a runner with that label is online, checked with MAC_RUNNER_STATUS_TOKEN
@@ -64,8 +64,8 @@ jobs:
             local output="$1" enabled="$2" label="$3" what="$4" use=false reason online
             if [[ "$enabled" != on ]]; then
               reason="its repository variable is not 'on'"
-            elif [[ "$EVENT" != push && "$EVENT" != workflow_dispatch ]] || [[ "$REF" != refs/heads/main ]]; then
-              reason="only pushes and manual runs on main use self-hosted runners"
+            elif [[ "$EVENT" != push && "$EVENT" != schedule && "$EVENT" != workflow_dispatch ]] || [[ "$REF" != refs/heads/main ]]; then
+              reason="only pushes, nightly and manual runs on main use self-hosted runners"
             elif (( ATTEMPT > 1 )); then
               reason="re-runs use GitHub-hosted runners"
             elif [[ -z "$TOKEN" ]]; then

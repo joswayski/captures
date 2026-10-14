@@ -346,10 +346,11 @@ smokes that isolate `/tmp` in a private mount namespace.
 
 ### Native exploratory test archives
 
-Native pull-request CI publishes `native-development-macos-ARM64`,
+The nightly (or manually dispatched) **Native macOS workbench** and **Native
+wgpu workbench** runs publish `native-development-macos-ARM64`,
 `native-development-windows-X64` and `native-development-linux-X64` artifacts
 after their build/unit-test dependencies pass. Download the matching artifact
-from the PR's Actions run, then extract both GitHub's artifact ZIP and the
+from that Actions run, then extract both GitHub's artifact ZIP and the
 package archive inside it. Read the included [TESTING.md](apps/native/TESTING.md)
 before launching; use a new output folder and quit shipping Captures first.
 Check the full run's results: an archive alone does not prove all GUI smokes passed.

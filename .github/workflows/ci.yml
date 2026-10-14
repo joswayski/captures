@@ -1,13 +1,20 @@
 name: CI
 
-# Pull requests and main get no CI from this workflow: the Captures Preview
-# release (release.yml) runs the same checks on every main push. Use "Run
-# workflow" to run it on a branch.
+# Every push to main runs the fast gate (frontend, account API, Rust on all three
+# OSes and native wgpu lint/unit checks, about 10 minutes). The unsigned installer
+# builds (10-20 minutes each) run nightly and on "Run workflow", which also tests
+# a branch. Pull requests get no CI.
 on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
+# Each main push keeps its own run so every commit gets a result; manual and
+# nightly runs replace older ones of the same kind on the same branch.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -70,6 +77,43 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: docker build -f apps/api/Dockerfile -t captures-api:test .
+      - name: Stop the rest of this run after a failure
+        # One failed job already fails the run; cancel the other jobs instead of
+        # letting them hold runners (and block newer pushes) until they finish.
+        if: failure()
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel" >/dev/null \
+            || echo "::warning::Could not cancel the rest of this run"
+
+  # The fast part of the nightly Native wgpu workbench: rustfmt, unit tests and
+  # clippy for apps/native/wgpu (its ruff, Python and token tests run in
+  # `npm run check` above). Its GUI smokes and packages stay nightly.
+  native:
+    name: Native wgpu checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          cache-workspaces: apps/native/wgpu
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install Linux windowing and software-rendering test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libasound2-plugins pulseaudio libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils x11-apps imagemagick xfce4-panel xdg-utils ffmpeg
+      - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
+      - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
+      - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
+      - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
       - name: Stop the rest of this run after a failure
         # One failed job already fails the run; cancel the other jobs instead of
         # letting them hold runners (and block newer pushes) until they finish.
@@ -161,6 +205,8 @@ jobs:
 
   macos-app:
     name: macOS app bundle
+    # About 13 minutes; nightly and manual only.
+    if: github.event_name != 'push'
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -211,6 +257,8 @@ jobs:
 
   cross-platform-app:
     name: Desktop app (${{ matrix.platform }})
+    # 10-20 minutes; nightly and manual only.
+    if: github.event_name != 'push'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:

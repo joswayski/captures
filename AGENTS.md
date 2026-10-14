@@ -4,7 +4,7 @@
 
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
-- Treat automatic per-merge builds as experimental Previews. Do not publish a stable release until the maintainer explicitly starts that channel.
+- Treat dated Preview builds as experimental. Do not publish a stable release until the maintainer explicitly starts that channel.
 - Public downloads and updates are pinned to the approved Tauri tag in `scripts/preview-release.mjs`. Native builds are opt-in until the maintainer accepts parity; passing CI does not authorize promotion. Match Tauri behavior and visuals, without adding unrequested controls such as Share.
 
 ## Repository map
@@ -22,8 +22,8 @@
 - Do not overwrite, stage, or publish unrelated work already present in the checkout.
 - Assume other agents may be working in this repository concurrently. Do new work in a dedicated Git worktree, and never stash, switch, or overwrite another agent's checkout.
 - Reuse established patterns in the repository before introducing a new abstraction or dependency.
-- Treat macOS, Windows, and Linux parity as the default. Prefer shared UI and logic that works on every supported platform; when a fix or feature must be platform-specific, implement or stub the equivalent path on the others (or explicitly gate with `cfg` / runtime checks), and document any unavoidable limitation in the PR and README if user-facing. Do not assume “works on my Mac” is enough—call out what was and was not verified on other platforms.
-- Deliver the native rewrite in cross-platform feature slices, not a complete macOS app followed by ports. Follow `docs/native-rewrite.md`; record macOS, Windows, X11, and Wayland implementation/verification status in each slice's PRs. Stubs and unverified hosts do not complete a parity gate.
+- Treat macOS, Windows, and Linux parity as the default. Prefer shared UI and logic that works on every supported platform; when a fix or feature must be platform-specific, implement or stub the equivalent path on the others (or explicitly gate with `cfg` / runtime checks), and document any unavoidable limitation in the commit message and README if user-facing. Do not assume “works on my Mac” is enough—call out what was and was not verified on other platforms.
+- Deliver the native rewrite in cross-platform feature slices, not a complete macOS app followed by ports. Follow `docs/native-rewrite.md`; record macOS, Windows, X11, and Wayland implementation/verification status in each slice's commit messages. Stubs and unverified hosts do not complete a parity gate.
 - Keep this file concise and update it when a recurring repository convention or correction should persist across future work.
 
 ## Visual design
@@ -41,9 +41,9 @@
 
 ## Documentation
 
-- Every pull request must leave the root `README.md` accurate. Update it when a change affects features, platform support, shortcuts, setup, build commands, privacy, networking, releases, or deployment.
+- Every change must leave the root `README.md` accurate. Update it when a change affects features, platform support, shortcuts, setup, build commands, privacy, networking, releases, or deployment.
 - Keep the root README product-focused. Put local setup, validation, and packaging details in `DEVELOPMENT.md`.
-- If a pull request does not need a README edit, still verify that its changes do not make the README inaccurate; do not add no-op wording solely to touch the file.
+- If a change does not need a README edit, still verify that it does not make the README inaccurate; do not add no-op wording solely to touch the file.
 - Keep the README concise and user-oriented. Put detailed maintainer release procedures in `docs/releases.md` and web-specific operations in `apps/web/README.md`.
 - Keep current behavior and roadmap sections distinct, especially for features that are not implemented yet.
 
@@ -55,7 +55,17 @@
 - For Docker changes, build the image when Docker is available. If it is unavailable, validate the affected build stages directly and report that limitation.
 - Report exactly which checks ran and any checks that could not run.
 
-## Pull requests
+## Shipping
 
-- Prefer a focused pull request over pushing directly to `main` unless explicitly asked otherwise.
-- Use a concise title and description covering what changed, why it changed, user or developer impact, and validation.
+Speed beats ceremony: there are no real users yet, so ship, watch, and fix forward.
+
+- Commit and push straight to `main`; no pull requests. Run the local checks for what you changed first (Validation above), then `git pull --rebase origin main` and push. Never force-push `main` or rewrite other agents' commits. Write a concise commit message covering what changed, why, and what was verified.
+- Never put literal CI-skip directives in commit messages, even to explain them: `CI` and the image builds would silently not run, leaving no image to deploy for that SHA.
+- Every push to `main` runs `CI` (about 10 minutes: frontend, account API, Rust on macOS/Windows/Linux, native wgpu checks), `AWS image` (web) and `AWS API image` (about 2 minutes each, no path filters). `Native Windows shortcut ownership` runs when `shortcuts.rs` changes. `Native wgpu workbench`, `Native macOS workbench` and CI's unsigned installer builds run nightly and on demand; dispatch them (`gh workflow run <file> --repo joswayski/captures --ref main`) only when a native GUI or platform change needs that check before the nightly run.
+- After pushing, deploy what changed yourself, server before web, waiting for each step to succeed before the next. `SHA` is your pushed commit; find its runs with `gh run list --repo joswayski/captures --commit "$SHA"`, wait with `gh run watch <id> --exit-status` (infrastructure runs: `gh run list --repo joswayski/infrastructure --workflow <file> --limit 1`), and report what you deployed.
+  1. Infrastructure or secrets the change needs, in `joswayski/infrastructure`, following that repository's guidance.
+  2. If the API changed (`apps/api`, the workspace crates it builds, `Cargo.lock`), after `AWS API image` succeeds for `SHA`: `gh workflow run deploy-captures-api.yml --repo joswayski/infrastructure --ref main -f git_sha="$SHA"`. The API applies database migrations on startup.
+  3. If the website changed (`apps/web`, `shared`, `docs/images`, root package files), after `AWS image` succeeds for `SHA`: `gh workflow run deploy-captures.yml --repo joswayski/infrastructure --ref main -f git_sha="$SHA"`.
+  4. Desktop apps: `release.yml` (Captures Preview) stays manual. Dispatch it, or change the approved public tag in `scripts/preview-release.mjs`, only when the maintainer asks (see `docs/releases.md`).
+- If `CI`, an image build or a deploy fails, fix it forward with another commit. Roll back a broken server with the deploy workflow's `rollback_from_sha` input only when a fix will take longer than a few minutes.
+- Still ask the owner first for anything irreversible: destructive or data-dropping migrations, deleting infrastructure or data, rotating secrets.

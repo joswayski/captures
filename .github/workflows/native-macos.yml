@@ -1,34 +1,19 @@
 name: Native macOS workbench
 
-# Runs on main only; pull requests get no CI. Use "Run workflow" to test a branch.
+# Nightly and manual only, so pushes to main never wait on this 20-45 minute
+# macOS build, GUI check and package run.
+# CI runs the fast native wgpu checks on every push. Use "Run workflow" to
+# check a change sooner or to test a branch.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'apps/native/**'
-      - 'crates/captures-settings*/**'
-      - 'crates/captures-app/**'
-      - 'crates/captures-feedback/**'
-      - 'crates/captures-history/**'
-      - 'crates/captures-image/**'
-      - 'crates/captures-capture/**'
-      - 'crates/captures-session/**'
-      - 'crates/captures-recording*/**'
-      - 'crates/captures-media/**'
-      - 'Cargo.lock'
-      - 'shared/**'
-      - 'uv.toml'
-      - 'ruff.toml'
-      - 'apps/desktop/ui/src/lib/thumbnailExit.ts'
-      - 'apps/desktop/assets/icon.svg'
-      - '.github/workflows/native-macos.yml'
+  schedule:
+    - cron: '30 7 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
   actions: write
 
-# The running build always finishes and only the newest waiting push runs next
+# The running build always finishes and only the newest waiting run starts next
 # (GitHub replaces older pending runs in the group).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
