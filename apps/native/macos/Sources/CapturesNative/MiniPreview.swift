@@ -93,6 +93,7 @@ final class MiniPreviewButton: NSButton {
     /// pill passive ("In editor") until the pointer leaves it.
     private(set) var editorJustOpened = false
     private var editorRestFrame: NSRect?
+    private var editorMorph: (start: CFTimeInterval, from: CGFloat, target: CGFloat)?
     var editorPresent: Bool { editorPhase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT) }
     /// The pill's current label, for tests and accessibility checks.
     var editorLabel: String {
@@ -212,6 +213,16 @@ final class MiniPreviewButton: NSButton {
             }
             layoutMorph()
         }
+        if let morph = editorMorph, let rest = editorRestFrame {
+            let spec = NativeMotion.transition("preview_editor_morph", tokens: tokens)
+            let elapsed = now - morph.start
+            let progress = spec.duration > 0 ? min(1, elapsed / spec.duration) : 1
+            let width = morph.from + (morph.target - morph.from) * CGFloat(NativeMotion.ease(spec.timing, progress))
+            frame = NSRect(x: growsFromTrailingEdge ? rest.maxX - width : rest.minX,
+                           y: rest.minY, width: width, height: rest.height)
+            if progress < 1 { running = true } else { editorMorph = nil }
+            needsDisplay = true
+        }
         if let start = iconPopStart {
             if now - start < NativeMotion.duration("preview_action_icon_pop", tokens: tokens) {
                 running = true
@@ -235,7 +246,7 @@ final class MiniPreviewButton: NSButton {
     /// Shipping `.thumbnail-editor-control`: the compact Edit icon, or while an
     /// editor shows this capture the "In editor" pill, widening away from its
     /// corner over the shipping morph. Leaving ignores clicks.
-    func setEditorPhase(_ phase: UInt32, animated: Bool) {
+    func setEditorPhase(_ phase: UInt32, animated: Bool, continuing previous: MiniPreviewButton? = nil) {
         guard kind == .edit else { return }
         editorPhase = phase
         let rest = editorRestFrame ?? frame
@@ -258,14 +269,19 @@ final class MiniPreviewButton: NSButton {
         applyIconHover()
         let morph = NativeMotion.transition("preview_editor_morph", tokens: tokens)
         if animated, window?.isVisible == true, morph.duration > 0, frame != next {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = morph.duration
-                context.timingFunction = morph.timing
-                animator().frame = next
-            }
-        } else if frame != next {
+            editorMorph = (CACurrentMediaTime(), frame.width, width)
+            startTicker()
+        } else if let previous, let motion = previous.editorMorph, morph.duration > 0 {
+            editorMorph = motion
+            let carriedWidth = previous.frame.width
+            frame = NSRect(x: growsFromTrailingEdge ? rest.maxX - carriedWidth : rest.minX,
+                           y: rest.minY, width: carriedWidth, height: rest.height)
+            startTicker()
+        } else {
+            editorMorph = nil
             frame = next
         }
+        if let previous { editorJustOpened = previous.editorJustOpened }
         if showsTooltip { tooltipChanged?(self, true) } else { tooltipChanged?(self, false) }
         needsDisplay = true
     }
@@ -940,19 +956,28 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// Apply the shared editor presence: the Edit control morphs into the
     /// "In editor" pill, stays pinned while leaving and lingering, and the card
     /// ring arrives over `0.22s ease` and eases out over the 550 ms leave.
-    func setEditorPhase(_ phase: UInt32, animated: Bool) {
+    func setEditorPhase(_ phase: UInt32, animated: Bool, continuing previous: MiniPreviewCardView? = nil) {
         editorPhase = phase
-        editButton?.setEditorPhase(phase, animated: animated)
+        let survivor = !compact && previous?.compact == false && !NativeMotion.reduceMotion ? previous : nil
+        editButton?.setEditorPhase(phase, animated: animated, continuing: survivor?.editButton)
         let present = phase == UInt32(CAPTURES_EDITOR_PHASE_PRESENT)
         let target: Float = present && !compact ? 1 : 0
         let spec = NativeMotion.transition(present ? "preview_editor_ring" : "preview_editor_ring_leave",
                                            tokens: tokens)
+        let from = (editorRing.presentation() ?? editorRing).opacity
+        editorRing.removeAnimation(forKey: "preview-editor-ring")
         if animated, window?.isVisible == true, spec.duration > 0, editorRing.opacity != target {
             let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = (editorRing.presentation() ?? editorRing).opacity
+            fade.fromValue = from
             fade.toValue = target
             fade.duration = spec.duration
             fade.timingFunction = spec.timing
+            fade.beginTime = editorRing.convertTime(CACurrentMediaTime(), from: nil)
+            editorRing.add(fade, forKey: "preview-editor-ring")
+        } else if let survivor,
+                  let fade = survivor.editorRing.animation(forKey: "preview-editor-ring")?.copy() as? CAAnimation {
+            // CALayer returns an immutable animation; retime its owned copy.
+            fade.beginTime = editorRing.convertTime(survivor.editorRing.convertTime(fade.beginTime, to: nil), from: nil)
             editorRing.add(fade, forKey: "preview-editor-ring")
         }
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -1069,9 +1094,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         guard remaining > 0 else { return }
         savedFeedbackToken &+= 1
         let token = savedFeedbackToken
+        let deadline = DispatchTime.now() + remaining
         savedFeedbackSince = CACurrentMediaTime() - startedAgo
         updateSaveButton(saved: saved)
-        DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
             guard let self, self.savedFeedbackToken == token else { return }
             self.savedFeedbackSince = nil
             self.updateSaveButton(saved: self.saved)
@@ -1083,6 +1109,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         setStatus(previous.status.stringValue, detail: previous.status.toolTip)
         if let since = previous.savedFeedbackSince {
             showSavedFeedback(startedAgo: CACurrentMediaTime() - since)
+        }
+    }
+
+    func setMainActionBusy(_ busy: Bool) {
+        for button in [copyButton, saveButton].compactMap({ $0 }) {
+            button.isEnabled = !busy
+            button.alphaValue = busy ? 0.7 : 1 // Shipping main-action disabled opacity.
         }
     }
 
@@ -1939,8 +1972,12 @@ final class MiniPreviewView: NSView {
         KeyViewLoop.install(order, window: window, initial: card)
     }
 
-    func setEditorPhase(_ phase: UInt32, for artifactID: String, animated: Bool) {
-        cards[artifactID]?.setEditorPhase(phase, animated: animated)
+    func setEditorPhase(_ phase: UInt32, for artifactID: String, animated: Bool,
+                        continuing previous: MiniPreviewView? = nil) {
+        let old = previous?.cards[artifactID]
+        let survivor = old?.isExiting == false && old?.editorPhase == phase
+            && generations[artifactID] == previous?.generations[artifactID] ? old : nil
+        cards[artifactID]?.setEditorPhase(phase, animated: animated, continuing: survivor)
     }
 
     func editControl(for artifactID: String) -> MiniPreviewButton? { cards[artifactID]?.editControl }
@@ -2461,6 +2498,7 @@ final class MiniPreviewController {
     private var stackPlacement: String { stackOrigin == nil ? settings.placement : draggedPlacement ?? settings.placement }
     private var pendingDecodes: [String: Int] = [:]
     private var cardGenerations: [String: Int] = [:]
+    private var busyActions: [String: Int] = [:]
     private var preparedDrags: [String: (imagePath: String, previewPath: String, path: String)] = [:]
     private var visibilityPendingArtifactID: String?
     private var nextDecodeToken = 0
@@ -2693,6 +2731,7 @@ final class MiniPreviewController {
         let decodeToken = nextDecodeToken
         pendingDecodes[artifact.id] = decodeToken
         cardGenerations[artifact.id] = decodeToken
+        busyActions[artifact.id] = nil
         preparedDrags[artifact.id] = nil
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
@@ -2813,6 +2852,23 @@ final class MiniPreviewController {
 
     func contains(_ artifact: CaptureArtifact, savedPath: String?) -> Bool {
         contains(artifact) && resources[artifact.id]?.artifact.savedPath == savedPath
+    }
+
+    /// Copy/unsaved Save share the shipping main-action gate. Completion may
+    /// still perform its accepted I/O, but only its source generation owns UI.
+    func beginMainAction(for artifact: CaptureArtifact) -> (() -> Bool)? {
+        precondition(Thread.isMainThread)
+        guard contains(artifact), let generation = cardGenerations[artifact.id],
+              busyActions[artifact.id] == nil else { return nil }
+        busyActions[artifact.id] = generation
+        panel?.previewView.card(for: artifact.id)?.setMainActionBusy(true)
+        return { [weak self] in
+            guard let self, self.busyActions[artifact.id] == generation else { return false }
+            self.busyActions[artifact.id] = nil
+            guard self.cardGenerations[artifact.id] == generation else { return false }
+            self.panel?.previewView.card(for: artifact.id)?.setMainActionBusy(false)
+            return self.contains(artifact)
+        }
     }
 
     /// Remove a card. Close plays shipping's streak and Delete its dust in
@@ -2970,7 +3026,7 @@ final class MiniPreviewController {
         stackOrigin = nil
         let ids = stack.ids; _ = stack.removeAll(ids)
         resources.removeAll(); pendingDecodes.removeAll()
-        preparedDrags.removeAll(); cardGenerations.removeAll()
+        preparedDrags.removeAll(); cardGenerations.removeAll(); busyActions.removeAll()
         arrivals.removeAll(); copyFailures.removeAll(); exitDeadlines.removeAll()
         panel?.close(); panel = nil
     }
@@ -3068,7 +3124,11 @@ final class MiniPreviewController {
             next.previewView.continueFileDrags(from: previous.previewView)
             next.previewView.continueRejections(from: previous.previewView)
         }
-        for id in liveIDs { next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false) }
+        for id in liveIDs {
+            next.previewView.card(for: id)?.setMainActionBusy(busyActions[id] == cardGenerations[id] && busyActions[id] != nil)
+            next.previewView.setEditorPhase(editorPhase(for: id), for: id, animated: false,
+                                           continuing: previous?.previewView)
+        }
         let now = CACurrentMediaTime()
         let highlight = NativeMotion.duration("preview_capture_highlight", tokens: tokens)
         for id in liveIDs {
@@ -3239,15 +3299,19 @@ final class MiniPreviewActions {
     }
 
     func copy(_ artifact: CaptureArtifact) {
+        let completion: (() -> Bool)? = boundToPreviews ? previews?.beginMainAction(for: artifact) : { true }
+        guard let completion else { return }
         previews?.setStatus("", for: artifact.id)
         LiveCaptureController.queue.async { [weak self] in
             let result = Result { try Data(contentsOf: URL(fileURLWithPath: artifact.imagePath)) }
             DispatchQueue.main.async {
                 guard let self else { return }
+                let current = completion()
                 switch result {
                 case .success(let png):
                     let pasteboard = self.pasteboard(); pasteboard.clearContents()
                     let copied = pasteboard.setData(png, forType: .png)
+                    guard current else { return }
                     // Success shows the shipping "Copied to clipboard" chip.
                     self.previews?.setStatus(copied ? "" : "Copy failed", for: artifact.id)
                     self.previews?.recordCopyResult(artifactID: artifact.id, succeeded: copied)
@@ -3255,6 +3319,7 @@ final class MiniPreviewActions {
                         self.previews?.recordClipboardCopy(artifactID: artifact.id, pasteboard: pasteboard)
                     }
                 case .failure:
+                    guard current else { return }
                     self.previews?.setStatus("Copy failed", for: artifact.id)
                     self.previews?.recordCopyResult(artifactID: artifact.id, succeeded: false)
                 }
@@ -3285,8 +3350,11 @@ final class MiniPreviewActions {
             }
             return
         }
+        let completion: (() -> Bool)? = boundToPreviews ? previews?.beginMainAction(for: artifact) : { true }
+        guard let completion else { inFlight.remove(artifact.id); return }
         guard let historyRoot else {
             inFlight.remove(artifact.id)
+            _ = completion()
             previews?.setStatus("Save unavailable", for: artifact.id); return
         }
         previews?.setStatus("", for: artifact.id)
@@ -3305,7 +3373,7 @@ final class MiniPreviewActions {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.inFlight.remove(artifact.id)
-                guard !self.boundToPreviews || self.previews?.contains(artifact) == true else { return }
+                guard completion() else { return }
                 switch result {
                 case .success(let path):
                     guard !self.boundToPreviews
