@@ -711,7 +711,15 @@ def main():
                                    "-depth", "8", "rgb:-") == bytes.fromhex("ef4650")
                     wait(hovered, "painted Delete hover")
                     if second:
-                        assert survivor_pixels() == before, "input missed the before-slide boundary"
+                        pixels = survivor_pixels()
+                        observed_ms = (time.monotonic() - first_accepted) * 1000
+                        if pixels != before:
+                            (output / f"{prefix}-retarget-expected.rgb").write_bytes(before)
+                            (output / f"{prefix}-retarget-actual.rgb").write_bytes(pixels)
+                            shot(preview, f"{prefix}-retarget-boundary")
+                        assert pixels == before, (
+                            f"survivor edge changed before the second input: crop={crop}, "
+                            f"{observed_ms:.0f}ms after first exit receipt")
                         # Prepare the hover/pixels first, then place the 150 ms
                         # click near 1.6 s instead of adding their variable cost
                         # to a fixed sleep. The host trace below checks timing.
