@@ -100,7 +100,7 @@ struct Marker {
 pub fn set_window(ctx: &eframe::egui::Context, window: &std::sync::Arc<winit::window::Window>) {
     ctx.data_mut(|data| {
         data.insert_temp(
-            eframe::egui::Id::new("editor-clipboard-window"),
+            eframe::egui::Id::unique("editor-clipboard-window"),
             std::sync::Arc::downgrade(window),
         )
     });
@@ -112,7 +112,7 @@ impl Marker {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let window = ctx
             .data(|data| {
-                data.get_temp::<std::sync::Weak<winit::window::Window>>(eframe::egui::Id::new(
+                data.get_temp::<std::sync::Weak<winit::window::Window>>(eframe::egui::Id::unique(
                     "editor-clipboard-window",
                 ))
             })
