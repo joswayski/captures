@@ -88,6 +88,15 @@ function canvasZoomPercent(
   return Number(match[1]);
 }
 
+function imageClipboard(files: File[] = []) {
+  const data = new Map<string, string>();
+  return {
+    files,
+    getData: (type: string) => data.get(type) ?? "",
+    setData: (type: string, value: string) => data.set(type, value),
+  };
+}
+
 const artifact: CaptureArtifact = {
   id: "capture-1",
   path: "/Users/example/Captures/capture.png",
@@ -102,7 +111,7 @@ const artifact: CaptureArtifact = {
   clipboard_copy_status: "copied",
 };
 
-function installExportableCanvas(): () => void {
+function installExportableCanvas(scheduleImageLoad = queueMicrotask): () => void {
   const context = {
     canvas: document.createElement("canvas"),
     drawImage: vi.fn(),
@@ -162,8 +171,13 @@ function installExportableCanvas(): () => void {
     width = 1_440;
     height = 900;
     crossOrigin = "";
-    set src(_value: string) {
-      queueMicrotask(() => this.onload?.(new Event("load")));
+    private source = "";
+    get src() {
+      return this.source;
+    }
+    set src(value: string) {
+      this.source = value;
+      scheduleImageLoad(() => this.onload?.(new Event("load")));
     }
   }
   // @ts-expect-error test stub for Image load timing
@@ -1495,20 +1509,20 @@ describe("ScreenshotEditor", () => {
       .querySelector(".screenshot-layer-list")!;
     expect(layerList.children).toHaveLength(2);
 
-    const copy = new KeyboardEvent("keydown", {
-      key: "c",
-      metaKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
+    const clipboardData = imageClipboard();
+    const copy = createEvent.copy(canvas, { clipboardData });
     fireEvent(canvas, copy);
     expect(copy.defaultPrevented).toBe(true);
-    const paste = new KeyboardEvent("keydown", {
+    const pasteKey = new KeyboardEvent("keydown", {
       key: "v",
       metaKey: true,
       bubbles: true,
       cancelable: true,
     });
+    fireEvent(canvas, pasteKey);
+    // The key must reach the webview so it can supply the current clipboard.
+    expect(pasteKey.defaultPrevented).toBe(false);
+    const paste = createEvent.paste(canvas, { clipboardData });
     fireEvent(canvas, paste);
     expect(paste.defaultPrevented).toBe(true);
     expect(layerList.children).toHaveLength(3);
@@ -1522,6 +1536,147 @@ describe("ScreenshotEditor", () => {
     fireEvent(canvas, duplicate);
     expect(duplicate.defaultPrevented).toBe(true);
     expect(layerList.children).toHaveLength(4);
+  });
+
+  it("pastes clipboard images instead of stale copied layers, with one undo per paste", async () => {
+    const restore = installExportableCanvas();
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+      const layers = screen.getByRole("region", { name: "Layers" });
+      fireEvent.click(
+        within(layers).getByRole("button", { name: "Original screenshotLocked background" }),
+      );
+      fireEvent.copy(canvas, { clipboardData: imageClipboard() });
+
+      const clipboardData = imageClipboard([
+        new File(["first"], "clipboard-first.png", { type: "image/png" }),
+        new File(["second"], "clipboard-second.png", { type: "image/png" }),
+      ]);
+      const paste = createEvent.paste(canvas, { clipboardData });
+      fireEvent(canvas, paste);
+      expect(paste.defaultPrevented).toBe(true);
+      await within(layers).findByText("clipboard-second.png");
+      expect(within(layers).getByText("clipboard-first.png")).toBeInTheDocument();
+      expect(layers.querySelector(".screenshot-layer-list")?.children).toHaveLength(3);
+      expect(Number(screen.getByLabelText("Canvas height").getAttribute("value"))).toBeGreaterThan(
+        900,
+      );
+
+      fireEvent.keyDown(canvas, { key: "z", ctrlKey: true });
+      expect(within(layers).queryByText("clipboard-first.png")).not.toBeInTheDocument();
+      expect(within(layers).queryByText("clipboard-second.png")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Canvas height")).toHaveValue(900);
+      fireEvent.keyDown(canvas, { key: "z", ctrlKey: true, shiftKey: true });
+      expect(within(layers).getByText("clipboard-first.png")).toBeInTheDocument();
+      expect(within(layers).getByText("clipboard-second.png")).toBeInTheDocument();
+
+      // Copying ordinary text elsewhere must not revive the old layer snapshot.
+      const text = imageClipboard();
+      text.setData("text/plain", "Not an image");
+      const textPaste = createEvent.paste(canvas, { clipboardData: text });
+      fireEvent(canvas, textPaste);
+      expect(textPaste.defaultPrevented).toBe(false);
+      expect(layers.querySelector(".screenshot-layer-list")?.children).toHaveLength(3);
+    } finally {
+      restore();
+    }
+  });
+
+  it("leaves clipboard copy and paste in fields to the webview", async () => {
+    render(<ScreenshotEditor />);
+    const field = await screen.findByLabelText("Canvas width");
+    const clipboardData = imageClipboard([new File(["image"], "field.png", { type: "image/png" })]);
+    for (const event of [
+      createEvent.copy(field, { clipboardData }),
+      createEvent.paste(field, { clipboardData }),
+    ]) {
+      fireEvent(field, event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "plaintext-only");
+    const child = document.createElement("span");
+    editable.append(child);
+    document.body.append(editable);
+    try {
+      const paste = createEvent.paste(child, { clipboardData });
+      fireEvent(child, paste);
+      expect(paste.defaultPrevented).toBe(false);
+      expect(screen.queryByText("field.png")).not.toBeInTheDocument();
+    } finally {
+      editable.remove();
+    }
+  });
+
+  it("rejects an unreadable clipboard batch without changing the document or using staged drag pixels", async () => {
+    const restore = installExportableCanvas();
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+      fireEvent.paste(canvas, {
+        clipboardData: imageClipboard([
+          new File(["valid"], "valid.png", { type: "image/png" }),
+          new File([], "broken.png", { type: "image/png" }),
+        ]),
+      });
+      await screen.findByText(/broken.png could not be loaded/);
+      expect(screen.getByLabelText("Canvas height")).toHaveValue(900);
+      expect(
+        screen.getByRole("region", { name: "Layers" }).querySelector(".screenshot-layer-list")
+          ?.children,
+      ).toHaveLength(1);
+      expect(invoke).not.toHaveBeenCalledWith("read_prepared_drag_image", expect.anything());
+      // A failed batch must not prevent the next paste from succeeding.
+      fireEvent.paste(canvas, {
+        clipboardData: imageClipboard([new File(["valid"], "retry.png", { type: "image/png" })]),
+      });
+      await within(screen.getByRole("region", { name: "Layers" })).findByText("retry.png");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps paste and drop order without losing edits made while images decode", async () => {
+    const loads: VoidFunction[] = [];
+    const restore = installExportableCanvas((load) => loads.push(load));
+    try {
+      render(<ScreenshotEditor />);
+      const width = await screen.findByLabelText("Canvas width");
+      act(() => loads.splice(0).forEach((load) => load()));
+      const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+      const layers = screen.getByRole("region", { name: "Layers" });
+      fireEvent.paste(canvas, {
+        clipboardData: imageClipboard([new File(["first"], "pasted.png", { type: "image/png" })]),
+      });
+      await waitFor(() => expect(loads).toHaveLength(1));
+      fireEvent.change(width, { target: { value: "1550" } });
+      fireEvent.blur(width);
+      fireEvent.drop(canvas, {
+        dataTransfer: {
+          types: ["Files"],
+          files: [new File(["second"], "dropped.png", { type: "image/png" })],
+        },
+      });
+      act(() => loads.shift()!());
+      await within(layers).findByText("pasted.png");
+      await waitFor(() => expect(loads).toHaveLength(1));
+      act(() => loads.shift()!());
+      await within(layers).findByText("dropped.png");
+      expect(width).toHaveValue(1550);
+      const names = Array.from(layers.querySelectorAll(".screenshot-layer-select strong")).map(
+        (row) => row.textContent,
+      );
+      expect(names).toEqual(["dropped.png", "pasted.png", "Original screenshot"]);
+      fireEvent.keyDown(canvas, { key: "z", ctrlKey: true });
+      expect(within(layers).queryByText("dropped.png")).not.toBeInTheDocument();
+      expect(within(layers).getByText("pasted.png")).toBeInTheDocument();
+      expect(width).toHaveValue(1550);
+    } finally {
+      restore();
+    }
   });
 
   it("draws one straight Arrow and bends it from one of three starter dots", async () => {

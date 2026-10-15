@@ -595,6 +595,7 @@ const MAX_SCREENSHOT_ZOOM_PERCENT = 800;
 const KEYBOARD_ZOOM_FACTOR = 1.25;
 const WHEEL_ZOOM_SENSITIVITY = 0.002;
 const SCREENSHOT_ZOOM_OPTIONS = [50, 100, 200] as const;
+const LAYER_CLIPBOARD_TYPE = "application/x-captures-editor-layer";
 
 const LAYER_BLEND_MODE_OPTIONS: Array<{ value: LayerBlendMode; label: string }> = [
   { value: "source-over", label: "Normal" },
@@ -607,6 +608,14 @@ const LAYER_BLEND_MODE_OPTIONS: Array<{ value: LayerBlendMode; label: string }> 
 
 function isFileTransfer(dataTransfer: DataTransfer): boolean {
   return Array.from(dataTransfer.types).includes("Files") || dataTransfer.files.length > 0;
+}
+
+function isEditorClipboardField(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])') !==
+      null
+  );
 }
 
 function clampScreenshotZoomPercent(value: number): number {
@@ -1903,7 +1912,10 @@ export function ScreenshotEditor() {
   const layerClipboardRef = useRef<{
     element: ScreenshotElement;
     pasteCount: number;
+    marker: string;
   } | null>(null);
+  const imageImportQueueRef = useRef(Promise.resolve());
+  const imageImportGenerationRef = useRef(0);
   const dropDepthRef = useRef(0);
   const displayedZoomPercentRef = useRef(100);
   const zoomAnchorFrameRef = useRef<number | null>(null);
@@ -2282,6 +2294,8 @@ export function ScreenshotEditor() {
 
   const discardRestoredDraft = useCallback(() => {
     if (!artifact) return;
+    imageImportGenerationRef.current += 1;
+    layerClipboardRef.current = null;
     const next = createScreenshotDocument(
       artifact.full_url,
       artifact.width,
@@ -2404,6 +2418,8 @@ export function ScreenshotEditor() {
     });
     return () => {
       active = false;
+      imageImportGenerationRef.current += 1;
+      layerClipboardRef.current = null;
       cleanup.dispose();
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
       objectUrls.clear();
@@ -2995,14 +3011,21 @@ export function ScreenshotEditor() {
     }
   }, [commitDocument, ensureImage]);
 
-  const copySelectedLayer = useCallback(() => {
-    const current = documentRef.current;
-    const element = current?.elements.find(({ id }) => id === selectedId);
-    if (!element) return false;
-    // Documents are updated immutably, so this object is a stable clipboard snapshot.
-    layerClipboardRef.current = { element, pasteCount: 0 };
-    return true;
-  }, [selectedId]);
+  const copySelectedLayer = useCallback(
+    (clipboardData: DataTransfer) => {
+      const current = documentRef.current;
+      const element = current?.elements.find(({ id }) => id === selectedId);
+      if (!element) return false;
+      // Claim the clipboard without publishing document data. An external copy
+      // replaces this marker, so stale layer snapshots cannot hide pasted images.
+      const marker = editorId();
+      clipboardData.setData(LAYER_CLIPBOARD_TYPE, marker);
+      // Documents are immutable; keep the editable snapshot within this editor.
+      layerClipboardRef.current = { element, pasteCount: 0, marker };
+      return true;
+    },
+    [selectedId],
+  );
 
   const pasteLayer = useCallback(() => {
     const clipboard = layerClipboardRef.current;
@@ -3069,14 +3092,8 @@ export function ScreenshotEditor() {
         return;
       }
       if (editingField) return;
-      if (command && event.key.toLowerCase() === "c") {
-        if (copySelectedLayer()) event.preventDefault();
-        return;
-      }
-      if (command && event.key.toLowerCase() === "v") {
-        if (pasteLayer()) event.preventDefault();
-        return;
-      }
+      // Let the webview dispatch copy/paste with the current clipboard contents.
+      if (command && ["c", "v"].includes(event.key.toLowerCase())) return;
       if (command && event.key.toLowerCase() === "d") {
         if (duplicateSelected()) event.preventDefault();
         return;
@@ -3145,11 +3162,9 @@ export function ScreenshotEditor() {
       window.removeEventListener("blur", stopModifierPan);
     };
   }, [
-    copySelectedLayer,
     deleteSelected,
     duplicateSelected,
     nudgeSelected,
-    pasteLayer,
     redo,
     setManualZoom,
     undo,
@@ -4709,111 +4724,175 @@ export function ScreenshotEditor() {
     setImageDropGuide(guide);
   };
 
-  const loadDroppedFiles = async (files: File[], guide?: ImageDropGuide) => {
+  const loadDroppedFiles = (files: File[], guide?: ImageDropGuide, fromClipboard = false) => {
     // Tell the preview stack this drop stayed inside Captures so it does not
     // dismiss the source card when a native file drag ends over the editor.
-    void invoke("mark_internal_file_drop").catch(() => undefined);
+    if (!fromClipboard) void invoke("mark_internal_file_drop").catch(() => undefined);
     const images = files.filter(isSupportedImageFile);
     if (images.length === 0) {
       setError("Drop PNG, JPEG, WebP, GIF, or another image file.");
       return;
     }
-    const initial = documentRef.current;
-    if (!initial) return;
-    let next = initial;
-    let lastId: string | null = null;
-    let placement = guide ?? defaultImageDropGuide(initial);
-    const createdUrls: string[] = [];
-    try {
-      for (const file of images) {
-        // Prefer a blob object URL (cheap, revocable). Fall back to a data URL
-        // if the webview rejects the blob load — historically our CSP omitted
-        // blob: from img-src, which produced "could not be loaded" on drop.
-        // Same-app drops from a preview card can also hand the webview an empty
-        // File; loadImageFile then reads the PNG staged for the native drag.
-        const image = await loadImageFile(file, {
-          preparedBytes: () =>
-            invoke<number[]>("read_prepared_drag_image", {
-              fileName: file.name,
-            }),
-        });
-        const sourceArtifactId = await invoke<string | null>("prepared_drag_artifact_id", {
-          fileName: file.name,
-        }).catch(() => null);
-        createdUrls.push(image.src);
-        if (image.src.startsWith("blob:")) {
-          objectUrlsRef.current.add(image.src);
+    if (!documentRef.current) return;
+    const generation = imageImportGenerationRef.current;
+    // Preserve repeated paste/drop order even when one image takes longer to decode.
+    imageImportQueueRef.current = imageImportQueueRef.current.then(async () => {
+      if (generation !== imageImportGenerationRef.current) return;
+      const createdUrls: string[] = [];
+      let committed = false;
+      try {
+        const decoded: Array<{
+          file: File;
+          image: HTMLImageElement;
+          sourceArtifactId: string | null;
+        }> = [];
+        for (const file of images) {
+          // Prefer a blob object URL (cheap, revocable). Fall back to a data URL
+          // if the webview rejects the blob load — historically our CSP omitted
+          // blob: from img-src, which produced "could not be loaded" on drop.
+          // Same-app drops from a preview card can also hand the webview an empty
+          // File; only drops/picks may use the PNG staged for the native drag.
+          const image = await loadImageFile(
+            file,
+            fromClipboard
+              ? undefined
+              : {
+                  preparedBytes: () =>
+                    invoke<number[]>("read_prepared_drag_image", {
+                      fileName: file.name,
+                    }),
+                },
+          );
+          createdUrls.push(image.src);
+          const sourceArtifactId = fromClipboard
+            ? null
+            : await invoke<string | null>("prepared_drag_artifact_id", {
+                fileName: file.name,
+              }).catch(() => null);
+          decoded.push({ file, image, sourceArtifactId });
         }
-        imageCacheRef.current.set(image.src, { image, status: "loaded" });
-        const position = positionImportedImageAtEdge(
-          image.naturalWidth,
-          image.naturalHeight,
-          next,
-          placement.target,
-          placement.edge,
-          placement.point,
-        );
-        const element: EditorImageElement = {
-          id: editorId(),
-          kind: "image",
-          source: "imported",
-          src: image.src,
-          originalSrc: null,
-          name: file.name,
-          sourceArtifactId,
-          x: position.x,
-          y: position.y,
-          width: position.width,
-          height: position.height,
-          naturalWidth: image.naturalWidth,
-          naturalHeight: image.naturalHeight,
-          locked: false,
-          visible: true,
-          opacity: 100,
-          blendMode: "source-over",
-        };
-        if (isFullyOutsideCanvas(elementBounds(element), next)) {
-          next = expandDocumentForElement(next, element, imageDropExpandPadding(placement.edge));
-        } else {
-          next = { ...next, elements: [...next.elements, element] };
+        if (generation !== imageImportGenerationRef.current) return;
+        // Decode the entire batch first, then add it to the latest document so
+        // edits made during decoding are not overwritten and failures stay atomic.
+        const initial = documentRef.current;
+        if (!initial) return;
+        let next = initial;
+        let lastId: string | null = null;
+        let placement = guide ?? defaultImageDropGuide(initial);
+        for (const { file, image, sourceArtifactId } of decoded) {
+          if (image.src.startsWith("blob:")) {
+            objectUrlsRef.current.add(image.src);
+          }
+          imageCacheRef.current.set(image.src, { image, status: "loaded" });
+          const position = positionImportedImageAtEdge(
+            image.naturalWidth,
+            image.naturalHeight,
+            next,
+            placement.target,
+            placement.edge,
+            placement.point,
+          );
+          const element: EditorImageElement = {
+            id: editorId(),
+            kind: "image",
+            source: "imported",
+            src: image.src,
+            originalSrc: null,
+            name: file.name,
+            sourceArtifactId,
+            x: position.x,
+            y: position.y,
+            width: position.width,
+            height: position.height,
+            naturalWidth: image.naturalWidth,
+            naturalHeight: image.naturalHeight,
+            locked: false,
+            visible: true,
+            opacity: 100,
+            blendMode: "source-over",
+          };
+          if (isFullyOutsideCanvas(elementBounds(element), next)) {
+            next = expandDocumentForElement(next, element, imageDropExpandPadding(placement.edge));
+          } else {
+            next = { ...next, elements: [...next.elements, element] };
+          }
+          lastId = element.id;
+          const added = next.elements.find(({ id }) => id === element.id);
+          if (added) {
+            const target = elementBounds(added);
+            const point = {
+              x: target.x + target.width / 2,
+              y: target.y + target.height,
+            };
+            placement = {
+              edge: placement.edge,
+              target,
+              point,
+              focus: stackDropLightFocusAtPoint(point, target),
+            };
+          }
         }
-        lastId = element.id;
-        const added = next.elements.find(({ id }) => id === element.id);
-        if (added) {
-          const target = elementBounds(added);
-          const point = {
-            x: target.x + target.width / 2,
-            y: target.y + target.height,
-          };
-          placement = {
-            edge: placement.edge,
-            target,
-            point,
-            focus: stackDropLightFocusAtPoint(point, target),
-          };
+        commitDocument(next);
+        committed = true;
+        setSelectedId(lastId);
+        setTool("select");
+        setImageRevision((revision) => revision + 1);
+        setError("");
+        if (lastId) {
+          revealOverflowIfNeeded(
+            next.elements.find(({ id }) => id === lastId),
+            next,
+          );
+        }
+      } catch (reason) {
+        if (generation === imageImportGenerationRef.current) setError(String(reason));
+      } finally {
+        if (!committed) {
+          createdUrls.forEach((url) => {
+            imageCacheRef.current.delete(url);
+            if (url.startsWith("blob:")) {
+              URL.revokeObjectURL(url);
+              objectUrlsRef.current.delete(url);
+            }
+          });
         }
       }
-      commitDocument(next);
-      setSelectedId(lastId);
-      setTool("select");
-      setImageRevision((revision) => revision + 1);
-      setError("");
-      if (lastId) {
-        revealOverflowIfNeeded(
-          next.elements.find(({ id }) => id === lastId),
-          next,
-        );
-      }
-    } catch (reason) {
-      createdUrls.forEach((url) => {
-        if (url.startsWith("blob:")) {
-          URL.revokeObjectURL(url);
-          objectUrlsRef.current.delete(url);
-        }
-      });
-      setError(String(reason));
-    }
+    });
   };
+
+  // Rebind after each render so clipboard commands use the latest selection and
+  // placement, including when keyboard focus is on the window rather than main.
+  useEffect(() => {
+    const onCopy = (event: ClipboardEvent) => {
+      if (event.defaultPrevented || isEditorClipboardField(event.target) || !event.clipboardData)
+        return;
+      if (copySelectedLayer(event.clipboardData)) event.preventDefault();
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        isEditorClipboardField(event.target) ||
+        !event.clipboardData ||
+        !documentRef.current
+      )
+        return;
+      const clipboard = layerClipboardRef.current;
+      if (clipboard && event.clipboardData.getData(LAYER_CLIPBOARD_TYPE) === clipboard.marker) {
+        if (pasteLayer()) event.preventDefault();
+        return;
+      }
+      const files = Array.from(event.clipboardData.files).filter(isSupportedImageFile);
+      if (files.length === 0) return;
+      event.preventDefault();
+      loadDroppedFiles(files, undefined, true);
+    };
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("paste", onPaste);
+    };
+  });
 
   const updateCustomExportDimension = (dimension: "width" | "height", value: number) => {
     const current = documentRef.current;
