@@ -98,6 +98,8 @@ def main():
                         help="Exercise viewport gestures, toolbar and keyboard zoom without editing")
     parser.add_argument("--history-shortcuts-only", action="store_true",
                         help="Exercise tool and document keys without stealing text input")
+    parser.add_argument("--clipboard-only", action="store_true",
+                        help="Exercise real image/file clipboard paste, layer ownership and draft pixels")
     parser.add_argument("--combine-only", action="store_true",
                         help="Exercise real-input layer merging, flattening, history and output pixels")
     parser.add_argument("--text-draft-only", action="store_true",
@@ -1165,6 +1167,85 @@ def main():
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
 
+        if args.clipboard_only:
+            resize_editor(1100, 800)
+            png = output / "Clipboard asymmetric.png"
+            run("convert", "-size", "90x43", "xc:#d53e55", "-fill", "#3cb371",
+                "-draw", "rectangle 45,0 89,42", "-strip", "PNG32:" + str(png))
+
+            def publish(data, kind):
+                subprocess.run(["xclip", "-selection", "clipboard", "-t", kind, "-i"],
+                               input=data, env=env, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, check=True, timeout=10)
+
+            publish(png.read_bytes(), "image/png")
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            imported = save_layers(lambda values: len(values) == 2, "clipboard PNG imported")[-1]
+            assert (imported["name"], imported["naturalWidth"], imported["naturalHeight"]) == (
+                "Clipboard image", 90, 43)
+            assert imported["y"] == 360 and document_size() == (640, 403)
+            asset_pixel(imported, 0, 0, (213, 62, 85, 255))
+            asset_pixel(imported, 89, 42, (60, 179, 113, 255))
+            shot(editor, "clipboard-image-imported")
+            # The imported layer is selected without a tool/selection click.
+            run("xdotool", "key", "ctrl+c", "sleep", ".3")
+            targets = run("xclip", "-selection", "clipboard", "-t", "TARGETS", "-o")
+            assert b"application/x-captures-editor-layer" in targets
+            assert b"UTF8_STRING" not in targets, "private marker must not expose a text token"
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            copied = save_layers(lambda values: len(values) == 3, "private layer paste")[-1]
+            assert (copied["x"], copied["y"]) == (imported["x"] + 24, imported["y"] + 24)
+            publish(b"ordinary filename", "UTF8_STRING")
+            run("xdotool", "key", "ctrl+v", "sleep", ".4")
+            assert len(layers()) == 3, "external text must invalidate the old layer snapshot"
+            export_click("filename")
+            run("xdotool", "key", "ctrl+a", "ctrl+v", "ctrl+c", "sleep", ".2")
+            assert run("xclip", "-selection", "clipboard", "-o") == b"ordinary filename"
+            blur_click()
+            publish(png.read_bytes(), "image/png")
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            external = save_layers(lambda values: len(values) == 4, "external replaces internal")[-1]
+            assert external["y"] == copied["y"] + copied["height"]
+            assert external["x"] != imported["x"] + 48, "must import, not the next layer-copy offset"
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 3, "image paste undo")
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: len(values) == 4, "image paste redo")[-1] == external
+            second = output / "Second.BMP"
+            run("convert", "-size", "31x17", "xc:#268752", str(second))
+            publish((png.as_uri() + "\r\n" + second.as_uri() + "\r\n").encode(), "text/uri-list")
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            pasted_files = save_layers(lambda values: len(values) == 6, "ordered file clipboard paste")
+            assert [image["name"] for image in pasted_files[-2:]] == [png.name, second.name]
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 5, "native one undo per file")
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 6, "file redo")
+            png.unlink(); second.unlink()
+            publish(b"https://example.invalid/never-fetch.png", "UTF8_STRING")
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "clipboard editor closes")
+            editor = reopen()
+            assert len(layers()) == 6
+            asset_pixel(layers()[1], 89, 42, (60, 179, 113, 255))
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            assert len(layers()) == 6, "reopen/URL text cannot revive the internal snapshot"
+            shot(editor, "clipboard-owned-draft-reopened")
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "clipboard suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["real-PNG-paste-pixels", "Add-images-placement-expansion", "Select-last-image",
+                           "private-OS-marker-no-text", "24px-layer-offset", "external-text-invalidates-layer",
+                           "filename-text-paste", "external-image-replaces-layer", "Undo-Redo",
+                           "ordered-local-file-paste", "one-undo-per-file", "owned-draft-after-source-deletion",
+                           "URL-text-no-fetch", "session-local-layer-copy", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS native clipboard: image pixels, OS ownership, fields, file order, undo and owned drafts")
+            return
+
         if args.import_formats_only:
             resize_editor(1200, 701)
             gif = output / "First frame.GIF"
@@ -1649,14 +1730,15 @@ def main():
             layer_click(1)  # Original image is locked.
             run("xdotool", "key", "Delete", "Right", "shift+Down", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 2, "locked keyboard deletion")[-1] == shape
-            # Layer snapshots must work even with an empty OS clipboard. Copy
-            # then move/delete the source, so paste cannot just duplicate it.
+            # Copy claims a private OS marker; source edits/deletion must not
+            # change the retained editable snapshot.
             subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"",
                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            check=True, timeout=10)
             layer_click(0)
             run("xdotool", "key", "ctrl+c", "sleep", ".3")
-            assert run("xclip", "-selection", "clipboard", "-o") == b""
+            assert b"application/x-captures-editor-layer" in run(
+                "xclip", "-selection", "clipboard", "-t", "TARGETS", "-o")
             run("xdotool", "key", "Right", "sleep", ".3", "key", "Delete", "sleep", ".3")
             save_layers(lambda values: len(values) == 1, "copied source deleted")
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
@@ -1665,15 +1747,17 @@ def main():
                             endX=shape["endX"] + 24, endY=shape["endY"] + 24,
                             visible=True, locked=False)
             assert pasted == expected and pasted["id"] != shape["id"], (pasted, expected)
-            subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"unrelated OS text",
-                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=True, timeout=10)
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             pasted_twice = save_layers(lambda values: len(values) == 3, "one paste with OS payload")[-1]
             expected = dict(shape, id=pasted_twice["id"], x=shape["x"] + 48, y=shape["y"] + 48,
                             endX=shape["endX"] + 48, endY=shape["endY"] + 48,
                             visible=True, locked=False)
             assert pasted_twice == expected and pasted_twice["id"] != pasted["id"]
+            subprocess.run(["xclip", "-selection", "clipboard", "-i"], input=b"unrelated OS text",
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=True, timeout=10)
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            assert len(layers()) == 3, "external copying invalidates the private layer snapshot"
             assert run("xclip", "-selection", "clipboard", "-o") == b"unrelated OS text"
             shot(editor, "layer-clipboard-pasted")
             run("xdotool", "key", "ctrl+z", "sleep", ".3")

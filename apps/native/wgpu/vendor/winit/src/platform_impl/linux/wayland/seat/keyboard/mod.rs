@@ -61,7 +61,9 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     warn!("unknown keymap format 0x{:x}", value)
                 },
             },
-            WlKeyboardEvent::Enter { surface, .. } => {
+            WlKeyboardEvent::Enter { surface, serial, .. } => {
+                seat_state.clipboard_serial = Some(serial);
+                seat_state.clipboard_focus = true;
                 let window_id = wayland::make_wid(&surface);
 
                 // Mark the window as focused.
@@ -97,6 +99,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                 }
             },
             WlKeyboardEvent::Leave { surface, .. } => {
+                seat_state.clipboard_focus = false;
                 let window_id = wayland::make_wid(&surface);
 
                 // NOTE: we should drop the repeat regardless whether it was for the present
@@ -131,7 +134,8 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     state.events_sink.push_window_event(WindowEvent::Focused(false), window_id);
                 }
             },
-            WlKeyboardEvent::Key { key, state: WEnum::Value(WlKeyState::Pressed), .. } => {
+            WlKeyboardEvent::Key { key, serial, state: WEnum::Value(WlKeyState::Pressed), .. } => {
+                seat_state.clipboard_serial = Some(serial);
                 let key = key + 8;
 
                 key_input(

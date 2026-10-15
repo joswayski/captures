@@ -38,6 +38,8 @@ pub struct WinitSeatState {
     /// The pointer bound on the seat.
     pub(crate) pointer: Option<Arc<ThemedPointer<WinitPointerData>>>,
     pub(crate) data_device: Option<DataDevice>,
+    pub(crate) clipboard_serial: Option<u32>,
+    pub(crate) clipboard_focus: bool,
 
     /// The touch bound on the seat.
     touch: Option<WlTouch>,

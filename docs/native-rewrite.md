@@ -4513,7 +4513,8 @@ Physical AppKit input, accessibility and IME acceptance remain unverified.
 
 Internal layer copy/paste is connected in both hosts through shared session
 commands. Cmd/Ctrl C retains an immutable selected-layer snapshot without
-changing the document, history, encoded preview or system clipboard. Cmd/Ctrl V
+changing the document, history or encoded preview, and claims the OS clipboard
+with an opaque private marker. Cmd/Ctrl V, while that marker still matches,
 creates a fresh visible/unlocked layer after the current selection (or at the
 front when no selection remains), offsets each successful paste by another 24px,
 and switches to Select only after acceptance. Source edits/deletion/undo do not
@@ -4521,13 +4522,20 @@ replace the copied snapshot. Failed paste does not consume an offset; successful
 paste uses existing render-before-publish, undo/redo, asset and draft contracts.
 Clipboard state is per open editor and is cleared by successful discard or close,
 not persisted or shared across windows. Copy image remains separate.
-Focused text controls retain normal OS text copy/paste. The wgpu native-input
-adapter preserves paste key-down even with an empty/unavailable OS clipboard,
-without injecting text or changing clipboard contents. Unit and private-X11
-tests cover snapshot ownership, command/focus gates, empty/nonempty OS payloads,
-fresh selection, offsets, undo/redo and reopening; AppKit uses native CI tests.
-Windows/Wayland share the implementation but physical input/presentation remains
-unverified, as does physical AppKit acceptance. No platform parity gate closes.
+External clipboard PNG/TIFF bytes on AppKit, RGBA on wgpu, or supported local
+image files import through Add images placement, sizing and canvas expansion,
+selecting the last image and Select tool. Imported pixels belong to the draft;
+no URL/HTML image resolution or drag-cache fallback is used. Native retains one
+undo step per image, unlike Tauri's single batch step. Existing drops retain
+pointer-guide placement and formats. Focused text controls retain normal paste.
+AppKit compares a private pasteboard token; Windows uses a registered private
+format and OS sequence; X11 serves a private selection with owner identity.
+Wayland uses the existing vendored winit/SCTK queue and focused input serial,
+authorizes only a matching private MIME offer and invalidates on source
+cancellation/replacement. No app-local revision substitutes for external change
+detection. External Wayland image reads still require the existing arboard
+data-control support. Physical AppKit/Windows/X11/Wayland input, IME,
+accessibility and clipboard-manager acceptance remain open; no parity gate closes.
 Both hosts expose these layer actions through a native right-click menu. The
 clicked stable layer ID, not the previous selection, owns Copy/Paste/Duplicate/
 Delete. Opening or cancelling a menu preserves selection and encoded output;

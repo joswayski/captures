@@ -43,6 +43,15 @@ Visibility also changes Wayland window/state and redraw/frame dispatch.
 Other package files are upstream copies; `.cargo-ok` is a Cargo cache marker,
 not part of the published archive.
 
+Wayland `ActiveEventLoopExtWayland::set_clipboard_marker` reuses the existing
+SCTK data-device/source dispatch to offer a private editor-layer MIME on the
+focused seat, using its latest keyboard/pointer input serial. Ownership starts
+false, becomes true only on a matching selection offer, and is invalidated by
+replacement or source cancellation. The retained source serves only the opaque
+marker, not text or serialized document data. It adds no dependency and does
+not change file-drag routing or PRIMARY. The additional patch surface is the
+keyboard serial/focus bookkeeping and clipboard state in the modules above.
+
 X11 capture-key registration now uses `EventLoopExtX11::hotkey_manager` on
 winit's existing X connection. Root passive-grab key edges dispatch before
 IME conversion on the same native queue as pointer input, rather than a

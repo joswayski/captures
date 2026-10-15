@@ -117,7 +117,6 @@ struct Presented {
     created_layer: Option<String>,
     can_undo: bool,
     can_redo: bool,
-    can_paste_layer: bool,
     merge_down_ids: Vec<String>,
     can_merge_visible: bool,
     can_flatten: bool,
@@ -159,7 +158,6 @@ impl Presented {
             created_layer: None,
             can_undo: snapshot.can_undo,
             can_redo: snapshot.can_redo,
-            can_paste_layer: snapshot.can_paste_layer,
             merge_down_ids: snapshot
                 .merge_down_ids
                 .into_iter()
@@ -1030,12 +1028,11 @@ impl View {
                 let copied_layer = presented.copied_layer;
                 let pasted_layer = presented.pasted_layer;
                 let combined_layers = std::mem::take(&mut self.combine_pending);
-                let selected = self.pending_layer_selection.take().or_else(|| {
-                    presented
-                        .created_layer
-                        .take()
-                        .or(self.selected_layer.clone())
-                });
+                let selected = presented
+                    .created_layer
+                    .take()
+                    .or(self.pending_layer_selection.take())
+                    .or(self.selected_layer.clone());
                 if !presented.has_draft {
                     self.draft_restored = false;
                 }
@@ -1822,6 +1819,39 @@ fn decode_import(path: &Path) -> Result<RgbaImage, String> {
     captures_app::editor_image_decode::decode_import(path)
 }
 
+fn paste_clipboard(
+    session: &mut EditorSession,
+    clipboard: &mut crate::editor_clipboard::Clipboard,
+    new_id: String,
+    after_id: Option<String>,
+) -> Result<Presented, String> {
+    let id = if clipboard.owns_layer() && session.snapshot().can_paste_layer {
+        session.execute(Request::PasteLayer {
+            new_id: new_id.clone(),
+            after_id,
+        })?;
+        new_id
+    } else {
+        // Decode before changing the document. Each image remains its own undo
+        // step, like native Add images (unlike Tauri's batch undo).
+        let images = clipboard.images()?;
+        let mut selected_id = after_id;
+        for (name, pixels) in images {
+            selected_id = Some(session.import_image(ImportImage {
+                pixels,
+                name,
+                selected_id,
+                point: None,
+            })?);
+        }
+        selected_id.ok_or("No clipboard image available.")?
+    };
+    let mut presented = Presented::after_edit(session);
+    presented.created_layer = Some(id);
+    presented.pasted_layer = true;
+    Ok(presented)
+}
+
 fn wake(ctx: &egui::Context, viewport: egui::ViewportId) {
     crate::live::request_hidden_root_paint(ctx);
     ctx.request_repaint_of(egui::ViewportId::ROOT);
@@ -1867,6 +1897,7 @@ impl Editor {
                 }
             };
             wake(&wake_ctx, viewport);
+            let mut clipboard = crate::editor_clipboard::Clipboard::default();
             while let Ok(job) = jobs.recv() {
                 let result = match job {
                     Job::Shutdown => break,
@@ -1887,6 +1918,9 @@ impl Editor {
                         .as_mut()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
+                            if let Request::PasteLayer { new_id, after_id } = request {
+                                return paste_clipboard(session, &mut clipboard, new_id, after_id);
+                            }
                             let creates_layer = matches!(
                                 request,
                                 Request::CreateClosedShape { .. }
@@ -1897,6 +1931,9 @@ impl Editor {
                             let copied_layer = matches!(request, Request::CopyLayer { .. });
                             let pasted_layer = matches!(request, Request::PasteLayer { .. });
                             session.execute(request)?;
+                            if copied_layer {
+                                clipboard.claim_layer(&wake_ctx)?;
+                            }
                             let mut presented = Presented::after_edit(session);
                             presented.copied_layer = copied_layer;
                             presented.pasted_layer = pasted_layer;
@@ -5731,14 +5768,13 @@ fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str
         return false;
     };
     if matches!(action, LayerAction::Paste) {
-        return presented.can_paste_layer
-            && target_id.is_none_or(|id| {
-                presented
-                    .document
-                    .elements
-                    .iter()
-                    .any(|element| element.base().id == id)
-            });
+        return target_id.is_none_or(|id| {
+            presented
+                .document
+                .elements
+                .iter()
+                .any(|element| element.base().id == id)
+        });
     }
     if matches!(action, LayerAction::MergeVisible) {
         return presented.can_merge_visible;
@@ -6859,7 +6895,6 @@ mod tests {
         copied.document = document;
         copied.pixels = pixels;
         copied.copied_layer = true;
-        copied.can_paste_layer = true;
         view.receive(&ctx, Ok(copied));
         assert_eq!(view.selected_layer.as_deref(), Some("other"));
         assert!(view.output.is_some());
@@ -6906,7 +6941,6 @@ mod tests {
         view.closed = false;
         let mut empty = presented(false);
         Arc::make_mut(&mut empty.document).elements.clear();
-        empty.can_paste_layer = true;
         view.receive(&ctx, Ok(empty));
         frame(&mut view, vec![]);
         click(
@@ -8567,9 +8601,11 @@ mod tests {
             vec![egui::Event::Paste("unrelated OS text".into())],
         );
         assert!(
-            rx.try_recv().is_err(),
-            "empty internal clipboard is not an image/text import"
+            matches!(rx.try_recv(), Ok(Job::Apply(Request::PasteLayer { .. }))),
+            "the worker arbitrates the actual OS clipboard, even without a retained layer"
         );
+        view.receive(&ctx, Err("No clipboard image available".into()));
+        view.last_solid_background = "#123456".into();
         frame(&mut view, vec![egui::Event::Copy, egui::Event::Copy]);
         assert!(
             matches!(rx.try_recv(), Ok(Job::Apply(Request::CopyLayer { id })) if id == original_id)
@@ -8578,7 +8614,6 @@ mod tests {
         let mut copied = presented(false);
         copied.pixels = view.presented.as_ref().unwrap().pixels.clone();
         copied.copied_layer = true;
-        copied.can_paste_layer = true;
         view.receive(&ctx, Ok(copied));
         assert_eq!(view.section, Section::Draw);
         assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
@@ -8629,7 +8664,6 @@ mod tests {
         image.base.id = new_id.clone();
         Arc::make_mut(&mut pasted.document).elements.push(layer);
         pasted.pasted_layer = true;
-        pasted.can_paste_layer = true;
         view.receive(&ctx, Ok(pasted));
         assert_eq!(view.section, Section::Layers);
         assert_eq!(view.selected_layer.as_ref(), Some(&new_id));
@@ -9307,7 +9341,6 @@ mod tests {
             created_layer: None,
             can_undo: unsaved,
             can_redo: false,
-            can_paste_layer: false,
             merge_down_ids: Vec::new(),
             can_merge_visible: false,
             can_flatten: false,

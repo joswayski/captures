@@ -696,6 +696,27 @@ pub struct ActiveEventLoop {
 }
 
 impl ActiveEventLoop {
+    pub fn set_clipboard_marker(
+        &self,
+        mime: String,
+        owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(), &'static str> {
+        let mut state = self.state.borrow_mut();
+        let seat = state.seats.values().find_map(|seat| {
+            seat.clipboard_focus.then_some(())?;
+            Some((seat.data_device.as_ref()?, seat.clipboard_serial?))
+        }).ok_or("clipboard Copy has no focused input seat")?;
+        let manager = state.outbound_drag_manager.as_ref()
+            .ok_or("compositor has no wl_data_device_manager")?;
+        let source = manager.create_copy_paste_source(&self.queue_handle, [mime.as_str()]);
+        source.set_selection(seat.0, seat.1);
+        let device = seat.0.inner().clone();
+        state.clipboard_marker = Some(super::outbound_drag::ClipboardMarker {
+            source, device, mime, owned,
+        });
+        Ok(())
+    }
+
     pub fn start_file_drag(
         &self,
         source: WindowId,

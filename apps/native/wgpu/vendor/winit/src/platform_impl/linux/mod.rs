@@ -884,6 +884,19 @@ pub enum ActiveEventLoop {
 
 impl ActiveEventLoop {
     #[cfg(wayland_platform)]
+    pub fn set_wayland_clipboard_marker(
+        &self,
+        mime: String,
+        owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(), &'static str> {
+        match self {
+            ActiveEventLoop::Wayland(loop_) => loop_.set_clipboard_marker(mime, owned),
+            #[cfg(x11_platform)]
+            ActiveEventLoop::X(_) => Err("not a Wayland event loop"),
+        }
+    }
+
+    #[cfg(wayland_platform)]
     pub fn start_wayland_file_drag(
         &self,
         source: crate::window::WindowId,

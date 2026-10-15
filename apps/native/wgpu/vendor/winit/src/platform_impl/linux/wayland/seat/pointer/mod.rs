@@ -44,7 +44,7 @@ impl PointerHandler for WinitState {
         events: &[PointerEvent],
     ) {
         let seat = pointer.winit_data().seat();
-        let seat_state = match self.seats.get(&seat.id()) {
+        let seat_state = match self.seats.get_mut(&seat.id()) {
             Some(seat_state) => seat_state,
             None => {
                 warn!("Received pointer event without seat");
@@ -167,6 +167,7 @@ impl PointerHandler for WinitState {
                 }
                 ref kind @ PointerEventKind::Press { button, serial, .. }
                 | ref kind @ PointerEventKind::Release { button, serial, .. } => {
+                    seat_state.clipboard_serial = Some(serial);
                     let mut data = pointer.winit_data().inner.lock().unwrap();
                     data.latest_button_serial = serial;
                     data.button_held = matches!(kind, PointerEventKind::Press { .. });

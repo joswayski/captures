@@ -9,6 +9,7 @@ mod compare_overlay;
 mod countdown;
 mod diagnostics;
 mod editor;
+mod editor_clipboard;
 mod effects;
 mod feedback;
 mod glass_tooltip;
@@ -186,6 +187,8 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         self.paste_input.end_event();
         self.outbound_drag.end_event();
         self.outbound_drag.service(event_loop);
+        #[cfg(target_os = "linux")]
+        editor_clipboard::service(event_loop);
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.service_root_repaint(event_loop);
     }
@@ -250,6 +253,8 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         self.inner.about_to_wait(event_loop);
         self.dispatch_requested_root_pass(event_loop);
         self.outbound_drag.service(event_loop);
+        #[cfg(target_os = "linux")]
+        editor_clipboard::service(event_loop);
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             self.service_root_repaint(event_loop);

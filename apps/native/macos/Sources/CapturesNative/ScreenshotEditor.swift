@@ -1355,7 +1355,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     lazy var applyCropHalo = EditorCtaHalo(tokens: tokens)
     private(set) var expandCanvasButton: CaptureButton!
     /// Remaining files from one drop; each imports after the previous one.
-    private var pendingDropURLs: [URL] = []
+    private enum ImportSource {
+        case file(URL)
+        case bytes(Data)
+    }
+    private var pendingImports: [ImportSource] = []
     /// Shipping `NumberInput`s: Shift rotation snap (1–180), New text size and
     /// the selected text's Size (8–512), with steppers and arrow keys.
     private let rotationSnap = TokenNumberField()
@@ -1645,6 +1649,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Test seam for the Add images panel: reports every chosen file, or none.
     private let imagePicker: ((NSWindow, @escaping ([URL]) -> Void) -> Void)?
     private let imageDecoder: (URL) throws -> EditorDecodedImage
+    private let layerPasteboard: NSPasteboard
+    private static let layerClipboardType = NSPasteboard.PasteboardType("es.captur.editor-clipboard-layer")
+    private var layerClipboardToken: String?
     private static let imageDecodeQueue = DispatchQueue(label: "es.captures.native.editor-image-decode",
                                                         qos: .userInitiated)
     private var importToken = 0
@@ -1665,6 +1672,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
          revealFiles: (([URL]) -> Void)? = nil,
          imagePicker: ((NSWindow, @escaping ([URL]) -> Void) -> Void)? = nil,
          imageDecoder: @escaping (URL) throws -> EditorDecodedImage = EditorImageDecoder.decode,
+         layerPasteboard: NSPasteboard = .general,
          writeClipboard: @escaping (Data) -> Bool = { png in
              let pasteboard = NSPasteboard.general
              pasteboard.clearContents()
@@ -1675,6 +1683,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         self.didReplaceOriginal = didReplaceOriginal
         self.revealFiles = revealFiles ?? ScreenshotEditorController.defaultRevealFiles
         self.imagePicker = imagePicker; self.imageDecoder = imageDecoder
+        self.layerPasteboard = layerPasteboard
         self.writeClipboard = writeClipboard
         editorNumberFormatter = NumberFormatter()
         outputIntegerFormatter = NumberFormatter()
@@ -6068,8 +6077,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard let first = images.first else { showError(NativeEditorCanvas.dropUnsupported); return false }
             selectionOverlay.cancelGesture()
             importToken += 1
-            pendingDropURLs = Array(images.dropFirst())
-            decodeImport(first, point: guide?.point, token: importToken,
+            pendingImports = images.dropFirst().map(ImportSource.file)
+            decodeImport(.file(first), point: guide?.point, token: importToken,
                          generation: state.generation, artifactID: artifactID)
             return true
         }
@@ -6117,7 +6126,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         let token = importToken
         let generation = state.generation
-        pendingDropURLs = []
+        pendingImports = []
         // Shipping's `<input type="file" multiple>` feeds the canvas-drop
         // import: the first image takes the default placement and each later
         // one stacks below the layer the previous one created.
@@ -6126,8 +6135,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard let self, !urls.isEmpty, self.importToken == token else { return }
                 let images = urls.filter(NativeEditorCanvas.isSupportedImage)
                 guard let first = images.first else { self.showError(NativeEditorCanvas.dropUnsupported); return }
-                self.pendingDropURLs = Array(images.dropFirst())
-                self.decodeImport(first, point: nil, token: token, generation: generation, artifactID: artifactID)
+                self.pendingImports = images.dropFirst().map(ImportSource.file)
+                self.decodeImport(.file(first), point: nil, token: token, generation: generation, artifactID: artifactID)
             }
         }
         if let imagePicker {
@@ -6142,14 +6151,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// Decode off the main thread, then import as one undoable edit. A drop
     /// point places the image where the drop guide showed.
-    private func decodeImport(_ url: URL, point: CGPoint?, token: Int, generation: Int, artifactID: String) {
+    private func decodeImport(_ source: ImportSource, point: CGPoint?, token: Int, generation: Int, artifactID: String) {
         guard importToken == token, state.generation == generation, state.artifactID == artifactID else { return }
         importLoading = true
         editorError = nil
         updateControls()
         let decoder = imageDecoder
         Self.imageDecodeQueue.async {
-            let result = Result { try decoder(url) }
+            let result = Result {
+                switch source {
+                case .file(let url): return try decoder(url)
+                case .bytes(let data): return try EditorImageDecoder.decode(data)
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.importToken == token,
                       self.state.generation == generation,
@@ -6160,7 +6174,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     self.submitPendingImportIfReady()
                 case .failure(let error):
                     self.importLoading = false
-                    self.pendingDropURLs = []
+                    self.pendingImports = []
                     self.showError("Couldn’t import image: \(error.localizedDescription)")
                     self.updateControls()
                 }
@@ -6202,10 +6216,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.invalidateOutput()
                 self.preferredLayerID = imported.layerID
                 self.publish(imported.presentation, resetCrop: false)
+                self.activateTool(section: Section.layers, shape: nil)
                 self.editorError = nil
-                if !self.pendingDropURLs.isEmpty, let artifactID = self.state.artifactID {
+                if !self.pendingImports.isEmpty, let artifactID = self.state.artifactID {
                     // Later files in one drop stack below the layer just added.
-                    let next = self.pendingDropURLs.removeFirst()
+                    let next = self.pendingImports.removeFirst()
                     self.updateControls()
                     self.decodeImport(next, point: nil, token: token,
                                       generation: self.state.generation, artifactID: artifactID)
@@ -6213,7 +6228,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
-                self.pendingDropURLs = []
+                self.pendingImports = []
                 self.showError("Couldn’t import image: \(error.localizedDescription)")
             }
             self.updateControls()
@@ -6224,7 +6239,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         importLoading = false
         pendingImport = nil
-        pendingDropURLs = []
+        pendingImports = []
     }
 
     private func transformLayer(_ transform: String, message: String) {
@@ -6269,19 +6284,46 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
               state.snapshot?.layers.contains(where: { $0.id == id }) == true else { return }
         cancelDrawing(); cancelViewportPan()
         command(["operation": "copy_layer", "id": id], message: "Copying layer…",
-                preserveOutputAndStatus: true)
+                preserveOutputAndStatus: true, copiedLayerToken: UUID().uuidString)
+    }
+
+    private var ownsLayerClipboard: Bool {
+        guard let layerClipboardToken else { return false }
+        return layerPasteboard.string(forType: Self.layerClipboardType) == layerClipboardToken
     }
 
     private func pasteLayer(after id: String?) {
-        guard layerActionsReady,
-              let snapshot = state.snapshot, snapshot.canPasteLayer else { return }
+        guard layerActionsReady, let snapshot = state.snapshot else { return }
         guard id == nil || snapshot.layers.contains(where: { $0.id == id }) else { return }
+        guard snapshot.canPasteLayer && ownsLayerClipboard else {
+            pasteClipboardImages()
+            return
+        }
         let newID = UUID().uuidString.lowercased()
         var request: [String: Any] = ["operation": "paste_layer", "new_id": newID]
         if let id { request["after_id"] = id }
         cancelDrawing(); cancelViewportPan()
         command(request, message: "Pasting layer…", preferredSelection: newID,
                 selectToolOnSuccess: true)
+    }
+
+    private func pasteClipboardImages() {
+        guard let artifactID = state.artifactID else { return }
+        // Snapshot actual local bytes/URLs now; never ask NSImage or HTML to
+        // resolve remote URLs, and never fall back to retained drag contents.
+        let sources: [ImportSource] = (layerPasteboard.pasteboardItems ?? []).compactMap { item in
+            if let value = item.string(forType: .fileURL), let url = URL(string: value),
+               url.isFileURL, url.host == nil || url.host == "" || url.host == "localhost",
+               NativeEditorCanvas.isSupportedImage(url) { return .file(url) }
+            if let data = item.data(forType: .png) ?? item.data(forType: .tiff) { return .bytes(data) }
+            return nil
+        }
+        guard let first = sources.first else { return }
+        cancelDrawing(); cancelViewportPan()
+        importToken += 1
+        pendingImports = Array(sources.dropFirst())
+        decodeImport(first, point: nil, token: importToken,
+                     generation: state.generation, artifactID: artifactID)
     }
 
     private func combine(_ operation: String, id: String? = nil) {
@@ -6318,7 +6360,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             add("Copy layer", #selector(copyLayerFromMenu(_:)), enabled: ready, id: target.id)
         }
         add("Paste layer", #selector(pasteLayerFromMenu(_:)),
-            enabled: ready && snapshot.canPasteLayer, id: targetID)
+            enabled: ready, id: targetID)
         if let target {
             menu.addItem(.separator())
             add("Duplicate", #selector(duplicateLayerFromMenu(_:)), enabled: ready, id: target.id)
@@ -6526,12 +6568,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                          createdLayerExistingIDs: Set<String>? = nil,
                          preserveStagedTextOnFailure: Bool = false,
                          preserveOutputAndStatus: Bool = false,
-                         selectToolOnSuccess: Bool = false) {
+                         selectToolOnSuccess: Bool = false,
+                         copiedLayerToken: String? = nil) {
         guard inlineTextInput == nil else {
             showError("Finish or cancel inline text before another editor action.")
             return
         }
         guard let generation = state.beginCommand() else { return }
+        let clipboardChange = layerPasteboard.changeCount
         cancelDrawingPreview()
         if !preserveOutputAndStatus { invalidateOutput() }
         preferredLayerID = preferredSelection
@@ -6542,6 +6586,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             switch result {
             case .success(let presentation):
                 guard self.state.complete(presentation.snapshot, generation: generation) else { return }
+                if let copiedLayerToken, self.layerPasteboard.changeCount == clipboardChange {
+                    self.layerClipboardToken = nil
+                    self.layerPasteboard.clearContents()
+                    if self.layerPasteboard.setString(copiedLayerToken, forType: Self.layerClipboardType) {
+                        self.layerClipboardToken = copiedLayerToken
+                    } else { self.showError("Couldn’t claim the layer clipboard.") }
+                }
                 if let createdLayerExistingIDs {
                     self.preferredLayerID = presentation.snapshot.layers
                         .first { !createdLayerExistingIDs.contains($0.id) }?.id
