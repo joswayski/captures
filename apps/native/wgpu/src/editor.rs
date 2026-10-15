@@ -1822,6 +1822,7 @@ fn decode_import(path: &Path) -> Result<RgbaImage, String> {
 fn paste_clipboard(
     session: &mut EditorSession,
     clipboard: &mut crate::editor_clipboard::Clipboard,
+    ctx: &egui::Context,
     new_id: String,
     after_id: Option<String>,
 ) -> Result<Presented, String> {
@@ -1834,7 +1835,7 @@ fn paste_clipboard(
     } else {
         // Decode before changing the document. Each image remains its own undo
         // step, like native Add images (unlike Tauri's batch undo).
-        let images = clipboard.images()?;
+        let images = clipboard.images(ctx)?;
         let mut selected_id = after_id;
         for (name, pixels) in images {
             selected_id = Some(session.import_image(ImportImage {
@@ -1919,7 +1920,13 @@ impl Editor {
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
                             if let Request::PasteLayer { new_id, after_id } = request {
-                                return paste_clipboard(session, &mut clipboard, new_id, after_id);
+                                return paste_clipboard(
+                                    session,
+                                    &mut clipboard,
+                                    &wake_ctx,
+                                    new_id,
+                                    after_id,
+                                );
                             }
                             let creates_layer = matches!(
                                 request,

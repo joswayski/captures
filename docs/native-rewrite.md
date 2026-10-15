@@ -4534,7 +4534,16 @@ Wayland uses the existing vendored winit/SCTK queue and focused input serial,
 authorizes only a matching private MIME offer and invalidates on source
 cancellation/replacement. No app-local revision substitutes for external change
 detection. External Wayland image reads still require the existing arboard
-data-control support. Physical AppKit/Windows/X11/Wayland input, IME,
+data-control support; local files use the focused core selection offer. Linux
+URI-list parsing splits literal CRLF before percent decoding and bounds transfers
+to 1 MiB/two seconds (X11 incremental URI-list transfers are rejected).
+Real private-X11 and headless-Sway input checks pass in light/dark, including
+image pixels, private offers, replacement/cancellation and ordered file paste;
+X11 also covers text-field paste and owned draft reopen after source deletion.
+Fresh AppKit named-pasteboard/real-FFI tests cover external-image precedence,
+owned draft pixels and Undo/Redo. The broader AppKit editor suite retains an
+exact-float zoom assertion failure also reproduced on the unchanged base;
+clipboard tests pass without relaxing it. Physical AppKit/Windows/X11/Wayland input, IME,
 accessibility and clipboard-manager acceptance remain open; no parity gate closes.
 Both hosts expose these layer actions through a native right-click menu. The
 clicked stable layer ID, not the previous selection, owns Copy/Paste/Duplicate/

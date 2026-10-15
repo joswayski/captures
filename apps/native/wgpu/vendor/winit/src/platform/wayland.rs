@@ -38,6 +38,10 @@ pub trait ActiveEventLoopExtWayland {
         owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(), &'static str>;
 
+    /// Request the focused seat's advertised URI list. The caller owns the
+    /// transfer pipe and must bound its reads off the native event loop.
+    fn clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str>;
+
     /// Start a COPY-only URI-list drag from a currently pressed source window.
     /// Completion reports COPY acceptance, whether the destination belongs to
     /// this client, and whether it is exactly the source window. The source file
@@ -62,6 +66,10 @@ impl ActiveEventLoopExtWayland for ActiveEventLoop {
         owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(), &'static str> {
         self.p.set_wayland_clipboard_marker(mime, owned)
+    }
+
+    fn clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str> {
+        self.p.wayland_clipboard_uri_list()
     }
 
     fn start_file_drag(

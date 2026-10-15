@@ -14,6 +14,7 @@ from pathlib import Path
 import random
 import re
 import select
+import signal
 import subprocess
 import threading
 import time
@@ -1169,6 +1170,16 @@ def main():
 
         if args.clipboard_only:
             resize_editor(1100, 800)
+            recording = spawn("clipboard-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "26", "-pix_fmt", "yuv420p", str(output / "clipboard-interaction.mp4")])
+            time.sleep(1)
+            # Show a real pointer crossing neighboring tools, then release field
+            # focus on empty rail space before using document shortcuts.
+            for y in [80, 120, 160, 200, 260, 340, 430]:
+                run("xdotool", "mousemove", "--sync", "--window", editor, "28", str(y), "sleep", ".2")
+            click(editor, 28, 430)
             png = output / "Clipboard asymmetric.png"
             run("convert", "-size", "90x43", "xc:#d53e55", "-fill", "#3cb371",
                 "-draw", "rectangle 45,0 89,42", "-strip", "PNG32:" + str(png))
@@ -1211,6 +1222,8 @@ def main():
             save_layers(lambda values: len(values) == 3, "image paste undo")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 4, "image paste redo")[-1] == external
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
             second = output / "Second.BMP"
             run("convert", "-size", "31x17", "xc:#268752", str(second))
             publish((png.as_uri() + "\r\n" + second.as_uri() + "\r\n").encode(), "text/uri-list")

@@ -696,6 +696,17 @@ pub struct ActiveEventLoop {
 }
 
 impl ActiveEventLoop {
+    pub fn clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str> {
+        let state = self.state.borrow();
+        let offer = state.seats.values().filter(|seat| seat.clipboard_focus)
+            .find_map(|seat| seat.data_device.as_ref()?.data().selection_offer());
+        let Some(offer) = offer.filter(|offer| offer.with_mime_types(|types| types.iter().any(|mime| mime == "text/uri-list"))) else {
+            return Ok(None);
+        };
+        offer.receive("text/uri-list".into()).map(|pipe| Some(pipe.into()))
+            .map_err(|_| "Could not receive clipboard files")
+    }
+
     pub fn set_clipboard_marker(
         &self,
         mime: String,

@@ -877,6 +877,8 @@ External clipboard images or local image files instead import through Add images
 placement, with owned draft pixels, canvas expansion, last-image selection and
 undo/redo. Native multi-image paste keeps one undo step per image (Tauri uses one
 batch step). Text fields retain normal paste; URL/HTML-only images are not fetched.
+On Wayland, clipboard pixels require compositor data-control support; editable
+layer ownership and local-file paste use the core selection protocol.
 **Copy image** remains the separate pixel-copy action. These are opt-in native
 source features, not a change to the pinned Tauri Preview or video editor.
 Closing the editor or discarding its draft clears the internal layer clipboard.

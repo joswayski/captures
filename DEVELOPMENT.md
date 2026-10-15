@@ -577,6 +577,26 @@ minimum size, unchanged drafts, undo and quit.
 Use `--drawing-defaults-only` in both appearances for keyboard-entered exact custom
 colors, partial input without draft writes, independently expected line pixels and
 single Undo, normal/minimum color controls, and retained stroke/fill/shadow defaults.
+Use `--clipboard-only` in both appearances for real X11 PNG/file paste, private
+layer ownership, external replacement, text-field paste, Undo/Redo and owned draft
+reopen after deleting the imported files. It saves screenshots and an interaction
+recording. For the corresponding Wayland transport/input checks (no X11 fallback):
+
+```sh
+cargo build --locked --manifest-path apps/native/wayland_drag_probe/Cargo.toml
+/usr/bin/python3 apps/native/wayland_editor_clipboard_smoke.py \
+  --binary apps/native/wgpu/target/debug/captures-wgpu-workbench \
+  --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe \
+  --output /tmp/captures-wayland-editor-clipboard-new
+```
+
+This needs headless Sway, wl-copy/wl-paste, grim and the existing virtual-input
+probe. It checks private MIME bytes, editable paste, external selection replacement,
+source cancellation/reclaim, image pixels and CRLF local-file ordering in light/dark.
+Core selection owns layer copies/files; arboard pixel reads need data-control.
+AppKit's real-image regression uses a UUID-named pasteboard and real FFI/draft
+worker. These are isolated host checks, not physical clipboard-manager, IME or
+accessibility acceptance; rebuild Swift tests rather than using cached binaries.
 Run `cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml accessibility_`
 for shared range bounds/actions, mixed keyboard/assistive event ordering and
 custom-color input semantics. These checks do not replace physical screen-reader

@@ -51,6 +51,12 @@ replacement or source cancellation. The retained source serves only the opaque
 marker, not text or serialized document data. It adds no dependency and does
 not change file-drag routing or PRIMARY. The additional patch surface is the
 keyboard serial/focus bookkeeping and clipboard state in the modules above.
+`clipboard_uri_list` receives only the focused seat's advertised `text/uri-list`
+offer and returns its pipe for bounded worker-side reads. It neither decodes
+paths nor blocks the native queue, and does not require data-control. Run
+`apps/native/wayland_editor_clipboard_smoke.py` for real compositor-delivered
+Copy/Paste, private payload bytes, external replacement, cancellation/reclaim,
+image pixels and CRLF file ordering; physical compositor acceptance stays open.
 
 X11 capture-key registration now uses `EventLoopExtX11::hotkey_manager` on
 winit's existing X connection. Root passive-grab key edges dispatch before

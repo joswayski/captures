@@ -617,6 +617,8 @@ fn main() -> eframe::Result {
                 .expect("native creation context has a root window");
             #[cfg(target_os = "windows")]
             create_drag.set_window(window);
+            #[cfg(target_os = "windows")]
+            editor_clipboard::set_window(&cc.egui_ctx, window);
             create_root_id.set(Some(window.id()));
             *create_native_state.borrow_mut() = RootState {
                 egui_ctx: Some(cc.egui_ctx.clone()),

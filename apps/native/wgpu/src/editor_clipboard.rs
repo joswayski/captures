@@ -19,17 +19,30 @@ impl Clipboard {
         self.marker.as_ref().is_some_and(Marker::matches)
     }
 
-    pub fn images(&mut self) -> Result<Vec<(String, RgbaImage)>, String> {
-        if self.images.is_none() {
-            self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
-        }
-        let clipboard = self.images.as_mut().unwrap();
-        let files = clipboard.get().file_list().unwrap_or_default();
+    pub fn images(
+        &mut self,
+        ctx: &eframe::egui::Context,
+    ) -> Result<Vec<(String, RgbaImage)>, String> {
+        #[cfg(target_os = "linux")]
+        let files = linux_files(ctx)?;
+        #[cfg(not(target_os = "linux"))]
+        let files = {
+            if self.images.is_none() {
+                self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
+            }
+            self.images
+                .as_mut()
+                .unwrap()
+                .get()
+                .file_list()
+                .unwrap_or_default()
+        };
+        #[cfg(not(target_os = "linux"))]
+        let _ = ctx;
         let files: Vec<_> = files
             .into_iter()
             .filter(|path| {
-                // arboard's Linux URI decoder also accepts file://host/... as a
-                // relative path. Only actual local absolute files are imported.
+                // Import local image files, never URLs or HTML references.
                 path.is_absolute()
                     && path.is_file()
                     && captures_app::editor_session::is_supported_image_path(path)
@@ -50,7 +63,13 @@ impl Clipboard {
                 })
                 .collect();
         }
-        let image = clipboard
+        if self.images.is_none() {
+            self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
+        }
+        let image = self
+            .images
+            .as_mut()
+            .unwrap()
             .get_image()
             .map_err(|error| format!("No clipboard image available: {error}"))?;
         let width = u32::try_from(image.width).map_err(|_| "Clipboard image is too wide.")?;
@@ -78,15 +97,48 @@ struct Marker {
 }
 
 #[cfg(target_os = "windows")]
+pub fn set_window(ctx: &eframe::egui::Context, window: &std::sync::Arc<winit::window::Window>) {
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            eframe::egui::Id::new("editor-clipboard-window"),
+            std::sync::Arc::downgrade(window),
+        )
+    });
+}
+
+#[cfg(target_os = "windows")]
 impl Marker {
-    fn claim(_: &eframe::egui::Context) -> Result<Self, String> {
+    fn claim(ctx: &eframe::egui::Context) -> Result<Self, String> {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let window = ctx
+            .data(|data| {
+                data.get_temp::<std::sync::Weak<winit::window::Window>>(eframe::egui::Id::new(
+                    "editor-clipboard-window",
+                ))
+            })
+            .and_then(|window| window.upgrade())
+            .ok_or("Clipboard owner window is unavailable.")?;
+        let handle = window.window_handle().map_err(|error| error.to_string())?;
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return Err("Clipboard owner is not a Win32 window.".into());
+        };
         let format = clipboard_win::register_format("application/x-captures-editor-layer")
             .ok_or("Could not register editor clipboard format.")?
             .get();
         let token = uuid::Uuid::new_v4().as_bytes().to_vec();
+        let guard = clipboard_win::Clipboard::new_attempts_for(handle.hwnd.get() as _, 10)
+            .map_err(|error| error.to_string())?;
+        clipboard_win::raw::set(format, &token).map_err(|error| error.to_string())?;
+        drop(guard);
+        // Reopen and verify after publication; never label an intervening
+        // external writer's sequence as ours.
         let _guard =
             clipboard_win::Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
-        clipboard_win::raw::set(format, &token).map_err(|error| error.to_string())?;
+        let mut published = Vec::new();
+        clipboard_win::raw::get_vec(format, &mut published).map_err(|error| error.to_string())?;
+        if published != token {
+            return Err("Clipboard changed during layer Copy.".into());
+        }
         let revision = clipboard_win::seq_num().ok_or("Clipboard revision unavailable.")?;
         Ok(Self { revision })
     }
@@ -116,6 +168,11 @@ struct WaylandClaim {
 static CLAIMS: std::sync::Mutex<Vec<WaylandClaim>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(target_os = "linux")]
+type UriReply = std::sync::mpsc::SyncSender<Result<Option<std::os::fd::OwnedFd>, String>>;
+#[cfg(target_os = "linux")]
+static URI_READS: std::sync::Mutex<Vec<UriReply>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(target_os = "linux")]
 pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
     use std::sync::atomic::Ordering;
     use winit::platform::wayland::ActiveEventLoopExtWayland;
@@ -130,6 +187,67 @@ pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
             .map_err(str::to_owned);
         let _ = claim.reply.send(result);
     }
+    for reply in std::mem::take(&mut *URI_READS.lock().unwrap()) {
+        let _ = reply.send(event_loop.clipboard_uri_list().map_err(str::to_owned));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_files(ctx: &eframe::egui::Context) -> Result<Vec<std::path::PathBuf>, String> {
+    use std::{
+        io::Read,
+        sync::atomic::Ordering,
+        time::{Duration, Instant},
+    };
+    let bytes = if WAYLAND.load(Ordering::Acquire) {
+        let (reply, receive) = std::sync::mpsc::sync_channel(1);
+        URI_READS.lock().unwrap().push(reply);
+        ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+        let fd = receive
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|_| "Clipboard file read did not reach the native event loop.")??;
+        let Some(fd) = fd else { return Ok(Vec::new()) };
+        use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+        let flags = fcntl_getfl(&fd).map_err(|error| error.to_string())?;
+        fcntl_setfl(&fd, flags | OFlags::NONBLOCK).map_err(|error| error.to_string())?;
+        let mut pipe = std::fs::File::from(fd);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut bytes = Vec::new();
+        loop {
+            if Instant::now() >= deadline {
+                return Err("Clipboard file transfer timed out.".into());
+            }
+            let mut chunk = [0; 8192];
+            match pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => {
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if bytes.len() > 1024 * 1024 {
+                        return Err("Clipboard file list exceeds 1 MiB.".into());
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        bytes
+    } else {
+        x11_marker::uri_list()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default()
+    };
+    // Parse lines before percent decoding: encoded CR/LF belong to filenames,
+    // but literal CRLF belongs to the URI-list transport. Never fetch URLs.
+    let text = std::str::from_utf8(&bytes).map_err(|_| "Invalid clipboard file list.")?;
+    text.lines()
+        .filter(|line| {
+            (line.starts_with("file:///") || line.starts_with("file://localhost/"))
+                && !line.contains(['?', '#'])
+        })
+        .map(|line| captures_app::preview_channel::local_media_path(line.into()))
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -180,6 +298,78 @@ mod x11_marker {
         rust_connection::RustConnection,
         wrapper::ConnectionExt as _,
     };
+
+    pub(super) fn uri_list() -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        let (connection, screen) = x11rb::connect(None)?;
+        let window = connection.generate_id()?;
+        connection
+            .create_window(
+                0,
+                window,
+                connection.setup().roots[screen].root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                0,
+                &CreateWindowAux::new(),
+            )?
+            .check()?;
+        let selection = connection.intern_atom(false, b"CLIPBOARD")?.reply()?.atom;
+        let target = connection
+            .intern_atom(false, b"text/uri-list")?
+            .reply()?
+            .atom;
+        let property = connection
+            .intern_atom(false, b"CAPTURES_EDITOR_URI_LIST")?
+            .reply()?
+            .atom;
+        let targets = connection.intern_atom(false, b"TARGETS")?.reply()?.atom;
+        for requested in [targets, target] {
+            connection
+                .convert_selection(window, selection, requested, property, x11rb::CURRENT_TIME)?
+                .check()?;
+            connection.flush()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                if std::time::Instant::now() >= deadline {
+                    return Err("Clipboard file transfer timed out.".into());
+                }
+                if let Some(Event::SelectionNotify(event)) = connection.poll_for_event()? {
+                    if event.requestor != window || event.target != requested {
+                        continue;
+                    }
+                    if event.property == 0 {
+                        return Ok(None);
+                    }
+                    let result = connection
+                        .get_property(true, window, property, AtomEnum::ANY, 0, 1024 * 1024 / 4)?
+                        .reply()?;
+                    if requested == targets {
+                        // Some owners answer unsupported targets with their
+                        // image bytes. Request URI data only when advertised.
+                        if !result
+                            .value32()
+                            .is_some_and(|mut atoms| atoms.any(|atom| atom == target))
+                        {
+                            return Ok(None);
+                        }
+                        break;
+                    }
+                    if result.type_ != target || result.format != 8 || result.bytes_after != 0 {
+                        return Err(
+                            "Clipboard file list is too large or has an invalid type.".into()
+                        );
+                    }
+                    return Ok(Some(result.value));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        Ok(None)
+    }
 
     pub(super) struct Marker {
         connection: Arc<RustConnection>,
