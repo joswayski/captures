@@ -870,10 +870,17 @@ selection. Locked and hidden layers can still be duplicated, and typing fields
 keep their own deletion keys. Arrow keys nudge an unlocked selection by one image
 pixel, or ten with Shift, without snapping or expanding the canvas. Hidden layers
 can be nudged too. Focused fields and zoom controls retain their arrow keys.
-Cmd/Ctrl C copies the selected layer inside that editor; Cmd/Ctrl V pastes the
-snapshot, even after its source is changed or deleted. Repeated pastes offset by
-24 pixels and support undo/redo. This does not replace the system clipboard or
-import clipboard images; **Copy image** remains the separate pixel-copy action.
+Cmd/Ctrl C retains the selected editable layer and claims the OS clipboard with
+a private marker, not visible text. Cmd/Ctrl V reuses that snapshot only while
+the marker still belongs to this editor; repeated layer pastes offset by 24 pixels.
+External clipboard images or local image files instead import through Add images
+placement, with owned draft pixels, canvas expansion, last-image selection and
+undo/redo. Native multi-image paste keeps one undo step per image (Tauri uses one
+batch step). Text fields retain normal paste; URL/HTML-only images are not fetched.
+On Wayland, clipboard pixels require compositor data-control support; editable
+layer ownership and local-file paste use the core selection protocol.
+**Copy image** remains the separate pixel-copy action. These are opt-in native
+source features, not a change to the pinned Tauri Preview or video editor.
 Closing the editor or discarding its draft clears the internal layer clipboard.
 Right-click a layer for Copy layer, Paste layer, Duplicate, Delete and Merge down.
 These actions target that row; Merge visible and Flatten image affect the document.

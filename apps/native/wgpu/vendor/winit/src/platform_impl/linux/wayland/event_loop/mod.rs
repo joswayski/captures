@@ -696,6 +696,38 @@ pub struct ActiveEventLoop {
 }
 
 impl ActiveEventLoop {
+    pub fn clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str> {
+        let state = self.state.borrow();
+        let offer = state.seats.values().filter(|seat| seat.clipboard_focus)
+            .find_map(|seat| seat.data_device.as_ref()?.data().selection_offer());
+        let Some(offer) = offer.filter(|offer| offer.with_mime_types(|types| types.iter().any(|mime| mime == "text/uri-list"))) else {
+            return Ok(None);
+        };
+        offer.receive("text/uri-list".into()).map(|pipe| Some(pipe.into()))
+            .map_err(|_| "Could not receive clipboard files")
+    }
+
+    pub fn set_clipboard_marker(
+        &self,
+        mime: String,
+        owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(), &'static str> {
+        let mut state = self.state.borrow_mut();
+        let seat = state.seats.values().find_map(|seat| {
+            seat.clipboard_focus.then_some(())?;
+            Some((seat.data_device.as_ref()?, seat.clipboard_serial?))
+        }).ok_or("clipboard Copy has no focused input seat")?;
+        let manager = state.outbound_drag_manager.as_ref()
+            .ok_or("compositor has no wl_data_device_manager")?;
+        let source = manager.create_copy_paste_source(&self.queue_handle, [mime.as_str()]);
+        source.set_selection(seat.0, seat.1);
+        let device = seat.0.inner().clone();
+        state.clipboard_marker = Some(super::outbound_drag::ClipboardMarker {
+            source, device, mime, owned,
+        });
+        Ok(())
+    }
+
     pub fn start_file_drag(
         &self,
         source: WindowId,

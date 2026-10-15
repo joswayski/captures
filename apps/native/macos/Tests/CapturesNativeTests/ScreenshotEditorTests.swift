@@ -2242,7 +2242,8 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         worker.deferEncodes = true
-        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker,
+                                                    writeClipboard: { _ in true })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try copyButton(in: controller.root).performClick(nil)
@@ -2427,6 +2428,72 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: originalURL), original)
         worker.close(); EditorWorker.flush()
         XCTAssertEqual(pasteboard.data(forType: .png), png, "pasteboard owns bytes after the editor worker closes")
+    }
+
+    func testRealClipboardImageReplacesRetainedLayerAndPersistsOwnedPixels() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let originalURL = fixture.history.appendingPathComponent(fixture.id).appendingPathComponent("capture.png")
+        let original = try Data(contentsOf: originalURL)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let worker = EditorWorker()
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, layerPasteboard: pasteboard)
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+        func shortcut(_ key: String, _ code: UInt16, shift: Bool = false) throws {
+            XCTAssertTrue(controller.window.performKeyEquivalent(with: try keyEvent(
+                window: controller.window, keyCode: code, characters: key,
+                modifiers: shift ? [.command, .shift] : .command)))
+        }
+        pasteboard.clearContents(); XCTAssertTrue(pasteboard.setData(original, forType: .png))
+        try shortcut("v", 9)
+        waitUntil { controller.state.snapshot?.layers.count == 2 && !controller.state.busy }
+        let imported = try XCTUnwrap(controller.state.snapshot?.layers.first)
+        XCTAssertEqual(imported.name, "Clipboard image")
+        XCTAssertEqual(imported.width, 7); XCTAssertEqual(imported.height, 3)
+        XCTAssertEqual(controller.state.snapshot?.height, 6, "Add images expands below the original")
+        try shortcut("c", 8)
+        waitUntil { !controller.state.busy && controller.state.snapshot?.canPasteLayer == true }
+        XCTAssertNil(pasteboard.string(forType: .string), "no visible clipboard token")
+        try shortcut("v", 9)
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        let pasted = try XCTUnwrap(controller.state.snapshot?.layers.first)
+        XCTAssertEqual(pasted.x, imported.x + 24); XCTAssertEqual(pasted.y, imported.y + 24)
+
+        // External replacement must import pixels, not reuse the old snapshot's
+        // next 48px offset. Text/HTML-only copying must not paste that snapshot.
+        pasteboard.clearContents(); XCTAssertTrue(pasteboard.setString("ordinary text", forType: .string))
+        try shortcut("v", 9)
+        XCTAssertEqual(controller.state.snapshot?.layers.count, 3)
+        pasteboard.clearContents(); XCTAssertTrue(pasteboard.setData(original, forType: .png))
+        try shortcut("v", 9)
+        waitUntil { controller.state.snapshot?.layers.count == 4 && !controller.state.busy }
+        let external = try XCTUnwrap(controller.state.snapshot?.layers.first)
+        XCTAssertEqual(external.name, "Clipboard image")
+        XCTAssertEqual(external.y, pasted.y + (pasted.height ?? 0))
+        try shortcut("z", 6)
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        try shortcut("z", 6, shift: true)
+        waitUntil { controller.state.snapshot?.layers.count == 4 && !controller.state.busy }
+        XCTAssertEqual(controller.state.snapshot?.layers.first?.id, external.id)
+        try worker.prepareForTermination().get()
+        let reopened = EditorWorker()
+        defer { reopened.close(); EditorWorker.flush() }
+        let restored = expectation(description: "clipboard draft restored")
+        reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                      artifactID: fixture.id) { result in
+            guard case .success(let presentation) = result else { XCTFail("draft open failed"); restored.fulfill(); return }
+            XCTAssertEqual(presentation.snapshot.layers.count, 4)
+            XCTAssertEqual(presentation.snapshot.layers.first?.id, external.id)
+            XCTAssertFalse(presentation.snapshot.canPasteLayer, "snapshot clipboard is session-local")
+            restored.fulfill()
+        }
+        wait(for: [restored], timeout: 5)
+        XCTAssertEqual(try Data(contentsOf: originalURL), original)
     }
 
     func testRealAsyncQuitRetainsQueuedSavePixelsAndFinalDraft() throws {
@@ -5165,10 +5232,13 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testLayerCopyPasteShortcutsDispatchAndPreserveOrInvalidateOutput() throws {
         _ = NSApplication.shared
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
         let original = layer(id: "source", name: "Source", x: 10, y: 20,
                              visible: true, locked: false, opacity: 100)
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [original]))
-        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker,
+                                                    layerPasteboard: pasteboard)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
@@ -5221,10 +5291,13 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testLayerShortcutsRespectFocusedControlPendingRejectedAndClosedStates() throws {
         _ = NSApplication.shared
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
         let source = layer(id: "source", name: "Source", x: 10, y: 20,
                            visible: true, locked: false, opacity: 100)
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [source], canPaste: true))
-        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker,
+                                                    layerPasteboard: pasteboard)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showLayers(in: controller.root)
@@ -5238,6 +5311,9 @@ final class ScreenshotEditorTests: XCTestCase {
             window: controller.window, keyCode: 8, characters: "c", modifiers: .command)))
         XCTAssertTrue(worker.requests.isEmpty, "native controls retain their own copy and paste")
         controller.window.makeFirstResponder(nil)
+        _ = controller.window.performKeyEquivalent(with: try keyEvent(
+            window: controller.window, keyCode: 8, characters: "c", modifiers: .command))
+        worker.requests.removeAll()
 
         worker.deferRequests = true
         _ = controller.window.performKeyEquivalent(with: try keyEvent(
@@ -7326,6 +7402,8 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testLayerContextMenuTargetsClickedStableLayerWithoutChangingSelection() throws {
         _ = NSApplication.shared
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
         let first = layer(id: "first", name: "First", x: 0, y: 0,
                           visible: true, locked: false, opacity: 100)
         let locked = layer(id: "locked", name: "Locked", x: 10, y: 10,
@@ -7333,7 +7411,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [first, locked], canPaste: true,
                                                      mergeDownIDs: ["locked"], canMergeVisible: true,
                                                      canFlatten: true))
-        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker,
+                                                    layerPasteboard: pasteboard)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try showComparison(controller, worker)
@@ -7438,7 +7517,8 @@ final class ScreenshotEditorTests: XCTestCase {
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         let stale = try XCTUnwrap(controller.layerContextMenu(row: 0))
-        XCTAssertFalse(stale.item(withTitle: "Paste layer")!.isEnabled)
+        XCTAssertTrue(stale.item(withTitle: "Paste layer")!.isEnabled,
+                      "the OS may contain an image even without an internal layer")
         XCTAssertTrue(stale.item(withTitle: "Merge down")!.isEnabled)
         XCTAssertFalse(stale.item(withTitle: "Merge visible")!.isEnabled)
         XCTAssertFalse(stale.item(withTitle: "Flatten image")!.isEnabled)

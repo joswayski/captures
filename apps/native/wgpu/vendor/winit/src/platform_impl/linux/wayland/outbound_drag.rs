@@ -6,7 +6,7 @@ use std::{io::Write, os::unix::ffi::OsStrExt, path::PathBuf};
 use sctk::data_device_manager::{
     data_device::DataDeviceHandler,
     data_offer::{DataOfferHandler, DragOffer},
-    data_source::{DataSourceHandler, DragSource},
+    data_source::{CopyPasteSource, DataSourceHandler, DragSource},
     WritePipe,
 };
 use sctk::reexports::client::{
@@ -20,6 +20,19 @@ use sctk::reexports::client::{
 use crate::event::WindowEvent;
 
 use super::{make_wid, state::WinitState, WindowId};
+
+pub struct ClipboardMarker {
+    pub source: CopyPasteSource,
+    pub device: WlDataDevice,
+    pub mime: String,
+    pub owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for ClipboardMarker {
+    fn drop(&mut self) {
+        self.owned.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
 
 pub struct OutboundDrag {
     pub source: DragSource,
@@ -100,6 +113,12 @@ impl DataSourceHandler for WinitState {
         mime: String,
         mut fd: WritePipe,
     ) {
+        if let Some(marker) = self.clipboard_marker.as_ref()
+            .filter(|marker| marker.source.inner() == source && marker.mime == mime) {
+            let bytes = marker.mime.as_bytes().to_vec();
+            std::thread::spawn(move || { let _ = fd.write_all(&bytes); });
+            return;
+        }
         if mime != "text/uri-list" {
             return;
         }
@@ -117,6 +136,10 @@ impl DataSourceHandler for WinitState {
     }
 
     fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, source: &WlDataSource) {
+        if self.clipboard_marker.as_ref().is_some_and(|marker| marker.source.inner() == source) {
+            self.clipboard_marker = None;
+            return;
+        }
         self.finish_outbound_drag(source, false);
     }
 
@@ -216,7 +239,14 @@ impl DataDeviceHandler for WinitState {
         }
     }
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _: f64, _: f64) {}
-    fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+    fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
+        if let Some(marker) = self.clipboard_marker.as_ref().filter(|marker| &marker.device == device) {
+            let matches = device.data::<sctk::data_device_manager::data_device::DataDeviceData>()
+                .and_then(|data| data.selection_offer())
+                .is_some_and(|offer| offer.with_mime_types(|types| types.contains(&marker.mime)));
+            marker.owned.store(matches, std::sync::atomic::Ordering::Release);
+        }
+    }
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
         if let Some((destination, path)) = self
             .outbound_drag

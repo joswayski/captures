@@ -28,13 +28,29 @@ enum EditorImageDecoder {
         }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [
             kCGImageSourceShouldCache: false,
-        ] as CFDictionary), CGImageSourceGetCount(source) > 0,
+        ] as CFDictionary) else {
+            throw AppBridgeError.backend("\(url.lastPathComponent) could not be loaded.")
+        }
+        return try decode(source, name: url.deletingPathExtension().lastPathComponent)
+    }
+
+    static func decode(_ data: Data) throws -> EditorDecodedImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [
+            kCGImageSourceShouldCache: false,
+        ] as CFDictionary) else {
+            throw AppBridgeError.backend("Clipboard image could not be loaded.")
+        }
+        return try decode(source, name: "Clipboard image")
+    }
+
+    private static func decode(_ source: CGImageSource, name: String) throws -> EditorDecodedImage {
+        guard CGImageSourceGetCount(source) > 0,
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
         let sourceWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
         let sourceHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
         sourceWidth > 0, sourceHeight > 0 else {
             // Shipping's webview reports undecodable imports by file name.
-            throw AppBridgeError.backend("\(url.lastPathComponent) could not be loaded.")
+            throw AppBridgeError.backend("\(name) could not be loaded.")
         }
         let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
         let swapsAxes = [5, 6, 7, 8].contains(orientation)
@@ -88,8 +104,7 @@ enum EditorImageDecoder {
                 }
             }
         }
-        let name = url.deletingPathExtension().lastPathComponent
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return EditorDecodedImage(data: pixels, width: width, height: height,
                                   bytesPerRow: bytesPerRow,
                                   name: name.isEmpty ? "Imported image" : name)

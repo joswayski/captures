@@ -67,6 +67,7 @@ pub struct WinitState {
     /// Outbound file drags share this event queue and the source window's seat.
     pub outbound_drag_manager: Option<DataDeviceManagerState>,
     pub outbound_drag: Option<super::outbound_drag::OutboundDrag>,
+    pub clipboard_marker: Option<super::outbound_drag::ClipboardMarker>,
 
     /// The shm for software buffers, such as cursors.
     pub shm: Shm,
@@ -180,6 +181,7 @@ impl WinitState {
             seat_state,
             outbound_drag_manager: DataDeviceManagerState::bind(globals, queue_handle).ok(),
             outbound_drag: None,
+            clipboard_marker: None,
             shm,
             custom_cursor_pool,
 
