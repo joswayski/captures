@@ -112,7 +112,8 @@ struct Presented {
     text_style_presets: Vec<TextStylePreset>,
     saved: Option<(SavePlan, SavedExport)>,
     copied: bool,
-    copied_layer: bool,
+    /// Layer Copy and a no-op Paste leave the current tool/fields untouched.
+    preserve_controls: bool,
     pasted_layer: bool,
     created_layer: Option<String>,
     can_undo: bool,
@@ -153,7 +154,7 @@ impl Presented {
             text_style_presets: snapshot.text_style_presets,
             saved: None,
             copied: false,
-            copied_layer: false,
+            preserve_controls: false,
             pasted_layer: false,
             created_layer: None,
             can_undo: snapshot.can_undo,
@@ -1025,7 +1026,7 @@ impl View {
                 if export_job.is_some() {
                     self.export_error = None;
                 }
-                let copied_layer = presented.copied_layer;
+                let preserve_controls = presented.preserve_controls;
                 let pasted_layer = presented.pasted_layer;
                 let combined_layers = std::mem::take(&mut self.combine_pending);
                 let selected = presented
@@ -1050,7 +1051,7 @@ impl View {
                 }
                 self.presented = Some(presented);
                 self.ensure_export_target();
-                if !copied_layer {
+                if !preserve_controls {
                     self.select_layer_exact(selected);
                 }
                 if self.live_queue.is_empty() && !ctx.input(|input| input.pointer.primary_down()) {
@@ -1060,7 +1061,7 @@ impl View {
                 if pasted_layer || combined_layers {
                     self.activate_tool(Section::Layers, None);
                 }
-                if !copied_layer {
+                if !preserve_controls {
                     self.reset_background_fields();
                 }
                 self.error = None;
@@ -1836,6 +1837,11 @@ fn paste_clipboard(
         // Decode before changing the document. Each image remains its own undo
         // step, like native Add images (unlike Tauri's batch undo).
         let images = clipboard.images(ctx)?;
+        if images.is_empty() {
+            let mut presented = Presented::from_session(session);
+            presented.preserve_controls = true;
+            return Ok(presented);
+        }
         let mut selected_id = after_id;
         for (name, pixels) in images {
             selected_id = Some(session.import_image(ImportImage {
@@ -1942,7 +1948,7 @@ impl Editor {
                                 clipboard.claim_layer(&wake_ctx)?;
                             }
                             let mut presented = Presented::after_edit(session);
-                            presented.copied_layer = copied_layer;
+                            presented.preserve_controls = copied_layer;
                             presented.pasted_layer = pasted_layer;
                             if creates_layer {
                                 presented.created_layer = presented
@@ -6901,7 +6907,7 @@ mod tests {
         let mut copied = presented(false);
         copied.document = document;
         copied.pixels = pixels;
-        copied.copied_layer = true;
+        copied.preserve_controls = true;
         view.receive(&ctx, Ok(copied));
         assert_eq!(view.selected_layer.as_deref(), Some("other"));
         assert!(view.output.is_some());
@@ -8611,8 +8617,15 @@ mod tests {
             matches!(rx.try_recv(), Ok(Job::Apply(Request::PasteLayer { .. }))),
             "the worker arbitrates the actual OS clipboard, even without a retained layer"
         );
-        view.receive(&ctx, Err("No clipboard image available".into()));
-        view.last_solid_background = "#123456".into();
+        let mut unchanged = presented(false);
+        unchanged.pixels = view.presented.as_ref().unwrap().pixels.clone();
+        unchanged.preserve_controls = true;
+        view.receive(&ctx, Ok(unchanged));
+        assert!(!view.pending && view.error.is_none());
+        assert_eq!(view.section, Section::Draw);
+        assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
+        assert_eq!(view.last_solid_background, "#123456");
+        assert!(view.output.is_some());
         frame(&mut view, vec![egui::Event::Copy, egui::Event::Copy]);
         assert!(
             matches!(rx.try_recv(), Ok(Job::Apply(Request::CopyLayer { id })) if id == original_id)
@@ -8620,7 +8633,7 @@ mod tests {
         assert!(rx.try_recv().is_err() && view.output.is_some());
         let mut copied = presented(false);
         copied.pixels = view.presented.as_ref().unwrap().pixels.clone();
-        copied.copied_layer = true;
+        copied.preserve_controls = true;
         view.receive(&ctx, Ok(copied));
         assert_eq!(view.section, Section::Draw);
         assert_eq!(view.selected_layer.as_ref(), Some(&original_id));
@@ -9343,7 +9356,7 @@ mod tests {
             text_style_presets: captures_app::editor_text::TEXT_STYLE_PRESETS.into(),
             saved: None,
             copied: false,
-            copied_layer: false,
+            preserve_controls: false,
             pasted_layer: false,
             created_layer: None,
             can_undo: unsaved,

@@ -23,6 +23,15 @@ use crate::window::{Window, WindowAttributes};
 
 pub use crate::window::Theme;
 
+/// Image/file formats advertised by the focused seat's clipboard selection.
+#[derive(Debug, Default)]
+pub struct ClipboardOffer {
+    /// Whether a PNG is advertised; reading its pixels still uses data-control.
+    pub has_png: bool,
+    /// Advertised local-file transfer, to be read with bounds off the event loop.
+    pub uri_list: Option<std::os::fd::OwnedFd>,
+}
+
 /// Additional methods on [`ActiveEventLoop`] that are specific to Wayland.
 pub trait ActiveEventLoopExtWayland {
     /// True if the [`ActiveEventLoop`] uses Wayland.
@@ -38,9 +47,9 @@ pub trait ActiveEventLoopExtWayland {
         owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(), &'static str>;
 
-    /// Request the focused seat's advertised URI list. The caller owns the
-    /// transfer pipe and must bound its reads off the native event loop.
-    fn clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str>;
+    /// Inspect advertised image/file formats and request an offered URI list.
+    /// The caller owns the pipe and must bound reads off the native event loop.
+    fn clipboard_offer(&self) -> Result<ClipboardOffer, &'static str>;
 
     /// Start a COPY-only URI-list drag from a currently pressed source window.
     /// Completion reports COPY acceptance, whether the destination belongs to
@@ -68,8 +77,8 @@ impl ActiveEventLoopExtWayland for ActiveEventLoop {
         self.p.set_wayland_clipboard_marker(mime, owned)
     }
 
-    fn clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str> {
-        self.p.wayland_clipboard_uri_list()
+    fn clipboard_offer(&self) -> Result<ClipboardOffer, &'static str> {
+        self.p.wayland_clipboard_offer()
     }
 
     fn start_file_drag(

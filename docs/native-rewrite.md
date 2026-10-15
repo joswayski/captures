@@ -4545,6 +4545,19 @@ owned draft pixels and Undo/Redo. The broader AppKit editor suite retains an
 exact-float zoom assertion failure also reproduced on the unchanged base;
 clipboard tests pass without relaxing it. Physical AppKit/Windows/X11/Wayland input, IME,
 accessibility and clipboard-manager acceptance remain open; no parity gate closes.
+
+wgpu now matches Tauri/AppKit's silent no-op for empty or text/HTML-only Paste
+outside fields, preserving the selected layer, tool, document and encoded output.
+X11 checks advertised TARGETS; Wayland checks the focused core selection offer
+before requesting pixels. Windows distinguishes absent image/file formats from
+failed reads, including CF_HDROP access under the clipboard lock. Image decoding,
+format/transfer and clipboard-access errors remain visible, rather than treating
+every clipboard error as absence. The existing X11 and headless-Sway light/dark
+smokes reproduce the old status error and now check unchanged status pixels/drafts
+for unsupported content, visible corrupt-image errors, and successful retry with
+real PNG pixels. AppKit already ignored absent input and is unchanged; Windows
+runtime and physical input acceptance remain unverified for this follow-up.
+
 Both hosts expose these layer actions through a native right-click menu. The
 clicked stable layer ID, not the previous selection, owns Copy/Paste/Duplicate/
 Delete. Opening or cancelling a menu preserves selection and encoded output;

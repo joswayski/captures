@@ -884,9 +884,9 @@ pub enum ActiveEventLoop {
 
 impl ActiveEventLoop {
     #[cfg(wayland_platform)]
-    pub fn wayland_clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str> {
+    pub fn wayland_clipboard_offer(&self) -> Result<crate::platform::wayland::ClipboardOffer, &'static str> {
         match self {
-            ActiveEventLoop::Wayland(loop_) => loop_.clipboard_uri_list(),
+            ActiveEventLoop::Wayland(loop_) => loop_.clipboard_offer(),
             #[cfg(x11_platform)]
             ActiveEventLoop::X(_) => Err("not a Wayland event loop"),
         }
