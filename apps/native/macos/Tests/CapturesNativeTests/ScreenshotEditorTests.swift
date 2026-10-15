@@ -2242,7 +2242,8 @@ final class ScreenshotEditorTests: XCTestCase {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         worker.deferEncodes = true
-        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker,
+                                                    writeClipboard: { _ in true })
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
         try copyButton(in: controller.root).performClick(nil)
