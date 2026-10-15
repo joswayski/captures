@@ -92,6 +92,12 @@ def cases(binary, pointer, root, env, bus):
                             f'{rect["width"]}x{rect["height"]}', str(profile / f"{name}.png")],
                             env=env, check=True, timeout=5)
 
+                    def status_pixels():
+                        rect = window()["rect"]
+                        return subprocess.check_output(["grim", "-t", "ppm", "-g",
+                            f'{rect["x"] + rect["width"] - 440},{rect["y"] + rect["height"] - 80} 440x80', "-"],
+                            env=env, timeout=5)
+
                     # Move across neighboring rail controls before focusing blank
                     # rail space. All paste commands below cross the compositor.
                     click(28, 430)
@@ -111,10 +117,24 @@ def cases(binary, pointer, root, env, bus):
                     key("v", "ctrl")
                     copied = count(3)[-1]
                     assert (copied["x"], copied["y"]) == (imported["x"] + 24, imported["y"] + 24)
-                    publish(b"ordinary filename", "text/plain")
+                    time.sleep(.5)
+                    unchanged_status = status_pixels()
+                    unchanged_layers = layers()
+                    for name, data, mime in [("text", b"ordinary filename", "text/plain"),
+                                             ("html", b'<img src="https://example.invalid/no-fetch.png">', "text/html"),
+                                             ("empty", b"", "text/plain")]:
+                        publish(data, mime)
+                        key("v", "ctrl")
+                        time.sleep(.7)
+                        shot(f"clipboard-{name}-ignored")
+                        assert layers() == unchanged_layers, "unsupported input pasted the retained snapshot"
+                        assert status_pixels() == unchanged_status, f"{name}-only Paste changed the export status"
+                    publish(b"not a PNG", "image/png")
                     key("v", "ctrl")
                     time.sleep(.7)
-                    assert len(layers()) == 3, "external selection must invalidate the internal snapshot"
+                    shot("clipboard-invalid-image-error")
+                    assert layers() == unchanged_layers, "failed image decode changed the document"
+                    assert status_pixels() != unchanged_status, "corrupt image must report an error"
                     publish(image.read_bytes(), "image/png")
                     key("v", "ctrl")
                     external = count(4)[-1]
@@ -127,10 +147,14 @@ def cases(binary, pointer, root, env, bus):
                     key("v", "ctrl")
                     assert [layer["name"] for layer in count(6)[-2:]] == [image.name, second.name]
                     key("c", "ctrl")
+                    wait(marker_types, "clipboard claim before cancellation")
+                    time.sleep(.5)
+                    unchanged_status = status_pixels()
                     subprocess.run(["wl-copy", "--clear"], env=env, check=True, timeout=5)
                     key("v", "ctrl")
                     time.sleep(.7)
                     assert len(layers()) == 6, "cleared selection must cancel snapshot authorization"
+                    assert status_pixels() == unchanged_status, "cleared clipboard Paste changed the status"
                     key("c", "ctrl")
                     key("v", "ctrl")
                     count(7)
@@ -144,6 +168,7 @@ def cases(binary, pointer, root, env, bus):
                     (profile / "result.json").write_text(json.dumps({"passed": True,
                         "appearance": appearance, "private_offer": types[0].decode(),
                         "checks": ["PNG-pixels", "private-MIME-no-text", "24px-layer-offset",
+                            "text-html-empty-cleared-silent-noop", "corrupt-image-error-and-recovery",
                             "external-selection-replacement", "external-image-precedence", "Undo-Redo",
                             "CRLF-file-order", "source-cancellation", "reclaim-after-cancel", "original-unchanged"]}, indent=2) + "\n")
                     print(f"PASS {appearance}: Wayland clipboard image/file input, ownership replacement/cancellation", flush=True)

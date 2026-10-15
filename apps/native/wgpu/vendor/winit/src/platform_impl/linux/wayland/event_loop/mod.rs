@@ -696,15 +696,23 @@ pub struct ActiveEventLoop {
 }
 
 impl ActiveEventLoop {
-    pub fn clipboard_uri_list(&self) -> Result<Option<std::os::fd::OwnedFd>, &'static str> {
+    pub fn clipboard_offer(&self) -> Result<crate::platform::wayland::ClipboardOffer, &'static str> {
         let state = self.state.borrow();
-        let offer = state.seats.values().filter(|seat| seat.clipboard_focus)
-            .find_map(|seat| seat.data_device.as_ref()?.data().selection_offer());
-        let Some(offer) = offer.filter(|offer| offer.with_mime_types(|types| types.iter().any(|mime| mime == "text/uri-list"))) else {
-            return Ok(None);
+        let device = state.seats.values().filter(|seat| seat.clipboard_focus)
+            .find_map(|seat| seat.data_device.as_ref())
+            .ok_or("Clipboard Paste has no focused input seat.")?;
+        let Some(offer) = device.data().selection_offer() else {
+            return Ok(Default::default());
         };
-        offer.receive("text/uri-list".into()).map(|pipe| Some(pipe.into()))
-            .map_err(|_| "Could not receive clipboard files")
+        let (has_png, has_files) = offer.with_mime_types(|types| (
+            types.iter().any(|mime| mime == "image/png"),
+            types.iter().any(|mime| mime == "text/uri-list"),
+        ));
+        let uri_list = if has_files {
+            Some(offer.receive("text/uri-list".into())
+                .map_err(|_| "Could not receive clipboard files")?.into())
+        } else { None };
+        Ok(crate::platform::wayland::ClipboardOffer { has_png, uri_list })
     }
 
     pub fn set_clipboard_marker(

@@ -1206,13 +1206,35 @@ def main():
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             copied = save_layers(lambda values: len(values) == 3, "private layer paste")[-1]
             assert (copied["x"], copied["y"]) == (imported["x"] + 24, imported["y"] + 24)
+
+            def status_pixels():
+                width, height = window_size()
+                return run("import", "-window", editor, "-crop", f"440x80+{width - 440}+{height - 80}",
+                           "-depth", "8", "rgba:-")
+
+            # Unsupported content is a silent no-op, not a failed image read.
+            # Keep the status region identical and the owned draft unchanged.
+            time.sleep(.5)
+            unchanged_status = status_pixels()
+            unchanged_layers = layers()
+            for name, data, mime in [("text", b"ordinary filename", "UTF8_STRING"),
+                                     ("html", b'<img src="https://example.invalid/no-fetch.png">', "text/html"),
+                                     ("empty", b"", "UTF8_STRING")]:
+                publish(data, mime)
+                run("xdotool", "key", "ctrl+v", "sleep", ".6")
+                shot(editor, f"clipboard-{name}-ignored")
+                assert layers() == unchanged_layers, "unsupported input must not paste the retained snapshot"
+                assert status_pixels() == unchanged_status, f"{name}-only Paste changed the export status"
             publish(b"ordinary filename", "UTF8_STRING")
-            run("xdotool", "key", "ctrl+v", "sleep", ".4")
-            assert len(layers()) == 3, "external text must invalidate the old layer snapshot"
             export_click("filename")
             run("xdotool", "key", "ctrl+a", "ctrl+v", "ctrl+c", "sleep", ".2")
             assert run("xclip", "-selection", "clipboard", "-o") == b"ordinary filename"
             blur_click()
+            publish(b"not a PNG", "image/png")
+            run("xdotool", "key", "ctrl+v", "sleep", ".6")
+            shot(editor, "clipboard-invalid-image-error")
+            assert layers() == unchanged_layers, "failed image decode changed the document"
+            assert status_pixels() != unchanged_status, "a corrupt advertised image must still report an error"
             publish(png.read_bytes(), "image/png")
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             external = save_layers(lambda values: len(values) == 4, "external replaces internal")[-1]
@@ -1252,6 +1274,7 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["real-PNG-paste-pixels", "Add-images-placement-expansion", "Select-last-image",
                            "private-OS-marker-no-text", "24px-layer-offset", "external-text-invalidates-layer",
+                           "text-html-empty-silent-noop", "corrupt-image-error-and-recovery",
                            "filename-text-paste", "external-image-replaces-layer", "Undo-Redo",
                            "ordered-local-file-paste", "one-undo-per-file", "owned-draft-after-source-deletion",
                            "URL-text-no-fetch", "session-local-layer-copy", "original-unchanged"],

@@ -24,8 +24,21 @@ impl Clipboard {
         ctx: &eframe::egui::Context,
     ) -> Result<Vec<(String, RgbaImage)>, String> {
         #[cfg(target_os = "linux")]
-        let files = linux_files(ctx)?;
-        #[cfg(not(target_os = "linux"))]
+        let (files, has_png) = linux_files(ctx)?;
+        #[cfg(target_os = "windows")]
+        let files = {
+            let _guard = clipboard_win::Clipboard::new_attempts(10)
+                .map_err(|error| format!("Could not open clipboard: {error}"))?;
+            let mut files = Vec::new();
+            if clipboard_win::raw::is_format_avail(clipboard_win::formats::CF_HDROP) {
+                // arboard maps both missing HDROP and failed reads to the
+                // same error. Check availability while holding the clipboard.
+                clipboard_win::raw::get_file_list_path(&mut files)
+                    .map_err(|error| format!("Could not read clipboard files: {error}"))?;
+            }
+            files
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let files = {
             if self.images.is_none() {
                 self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
@@ -63,15 +76,27 @@ impl Clipboard {
                 })
                 .collect();
         }
+        // Linux's image reader can report both absent formats and real
+        // transfer failures as ContentNotAvailable. Inspect the actual offer
+        // instead of swallowing errors or probing an unsupported PNG target.
+        #[cfg(target_os = "linux")]
+        if !has_png {
+            return Ok(Vec::new());
+        }
         if self.images.is_none() {
             self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
         }
-        let image = self
-            .images
-            .as_mut()
-            .unwrap()
-            .get_image()
-            .map_err(|error| format!("No clipboard image available: {error}"))?;
+        let image = match self.images.as_mut().unwrap().get_image() {
+            Ok(image) => image,
+            // Windows distinguishes absent formats from access/decoding
+            // failures. The separate AppKit host already ignores absent images.
+            #[cfg(target_os = "windows")]
+            Err(arboard::Error::ContentNotAvailable) => return Ok(Vec::new()),
+            Err(arboard::Error::ConversionFailure) => {
+                return Err("Could not decode clipboard image. Copy it again and retry.".into());
+            }
+            Err(error) => return Err(format!("Could not read clipboard image: {error}")),
+        };
         let width = u32::try_from(image.width).map_err(|_| "Clipboard image is too wide.")?;
         let height = u32::try_from(image.height).map_err(|_| "Clipboard image is too tall.")?;
         if width == 0
@@ -168,9 +193,10 @@ struct WaylandClaim {
 static CLAIMS: std::sync::Mutex<Vec<WaylandClaim>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(target_os = "linux")]
-type UriReply = std::sync::mpsc::SyncSender<Result<Option<std::os::fd::OwnedFd>, String>>;
+type OfferReply =
+    std::sync::mpsc::SyncSender<Result<winit::platform::wayland::ClipboardOffer, String>>;
 #[cfg(target_os = "linux")]
-static URI_READS: std::sync::Mutex<Vec<UriReply>> = std::sync::Mutex::new(Vec::new());
+static OFFER_READS: std::sync::Mutex<Vec<OfferReply>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(target_os = "linux")]
 pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -187,26 +213,28 @@ pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
             .map_err(str::to_owned);
         let _ = claim.reply.send(result);
     }
-    for reply in std::mem::take(&mut *URI_READS.lock().unwrap()) {
-        let _ = reply.send(event_loop.clipboard_uri_list().map_err(str::to_owned));
+    for reply in std::mem::take(&mut *OFFER_READS.lock().unwrap()) {
+        let _ = reply.send(event_loop.clipboard_offer().map_err(str::to_owned));
     }
 }
 
 #[cfg(target_os = "linux")]
-fn linux_files(ctx: &eframe::egui::Context) -> Result<Vec<std::path::PathBuf>, String> {
+fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, bool), String> {
     use std::{
         io::Read,
         sync::atomic::Ordering,
         time::{Duration, Instant},
     };
-    let bytes = if WAYLAND.load(Ordering::Acquire) {
+    let (has_png, bytes) = if WAYLAND.load(Ordering::Acquire) {
         let (reply, receive) = std::sync::mpsc::sync_channel(1);
-        URI_READS.lock().unwrap().push(reply);
+        OFFER_READS.lock().unwrap().push(reply);
         ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
-        let fd = receive
+        let offer = receive
             .recv_timeout(Duration::from_secs(2))
-            .map_err(|_| "Clipboard file read did not reach the native event loop.")??;
-        let Some(fd) = fd else { return Ok(Vec::new()) };
+            .map_err(|_| "Clipboard offer read did not reach the native event loop.")??;
+        let Some(fd) = offer.uri_list else {
+            return Ok((Vec::new(), offer.has_png));
+        };
         use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
         let flags = fcntl_getfl(&fd).map_err(|error| error.to_string())?;
         fcntl_setfl(&fd, flags | OFlags::NONBLOCK).map_err(|error| error.to_string())?;
@@ -232,22 +260,22 @@ fn linux_files(ctx: &eframe::egui::Context) -> Result<Vec<std::path::PathBuf>, S
                 Err(error) => return Err(error.to_string()),
             }
         }
-        bytes
+        (offer.has_png, bytes)
     } else {
-        x11_marker::uri_list()
-            .map_err(|error| error.to_string())?
-            .unwrap_or_default()
+        x11_marker::offered_files().map_err(|error| error.to_string())?
     };
     // Parse lines before percent decoding: encoded CR/LF belong to filenames,
     // but literal CRLF belongs to the URI-list transport. Never fetch URLs.
     let text = std::str::from_utf8(&bytes).map_err(|_| "Invalid clipboard file list.")?;
-    text.lines()
+    let files = text
+        .lines()
         .filter(|line| {
             (line.starts_with("file:///") || line.starts_with("file://localhost/"))
                 && !line.contains(['?', '#'])
         })
         .map(|line| captures_app::preview_channel::local_media_path(line.into()))
-        .collect()
+        .collect::<Result<_, _>>()?;
+    Ok((files, has_png))
 }
 
 #[cfg(target_os = "linux")]
@@ -299,7 +327,7 @@ mod x11_marker {
         wrapper::ConnectionExt as _,
     };
 
-    pub(super) fn uri_list() -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+    pub(super) fn offered_files() -> Result<(bool, Vec<u8>), Box<dyn std::error::Error>> {
         let (connection, screen) = x11rb::connect(None)?;
         let window = connection.generate_id()?;
         connection
@@ -327,6 +355,8 @@ mod x11_marker {
             .reply()?
             .atom;
         let targets = connection.intern_atom(false, b"TARGETS")?.reply()?.atom;
+        let png = connection.intern_atom(false, b"image/png")?.reply()?.atom;
+        let mut has_png = false;
         for requested in [targets, target] {
             connection
                 .convert_selection(window, selection, requested, property, x11rb::CURRENT_TIME)?
@@ -342,19 +372,33 @@ mod x11_marker {
                         continue;
                     }
                     if event.property == 0 {
-                        return Ok(None);
+                        if requested == targets
+                            && connection.get_selection_owner(selection)?.reply()?.owner == 0
+                        {
+                            return Ok((false, Vec::new()));
+                        }
+                        return Err("Clipboard offer became unavailable.".into());
                     }
                     let result = connection
                         .get_property(true, window, property, AtomEnum::ANY, 0, 1024 * 1024 / 4)?
                         .reply()?;
                     if requested == targets {
                         // Some owners answer unsupported targets with their
-                        // image bytes. Request URI data only when advertised.
-                        if !result
-                            .value32()
-                            .is_some_and(|mut atoms| atoms.any(|atom| atom == target))
+                        // current content. Read only advertised image/file types;
+                        // an invalid offer is not proof of absent image data.
+                        if result.type_ != u32::from(AtomEnum::ATOM)
+                            || result.format != 32
+                            || result.bytes_after != 0
                         {
-                            return Ok(None);
+                            return Err("Clipboard format list has an invalid type or size.".into());
+                        }
+                        let atoms: Vec<_> = result
+                            .value32()
+                            .ok_or("Invalid clipboard formats.")?
+                            .collect();
+                        has_png = atoms.contains(&png);
+                        if !atoms.contains(&target) {
+                            return Ok((has_png, Vec::new()));
                         }
                         break;
                     }
@@ -363,12 +407,12 @@ mod x11_marker {
                             "Clipboard file list is too large or has an invalid type.".into()
                         );
                     }
-                    return Ok(Some(result.value));
+                    return Ok((has_png, result.value));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
-        Ok(None)
+        Ok((has_png, Vec::new()))
     }
 
     pub(super) struct Marker {
