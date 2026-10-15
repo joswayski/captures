@@ -45,6 +45,20 @@ def main():
                                     env=env, stderr=log, stdout=subprocess.PIPE, text=True, timeout=5)
             return result.stdout.split()
 
+        def preview_at_height(height):
+            visible = previews()
+            assert len(visible) <= 1, "Restore duplicated the preview window"
+            if not visible:
+                return False
+            window = visible[0]
+            geometry = subprocess.run(["xdotool", "getwindowgeometry", "--shell", window],
+                                      env=env, stderr=log, stdout=subprocess.PIPE, text=True, timeout=5)
+            if geometry.returncode and window not in previews():
+                return False  # The retiring Clear all viewport vanished during this query.
+            geometry.check_returncode()
+            actual = int(dict(line.split("=", 1) for line in geometry.stdout.splitlines())["HEIGHT"])
+            return window if actual == height else False
+
         def wait(condition):
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
@@ -252,11 +266,11 @@ def main():
                     cleared_at = time.monotonic()
                     wait(lambda: (output / "processes.log").read_text().count('"settles":false') >= previous_exits + 2)
                     click(894, 433, settle=False)
-                    preview = wait(previews)[0]
-                    # Decode acceptance and the OS resize land on different
-                    # frames. Check the resized viewport within the same hold,
-                    # not whatever frame happens to follow the click release.
-                    wait(lambda: preview_height() == 240)
+                    # Restore releases Clear all's exit cards before decoding
+                    # its new image. The viewport can retire and reopen with a
+                    # new XID, so locate the ready window rather than polling
+                    # the outgoing one. Keep the same hold and pixel checks.
+                    preview = wait(lambda: preview_at_height(240))
                     elapsed = time.monotonic() - cleared_at
                     height = int(dict(line.split("=", 1) for line in run(
                         "xdotool", "getwindowgeometry", "--shell", preview).decode().splitlines())["HEIGHT"])
