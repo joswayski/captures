@@ -393,9 +393,14 @@ before draining host workers and releases the election lock last.
 
 Run `/usr/bin/python3 apps/native/x11_preview_smoke.py --main-actions-only
 --binary PATH --output NEW_DIRECTORY` to record Copy/Save hover, Save hold,
-drag-out/reentry and cancelled release at all four screen corners. Add
+drag-out/reentry and cancelled release at all four screen corners, then verify
+long-held Copy, reentered Save and long-held Show in Folder. Add
 `--reduced-motion` to repeat without transitions. The fixture uses disposable
-History/settings and checks drawn pixels and absence of a cancelled export.
+History/settings and checks drawn pixels, exact clipboard/export pixels,
+folder delivery and absence of a cancelled or duplicate export.
+The Windows/X11/Wayland card buttons retain the original primary press rather
+than dropping it at egui's click-duration/movement threshold; disabling or
+removing a button cancels that gesture. AppKit retains standard NSButton tracking.
 This is private-X11/software-rendering evidence, not macOS, Windows, Wayland
 or physical-desktop acceptance.
 

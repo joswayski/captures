@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--record-clear", action="store_true", help="Record Clear all presentation in the stack smoke")
     parser.add_argument("--record-stack-motion", action="store_true", help="Record collapse/expand and interrupted icon/toolbar hover")
-    parser.add_argument("--main-actions-only", action="store_true", help="Record main-action hover, hold and cancellation at all corners")
+    parser.add_argument("--main-actions-only", action="store_true", help="Record main-action feedback and held Copy/Save/Reveal activation at all corners")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
     parser.add_argument("--close-only", action="store_true", help="Exercise saved Close without moving held survivors at all corners")
@@ -937,13 +937,39 @@ def main():
                     wait(edit_lifted, "rapid Edit reversals return to the lifted face")
                 run("xdotool", "mousemove", "--sync", "640", "440")
                 wait(lambda: sample() == idle_pixel, "preview media returns to idle after hover")
+                if args.main_actions_only:
+                    # DOM buttons accept release after a long hold or a
+                    # leave/reentry. Neither gesture satisfies egui clicked().
+                    main_move(170, card_top + 61)
+                    run("xdotool", "mousedown", "1", "sleep", "1.1", "mouseup", "1")
+                    wait(lambda: clipboard_pixels() == rgb(first.parent / "capture.png"),
+                         "long-held Copy delivers full-resolution pixels")
+                    time.sleep(.2)
+                    shot(preview, f"{prefix}-held-copy-result")
+                    main_move(170, card_top + 80)  # Copy is now a chip; Save is centered.
+                    run("xdotool", "mousedown", "1", "sleep", "1.1")
+                    main_move(10, card_top + 72)  # Leave the whole card, not just Save.
+                    main_move(170, card_top + 80)
+                    assert not json.loads(first.read_text()).get("saved_path"), "Save fired before release"
+                    run("xdotool", "mouseup", "1")
+                    exported = Path(wait(lambda: json.loads(first.read_text()).get("saved_path"),
+                                         "held/reentered Save writes an export"))
+                    assert rgb(exported) == rgb(first.parent / "capture.png"), "held Save changed pixels"
+                    time.sleep(.2)
+                    shot(preview, f"{prefix}-held-save-result")
+                    main_move(170, card_top + 80)
+                    run("xdotool", "mousedown", "1", "sleep", "1.1", "mouseup", "1")
+                    wait(lambda: reveal_log.exists() and [str(exported.parent)] in [
+                        json.loads(line) for line in reveal_log.read_text().splitlines()],
+                        "long-held Show in Folder receives the export folder")
+                    assert list(exported.parent.iterdir()) == [exported], "held actions duplicated the export"
                 if icon_recording:
                     icon_recording.communicate(input=b"q\n", timeout=10)
                     assert icon_recording.returncode == 0, "icon-hover recording failed"
                 if args.main_actions_only:
                     run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
                     assert app.wait(timeout=10) == 0
-                    print(f"PASS {placement}: Save hover brightness/lift, held scale/translation, drag-out/reentry, cancelled export; neighboring Delete/Edit feedback", flush=True)
+                    print(f"PASS {placement}: main-action feedback, cancelled export, long-held Copy pixels, reentered Save pixels, long-held Reveal; neighboring Delete/Edit feedback", flush=True)
                     continue
                 if args.drag_only:
                     # Reject our own source without importing it into an editor.
@@ -2266,6 +2292,8 @@ def main():
             result = {"passed": True, "scenarios": len(cases), "reducedMotion": args.reduced_motion,
                 "checks": ["main-action hover brightness and lift", "held scale and translation",
                     "press survives pointer leave and reentry", "release outside creates no export",
+                    "long-held Copy delivers original pixels", "held/reentered Save exports original pixels",
+                    "long-held Show in Folder delivers the export folder without another export",
                     "neighboring Delete/Edit feedback", "clean exit"],
                 "scope": "Private X11/software GL, not physical desktop or Wayland acceptance."}
         (output / "result.json").write_text(json.dumps(result, indent=2))

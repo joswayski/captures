@@ -1538,7 +1538,7 @@ fn editor_control(
     if let Some(text) = phase.tooltip() {
         crate::glass_tooltip::preview_icon(ui, tokens, rect, text, tooltip_above, tip);
     }
-    let activated = visible && enabled && phase.interactive() && response.clicked();
+    let activated = button_activated(ui, &response, visible, enabled && phase.interactive());
     if activated {
         ui.data_mut(|data| data.insert_temp(latch, true));
     }
@@ -2068,7 +2068,7 @@ fn control(
     let main = tooltip.is_none();
     // CSS :active lasts until release, even outside the button. egui drops
     // click eligibility after a long hold or drag; retain only the visual
-    // press origin, leaving response.clicked() as the action gate below.
+    // press origin here. Activation also checks enabled state below.
     let press_id = id.with("main-pressed");
     let pressed = main
         && visible
@@ -2275,7 +2275,44 @@ fn control(
         );
         crate::glass_tooltip::preview_icon(ui, tokens, rect, label, above, progress);
     }
-    eligible && response.clicked()
+    button_activated(ui, &response, eligible, enabled)
+}
+
+/// DOM/NSButton activation has no egui click-duration or movement cutoff.
+/// Keep the original primary press, not a drag that happens to end here.
+/// Keyboard/accessibility clicks and the existing moving-card hit test stay
+/// on egui's path. Disabled controls cannot acquire or retain a held action.
+fn button_activated(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    visible: bool,
+    enabled: bool,
+) -> bool {
+    let id = response.id.with("held-action");
+    let pass = ui.ctx().cumulative_pass_nr();
+    // A removed control cannot revive a press when it returns later.
+    let held = ui.data(|data| {
+        data.get_temp::<(bool, u64)>(id)
+            .is_some_and(|(held, last)| held && pass <= last.saturating_add(1))
+    });
+    let (pressed, down, released) = ui.input(|input| {
+        let pointer = &input.pointer;
+        let pressed = enabled
+            && if pointer.primary_pressed() {
+                visible && response.is_pointer_button_down_on()
+            } else {
+                held
+            };
+        let released = pressed
+            && pointer.primary_released()
+            && response.contains_pointer()
+            && pointer
+                .interact_pos()
+                .is_some_and(|pos| response.rect.contains(pos));
+        (pressed, pointer.primary_down(), released)
+    });
+    ui.data_mut(|data| data.insert_temp(id, (pressed && down, pass)));
+    (visible && enabled && response.clicked()) || released
 }
 
 /// CSS brightness filters operate on unpremultiplied sRGB, not linear light.
@@ -3600,6 +3637,103 @@ mod tests {
                 expected,
                 "{click:?}, saved={saved}, busy={busy:?}, can_save={can_save}"
             );
+        }
+    }
+
+    #[test]
+    fn card_buttons_accept_held_release_only_on_the_original_control() {
+        for (point, saved, action) in [
+            (egui::pos2(142., 60.), false, Action::Copy),
+            (egui::pos2(142., 100.), false, Action::Save),
+            (egui::pos2(142., 100.), true, Action::Reveal),
+            (egui::pos2(22., 22.), false, Action::Discard),
+            (egui::pos2(22., 22.), true, Action::Dismiss),
+            (egui::pos2(56., 22.), true, Action::Trash),
+            (egui::pos2(262., 22.), false, Action::Edit),
+        ] {
+            for (excursion, release_inside) in [(false, true), (true, true), (true, false)] {
+                let ctx = egui::Context::default();
+                let texture = ctx.load_texture(
+                    "held-action",
+                    egui::ColorImage::filled([2, 2], Color32::WHITE),
+                    Default::default(),
+                );
+                let frame = |events| {
+                    run_card_state(
+                        &ctx,
+                        &texture,
+                        events,
+                        false,
+                        true,
+                        egui::Pos2::ZERO,
+                        None,
+                        None,
+                        true,
+                        saved,
+                    )
+                };
+                frame(moved(point));
+                frame(moved(point));
+                assert_eq!(frame(pointer(point, true)), None);
+                // Exercise time and distance cancellation independently. No
+                // repeat action is allowed while held beyond the .8s timeout.
+                if !excursion {
+                    for _ in 0..60 {
+                        assert_eq!(frame(vec![]), None);
+                    }
+                }
+                let outside = egui::pos2(320., 210.);
+                if excursion {
+                    assert_eq!(frame(moved(outside)), None);
+                    assert_eq!(frame(vec![]), None);
+                }
+                let release = if release_inside { point } else { outside };
+                assert_eq!(frame(moved(release)), None);
+                assert_eq!(
+                    frame(pointer(release, false)),
+                    release_inside.then_some(action),
+                    "{action:?}, excursion={excursion}, release_inside={release_inside}"
+                );
+                assert_eq!(frame(vec![]), None, "release must fire only once");
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_or_removed_card_button_cannot_revive_a_held_action() {
+        for removed in [false, true] {
+            let ctx = egui::Context::default();
+            let texture = ctx.load_texture(
+                "interrupted-action",
+                egui::ColorImage::filled([2, 2], Color32::WHITE),
+                Default::default(),
+            );
+            let point = egui::pos2(142., 100.);
+            let frame = |events, interrupted| {
+                run_card_state(
+                    &ctx,
+                    &texture,
+                    events,
+                    interrupted && removed,
+                    true,
+                    egui::Pos2::ZERO,
+                    None,
+                    (interrupted && !removed).then_some(Busy::Save),
+                    true,
+                    false,
+                )
+            };
+            frame(moved(point), false);
+            frame(pointer(point, true), false);
+            assert_eq!(frame(moved(egui::pos2(40., 80.)), false), None);
+            assert_eq!(frame(moved(point), false), None);
+            frame(vec![], true);
+            frame(vec![], true);
+            // Re-enable/reinsert while still held; it must require a new press.
+            assert_eq!(frame(moved(point), false), None);
+            assert_eq!(frame(pointer(point, false), false), None);
+            assert_eq!(frame(pointer(point, true), false), None);
+            assert_eq!(frame(pointer(point, false), false), Some(Action::Save));
         }
     }
 
