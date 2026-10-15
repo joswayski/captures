@@ -1095,6 +1095,31 @@ pub extern "C" fn captures_preview_hover_media_v1() -> CapturesPreviewHoverMedia
     }
 }
 
+/// Main-action presentation targets; translation is in y-down logical points.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CapturesPreviewMainActionFeedback {
+    pub translate_y: f64,
+    pub scale: f64,
+    pub brightness: f64,
+    pub opacity: f64,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_main_action_feedback_v1(
+    hovered: bool,
+    pressed: bool,
+    enabled: bool,
+) -> CapturesPreviewMainActionFeedback {
+    let feedback = preview_chrome::main_action_feedback(hovered, pressed, enabled);
+    CapturesPreviewMainActionFeedback {
+        translate_y: feedback.translate_y,
+        scale: feedback.scale,
+        brightness: feedback.brightness,
+        opacity: feedback.opacity,
+    }
+}
+
 /// Shipping card warning beside the metadata ("Not in History", then
 /// "Clipboard unavailable"), or null. Static UTF-8; never free it.
 #[unsafe(no_mangle)]
@@ -1534,6 +1559,25 @@ mod tests {
             (media.blur, media.brightness, media.scale),
             (2., 0.5, 1.015)
         );
+        for (hovered, pressed, y, scale, brightness) in [
+            (false, false, 0., 1., 1.),
+            (true, false, -1., 1., 1.12),
+            (true, true, 1., 0.97, 1.12),
+            (false, true, 1., 0.97, 1.),
+        ] {
+            for enabled in [true, false] {
+                let feedback = captures_preview_main_action_feedback_v1(hovered, pressed, enabled);
+                assert_eq!(
+                    (
+                        feedback.translate_y,
+                        feedback.scale,
+                        feedback.brightness,
+                        feedback.opacity
+                    ),
+                    (y, scale, brightness, if enabled { 1. } else { 0.7 })
+                );
+            }
+        }
     }
 
     #[test]

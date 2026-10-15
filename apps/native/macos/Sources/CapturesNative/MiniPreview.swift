@@ -42,6 +42,13 @@ enum MiniPreviewButtonKind: CaseIterable {
     }
 }
 
+/// Observe the cell that AppKit highlights during its standard mouse tracking.
+private final class MiniPreviewButtonCell: NSButtonCell {
+    override var isHighlighted: Bool {
+        didSet { (controlView as? MiniPreviewButton)?.mainActionTrackingChanged() }
+    }
+}
+
 /// Preview-only control so this floating chrome does not inherit Workbench button styling.
 final class MiniPreviewButton: NSButton {
     /// A main action's glyph pops in when it changes (Save → Saved → Show in
@@ -50,11 +57,19 @@ final class MiniPreviewButton: NSButton {
         didSet { if popsIcon && kind != oldValue { popIcon() } }
     }
     /// Shipping `.thumbnail-main-actions svg`: Copy and Save pop new glyphs.
-    var popsIcon = false
+    var popsIcon = false { didSet { updateMainActionFeedback() } }
+    private var mainFeedback = captures_preview_main_action_feedback_v1(false, false, true)
+    private var mainAnimation: (start: CFTimeInterval, from: CapturesPreviewMainActionFeedback,
+                                target: CapturesPreviewMainActionFeedback)?
+    private var mainBrightnessAnimation: (start: CFTimeInterval, from: Double, target: Double)?
+    override var isEnabled: Bool {
+        didSet { updateMainActionFeedback() }
+    }
     private let tokens: Tokens
     private let primary: Bool
     private var tracking: NSTrackingArea?
     private var hovered = false
+    private var mainPointerPressed = false
     private var focused = false
     private let actionBlock: () -> Void
     /// Shipping Minimize: on hover/focus the icon gives way to this label and
@@ -104,6 +119,7 @@ final class MiniPreviewButton: NSButton {
          primary: Bool = false, action: @escaping () -> Void) {
         self.kind = kind; self.tokens = tokens; self.primary = primary; self.actionBlock = action
         super.init(frame: frame)
+        cell = MiniPreviewButtonCell(textCell: title)
         self.title = title; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; self.action = #selector(activate)
         setAccessibilityLabel(title); toolTip = nil
@@ -130,6 +146,85 @@ final class MiniPreviewButton: NSButton {
         super.setFrameSize(newSize)
         refreshBoxShadow()
         applyIconHoverPose()
+        applyMainActionPose()
+    }
+
+    fileprivate func mainActionTrackingChanged() { updateMainActionFeedback() }
+
+    private func updateMainActionFeedback() {
+        guard popsIcon else { return }
+        let now = CACurrentMediaTime()
+        sampleMainAction(at: now)
+        let target = captures_preview_main_action_feedback_v1(hovered,
+            !isHidden && (mainPointerPressed || cell?.isHighlighted == true), isEnabled)
+        // Opacity is not part of the CSS transition list.
+        alphaValue = CGFloat(target.opacity)
+        let spec = NativeMotion.transition("preview_main_action", tokens: tokens)
+        if !isHidden, window?.isVisible == true, spec.duration > 0 {
+            // CSS filter and transform have independent clocks. Pressing while
+            // hover is arriving must not restart its unchanged brightness target.
+            let poseTarget = mainAnimation?.target ?? mainFeedback
+            if poseTarget.translate_y != target.translate_y || poseTarget.scale != target.scale {
+                mainAnimation = (now, mainFeedback, target)
+            }
+            if (mainBrightnessAnimation?.target ?? mainFeedback.brightness) != target.brightness {
+                mainBrightnessAnimation = (now, mainFeedback.brightness, target.brightness)
+            }
+            if mainAnimation != nil || mainBrightnessAnimation != nil { startTicker() }
+        } else {
+            mainAnimation = nil; mainBrightnessAnimation = nil; mainFeedback = target
+        }
+        mainFeedback.opacity = target.opacity
+        applyMainActionPose(); needsDisplay = true
+    }
+
+    private func sampleMainAction(at now: CFTimeInterval) {
+        let spec = NativeMotion.transition("preview_main_action", tokens: tokens)
+        func progress(_ start: CFTimeInterval) -> Double {
+            spec.duration > 0 ? min(1, (now - start) / spec.duration) : 1
+        }
+        if let animation = mainAnimation {
+            let t = progress(animation.start)
+            let eased = NativeMotion.ease(spec.timing, t)
+            mainFeedback.translate_y = animation.from.translate_y
+                + (animation.target.translate_y - animation.from.translate_y) * eased
+            mainFeedback.scale = animation.from.scale + (animation.target.scale - animation.from.scale) * eased
+            if t >= 1 {
+                mainFeedback.translate_y = animation.target.translate_y
+                mainFeedback.scale = animation.target.scale
+                mainAnimation = nil
+            }
+        }
+        if let animation = mainBrightnessAnimation {
+            let t = progress(animation.start)
+            mainFeedback.brightness = animation.from
+                + (animation.target - animation.from) * NativeMotion.ease(spec.timing, t)
+            if t >= 1 { mainFeedback.brightness = animation.target; mainBrightnessAnimation = nil }
+        }
+    }
+
+    private func applyMainActionPose() {
+        guard popsIcon else { return }
+        wantsLayer = true
+        guard let layer else { return }
+        let pose = MotionKeyframes.Frame(offset: 0, opacity: 1,
+            translateY: mainFeedback.translate_y, scale: mainFeedback.scale)
+        let hold = CABasicAnimation(keyPath: "transform")
+        hold.fromValue = NSValue(caTransform3D: NativeMotion.transform(pose, layer: layer,
+            down: superview?.isFlipped == true ? 1 : -1))
+        hold.toValue = hold.fromValue; hold.duration = 0
+        hold.fillMode = .both; hold.isRemovedOnCompletion = false
+        layer.add(hold, forKey: "preview-main-action-pose")
+    }
+
+    /// CSS brightness multiplies drawn sRGB channels, not alpha or glass fill selection.
+    private func mainActionColor(_ color: NSColor) -> NSColor {
+        guard popsIcon, mainFeedback.brightness != 1,
+              let rgb = color.usingColorSpace(.sRGB) else { return color }
+        let factor = CGFloat(mainFeedback.brightness)
+        return NSColor(srgbRed: min(1, rgb.redComponent * factor),
+            green: min(1, rgb.greenComponent * factor), blue: min(1, rgb.blueComponent * factor),
+            alpha: rgb.alphaComponent)
     }
 
     /// Keep the held pose centred as Edit morphs between an icon and a pill.
@@ -164,7 +259,7 @@ final class MiniPreviewButton: NSButton {
     }
 
     @objc private func activate() {
-        guard (superview as? MiniPreviewCardView)?.isExiting != true else { return }
+        guard isEnabled, (superview as? MiniPreviewCardView)?.isExiting != true else { return }
         if kind == .edit { editorJustOpened = true; needsDisplay = true }
         actionBlock()
     }
@@ -186,6 +281,10 @@ final class MiniPreviewButton: NSButton {
     private func tick() {
         let now = CACurrentMediaTime()
         var running = false
+        if mainAnimation != nil || mainBrightnessAnimation != nil {
+            sampleMainAction(at: now); applyMainActionPose(); needsDisplay = true
+            running = mainAnimation != nil || mainBrightnessAnimation != nil
+        }
         if let hover = iconHoverAnimation {
             let spec = NativeMotion.transition(kind == .edit ? "preview_editor_hover" : "preview_icon_hover", tokens: tokens)
             let elapsed = now - hover.start
@@ -239,6 +338,7 @@ final class MiniPreviewButton: NSButton {
             // Hidden chrome cannot stay hovered or keep its tip on screen.
             hovered = false; editorJustOpened = false
             iconHover = 0; iconHoverAnimation = nil
+            updateMainActionFeedback()
             tooltipChanged?(self, false)
         }
     }
@@ -297,16 +397,26 @@ final class MiniPreviewButton: NSButton {
     }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+        if popsIcon { options.insert(.enabledDuringMouseDrag) }
+        tracking = NSTrackingArea(rect: .zero, options: options,
                                   owner: self, userInfo: nil)
         addTrackingArea(tracking!); super.updateTrackingAreas()
     }
+    override func mouseDown(with event: NSEvent) {
+        guard popsIcon, isEnabled else { super.mouseDown(with: event); return }
+        // CSS :active persists while dragging outside and back in. AppKit still
+        // owns tracking and action dispatch; this flag only holds the drawing.
+        mainPointerPressed = true; updateMainActionFeedback()
+        defer { mainPointerPressed = false; updateMainActionFeedback() }
+        super.mouseDown(with: event)
+    }
     override func mouseEntered(with event: NSEvent) {
-        hovered = true; applyIconHover(); applyHoverShape(); needsDisplay = true
+        hovered = true; applyIconHover(); applyHoverShape(); updateMainActionFeedback(); needsDisplay = true
         tooltipChanged?(self, showsTooltip)
     }
     override func mouseExited(with event: NSEvent) {
-        hovered = false; editorJustOpened = false; applyIconHover(); applyHoverShape(); needsDisplay = true
+        hovered = false; editorJustOpened = false; applyIconHover(); applyHoverShape(); updateMainActionFeedback(); needsDisplay = true
         tooltipChanged?(self, showsTooltip)
     }
     private func applyIconHover() {
@@ -324,6 +434,7 @@ final class MiniPreviewButton: NSButton {
     /// Shipping `.icon-button.delete:hover` uses white on the signal fill,
     /// not the ordinary raised-glass hover used by Close and Edit.
     var chromeBackground: NSColor {
+        if popsIcon { return mainActionColor(tokens.color(primary ? "theme-accent" : "glass-strong")) }
         if primary { return tokens.color("theme-accent") }
         if boxShadowToken == "shadow-sm" {
             let rest = tokens.color("glass-strong")
@@ -333,6 +444,7 @@ final class MiniPreviewButton: NSButton {
         return tokens.color(hovered || cell?.isHighlighted == true ? "glass-raised" : "glass-strong")
     }
     var chromeForeground: NSColor {
+        if popsIcon { return mainActionColor(tokens.color(primary ? "theme-accent-ink" : "glass-text")) }
         if primary { return tokens.color("theme-accent-ink") }
         if kind == .trash {
             let rest = tokens.color("theme-signal-text")
@@ -426,7 +538,7 @@ final class MiniPreviewButton: NSButton {
             return
         }
         chromeBackground.setFill()
-        path.fill(); (primary ? NSColor.clear : tokens.color("glass-border")).setStroke(); path.stroke()
+        path.fill(); mainActionColor(primary ? NSColor.clear : tokens.color("glass-border")).setStroke(); path.stroke()
         let color = chromeForeground
         color.setStroke(); color.setFill()
         var iconX: CGFloat = 6
@@ -446,7 +558,7 @@ final class MiniPreviewButton: NSButton {
         drawIcon(in: NSRect(x: iconX + (16 - side) / 2, y: (bounds.height - side) / 2,
                             width: side, height: side))
         if window?.firstResponder === self {
-            tokens.color("theme-accent").setStroke(); let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5); focus.lineWidth = 2; focus.stroke()
+            mainActionColor(tokens.color("theme-accent")).setStroke(); let focus = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5); focus.lineWidth = 2; focus.stroke()
         }
     }
     /// `.thumbnail-editor-control.is-present`: an accent-outlined glass pill
@@ -1115,7 +1227,6 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     func setMainActionBusy(_ busy: Bool) {
         for button in [copyButton, saveButton].compactMap({ $0 }) {
             button.isEnabled = !busy
-            button.alphaValue = busy ? 0.7 : 1 // Shipping main-action disabled opacity.
         }
     }
 

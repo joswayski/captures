@@ -507,6 +507,12 @@ CapturesTrayNoticeRect captures_preview_icon_tooltip_frame_v1(CapturesTrayNotice
 typedef struct { double blur, brightness, scale; } CapturesPreviewHoverMedia;
 CapturesPreviewHoverMedia captures_preview_hover_media_v1(void);
 
+/* Main-action drawing targets: y-down translation in points, scale, sRGB
+ * brightness multiplier, whole-button opacity. Does not authorize actions. */
+typedef struct { double translate_y, scale, brightness, opacity; } CapturesPreviewMainActionFeedback;
+CapturesPreviewMainActionFeedback captures_preview_main_action_feedback_v1(bool hovered,
+    bool pressed, bool enabled);
+
 /* Card warning beside the metadata: none while the clipboard holds the
  * capture, "Not in History" when it was not written to History, else
  * "Clipboard unavailable" after a failed copy. Static UTF-8 or NULL; never free. */

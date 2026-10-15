@@ -42,6 +42,7 @@ def main():
     parser.add_argument("--stack", action="store_true", help="Also exercise retained multi-card previews")
     parser.add_argument("--record-clear", action="store_true", help="Record Clear all presentation in the stack smoke")
     parser.add_argument("--record-stack-motion", action="store_true", help="Record collapse/expand and interrupted icon/toolbar hover")
+    parser.add_argument("--main-actions-only", action="store_true", help="Record main-action hover, hold and cancellation at all corners")
     parser.add_argument("--drag-only", action="store_true", help="Exercise real outbound XDND transfer and cancellation")
     parser.add_argument("--retarget-only", action="store_true", help="Exercise three-card overlapping dust holds at all corners")
     parser.add_argument("--close-only", action="store_true", help="Exercise saved Close without moving held survivors at all corners")
@@ -533,6 +534,8 @@ def main():
         cases += [("bottom_left", True, True), ("bottom_left", False, False)]
         if args.lifecycle or args.drag_only:
             cases = cases[:1]
+        if args.main_actions_only:
+            cases = cases[:4]
         if args.retarget_only or args.close_only:
             assert not args.reduced_motion, "held-slot checks require animated exits"
             cases = cases[:4]
@@ -812,7 +815,7 @@ def main():
                 delete_x = 28 + (248 if placement.endswith("right") else 8)
                 delete_y = card_top + 8
                 icon_recording = None
-                if args.record_stack_motion:
+                if args.record_stack_motion or args.main_actions_only:
                     frame = window_geometry(preview)
                     icon_recording = subprocess.Popen(["ffmpeg", "-y", "-f", "x11grab",
                         "-video_size", "340x240", "-framerate", "30", "-i",
@@ -822,8 +825,72 @@ def main():
                         stdout=subprocess.DEVNULL, stderr=(output / f"{prefix}-icon-hover.ffmpeg.log").open("w"))
                     children.append(icon_recording)
                     time.sleep(.3)
-                run("xdotool", "mousemove", "--sync", "--window", preview,
-                    str(delete_x + 14), str(delete_y + 14))
+                # Measure the actual opaque Save face independently of native
+                # animation state. Hover lifts 1px and multiplies sRGB by 1.12;
+                # holding shrinks to 97% and moves 1px below its resting centre.
+                def main_move(x, y):
+                    origin = dict(line.split("=", 1) for line in
+                                  run("xdotool", "getmouselocation", "--shell").decode().splitlines())
+                    frame = window_geometry(preview)
+                    start_x, start_y = int(origin["X"]), int(origin["Y"])
+                    end_x, end_y = int(frame["X"]) + x, int(frame["Y"]) + y
+                    command = ["xdotool"]
+                    for step in range(1, 17):
+                        fraction = step / 16
+                        command += ["mousemove", str(round(start_x + (end_x - start_x) * fraction)),
+                                    str(round(start_y + (end_y - start_y) * fraction)), "sleep", ".02"]
+                    run(*command)
+
+                def main_metrics():
+                    raw = run("import", "-window", preview, "-crop",
+                              f"160x50+90+{card_top + 74}", "-depth", "8", "rgb:-")
+                    gold = [(i // 3 % 160, i // 3 // 160) for i in range(0, len(raw), 3)
+                            if raw[i] > 200 and raw[i + 1] > 170 and raw[i + 2] < 80]
+                    if not gold:
+                        return None
+                    left, right = min(x for x, _ in gold), max(x for x, _ in gold)
+                    top, bottom = min(y for _, y in gold), max(y for _, y in gold)
+                    pixel = (25 * 160 + 20) * 3
+                    return {"x": left, "y": top, "width": right - left + 1,
+                            "height": bottom - top + 1, "centerY": (top + bottom) / 2,
+                            "rgb": list(raw[pixel:pixel + 3])}
+
+                rest = wait(main_metrics, "resting Save face")
+                shot(preview, f"{prefix}-main-rest")
+                main_move(170, card_top + 61)
+                time.sleep(.2)
+                shot(preview, f"{prefix}-copy-hover")
+                main_move(170, card_top + 99)
+                expected_rgb = [min(255, round(channel * 1.12)) for channel in (255, 202, 40)]
+
+                def main_hovered():
+                    value = main_metrics()
+                    return value if value and value["y"] == rest["y"] - 1 and all(
+                        abs(a - b) <= 2 for a, b in zip(value["rgb"], expected_rgb)) else None
+
+                hover = wait(main_hovered, "Save hover lifts 1px and brightens by 1.12")
+                shot(preview, f"{prefix}-main-hover")
+                run("xdotool", "mousedown", "1")
+
+                def main_held():
+                    value = main_metrics()
+                    return value if value and 3 <= rest["width"] - value["width"] <= 5 and abs(
+                        value["centerY"] - rest["centerY"] - 1) <= .5 else None
+
+                held = wait(main_held, "Save hold scales the whole face to .97 and moves down 1px")
+                shot(preview, f"{prefix}-main-held")
+                main_move(60, card_top + 72)
+                wait(main_held, "held Save stays depressed outside its hit rectangle")
+                main_move(170, card_top + 99)
+                wait(main_held, "held Save stays depressed on reentry")
+                main_move(60, card_top + 72)
+                run("xdotool", "mouseup", "1")
+                wait(lambda: main_metrics() == rest, "cancelled Save returns to its unchanged resting face")
+                assert not json.loads(first.read_text()).get("saved_path"), "release outside activated Save"
+                assert not list((output / prefix / "exports Café").glob("*")), "cancel created an export"
+                (output / f"{prefix}-main-feedback.json").write_text(json.dumps(
+                    {"rest": rest, "hover": hover, "held": held, "cancelled": main_metrics()}, indent=2))
+                main_move(delete_x + 14, delete_y + 14)
                 def delete_fill():
                     return run("import", "-window", preview, "-crop",
                                f"1x1+{delete_x + 4}+{delete_y + 14}", "-depth", "8", "rgb:-")
@@ -852,8 +919,7 @@ def main():
                 # icon. Its old top border becomes the same glass as the inside.
                 edit_x = 28 + (8 if placement.endswith("right") else 248)
                 edit_y = card_top + 8
-                run("xdotool", "mousemove", "--sync", "--window", preview,
-                    str(edit_x + 14), str(edit_y + 14))
+                main_move(edit_x + 14, edit_y + 14)
                 def edit_lifted():
                     top = run("import", "-window", preview, "-crop",
                               f"1x1+{edit_x + 14}+{edit_y}", "-depth", "8", "rgb:-")
@@ -874,6 +940,11 @@ def main():
                 if icon_recording:
                     icon_recording.communicate(input=b"q\n", timeout=10)
                     assert icon_recording.returncode == 0, "icon-hover recording failed"
+                if args.main_actions_only:
+                    run("xdotool", "windowactivate", "--sync", root, "key", "ctrl+q")
+                    assert app.wait(timeout=10) == 0
+                    print(f"PASS {placement}: Save hover brightness/lift, held scale/translation, drag-out/reentry, cancelled export; neighboring Delete/Edit feedback", flush=True)
+                    continue
                 if args.drag_only:
                     # Reject our own source without importing it into an editor.
                     # Record the real 420ms shake and settled pointer recovery.
@@ -2191,6 +2262,12 @@ def main():
                 "608px viewport and exact survivor pixels held past the first exit",
                 "settled 240px viewport with one actionable oldest capture",
                 "History and original capture bytes preserved", "clean exit"]
+        if args.main_actions_only:
+            result = {"passed": True, "scenarios": len(cases), "reducedMotion": args.reduced_motion,
+                "checks": ["main-action hover brightness and lift", "held scale and translation",
+                    "press survives pointer leave and reentry", "release outside creates no export",
+                    "neighboring Delete/Edit feedback", "clean exit"],
+                "scope": "Private X11/software GL, not physical desktop or Wayland acceptance."}
         (output / "result.json").write_text(json.dumps(result, indent=2))
     finally:
         for child in reversed(children):

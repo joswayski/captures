@@ -6,6 +6,71 @@ import CCapturesSettings
 final class MiniPreviewTests: XCTestCase {
     private let tokens = Tokens.variants["dark-mustard"]!
 
+    func testMainActionRenderedFeedbackKeepsGlassAndHitFrame() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        defer { NativeMotion.motionPreference = preference }
+        for reduced in [false, true] {
+            NativeMotion.motionPreference = { reduced }
+            var copies = 0
+            let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.white)],
+                                     copy: { _ in copies += 1 })
+            defer { panel.close() }
+            panel.orderFrontRegardless()
+            let card = try XCTUnwrap(panel.previewView.card(for: "card"))
+            let event = try hoverEvent(for: panel)
+            card.mouseEntered(with: event)
+            let button = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewButton }
+                .first { $0.kind == .copy })
+            let frame = button.frame
+            let rest = try XCTUnwrap(tokens.color("glass-strong").usingColorSpace(.sRGB))
+            button.mouseEntered(with: event)
+            try waitUntil { abs(button.chromeBackground.usingColorSpace(.sRGB)!.redComponent
+                - min(1, rest.redComponent * 1.12)) < 0.001 }
+            func assertPose(scale: Double, dy: Double) throws {
+                _ = try renderPresentation(panel)
+                let layer = try XCTUnwrap(button.layer?.presentation())
+                XCTAssertEqual(layer.transform.m11, CGFloat(scale), accuracy: 0.001)
+                let down: CGFloat = card.isFlipped ? 1 : -1
+                // Account for AppKit's backing-layer anchor when measuring the centre.
+                let centre = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
+                let t = layer.transform
+                let transformedY = (centre.y - layer.anchorPoint.y * layer.bounds.height) * t.m22
+                    + t.m42 + layer.position.y
+                XCTAssertEqual(transformedY, frame.midY + down * CGFloat(dy), accuracy: 0.01)
+                XCTAssertEqual(button.frame, frame)
+            }
+            try assertPose(scale: 1, dy: -1)
+            // Exercise the public cell highlight used by native tracking, not
+            // NSButton.highlight (which mouse tracking need not call).
+            button.cell?.isHighlighted = true
+            if !reduced { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
+            try assertPose(scale: 0.97, dy: 1)
+            button.cell?.isHighlighted = false // cancelled or released tracking
+            if !reduced { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
+            try assertPose(scale: 1, dy: -1)
+            button.performClick(nil)
+            XCTAssertEqual(copies, 1)
+            card.setMainActionBusy(true)
+            XCTAssertEqual(button.alphaValue, 0.7, accuracy: 0.001)
+            button.performClick(nil)
+            XCTAssertEqual(copies, 1, "disabled actions must not dispatch")
+            button.mouseExited(with: event)
+            button.mouseEntered(with: event)
+            if !reduced { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
+            try assertPose(scale: 1, dy: -1)
+            XCTAssertEqual(button.chromeBackground.usingColorSpace(.sRGB)!.alphaComponent,
+                           rest.alphaComponent, accuracy: 0.001)
+            let bitmap = try XCTUnwrap(renderPresentation(panel))
+            let rect = button.convert(button.bounds, to: panel.previewView)
+            let pixel = try XCTUnwrap(pixelColor(in: bitmap, of: panel,
+                x: rect.minX + 4, y: rect.midY))
+            XCTAssertGreaterThan(pixel.alphaComponent, 0, "the transformed glass face is rendered")
+            card.setMainActionBusy(false)
+            XCTAssertEqual(button.alphaValue, 1)
+        }
+    }
+
     func testPreviewKindsResolveSharedShippingGeometry() {
         XCTAssertEqual(MiniPreviewButtonKind.allCases.map(\.iconName),
                        ["close", "trash", "edit", "copy", "save", "folder", "preview-stack", "close", "check"])

@@ -731,6 +731,8 @@ pub enum Transition {
     PreviewMediaScale,
     /// `.icon-button`: hover background and foreground over `0.14s ease`.
     PreviewIconHover,
+    /// `.thumbnail-main-actions button`: filter and transform over `0.14s ease`.
+    PreviewMainAction,
     /// `.thumbnail-editor-control-face`: hover lift/scale over `0.18s ease`.
     PreviewEditorHover,
     /// `.icon-button::after`: card icon tooltips fade and nudge over `0.12s ease`.
@@ -792,7 +794,7 @@ const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::SegmentLabel,
@@ -800,6 +802,7 @@ impl Transition {
         Self::PreviewMediaFilter,
         Self::PreviewMediaScale,
         Self::PreviewIconHover,
+        Self::PreviewMainAction,
         Self::PreviewEditorHover,
         Self::PreviewIconTooltip,
         Self::PreviewStackTooltip,
@@ -826,6 +829,7 @@ impl Transition {
             Self::PreviewMediaFilter => "preview_media_filter",
             Self::PreviewMediaScale => "preview_media_scale",
             Self::PreviewIconHover => "preview_icon_hover",
+            Self::PreviewMainAction => "preview_main_action",
             Self::PreviewEditorHover => "preview_editor_hover",
             Self::PreviewIconTooltip => "preview_icon_tooltip",
             Self::PreviewStackTooltip => "preview_stack_tooltip",
@@ -857,7 +861,7 @@ impl Transition {
             Self::Tooltip => token("dur-1", "ease-standard"),
             Self::PreviewMediaFilter | Self::PreviewEditorHover => (Timing::Millis(180.), CSS_EASE),
             Self::PreviewMediaScale | Self::PreviewEditorRing => (Timing::Millis(220.), CSS_EASE),
-            Self::PreviewIconHover => (Timing::Millis(140.), CSS_EASE),
+            Self::PreviewIconHover | Self::PreviewMainAction => (Timing::Millis(140.), CSS_EASE),
             Self::PreviewIconTooltip => (Timing::Millis(120.), CSS_EASE),
             Self::PreviewStackTooltip => token("dur-1", "ease-out"),
             Self::PreviewEditorRingLeave => (Timing::Millis(550.), Easing::Token("ease-standard")),
@@ -1369,6 +1373,16 @@ mod tests {
         assert_eq!(
             icon_hover.easing,
             CubicBezier::new(0.25, 0.1, 0.25, 1.).unwrap()
+        );
+        let main_action = Transition::PreviewMainAction.resolve(&Shipping).unwrap();
+        assert_eq!(main_action.duration_ms, 140.);
+        assert_eq!(
+            main_action.easing,
+            CubicBezier::new(0.25, 0.1, 0.25, 1.).unwrap()
+        );
+        assert_eq!(
+            catalog["transitions"]["preview_main_action"]["duration"]["millis"],
+            140.
         );
         let editor_hover = Transition::PreviewEditorHover.resolve(&Shipping).unwrap();
         assert_eq!(editor_hover.duration_ms, 180.);
