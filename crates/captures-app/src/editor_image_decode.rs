@@ -33,6 +33,29 @@ pub fn decode_import(path: &Path) -> Result<RgbaImage, String> {
     decode(path, true)
 }
 
+/// Decode a complete import batch, bounding retained pixels before any edit.
+pub fn decode_imports(paths: Vec<std::path::PathBuf>) -> Result<Vec<(String, RgbaImage)>, String> {
+    let mut retained = 0_u64;
+    paths
+        .into_iter()
+        .map(|path| {
+            let pixels = decode_import(&path)?;
+            let size = u64::from(pixels.width()) * u64::from(pixels.height());
+            if size > MAX_RENDER_PIXELS.saturating_sub(retained) {
+                return Err("Images exceed the total decoded-pixel limit.".into());
+            }
+            retained += size;
+            Ok((
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                pixels,
+            ))
+        })
+        .collect()
+}
+
 pub fn decode_opened_image(path: &Path) -> Result<RgbaImage, String> {
     decode(path, false)
 }

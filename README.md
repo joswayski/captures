@@ -737,8 +737,10 @@ Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
 **Add images** imports one or more PNG, JPEG, WebP, TIFF, GIF, BMP or SVG files: the first lands below
 the selected visible image, each later one below the previous, expanding the canvas
-when needed. Imports respect EXIF orientation, are undoable (one step per file),
-and keep their own draft pixels so reopening does not require the source file.
+when needed. File drops retain the chosen edge or stacked placement for the whole
+batch. One Undo/Redo covers each picker selection or drop; a decode or render failure
+adds nothing and preserves existing Undo/Redo. Imports respect EXIF orientation
+and keep their own draft pixels so reopening does not require the source files.
 GIF imports use only the first frame; **Open** still treats GIFs as recordings.
 Supported ICC profiles and PNG gamma/chromaticity/CICP metadata convert to sRGB.
 The shared decoder rejects calibrated or externally linked BMP color descriptions
@@ -877,8 +879,8 @@ External clipboard images or local image files instead import through Add images
 placement, with owned draft pixels, canvas expansion, last-image selection and
 one undo/redo step for the entire paste, matching Tauri. If any image cannot be
 decoded or the resulting canvas cannot be rendered, nothing is added and existing
-Undo/Redo remains available. Add images and file drops keep their existing per-image
-undo steps. Text fields retain normal paste; URL/HTML-only images are not fetched.
+Undo/Redo remains available. Add images and file drops use the same atomic batch
+contract. Text fields retain normal paste; URL/HTML-only images are not fetched.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 X11 file-list paste accepts incremental clipboard transfers within the existing

@@ -2980,6 +2980,37 @@ fn clipboard_image_batch_is_one_atomic_owned_edit() {
 }
 
 #[test]
+fn image_batches_keep_the_drop_edge_after_canvas_expansion() {
+    // Independent 7×3 capture + 3×2 and 1×4 imports. Left/top expansion must
+    // translate the target for the next image; center drops must stay stacked.
+    for (point, size, positions) in [
+        (Point { x: 3.5, y: 0. }, (7., 9.), [(2., 4.), (3., 0.)]),
+        (Point { x: 7., y: 1.5 }, (11., 4.), [(7., 1.), (10., 0.)]),
+        (Point { x: 3.5, y: 3. }, (7., 9.), [(2., 3.), (3., 5.)]),
+        (Point { x: 0., y: 1.5 }, (11., 4.), [(1., 1.), (0., 0.)]),
+        (Point { x: 3.5, y: 1.5 }, (7., 3.), [(2., 1.), (3., 1.)]),
+    ] {
+        let (data, id, _) = setup();
+        let mut editor = open(data.path(), &id).unwrap();
+        editor
+            .import_images(
+                [
+                    ("first.png".into(), RgbaImage::new(3, 2)),
+                    ("second.png".into(), RgbaImage::new(1, 4)),
+                ],
+                None,
+                Some(point),
+            )
+            .unwrap();
+        let document = editor.snapshot().document;
+        assert_eq!((document.width, document.height), size, "{point:?}");
+        for (image, expected) in document.elements[1..].iter().zip(positions) {
+            assert_eq!((image.base().x, image.base().y), expected, "{point:?}");
+        }
+    }
+}
+
+#[test]
 fn failed_import_render_preserves_redo_frame_and_files() {
     let (data, id, _) = setup();
     let mut editor = open(data.path(), &id).unwrap();

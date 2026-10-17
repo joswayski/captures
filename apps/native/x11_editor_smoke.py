@@ -1425,18 +1425,79 @@ def main():
             document_pixel("gif-bmp-svg-imported", imported[1]["x"] + 10, imported[1]["y"] + 10, (213, 62, 85))
             document_pixel("gif-bmp-svg-imported", imported[2]["x"] + 50, imported[2]["y"] + 30, (142, 68, 173))
             document_pixel("gif-bmp-svg-imported", imported[3]["x"] + 10, imported[3]["y"] + 10, (45, 100, 189))
+            recording = spawn("import-batch-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "26", "-pix_fmt", "yuv420p", str(output / "import-batch-interaction.mp4")])
+            for y in [80, 120, 160, 260, 340, 430]:
+                run("xdotool", "mousemove", "--sync", "--window", editor, "28", str(y), "sleep", ".15")
             toolbar_click("undo")
-            save_layers(lambda values: len(values) == 3, "SVG undone independently")
+            save_layers(lambda values: len(values) == 1, "whole picker batch undone in one step")
+            shot(editor, "picker-batch-undone")
+
+            def pick(paths):
+                chooser.selected = paths
+                toolbar_click("import")
+                wait(lambda: chooser.pending, "batch picker")
+                GLib.idle_add(chooser.respond, False)
+                settled_draft()
+
+            corrupt = output / "Corrupt.png"
+            corrupt.write_bytes(b"not an image")
+            tall = output / "Tall.png"
+            tall.write_bytes(fixture_png(1, 16_384))
+            for name, invalid in [("decode", corrupt), ("render", tall)]:
+                pick([gif, invalid])
+                assert len(layers()) == 1, f"late picker {name} failure published a partial batch"
+                shot(editor, f"picker-batch-{name}-error")
+            toolbar_click("redo")
+            assert save_layers(lambda values: len(values) == 4, "picker failures preserve batch Redo") == imported
+            shot(editor, "picker-batch-redone")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
             toolbar_click("undo")
-            save_layers(lambda values: len(values) == 2, "one file per Undo")
+            save_layers(lambda values: len(values) == 1, "original before file drop")
+
+            def drop(paths, name):
+                x, y = document_point((320, 1))
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".3")
+                log = output / f"{name}-protocol.jsonl"
+                source = subprocess.Popen(["/usr/bin/python3", str(Path(__file__).with_name("x11_drag_source.py")),
+                    "--target", str(editor), "--log", str(log),
+                    *[item for path in paths for item in ["--file", str(path)]]],
+                    env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+                children.append(source)
+                assert source.stdout.readline().strip() == "entered"
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y + 1), "sleep", ".3")
+                source.stdin.write("position\n"); source.stdin.flush()
+                shot(editor, f"{name}-guide")
+                source.stdin.write("drop\n"); source.stdin.flush()
+                assert source.stdout.readline().strip() == "done"
+                source.wait(timeout=10)
+                events = [json.loads(line) for line in log.read_text().splitlines()]
+                assert events[-1] == {"event": "finished", "accepted": True}, events
+                settled_draft()
+
+            drop([gif, notes, bmp], "drop-batch")
+            dropped = save_layers(lambda values: len(values) == 3, "whole drop imported")
+            assert [(layer["x"], layer["y"]) for layer in dropped] == [(0, 130), (260, 50), (280, 0)], dropped
+            assert document_size() == (640, 490), "both files must retain the top edge through expansion"
+            shot(editor, "drop-batch-imported")
+            document_pixel("drop-batch-imported", 270, 60, (213, 62, 85))
+            document_pixel("drop-batch-imported", 330, 30, (142, 68, 173))
             toolbar_click("undo")
-            save_layers(lambda values: len(values) == 1, "all imports undone")
+            save_layers(lambda values: len(values) == 1, "whole drop undone in one step")
+            shot(editor, "drop-batch-undone")
+            for name, invalid in [("decode", corrupt), ("render", tall)]:
+                drop([gif, invalid], f"drop-batch-{name}")
+                assert len(layers()) == 1, f"late drop {name} failure published a partial batch"
+                shot(editor, f"drop-batch-{name}-error")
             toolbar_click("redo")
-            save_layers(lambda values: len(values) == 2, "GIF redone")
-            toolbar_click("redo")
-            save_layers(lambda values: len(values) == 3, "BMP redone")
-            toolbar_click("redo")
-            assert save_layers(lambda values: len(values) == 4, "SVG redone") == imported
+            assert save_layers(lambda values: len(values) == 3, "drop failures preserve Redo") == dropped
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 1, "original before retry")
+            pick([gif, notes, bmp, svg])
+            imported = save_layers(lambda values: len(values) == 4, "picker batch retry")
             unsupported_svg = output / "Resource.SVG"
             unsupported_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" height="50">'
                 '<use href="private.svg#shapes"/></svg>')
@@ -1448,8 +1509,8 @@ def main():
                                "rejected SVG leaves the document untouched") == imported
             shot(editor, "svg-conversion-error")
             toolbar_click("undo")
-            save_layers(lambda values: len(values) == 3,
-                        "rejected SVG adds no undo step; last valid SVG undone")
+            save_layers(lambda values: len(values) == 1,
+                        "rejected SVG adds no undo step; whole valid batch undone")
             toolbar_click("redo")
             assert save_layers(lambda values: len(values) == 4, "valid SVG restored after rejection") == imported
             assert all(path.read_bytes() == before for path, before in source_bytes.items())
@@ -1476,7 +1537,9 @@ def main():
                            "svg-inferred-height", "svg-local-reference", "svg-viewbox-rasterization",
                            "straight-svg-alpha", "svg-bundled-text", "external-svg-reference-rejected",
                            "unsupported-svg-preserves-document-and-undo",
-                           "ordered-placement", "one-undo-step-per-file", "stable-redo",
+                           "ordered-placement", "one-undo-step-per-picker-or-drop", "stable-redo",
+                           "late-picker-and-drop-decode-render-failure-atomic", "retry-after-failure",
+                           "XDND-multiple-URI-files", "drop-top-edge-retained-through-expansion",
                            "immutable-sources", "draft-reopens-after-source-removal", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native GIF/BMP/SVG imports: picker, pixels, alpha, undo/redo and detached draft reopen")

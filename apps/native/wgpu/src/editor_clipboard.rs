@@ -63,25 +63,7 @@ impl Clipboard {
             })
             .collect();
         if !files.is_empty() {
-            let mut retained = 0_u64;
-            return files
-                .into_iter()
-                .map(|path| {
-                    let pixels = captures_app::editor_image_decode::decode_import(&path)?;
-                    let size = u64::from(pixels.width()) * u64::from(pixels.height());
-                    if size > MAX_RENDER_PIXELS.saturating_sub(retained) {
-                        return Err("Clipboard images exceed the total decoded-pixel limit.".into());
-                    }
-                    retained += size;
-                    Ok((
-                        path.file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                        pixels,
-                    ))
-                })
-                .collect();
+            return captures_app::editor_image_decode::decode_imports(files);
         }
         // Linux's image reader can report both absent formats and real
         // transfer failures as ContentNotAvailable. Inspect the actual offer

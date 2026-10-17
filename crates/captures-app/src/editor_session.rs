@@ -970,20 +970,22 @@ impl EditorSession {
         )
     }
 
-    /// Import a decoded clipboard batch as one edit, returning the last layer ID.
-    /// Later images stack below the previous import. Nothing is published until
-    /// every image validates and the entire candidate document renders.
+    /// Import a decoded batch as one edit, returning the last layer ID. Later
+    /// images keep the first placement edge relative to the previous import.
+    /// Nothing is published until every image validates and the candidate renders.
     pub fn import_images(
         &mut self,
         images: impl IntoIterator<Item = (String, RgbaImage)>,
-        mut selected_id: Option<String>,
-        mut point: Option<Point>,
+        selected_id: Option<String>,
+        point: Option<Point>,
     ) -> Result<String, String> {
         self.require_finished_text_input()?;
         if point.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite()) {
             return Err("Image drop coordinates must be finite.".into());
         }
         let mut document = self.history.current().clone();
+        let (mut target, placement, mut position) =
+            import_placement(&document, selected_id.as_deref(), point);
         let mut assets = self.assets.clone();
         let mut retained = retained_asset_pixels(&assets)?;
         let mut last_id = None;
@@ -999,8 +1001,6 @@ impl EditorSession {
             });
             let asset_id = fresh_id(|id| assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
             let source = format!("{ASSET_PREFIX}{asset_id}");
-            let (target, placement, position) =
-                import_placement(&document, selected_id.as_deref(), point.take());
             let bounds = position_imported_image(
                 width,
                 height,
@@ -1046,8 +1046,17 @@ impl EditorSession {
             } else {
                 document.elements.push(element);
             }
+            // Expansion can translate the new layer. Continue from its accepted
+            // bounds, retaining the original edge just like loadDroppedFiles.
+            let Some(Element::Image(added)) = document.elements.last() else {
+                unreachable!("import adds an image element")
+            };
+            target = image_bounds(added);
+            position = Some(Point {
+                x: target.x + target.width / 2.,
+                y: target.y + target.height,
+            });
             assets.insert(source, Arc::new(pixels));
-            selected_id = Some(layer_id.clone());
             last_id = Some(layer_id);
         }
         let last_id = last_id.ok_or("No images to import.")?;

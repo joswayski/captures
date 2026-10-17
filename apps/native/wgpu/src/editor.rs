@@ -31,7 +31,7 @@ use captures_app::{
     editor_output::SavedExport,
     editor_session::{
         DraftAutosave, EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize,
-        ImportImage, OpenRequest, PngOptions, Request, TextCreate, TextPatch,
+        OpenRequest, PngOptions, Request, TextCreate, TextPatch,
     },
     editor_text::{TextStylePreset, font_family_options, shadow_style},
     editor_viewport::{Viewport, wheel_zoom_factor, zoom_from_slider, zoom_slider_position},
@@ -76,7 +76,7 @@ enum Job {
         reply: Sender<drawing_preview::Reply>,
     },
     Import {
-        path: PathBuf,
+        paths: Vec<PathBuf>,
         selected_id: Option<String>,
         /// Document-space drop sample; `None` uses the default placement.
         point: Option<Point>,
@@ -1597,7 +1597,7 @@ impl View {
             Ok(Some(paths)) => {
                 // Like a canvas drop without a pointer: the first image takes
                 // shipping's default placement and later ones stack below the
-                // layer the previous one created, one edit at a time.
+                // layer the previous one created, in one atomic edit.
                 let paths: Vec<PathBuf> = paths
                     .into_iter()
                     .filter(|path| captures_app::editor_session::is_supported_image_path(path))
@@ -1605,9 +1605,7 @@ impl View {
                 if paths.is_empty() {
                     self.error = Some(captures_app::editor_session::DROP_UNSUPPORTED.into());
                 } else {
-                    self.drop
-                        .queue
-                        .extend(paths.into_iter().map(|path| (path, None)));
+                    self.drop.queue.push_back((paths, None));
                     canvas::drain_drops(self, tx);
                 }
             }
@@ -1816,6 +1814,7 @@ fn save_dirty(session: &mut EditorSession) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn decode_import(path: &Path) -> Result<RgbaImage, String> {
     captures_app::editor_image_decode::decode_import(path)
 }
@@ -1951,23 +1950,18 @@ impl Editor {
                             Ok(presented)
                         }),
                     Job::Import {
-                        path,
+                        paths,
                         selected_id,
                         point,
                     } => session
                         .as_mut()
                         .ok_or_else(|| "Editor is unavailable.".to_owned())
                         .and_then(|session| {
-                            let id = session.import_image(ImportImage {
-                                pixels: decode_import(&path)?,
-                                name: path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned(),
+                            let id = session.import_images(
+                                captures_app::editor_image_decode::decode_imports(paths)?,
                                 selected_id,
                                 point,
-                            })?;
+                            )?;
                             let mut presented = Presented::after_edit(session);
                             presented.created_layer = Some(id);
                             Ok(presented)
@@ -12257,8 +12251,8 @@ mod tests {
         view.pending = false;
         assert!(view.receive_import(&jobs));
         assert!(
-            matches!(queued.recv().unwrap(), Job::Import { path, selected_id, point: None }
-            if path == Path::new("photo.png") && selected_id.is_none())
+            matches!(queued.recv().unwrap(), Job::Import { paths, selected_id, point: None }
+            if paths == [PathBuf::from("photo.png")] && selected_id.is_none())
         );
         assert!(view.pending && view.import_picker.is_none());
         assert!(Arc::ptr_eq(
@@ -12301,18 +12295,12 @@ mod tests {
             .unwrap();
         assert!(view.receive_import(&jobs));
         assert!(
-            matches!(queued.try_recv().unwrap(), Job::Import { path, point: None, .. }
-            if path == Path::new("first.GIF"))
+            matches!(queued.try_recv().unwrap(), Job::Import { paths, point: None, .. }
+            if paths == [PathBuf::from("first.GIF"), PathBuf::from("second.BMP")])
         );
         assert!(view.pending && queued.try_recv().is_err());
-        // Later images wait for the previous import, then stack below it.
+        // The whole picker batch is one in-flight edit.
         assert!(!canvas::drain_drops(&mut view, &jobs));
-        view.pending = false;
-        assert!(canvas::drain_drops(&mut view, &jobs));
-        assert!(
-            matches!(queued.try_recv().unwrap(), Job::Import { path, point: None, .. }
-            if path == Path::new("second.BMP"))
-        );
         view.pending = false;
         assert!(!canvas::drain_drops(&mut view, &jobs) && view.drop.queue.is_empty());
 
@@ -12523,7 +12511,7 @@ mod tests {
             .unwrap()
             .drop
             .queue
-            .push_back((path.clone(), None));
+            .push_back((vec![path.clone()], None));
         selection.send(Some(vec![path.clone()])).unwrap();
         editor.flush(&ctx).unwrap();
         {
@@ -12539,7 +12527,7 @@ mod tests {
         editor.view.lock().unwrap().submit_job(
             &editor.tx,
             Job::Import {
-                path,
+                paths: vec![path],
                 selected_id: None,
                 point: None,
             },
@@ -12567,6 +12555,102 @@ mod tests {
     }
 
     #[test]
+    fn import_batches_are_one_edit_and_late_failures_preserve_redo_and_assets() {
+        let (data, id) = fixture();
+        let first = data.path().join("first.png");
+        let second = data.path().join("second.png");
+        let broken = data.path().join("broken.png");
+        let tall = data.path().join("tall.png");
+        RgbaImage::new(3, 2).save(&first).unwrap();
+        RgbaImage::new(2, 2).save(&second).unwrap();
+        fs::write(&broken, b"not an image").unwrap();
+        RgbaImage::new(1, captures_app::editor_render::MAX_RENDER_DIMENSION)
+            .save(&tall)
+            .unwrap();
+        let ctx = egui::Context::default();
+        let editor = Editor::open(
+            &ctx,
+            data.path().join("history"),
+            id,
+            data.path().join("exports"),
+            CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
+        );
+        receive(&editor, &ctx);
+        let submit = |paths| {
+            editor.view.lock().unwrap().submit_job(
+                &editor.tx,
+                Job::Import {
+                    paths,
+                    selected_id: Some("capture-background".into()),
+                    point: None,
+                },
+            );
+            receive(&editor, &ctx);
+        };
+        submit(vec![first.clone(), second.clone()]);
+        let edited = {
+            let view = editor.view.lock().unwrap();
+            let frame = view.presented.as_ref().unwrap();
+            assert_eq!(frame.document.elements.len(), 3);
+            assert_eq!(layer_label(&frame.document.elements[1]), "first.png");
+            assert_eq!(layer_label(&frame.document.elements[2]), "second.png");
+            assert_eq!(
+                view.selected_layer.as_deref(),
+                Some(frame.document.elements[2].base().id.as_str())
+            );
+            frame.document.clone()
+        };
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Undo);
+        receive(&editor, &ctx);
+        let (before, pixels, assets, selection) = {
+            let view = editor.view.lock().unwrap();
+            let frame = view.presented.as_ref().unwrap();
+            assert_eq!(frame.document.elements.len(), 1);
+            assert!(!frame.can_undo && frame.can_redo);
+            (
+                frame.document.clone(),
+                frame.pixels.clone(),
+                frame.image_assets.clone(),
+                view.selected_layer.clone(),
+            )
+        };
+        for (last, render_error) in [(broken, false), (tall, true)] {
+            // The first file decodes successfully; the second either fails
+            // decoding or makes the final candidate canvas too tall to render.
+            submit(vec![first.clone(), last]);
+            let view = editor.view.lock().unwrap();
+            let frame = view.presented.as_ref().unwrap();
+            assert!(view.error.is_some() && !view.pending);
+            assert_eq!(
+                view.error
+                    .as_ref()
+                    .unwrap()
+                    .contains("editor rendering is limited"),
+                render_error
+            );
+            assert!(frame.can_redo && !frame.can_undo);
+            assert_eq!(frame.document, before);
+            assert!(Arc::ptr_eq(&frame.pixels, &pixels));
+            assert_eq!(frame.image_assets, assets);
+            assert_eq!(view.selected_layer, selection);
+        }
+        editor
+            .view
+            .lock()
+            .unwrap()
+            .submit(&editor.tx, Request::Redo);
+        receive(&editor, &ctx);
+        let view = editor.view.lock().unwrap();
+        assert_eq!(view.presented.as_ref().unwrap().document, edited);
+        assert!(!view.presented.as_ref().unwrap().can_redo);
+    }
+
+    #[test]
     fn imported_file_is_owned_undoable_and_reopens_after_source_deletion() {
         let (data, id) = fixture();
         let original = fs::read(data.path().join("history").join(&id).join("capture.png")).unwrap();
@@ -12591,7 +12675,7 @@ mod tests {
         editor.view.lock().unwrap().submit_job(
             &editor.tx,
             Job::Import {
-                path: path.clone(),
+                paths: vec![path.clone()],
                 selected_id: Some("capture-background".into()),
                 point: None,
             },
@@ -12639,7 +12723,7 @@ mod tests {
         editor.view.lock().unwrap().submit_job(
             &editor.tx,
             Job::Import {
-                path,
+                paths: vec![path],
                 selected_id: None,
                 point: None,
             },
@@ -14268,7 +14352,7 @@ mod tests {
     }
 
     #[test]
-    fn file_drops_queue_images_at_the_pointer_and_import_one_at_a_time() {
+    fn file_drops_queue_batches_at_the_pointer_and_import_one_at_a_time() {
         let ctx = egui::Context::default();
         let (mut view, id) = canvas_view(
             &ctx,
@@ -14316,35 +14400,33 @@ mod tests {
             drop(&["a.GIF", "skip.txt", "b.BMP"]),
             preview,
         );
-        assert_eq!(view.drop.queue.len(), 2);
+        assert_eq!(view.drop.queue.len(), 1);
         assert_eq!(view.drop.queue[0].1, Some(Point { x: 100., y: 2. }));
-        assert_eq!(view.drop.queue[1].1, None);
+        view.selected_layer = None;
         view.pending = true;
         assert!(!canvas::drain_drops(&mut view, &tx));
+        // Selection is sampled on dispatch, not when the batch was queued.
+        view.selected_layer = Some(id.clone());
         view.pending = false;
         assert!(canvas::drain_drops(&mut view, &tx));
         match rx.try_recv().unwrap() {
             Job::Import {
-                path,
+                paths,
                 selected_id,
                 point,
             } => {
-                assert_eq!(path, Path::new("a.GIF"));
+                assert_eq!(paths, [PathBuf::from("a.GIF"), PathBuf::from("b.BMP")]);
                 assert_eq!(selected_id.as_deref(), Some(id.as_str()));
                 assert_eq!(point, Some(Point { x: 100., y: 2. }));
             }
             _ => panic!("expected an import"),
         }
-        // One edit in flight: the second file waits for the first response.
+        // One edit in flight for the complete drop.
         assert!(!canvas::drain_drops(&mut view, &tx));
         view.pending = false;
-        assert!(canvas::drain_drops(&mut view, &tx));
-        assert!(matches!(
-            rx.try_recv().unwrap(),
-            Job::Import { path, point: None, .. } if path == Path::new("b.BMP")
-        ));
+        assert!(!canvas::drain_drops(&mut view, &tx));
         // Closing drops any queued files.
-        view.drop.queue.push_back(("c.png".into(), None));
+        view.drop.queue.push_back((vec!["c.png".into()], None));
         view.pending = false;
         view.close_requested = true;
         assert!(!canvas::drain_drops(&mut view, &tx) && view.drop.queue.is_empty());

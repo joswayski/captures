@@ -4329,8 +4329,8 @@ Both hosts now port the shipping canvas interactions from shared
 `captures_app::editor_canvas` geometry and copy. Image files dropped on the
 canvas (egui hovered/dropped files, AppKit `NSDraggingDestination`) show the
 shared `image_drop_guide` target, edge glow or stack light and toast, then
-import one file at a time through the existing external-image layer path at the
-drop sample; later files stack below the previous import and unsupported drops
+import the accepted files as one atomic batch at the drop sample; later files
+retain the chosen edge relative to the previous import and unsupported drops
 report an error. A selected layer past the canvas edge shows the overflow tint and
 an Expand canvas action whose hover shows the dashed ghost; `expand_canvas` is one
 undo step. Lines/arrows show endpoints, curve dots and starter dots with shipping
@@ -4362,7 +4362,7 @@ Add images now matches shipping's multi-select file input on both hosts (rfd
 `pick_files`, `NSOpenPanel.allowsMultipleSelection`). The chosen files feed the
 canvas-drop import queue with no drop point: unsupported files are skipped (all
 unsupported reports the drop error), the first image takes the default placement and
-each later one stacks below the previous import, one undo step per file. The drop
+each later one stacks below the previous import, one undo step per selection. The drop
 guide's snapped edge and the armed Expand canvas ghost now animate like shipping:
 `motion` adds `snap_bloom_breathe` (opacity and scale about the bloom's center),
 `snap_edge_pulse` and `expand_ghost_breathe`, and `editor_canvas` the accent bloom
@@ -4532,9 +4532,16 @@ before publishing document, frame, owned assets and one undo/redo step, matching
 Tauri. A late decode, dimension/budget or final-render failure publishes nothing
 and preserves existing Undo/Redo. The additive batch C ABI copies borrowed pixel
 buffers before returning; the single-image ABI remains compatible. Host collection
-also bounds cumulative decoded pixels. Add images and existing drops retain their
-per-image undo steps, pointer-guide placement and formats. Focused text controls
-retain normal paste.
+also bounds cumulative decoded pixels. Add images and file drops now decode their
+whole accepted selection before submitting that same atomic batch transaction.
+The first drop retains its pointer-guide placement; later files keep the original
+edge (including top/left after canvas expansion) relative to the preceding image,
+matching Tauri. Picker and clipboard batches default below. Formats and focused
+text paste remain unchanged. Late file-decode or candidate-render failure adds no
+layer or Undo step, preserves Redo, and permits retry. Shared tests cover all four
+edges and stacked placement; native controller/worker regressions cover picker and
+drop batching, one Undo/Redo and failures. Physical file dialogs, drag/drop,
+clipboard managers, IME and accessibility acceptance remain open on every OS.
 AppKit compares a private pasteboard token; Windows uses a registered private
 format and OS sequence; X11 serves a private selection with owner identity.
 Wayland uses the existing vendored winit/SCTK queue and focused input serial,

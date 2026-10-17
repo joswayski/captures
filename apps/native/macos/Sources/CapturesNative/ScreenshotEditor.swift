@@ -1354,12 +1354,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Shipping `cta-pulse` halo behind Apply crop while a crop is staged.
     lazy var applyCropHalo = EditorCtaHalo(tokens: tokens)
     private(set) var expandCanvasButton: CaptureButton!
-    /// Remaining files from one drop; each imports after the previous one.
+    /// Local sources decoded together before a single atomic import.
     private enum ImportSource {
         case file(URL)
         case bytes(Data)
     }
-    private var pendingImports: [ImportSource] = []
     /// Shipping `NumberInput`s: Shift rotation snap (1–180), New text size and
     /// the selected text's Size (8–512), with steppers and arrow keys.
     private let rotationSnap = TokenNumberField()
@@ -6074,11 +6073,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard let artifactID = state.artifactID, state.snapshot != nil, inlineTextInput == nil,
                   !importLoading else { return false }
             let images = urls.filter(NativeEditorCanvas.isSupportedImage)
-            guard let first = images.first else { showError(NativeEditorCanvas.dropUnsupported); return false }
+            guard !images.isEmpty else { showError(NativeEditorCanvas.dropUnsupported); return false }
             selectionOverlay.cancelGesture()
             importToken += 1
-            pendingImports = images.dropFirst().map(ImportSource.file)
-            decodeImport(.file(first), point: guide?.point, token: importToken,
+            decodeImports(images.map(ImportSource.file), point: guide?.point, token: importToken,
                          generation: state.generation, artifactID: artifactID)
             return true
         }
@@ -6126,17 +6124,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         let token = importToken
         let generation = state.generation
-        pendingImports = []
-        // Shipping's `<input type="file" multiple>` feeds the canvas-drop
-        // import: the first image takes the default placement and each later
-        // one stacks below the layer the previous one created.
+        // Decode the complete accepted selection before committing any layer.
         let completion: ([URL]) -> Void = { [weak self] urls in
             DispatchQueue.main.async {
                 guard let self, !urls.isEmpty, self.importToken == token else { return }
                 let images = urls.filter(NativeEditorCanvas.isSupportedImage)
-                guard let first = images.first else { self.showError(NativeEditorCanvas.dropUnsupported); return }
-                self.pendingImports = images.dropFirst().map(ImportSource.file)
-                self.decodeImport(.file(first), point: nil, token: token, generation: generation, artifactID: artifactID)
+                guard !images.isEmpty else { self.showError(NativeEditorCanvas.dropUnsupported); return }
+                self.decodeImports(images.map(ImportSource.file), point: nil, token: token, generation: generation, artifactID: artifactID)
             }
         }
         if let imagePicker {
@@ -6149,12 +6143,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
     }
 
-    /// Decode off the main thread, then import as one undoable edit. A drop
-    /// point places the image where the drop guide showed.
-    private func decodeImport(_ source: ImportSource, point: CGPoint?, token: Int, generation: Int, artifactID: String) {
-        decodeImports([source], point: point, token: token, generation: generation, artifactID: artifactID)
-    }
-
+    /// Decode the whole batch off the main thread, then import as one undoable
+    /// edit. Only the first image uses the drop guide point.
     private func decodeImports(_ sources: [ImportSource], point: CGPoint?, token: Int, generation: Int, artifactID: String) {
         guard importToken == token, state.generation == generation, state.artifactID == artifactID else { return }
         importLoading = true
@@ -6187,7 +6177,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     self.submitPendingImportIfReady()
                 case .failure(let error):
                     self.importLoading = false
-                    self.pendingImports = []
                     self.showError("Couldn’t import image: \(error.localizedDescription)")
                     self.updateControls()
                 }
@@ -6231,17 +6220,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.publish(imported.presentation, resetCrop: false)
                 self.activateTool(section: Section.layers, shape: nil)
                 self.editorError = nil
-                if !self.pendingImports.isEmpty, let artifactID = self.state.artifactID {
-                    // Later files in one drop stack below the layer just added.
-                    let next = self.pendingImports.removeFirst()
-                    self.updateControls()
-                    self.decodeImport(next, point: nil, token: token,
-                                      generation: self.state.generation, artifactID: artifactID)
-                    return
-                }
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
-                self.pendingImports = []
                 self.showError("Couldn’t import image: \(error.localizedDescription)")
             }
             self.updateControls()
@@ -6252,7 +6232,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         importLoading = false
         pendingImport = nil
-        pendingImports = []
     }
 
     private func transformLayer(_ transform: String, message: String) {
@@ -6334,7 +6313,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard !sources.isEmpty else { return }
         cancelDrawing(); cancelViewportPan()
         importToken += 1
-        pendingImports = []
         decodeImports(sources, point: nil, token: importToken,
                       generation: state.generation, artifactID: artifactID)
     }

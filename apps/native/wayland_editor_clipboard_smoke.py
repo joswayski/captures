@@ -9,15 +9,19 @@ import select
 import subprocess
 import time
 
+from gi.repository import GLib
+
 from instance_smoke import png
 from wayland_keyboard_smoke import KEYS
 from wayland_native_capture_smoke import wait, windows
 from wayland_screenshot_smoke import ready, stop
 from wayland_shortcuts_host_smoke import HEIGHT, WIDTH, main
+from x11_editor_smoke import FileChooser
 
 
 def cases(binary, pointer, root, env, bus):
     assert "DISPLAY" not in env
+    chooser = FileChooser(bus, [])
     keyboard = subprocess.Popen([pointer.args[0], "keyboard"], env=env,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     ready(keyboard)
@@ -194,6 +198,37 @@ def cases(binary, pointer, root, env, bus):
                                                      "-depth", "8", "rgba:-"])
                     assert pixel == bytes((213, 62, 85, 255)), pixel
                     assert source.read_bytes() == original
+
+                    def pick(paths):
+                        chooser.selected = paths
+                        click(window()["rect"]["width"] - 70, 26)
+                        wait(lambda: chooser.pending, "native multi-file picker request")
+                        assert chooser.calls[-1][1].get("multiple", False)
+                        GLib.idle_add(chooser.respond, False)
+                        time.sleep(1.5)
+
+                    # The real rfd portal transport receives an isolated chooser
+                    # response; no physical file dialog or X11 input is involved.
+                    pick([image, second])
+                    picked = count(9)
+                    assert [layer["name"] for layer in picked[-2:]] == [image.name, second.name]
+                    shot("picker-batch-imported")
+                    click(28, 430)
+                    key("z", "ctrl")
+                    unchanged_layers = count(7)
+                    shot("picker-batch-undone")
+                    for name, invalid in [("decode", corrupt), ("render", tall)]:
+                        pick([image, invalid])
+                        assert layers() == unchanged_layers, f"late picker {name} failure published partial layers"
+                        shot(f"picker-batch-{name}-error")
+                    click(28, 430)
+                    key("z", "ctrl+shift")
+                    assert count(9) == picked, "failed picker batches must preserve Redo"
+                    key("z", "ctrl")
+                    count(7)
+                    pick([image, second])
+                    assert [layer["name"] for layer in count(9)[-2:]] == [image.name, second.name]
+                    shot("picker-batch-retried")
                     (profile / "result.json").write_text(json.dumps({"passed": True,
                         "appearance": appearance, "private_offer": types[0].decode(),
                         "checks": ["PNG-pixels", "private-MIME-no-text", "24px-layer-offset",
@@ -201,6 +236,8 @@ def cases(binary, pointer, root, env, bus):
                             "external-selection-replacement", "external-image-precedence", "Undo-Redo",
                             "one-undo-per-batch", "late-decode-and-render-failure-atomic",
                             "failed-batch-preserves-Redo", "batch-retry",
+                            "picker-one-undo-per-batch", "picker-late-decode-render-failure-atomic",
+                            "picker-failure-preserves-Redo", "picker-retry",
                             "CRLF-file-order", "source-cancellation", "reclaim-after-cancel", "original-unchanged"]}, indent=2) + "\n")
                     print(f"PASS {appearance}: Wayland clipboard image/file input, ownership replacement/cancellation", flush=True)
                 except Exception:
@@ -210,6 +247,7 @@ def cases(binary, pointer, root, env, bus):
                     stop(app)
     finally:
         stop(keyboard)
+        chooser.remove_from_connection()
     return {"clipboard_appearances": 2, "core_selection_ownership": True,
             "image_read_protocol": "wlr-data-control", "physical_acceptance": False}
 
