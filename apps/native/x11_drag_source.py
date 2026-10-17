@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Disposable XDND file source for real native drop tests, not an app hook.
 
-Offers one file as text/uri-list to a target window, serves the XdndSelection
+Offers files as text/uri-list to a target window, serves the XdndSelection
 conversion, and drops when stdin receives a line ("drop" or "leave"). The real
 pointer stays with the harness, so the target sees ordinary motion events.
 """
@@ -17,7 +17,7 @@ from Xlib import X, display, protocol
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", type=lambda value: int(value, 0), required=True)
-    parser.add_argument("--file", type=Path, required=True)
+    parser.add_argument("--file", type=Path, action="append", required=True)
     parser.add_argument("--log", type=Path, required=True)
     args = parser.parse_args()
     connection = display.Display()
@@ -28,7 +28,7 @@ def main():
     atoms = {name: connection.intern_atom(name) for name in (
         "XdndAware", "XdndEnter", "XdndPosition", "XdndStatus", "XdndDrop", "XdndLeave",
         "XdndFinished", "XdndActionCopy", "XdndSelection", "text/uri-list")}
-    uri = (args.file.resolve().as_uri() + "\r\n").encode()
+    uri = "".join(path.resolve().as_uri() + "\r\n" for path in args.file).encode()
     source.set_selection_owner(atoms["XdndSelection"], X.CurrentTime)
     connection.sync()
 

@@ -17,7 +17,7 @@ use captures_app::{
 };
 use eframe::egui::{Color32, FontFamily, FontId, Stroke, StrokeKind, pos2, vec2};
 
-/// Queued dropped files and the live hover state. Files import one at a time
+/// Queued dropped batches and the live hover state. Batches import one at a time
 /// through the worker, preserving the one-in-flight edit contract.
 #[derive(Default)]
 pub(super) struct DropState {
@@ -25,7 +25,7 @@ pub(super) struct DropState {
     /// `input.time` when the current hover began: the drop guide's bloom,
     /// edge pulse and particles run from here.
     pub since: Option<f64>,
-    pub queue: std::collections::VecDeque<(PathBuf, Option<Point>)>,
+    pub queue: std::collections::VecDeque<(Vec<PathBuf>, Option<Point>)>,
 }
 
 fn accent(tokens: &Tokens, alpha: f32) -> Color32 {
@@ -107,15 +107,10 @@ pub(super) fn receive_drops(ctx: &egui::Context, view: &mut View, preview: Optio
     }
     view.drop.hovering = false;
     view.drop.since = None;
-    for (index, path) in paths.into_iter().enumerate() {
-        view.drop
-            .queue
-            .push_back((path, if index == 0 { point } else { None }));
-    }
+    view.drop.queue.push_back((paths, point));
 }
 
-/// Submit the next dropped file once no other edit is in flight. Later files
-/// in one drop stack below the layer the previous file created.
+/// Submit the next complete batch once no other edit is in flight.
 pub(super) fn drain_drops(view: &mut View, tx: &Sender<Job>) -> bool {
     if view.closed || view.close_requested {
         view.drop.queue.clear();
@@ -124,13 +119,13 @@ pub(super) fn drain_drops(view: &mut View, tx: &Sender<Job>) -> bool {
     if view.pending || view.inline.is_some() {
         return false;
     }
-    let Some((path, point)) = view.drop.queue.pop_front() else {
+    let Some((paths, point)) = view.drop.queue.pop_front() else {
         return false;
     };
     view.submit_job(
         tx,
         Job::Import {
-            path,
+            paths,
             selected_id: view.selected_layer.clone(),
             point,
         },

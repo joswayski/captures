@@ -729,10 +729,10 @@ void captures_editor_draw_geometry_free_v1(CapturesEditorDrawGeometry *handle);
  * concurrently. Hosts retain decoding, picker, clipboard and batch policy. */
 char *captures_editor_import_image_v1(CapturesEditorSession *session,
     const CapturesRegionPixels *pixels, const char *request_json);
-/* Atomic clipboard batch: pixels points to count readable initialized descriptors
+/* Atomic image batch: pixels points to count readable initialized descriptors
  * with the same row/lifetime contract above. request_json is
  * {names:[string,...],selected_id?,point?:{x,y}}; names must match count, nonzero.
- * The first image uses the supplied placement; later images stack below it in
+ * The first image sets the placement edge; later images retain that edge in
  * order. One Undo/Redo covers the whole batch. Any failure leaves document,
  * frame, history and owned assets unchanged. Success returns the same response
  * shape as import_image with the last layer_id. Existing single-image ABI remains
