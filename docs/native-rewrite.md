@@ -792,6 +792,17 @@ show the login item as
 unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
 Windows, Wayland and screen-reader acceptance remain open.
 
+The wgpu custom-color fields now display uppercase hex values and expose the
+shipping names for each color well and hex input without replacing their native
+accessibility roles. Escape discards the draft even after egui releases focus;
+Enter and blur still commit valid colors, invalid input restores the saved value,
+and stored settings remain lowercase. A UI/accessibility-tree regression covers
+these contracts. A real private-X11 check reproduces the old Escape save;
+light/dark checks verify cancellation, shorthand expansion, invalid input, reset
+and the normal/minimum presentation. AppKit's existing uppercase controls and labels are
+unchanged; Windows and Wayland use the shared wgpu path but this follow-up has no
+runtime or physical screen-reader acceptance on those hosts.
+
 The wgpu Preferences Find keyboard follow-up consumes each accepted key with its
 own modifiers. Enter/Shift+Enter retain search-field focus for repeated navigation
 and continued typing; Enter on a focused Find button remains that button's action.
