@@ -915,8 +915,10 @@ impl Preferences {
         }
     }
     fn sync_colors(&mut self) {
-        self.custom_accent = string_at(&self.value, &["custom_theme", "accent"]);
-        self.custom_signal = string_at(&self.value, &["custom_theme", "signal"]);
+        self.custom_accent =
+            string_at(&self.value, &["custom_theme", "accent"]).to_ascii_uppercase();
+        self.custom_signal =
+            string_at(&self.value, &["custom_theme", "signal"]).to_ascii_uppercase();
     }
     fn set(&mut self, path: &[&str], value: Value) {
         set(&mut self.value, path, value);
@@ -1801,8 +1803,8 @@ impl Preferences {
                             .clicked()
                         {
                             let defaults = captures_settings::CustomThemeSettings::default();
-                            self.custom_accent = defaults.accent;
-                            self.custom_signal = defaults.signal;
+                            self.custom_accent = defaults.accent.to_ascii_uppercase();
+                            self.custom_signal = defaults.signal.to_ascii_uppercase();
                             self.commit_colors();
                         }
                     });
@@ -1858,12 +1860,14 @@ impl Preferences {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = t.number("s-3");
                     ui.spacing_mut().interact_size = egui::vec2(36., t.number("h-md"));
-                    if ui
+                    let picker = ui
                         .color_edit_button_srgb(&mut rgb)
-                        .on_hover_text(format!("{title} color picker"))
-                        .changed()
-                    {
-                        let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+                        .on_hover_text(format!("{title} color picker"));
+                    ui.ctx().accesskit_node_builder(picker.id, |node| {
+                        node.set_label(format!("{title} color picker"));
+                    });
+                    if picker.changed() {
+                        let hex = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
                         if key == "accent" {
                             self.custom_accent = hex;
                         } else {
@@ -1886,15 +1890,21 @@ impl Preferences {
                                 .align(egui::Align2::LEFT_CENTER),
                         )
                     });
-                    let escape =
-                        response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    ui.ctx().accesskit_node_builder(response.id, |node| {
+                        node.set_label(format!("{title} hex value"));
+                    });
+                    // egui releases focus before drawing the field on Escape.
+                    let escape = (response.has_focus() || response.lost_focus())
+                        && ui.input(|i| i.key_pressed(egui::Key::Escape));
                     if escape {
-                        *field = old.clone();
+                        *field = old.to_ascii_uppercase();
                         response.surrender_focus();
                     } else if response.lost_focus()
                         || response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
                     {
-                        *field = normalize_hex_color(field).unwrap_or(old);
+                        *field = normalize_hex_color(field)
+                            .unwrap_or(old)
+                            .to_ascii_uppercase();
                         response.surrender_focus();
                         self.commit_colors();
                     }
@@ -3721,6 +3731,151 @@ mod tests {
         frame(&mut prefs, vec![button(true)]);
         frame(&mut prefs, vec![button(false)]);
         assert!(!prefs.value["freeze_screen"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn custom_colors_cancel_commit_and_expose_named_controls() {
+        use crate::accessibility::tests::{find_role, tree};
+        use egui::{Event, Key, Modifiers, accesskit::Role};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let settings = AppSettings {
+            theme: captures_settings::ColorTheme::Custom,
+            custom_theme: captures_settings::CustomThemeSettings {
+                accent: "#1a2b3c".into(),
+                signal: "#c4d5e6".into(),
+            },
+            ..Default::default()
+        };
+        captures_settings::save(&path, &settings).unwrap();
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::new(ctx.clone(), path.clone(), None, None);
+        let settle = |prefs: &mut Preferences| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                prefs.receive(&ctx);
+                assert!(prefs.save_error.is_none());
+                if !prefs.value.is_null() && !prefs.saving {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "settings I/O completed");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        settle(&mut prefs);
+        let tokens = crate::tokens::load()["light-mustard"].clone();
+        let frame = |prefs: &mut Preferences, events| {
+            tree(&ctx, egui::vec2(820., 6000.), events, |ui| {
+                prefs.ui(ui, &tokens, false);
+            })
+        };
+        let key = |key, modifiers| {
+            vec![
+                Event::ModifiersChanged(modifiers),
+                Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                },
+                Event::ModifiersChanged(Modifiers::NONE),
+            ]
+        };
+        frame(&mut prefs, vec![]);
+        let output = frame(&mut prefs, vec![]);
+        let bounds = output
+            .nodes
+            .iter()
+            .find(|(_, node)| {
+                node.role() == Role::TextInput
+                    && node
+                        .value()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("#1a2b3c"))
+            })
+            .unwrap()
+            .1
+            .bounds()
+            .unwrap();
+        let point = egui::pos2(
+            (bounds.x0 + bounds.x1) as f32 / 2.,
+            (bounds.y0 + bounds.y1) as f32 / 2.,
+        );
+        let edit = |prefs: &mut Preferences, text: &str| {
+            frame(prefs, vec![Event::PointerMoved(point)]);
+            for pressed in [true, false] {
+                frame(
+                    prefs,
+                    vec![Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+            frame(prefs, key(Key::A, Modifiers::COMMAND));
+            let output = frame(prefs, vec![Event::Text(text.into())]);
+            assert!(
+                output
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.role() == Role::TextInput && node.value() == Some(text)),
+                "typed draft is visible before commit or cancel"
+            );
+        };
+        edit(&mut prefs, "#abc");
+        frame(&mut prefs, key(Key::Escape, Modifiers::NONE));
+        settle(&mut prefs);
+        assert_eq!(
+            captures_settings::load(&path).unwrap().custom_theme.accent,
+            "#1a2b3c",
+            "Escape cancels a valid draft instead of saving it"
+        );
+        let cancelled = frame(&mut prefs, vec![]);
+        assert!(
+            cancelled
+                .nodes
+                .iter()
+                .any(|(_, node)| node.role() == Role::TextInput
+                    && node
+                        .value()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("#1a2b3c"))),
+            "Escape restores the displayed color"
+        );
+
+        for (draft, ending, stored, displayed) in [
+            ("#bCd", Key::Enter, "#bbccdd", "#BBCCDD"),
+            ("#invalid", Key::Tab, "#bbccdd", "#BBCCDD"),
+            ("#4e5f6a", Key::Tab, "#4e5f6a", "#4E5F6A"),
+        ] {
+            edit(&mut prefs, draft);
+            frame(&mut prefs, key(ending, Modifiers::NONE));
+            settle(&mut prefs);
+            let output = frame(&mut prefs, vec![]);
+            let accent = find_role(&output, Role::TextInput, "Accent hex value")
+                .unwrap()
+                .1;
+            assert_eq!(accent.value(), Some(displayed));
+            let signal = find_role(&output, Role::TextInput, "Recording signal hex value")
+                .unwrap()
+                .1;
+            assert_eq!(signal.value(), Some("#C4D5E6"));
+            for label in ["Accent color picker", "Recording signal color picker"] {
+                assert!(find_role(&output, Role::ColorWell, label).is_some());
+            }
+            let saved = captures_settings::load(&path).unwrap();
+            assert_eq!(saved.custom_theme.accent, stored);
+            assert_eq!(saved.custom_theme.signal, "#c4d5e6");
+        }
     }
 
     #[test]
