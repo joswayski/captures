@@ -963,84 +963,102 @@ impl EditorSession {
     /// Import one decoded image as a single undoable edit. Asset ownership,
     /// document history, and rendered pixels are published atomically.
     pub fn import_image(&mut self, request: ImportImage) -> Result<String, String> {
+        self.import_images(
+            [(request.name, request.pixels)],
+            request.selected_id,
+            request.point,
+        )
+    }
+
+    /// Import a decoded clipboard batch as one edit, returning the last layer ID.
+    /// Later images stack below the previous import. Nothing is published until
+    /// every image validates and the entire candidate document renders.
+    pub fn import_images(
+        &mut self,
+        images: impl IntoIterator<Item = (String, RgbaImage)>,
+        mut selected_id: Option<String>,
+        mut point: Option<Point>,
+    ) -> Result<String, String> {
         self.require_finished_text_input()?;
-        let (width, height) = request.pixels.dimensions();
-        validate_import_dimensions(width, height, retained_asset_pixels(&self.assets)?)?;
-        if request
-            .point
-            .is_some_and(|point| !point.x.is_finite() || !point.y.is_finite())
-        {
+        if point.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite()) {
             return Err("Image drop coordinates must be finite.".into());
         }
-
-        let layer_id = fresh_id(|id| {
-            self.history
-                .current()
-                .elements
-                .iter()
-                .any(|element| element.base().id == id)
-        });
-        let asset_id = fresh_id(|id| self.assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
-        let source = format!("{ASSET_PREFIX}{asset_id}");
         let mut document = self.history.current().clone();
-        let (target, placement, point) =
-            import_placement(&document, request.selected_id.as_deref(), request.point);
-        let bounds = position_imported_image(
-            width,
-            height,
-            document.width,
-            document.height,
-            target,
-            placement,
-            point,
-        );
-        let element = Element::Image(ImageElement {
-            base: ElementBase {
-                id: layer_id.clone(),
-                x: bounds.x,
-                y: bounds.y,
-                rotation: None,
-                locked: false,
-                visible: true,
-                opacity: 100.,
-                blend_mode: "source-over".into(),
-            },
-            source: "imported".into(),
-            src: source.clone(),
-            original_src: OptionalNullable::Null,
-            name: request.name,
-            source_artifact_id: None,
-            width: bounds.width,
-            height: bounds.height,
-            natural_width: f64::from(width),
-            natural_height: f64::from(height),
-            orientation: None,
-            extra: Default::default(),
-        });
-        if fully_outside_canvas(bounds, document.width, document.height) {
-            expand_document_for_element(
-                &mut document,
-                element,
-                if placement == ImportPlacement::Stack {
-                    24.
-                } else {
-                    0.
-                },
+        let mut assets = self.assets.clone();
+        let mut retained = retained_asset_pixels(&assets)?;
+        let mut last_id = None;
+        for (name, pixels) in images {
+            let (width, height) = pixels.dimensions();
+            validate_import_dimensions(width, height, retained)?;
+            retained += u64::from(width) * u64::from(height);
+            let layer_id = fresh_id(|id| {
+                document
+                    .elements
+                    .iter()
+                    .any(|element| element.base().id == id)
+            });
+            let asset_id = fresh_id(|id| assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
+            let source = format!("{ASSET_PREFIX}{asset_id}");
+            let (target, placement, position) =
+                import_placement(&document, selected_id.as_deref(), point.take());
+            let bounds = position_imported_image(
+                width,
+                height,
+                document.width,
+                document.height,
+                target,
+                placement,
+                position,
             );
-        } else {
-            document.elements.push(element);
+            let element = Element::Image(ImageElement {
+                base: ElementBase {
+                    id: layer_id.clone(),
+                    x: bounds.x,
+                    y: bounds.y,
+                    rotation: None,
+                    locked: false,
+                    visible: true,
+                    opacity: 100.,
+                    blend_mode: "source-over".into(),
+                },
+                source: "imported".into(),
+                src: source.clone(),
+                original_src: OptionalNullable::Null,
+                name,
+                source_artifact_id: None,
+                width: bounds.width,
+                height: bounds.height,
+                natural_width: f64::from(width),
+                natural_height: f64::from(height),
+                orientation: None,
+                extra: Default::default(),
+            });
+            if fully_outside_canvas(bounds, document.width, document.height) {
+                expand_document_for_element(
+                    &mut document,
+                    element,
+                    if placement == ImportPlacement::Stack {
+                        24.
+                    } else {
+                        0.
+                    },
+                );
+            } else {
+                document.elements.push(element);
+            }
+            assets.insert(source, Arc::new(pixels));
+            selected_id = Some(layer_id.clone());
+            last_id = Some(layer_id);
         }
-
+        let last_id = last_id.ok_or("No images to import.")?;
         let mut history = self.history.clone();
         history.commit(document);
-        let mut assets = self.assets.clone();
-        assets.insert(source, Arc::new(request.pixels));
         let pixels = render_frame(history.current(), &assets, self.fonts.as_mut())?;
 
         self.history = history;
         self.assets = assets;
         self.pixels = Arc::new(pixels);
-        Ok(layer_id)
+        Ok(last_id)
     }
 
     fn remove_image_background(

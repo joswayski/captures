@@ -1656,7 +1656,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                         qos: .userInitiated)
     private var importToken = 0
     private var importLoading = false
-    private var pendingImport: (image: EditorDecodedImage, generation: Int, artifactID: String, point: CGPoint?)?
+    private var pendingImport: (images: [EditorDecodedImage], generation: Int, artifactID: String, point: CGPoint?)?
 
     private enum Section {
         static let geometry = 0
@@ -6152,25 +6152,38 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Decode off the main thread, then import as one undoable edit. A drop
     /// point places the image where the drop guide showed.
     private func decodeImport(_ source: ImportSource, point: CGPoint?, token: Int, generation: Int, artifactID: String) {
+        decodeImports([source], point: point, token: token, generation: generation, artifactID: artifactID)
+    }
+
+    private func decodeImports(_ sources: [ImportSource], point: CGPoint?, token: Int, generation: Int, artifactID: String) {
         guard importToken == token, state.generation == generation, state.artifactID == artifactID else { return }
         importLoading = true
         editorError = nil
         updateControls()
         let decoder = imageDecoder
         Self.imageDecodeQueue.async {
-            let result = Result {
-                switch source {
-                case .file(let url): return try decoder(url)
-                case .bytes(let data): return try EditorImageDecoder.decode(data)
+            let result = Result { () throws -> [EditorDecodedImage] in
+                var images: [EditorDecodedImage] = []
+                var retainedPixels = 0
+                for source in sources {
+                    let image: EditorDecodedImage
+                    switch source {
+                    case .file(let url): image = try decoder(url)
+                    case .bytes(let data): image = try EditorImageDecoder.decode(data)
+                    }
+                    retainedPixels = try EditorImageDecoder.validateDimensions(
+                        width: image.width, height: image.height, retainedPixels: retainedPixels)
+                    images.append(image)
                 }
+                return images
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.importToken == token,
                       self.state.generation == generation,
                       self.state.artifactID == artifactID else { return }
                 switch result {
-                case .success(let image):
-                    self.pendingImport = (image, generation, artifactID, point)
+                case .success(let images):
+                    self.pendingImport = (images, generation, artifactID, point)
                     self.submitPendingImportIfReady()
                 case .failure(let error):
                     self.importLoading = false
@@ -6206,7 +6219,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let selectedID = selectedLayerID
         editorError = nil
         updateControls()
-        worker.importImage(pendingImport.image, selectedID: selectedID, point: pendingImport.point) { [weak self] result in
+        worker.importImages(pendingImport.images, selectedID: selectedID, point: pendingImport.point) { [weak self] result in
             guard let self, self.importToken == token else { return }
             self.importLoading = false
             switch result {
@@ -6318,12 +6331,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             if let data = item.data(forType: .png) ?? item.data(forType: .tiff) { return .bytes(data) }
             return nil
         }
-        guard let first = sources.first else { return }
+        guard !sources.isEmpty else { return }
         cancelDrawing(); cancelViewportPan()
         importToken += 1
-        pendingImports = Array(sources.dropFirst())
-        decodeImport(first, point: nil, token: importToken,
-                     generation: state.generation, artifactID: artifactID)
+        pendingImports = []
+        decodeImports(sources, point: nil, token: importToken,
+                      generation: state.generation, artifactID: artifactID)
     }
 
     private func combine(_ operation: String, id: String? = nil) {

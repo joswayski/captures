@@ -25,6 +25,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
+from instance_smoke import png as fixture_png
 from x11_capture_smoke import ScreenSaver
 
 
@@ -1248,8 +1249,6 @@ def main():
             save_layers(lambda values: len(values) == 3, "image paste undo")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             assert save_layers(lambda values: len(values) == 4, "image paste redo")[-1] == external
-            recording.send_signal(signal.SIGINT)
-            recording.wait(timeout=10)
             second = output / "Second é #.BMP"
             run("convert", "-size", "31x17", "xc:#268752", str(second))
             file_list = (png.as_uri() + "\r\n" + second.as_uri() + "\r\n").encode()
@@ -1257,10 +1256,33 @@ def main():
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             pasted_files = save_layers(lambda values: len(values) == 6, "ordered file clipboard paste")
             assert [image["name"] for image in pasted_files[-2:]] == [png.name, second.name]
+            shot(editor, "clipboard-batch-pasted")
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            save_layers(lambda values: len(values) == 5, "native one undo per file")
+            unchanged_layers = save_layers(lambda values: len(values) == 4, "one undo removes clipboard batch")
+            shot(editor, "clipboard-batch-undone")
+            corrupt = output / "Corrupt.png"
+            corrupt.write_bytes(b"not an image")
+            tall = output / "Tall.png"
+            tall.write_bytes(fixture_png(1, 16_384))
+            for name, invalid in (("decode", corrupt), ("render", tall)):
+                publish(b"ordinary text", "UTF8_STRING")
+                run("xdotool", "key", "ctrl+v", "sleep", ".7")
+                unchanged_status = status_pixels()
+                publish((png.as_uri() + "\r\n" + invalid.as_uri() + "\r\n").encode(), "text/uri-list")
+                run("xdotool", "key", "ctrl+v", "sleep", ".8")
+                save_layers(lambda values: values == unchanged_layers, f"late {name} failure is atomic")
+                shot(editor, f"clipboard-batch-{name}-error")
+                assert status_pixels() != unchanged_status, f"late {name} failure must report an error"
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
-            save_layers(lambda values: len(values) == 6, "file redo")
+            assert save_layers(lambda values: len(values) == 6, "batch redo survives both failures") == pasted_files
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: len(values) == 4, "batch redo is one edit")
+            publish(file_list, "text/uri-list")
+            run("xdotool", "key", "ctrl+v", "sleep", ".3")
+            save_layers(lambda values: len(values) == 6, "clipboard batch retry")
+            shot(editor, "clipboard-batch-retried")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
             transfer_payload = output / "clipboard-uris.txt"
             transfer_payload.write_bytes(file_list)
 
@@ -1294,19 +1316,22 @@ def main():
                     assert {event["kind"] for event in events if event["event"] == "split"} == {"escape", "CRLF"}
                 if targets:
                     assert any(event == {"event": "chunk", "target": "TARGETS", "count": 0} for event in events)
-                # Failed attempts must add no undo step; these two remove only
-                # the newly imported images and restore the original six layers.
-                for count in (7, 6):
-                    run("xdotool", "key", "ctrl+z", "sleep", ".3")
-                    save_layers(lambda values: len(values) == count, "incremental image undo")
+                # Failed attempts add no undo step; one Undo removes the entire
+                # successful batch and restores the original six layers.
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                save_layers(lambda values: len(values) == 6, "incremental batch undo")
 
             paste_incremental()
             unchanged_layers = layers()
+            clean_status = status_pixels()
             for mode in ("oversized-hint", "overflow", "missing-end", "slow", "wrong-type",
                          "wrong-terminator", "malformed-header"):
                 # Clear the preceding error with an ordinary no-op Paste first.
+                # Wait for its rendered receipt: two timeout cases have the same
+                # text, so sampling the previous error would hide the new one.
                 publish(b"ordinary text", "UTF8_STRING")
                 run("xdotool", "key", "ctrl+v", "sleep", ".7")
+                wait(lambda: status_pixels() == clean_status, "preceding clipboard error cleared")
                 unchanged_status = status_pixels()
                 incremental(mode)
                 run("xdotool", "key", "ctrl+v", "sleep", "2.7" if mode in ("missing-end", "slow") else ".8")
@@ -1341,7 +1366,8 @@ def main():
                            "private-OS-marker-no-text", "24px-layer-offset", "external-text-invalidates-layer",
                            "text-html-empty-silent-noop", "corrupt-image-error-and-recovery",
                            "filename-text-paste", "external-image-replaces-layer", "Undo-Redo",
-                           "ordered-local-file-paste", "one-undo-per-file", "owned-draft-after-source-deletion",
+                           "ordered-local-file-paste", "one-undo-per-batch", "owned-draft-after-source-deletion",
+                           "late-decode-and-render-failure-atomic", "failed-batch-preserves-Redo", "batch-retry",
                            "INCR-URI-and-TARGETS", "split-URI-escapes-and-CRLF", "INCR-exact-1MiB",
                            "INCR-errors-no-partial-import", "INCR-absolute-deadline", "INCR-error-retry-and-undo",
                            "URL-text-no-fetch", "session-local-layer-copy", "original-unchanged"],

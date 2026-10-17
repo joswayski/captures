@@ -976,6 +976,70 @@ pub unsafe extern "C" fn captures_editor_import_image_v1(
     })
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportImagesRequest {
+    names: Vec<String>,
+    selected_id: Option<String>,
+    point: Option<Point>,
+}
+
+/// Import a decoded batch as one atomic edit, returning the last layer ID.
+///
+/// # Safety
+/// The session is live and exclusively owned. `pixels` points to `count` aligned,
+/// initialized readable descriptors, each with the same borrowed RGBA row contract
+/// as `captures_editor_import_image_v1`. All buffers and NUL-terminated request JSON
+/// remain live through this call. Free the response with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_import_images_v1(
+    session: *mut EditorSession,
+    pixels: *const RegionPixels,
+    count: usize,
+    request_json: *const c_char,
+) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable JSON and a serialized live session.
+        let request = serde_json::from_str::<ImportImagesRequest>(unsafe { text(request_json) }?)
+            .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_mut() }.ok_or("editor handle is null")?;
+        if count == 0
+            || count != request.names.len()
+            || pixels.is_null()
+            || count > isize::MAX as usize / std::mem::size_of::<RegionPixels>()
+        {
+            return Err("Invalid editor image batch descriptors.".into());
+        }
+        // SAFETY: descriptor span was checked and caller provides readable storage.
+        let pixels = unsafe { std::slice::from_raw_parts(pixels, count) };
+        let mut total = 0_u64;
+        // Bound the aggregate allocation before copying any caller pixels.
+        for image in pixels {
+            let size = u64::from(image.width) * u64::from(image.height);
+            if size > MAX_RENDER_PIXELS.saturating_sub(total) {
+                return Err("Editor images exceed the total decoded-pixel limit.".into());
+            }
+            total += size;
+        }
+        let images = pixels
+            .iter()
+            .zip(request.names)
+            .map(|(pixels, name)| {
+                // SAFETY: the single-image validator checks each row layout before copying.
+                unsafe { copy_import_pixels(pixels) }.map(|pixels| (name, pixels))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let layer_id = session.import_images(images, request.selected_id, request.point)?;
+        session.refresh_layer_thumbnails();
+        Ok::<_, String>(json!({"layer_id":layer_id,"snapshot":session.snapshot()}))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(imported) => json!({"ok":true,"result":imported}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
 unsafe fn copy_import_pixels(pixels: &RegionPixels) -> Result<RgbaImage, String> {
     let width = pixels.width;
     let height = pixels.height;
@@ -2540,6 +2604,129 @@ mod tests {
             captures_editor_free_v1(reopened);
         }
         assert!(data.path().join("drafts").exists());
+    }
+
+    #[test]
+    fn batch_import_copies_all_buffers_and_preserves_history_on_late_failure() {
+        let (_data, open_request, original) = editor_fixture();
+        let mut first = [17, 91, 203, 255, 39, 119, 7, 255, 81, 23, 169, 255];
+        let mut second = [53, 127, 19, 255, 0, 0, 0, 0, 81, 93, 211, 255];
+        let images = [
+            RegionPixels {
+                data: first.as_ptr(),
+                length: first.len(),
+                width: 3,
+                height: 1,
+                bytes_per_row: 12,
+            },
+            RegionPixels {
+                data: second.as_ptr(),
+                length: second.len(),
+                width: 1,
+                height: 2,
+                bytes_per_row: 8,
+            },
+        ];
+        let request =
+            c"{\"names\":[\"first.png\",\"second.png\"],\"selected_id\":\"capture-background\"}";
+        // SAFETY: descriptors and buffers remain live through each serialized call.
+        // Invalid layouts are rejected before reading their declared pixels.
+        unsafe {
+            let session = open_editor(&open_request);
+            let imported = take_json(captures_editor_import_images_v1(
+                session,
+                images.as_ptr(),
+                2,
+                request.as_ptr(),
+            ));
+            assert_eq!(imported["ok"], true, "{imported}");
+            let snapshot = imported["result"]["snapshot"].clone();
+            assert_eq!(
+                snapshot["document"]["elements"].as_array().unwrap().len(),
+                3
+            );
+            assert_eq!(snapshot["document"]["height"], 6.);
+            assert_eq!(
+                imported["result"]["layer_id"],
+                snapshot["document"]["elements"][2]["id"]
+            );
+            let frame = (&*session).pixels();
+            assert_eq!(frame.get_pixel(2, 3).0, [17, 91, 203, 255]);
+            assert_eq!(frame.get_pixel(3, 4).0, [53, 127, 19, 255]);
+            assert_eq!(frame.get_pixel(3, 5).0, [81, 93, 211, 255]);
+            first.fill(0);
+            second.fill(0);
+            let undo = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"undo\"}".as_ptr(),
+            ));
+            assert_eq!(
+                undo["result"]["document"]["elements"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!((&*session).pixels().as_ref(), &original);
+            assert_eq!(undo["result"]["can_redo"], true);
+            let mut invalid = images;
+            invalid[1].length = 3;
+            let failed = take_json(captures_editor_import_images_v1(
+                session,
+                invalid.as_ptr(),
+                2,
+                request.as_ptr(),
+            ));
+            assert_eq!(failed["ok"], false);
+            assert!(failed["error"].as_str().unwrap().contains("too short"));
+            let mismatch = take_json(captures_editor_import_images_v1(
+                session,
+                images.as_ptr(),
+                1,
+                request.as_ptr(),
+            ));
+            assert_eq!(mismatch["ok"], false);
+            // Individually valid dimensions exceed the aggregate budget by
+            // one pixel. Reject the batch before reading any caller buffer.
+            let mut oversized = images;
+            oversized[0] = RegionPixels {
+                data: std::ptr::null(),
+                length: 0,
+                width: 10_000,
+                height: 10_000,
+                bytes_per_row: 40_000,
+            };
+            oversized[1].height = 1;
+            let over_budget = take_json(captures_editor_import_images_v1(
+                session,
+                oversized.as_ptr(),
+                2,
+                request.as_ptr(),
+            ));
+            assert_eq!(over_budget["ok"], false);
+            assert!(
+                over_budget["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("total decoded-pixel limit")
+            );
+            let after = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"snapshot\"}".as_ptr(),
+            ));
+            assert_eq!(after["result"], undo["result"]);
+            let redo = take_json(captures_editor_request_v1(
+                session,
+                c"{\"operation\":\"redo\"}".as_ptr(),
+            ));
+            assert_eq!(redo["result"]["document"], snapshot["document"]);
+            assert_eq!(
+                (&*session).pixels(),
+                frame,
+                "Redo uses owned copies, not caller buffers"
+            );
+            captures_editor_free_v1(session);
+        }
     }
 
     #[test]

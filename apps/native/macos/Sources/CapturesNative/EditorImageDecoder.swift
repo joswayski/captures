@@ -7,6 +7,17 @@ enum EditorImageDecoder {
     private static let maximumDimension = 16_384
     private static let maximumPixels = 100_000_000
 
+    /// Return the cumulative decoded-pixel count before retaining another image.
+    static func validateDimensions(width: Int, height: Int, retainedPixels: Int = 0) throws -> Int {
+        guard width > 0, height > 0, width <= maximumDimension, height <= maximumDimension,
+              retainedPixels >= 0, retainedPixels <= maximumPixels,
+              width * height <= maximumPixels - retainedPixels else {
+            throw AppBridgeError.backend(
+                "Editor images are limited to 16,384 pixels per side and 100,000,000 decoded pixels.")
+        }
+        return retainedPixels + width * height
+    }
+
     static func decode(_ url: URL) throws -> EditorDecodedImage {
         if url.pathExtension.lowercased() == "svg" {
             var response: UnsafeMutablePointer<CChar>?
@@ -56,12 +67,7 @@ enum EditorImageDecoder {
         let swapsAxes = [5, 6, 7, 8].contains(orientation)
         let width = swapsAxes ? sourceHeight : sourceWidth
         let height = swapsAxes ? sourceWidth : sourceHeight
-        guard width <= maximumDimension, height <= maximumDimension,
-              width.multipliedReportingOverflow(by: height).overflow == false,
-              width * height <= maximumPixels else {
-            throw AppBridgeError.backend(
-                "Editor images are limited to 16,384 pixels per side and 100,000,000 decoded pixels.")
-        }
+        _ = try validateDimensions(width: width, height: height)
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,

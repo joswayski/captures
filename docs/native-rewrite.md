@@ -4525,9 +4525,16 @@ not persisted or shared across windows. Copy image remains separate.
 External clipboard PNG/TIFF bytes on AppKit, RGBA on wgpu, or supported local
 image files import through Add images placement, sizing and canvas expansion,
 selecting the last image and Select tool. Imported pixels belong to the draft;
-no URL/HTML image resolution or drag-cache fallback is used. Native retains one
-undo step per image, unlike Tauri's single batch step. Existing drops retain
-pointer-guide placement and formats. Focused text controls retain normal paste.
+no URL/HTML image resolution or drag-cache fallback is used. Both native hosts
+decode clipboard images before submitting one batch to the shared session.
+The session validates cumulative retained pixels and renders the entire candidate
+before publishing document, frame, owned assets and one undo/redo step, matching
+Tauri. A late decode, dimension/budget or final-render failure publishes nothing
+and preserves existing Undo/Redo. The additive batch C ABI copies borrowed pixel
+buffers before returning; the single-image ABI remains compatible. Host collection
+also bounds cumulative decoded pixels. Add images and existing drops retain their
+per-image undo steps, pointer-guide placement and formats. Focused text controls
+retain normal paste.
 AppKit compares a private pasteboard token; Windows uses a registered private
 format and OS sequence; X11 serves a private selection with owner identity.
 Wayland uses the existing vendored winit/SCTK queue and focused input serial,

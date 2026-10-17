@@ -875,8 +875,10 @@ a private marker, not visible text. Cmd/Ctrl V reuses that snapshot only while
 the marker still belongs to this editor; repeated layer pastes offset by 24 pixels.
 External clipboard images or local image files instead import through Add images
 placement, with owned draft pixels, canvas expansion, last-image selection and
-undo/redo. Native multi-image paste keeps one undo step per image (Tauri uses one
-batch step). Text fields retain normal paste; URL/HTML-only images are not fetched.
+one undo/redo step for the entire paste, matching Tauri. If any image cannot be
+decoded or the resulting canvas cannot be rendered, nothing is added and existing
+Undo/Redo remains available. Add images and file drops keep their existing per-image
+undo steps. Text fields retain normal paste; URL/HTML-only images are not fetched.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 X11 file-list paste accepts incremental clipboard transfers within the existing
