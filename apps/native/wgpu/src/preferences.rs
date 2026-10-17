@@ -1068,6 +1068,7 @@ impl Preferences {
                 "recording": self.shortcut_recorder.as_ref().map(|recorder| recorder.field.label()),
                 "find": {
                     "open": self.find_open,
+                    "query": self.query,
                     "count": self.matches.len(),
                     "index": self.match_index,
                     "focused": ui.memory(|m| m.has_focus(egui::Id::unique("settings-find"))),
@@ -1183,6 +1184,14 @@ impl Preferences {
             return;
         }
         let in_find = ui.memory(|m| m.has_focus(egui::Id::unique("settings-find")));
+        // Escape releases TextEdit focus before this pass. Let the color field
+        // see it so it can cancel its draft instead of committing on blur.
+        let in_color = ui.memory(|m| {
+            ["accent", "signal"].iter().any(|key| {
+                let id = custom_color_field_id(key);
+                m.has_focus(id) || m.had_focus_last_frame(id)
+            })
+        });
         let mut focus_find = false;
         ui.input_mut(|input| {
             input.events.retain(|event| {
@@ -1203,9 +1212,12 @@ impl Preferences {
                 let plain = modifiers.matches_exact(shift);
                 let command = modifiers.matches_exact(egui::Modifiers::COMMAND | shift);
                 if *key == egui::Key::F && command && !modifiers.shift {
+                    if !self.find_open {
+                        self.find_jump = true;
+                    }
                     self.find_open = true;
                     focus_find = true;
-                } else if self.find_open && *key == egui::Key::Escape && plain {
+                } else if self.find_open && *key == egui::Key::Escape && plain && !in_color {
                     self.close_find();
                 } else if self.find_open
                     && ((*key == egui::Key::F3 && plain)
@@ -1221,13 +1233,21 @@ impl Preferences {
             });
         });
         if focus_find && self.find_open {
-            ui.memory_mut(|m| m.request_focus(egui::Id::unique("settings-find")));
+            let id = egui::Id::unique("settings-find");
+            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(self.query.chars().count()),
+                )));
+            state.store(ui.ctx(), id);
+            ui.memory_mut(|m| m.request_focus(id));
         }
     }
 
     fn close_find(&mut self) {
         self.find_open = false;
-        self.query.clear();
         self.matches.clear();
     }
 
@@ -1320,7 +1340,9 @@ impl Preferences {
         } else {
             Vec::new()
         };
-        self.match_index = self.match_index.min(self.matches.len().saturating_sub(1));
+        if self.find_open {
+            self.match_index = self.match_index.min(self.matches.len().saturating_sub(1));
+        }
         let inset = t.number("s-3");
         for (index, (rect, background)) in self.matches.iter().enumerate() {
             let stroke = if index == self.match_index {
@@ -1883,6 +1905,7 @@ impl Preferences {
                     let response = field_scope(ui, t, |ui| {
                         ui.add(
                             egui::TextEdit::singleline(field)
+                                .id(custom_color_field_id(key))
                                 .font(egui::FontId::monospace(t.number("text-xs")))
                                 .margin(egui::vec2(t.number("s-3"), t.number("s-1")))
                                 .desired_width(ui.available_width())
@@ -2967,6 +2990,10 @@ fn description(
     ui.label(job);
 }
 
+fn custom_color_field_id(key: &str) -> egui::Id {
+    egui::Id::unique("settings-custom-color").with(key)
+}
+
 /// Shipping text fields: `--surface-field`, `--control-border`, accent focus.
 fn field_scope<R>(ui: &mut egui::Ui, t: &Tokens, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.scope(|ui| {
@@ -3791,6 +3818,8 @@ mod tests {
             ]
         };
         frame(&mut prefs, vec![]);
+        frame(&mut prefs, key(Key::F, Modifiers::COMMAND));
+        frame(&mut prefs, vec![Event::Text("Custom colors".into())]);
         let output = frame(&mut prefs, vec![]);
         let bounds = output
             .nodes
@@ -3842,6 +3871,10 @@ mod tests {
         );
         let cancelled = frame(&mut prefs, vec![]);
         assert!(
+            find_role(&cancelled, Role::Button, preferences::FIND_CLOSE).is_some(),
+            "The color field owns Escape; Find stays open"
+        );
+        assert!(
             cancelled
                 .nodes
                 .iter()
@@ -3851,6 +3884,14 @@ mod tests {
                         .is_some_and(|value| value.eq_ignore_ascii_case("#1a2b3c"))),
             "Escape restores the displayed color"
         );
+        frame(&mut prefs, key(Key::Escape, Modifiers::NONE));
+        let closed = frame(&mut prefs, vec![]);
+        assert!(
+            find_role(&closed, Role::Button, preferences::FIND_CLOSE).is_none(),
+            "A second Escape closes Find after cancelling the color edit"
+        );
+        frame(&mut prefs, key(Key::F, Modifiers::COMMAND));
+        frame(&mut prefs, vec![]);
 
         for (draft, ending, stored, displayed) in [
             ("#bCd", Key::Enter, "#bbccdd", "#BBCCDD"),
@@ -3948,8 +3989,27 @@ mod tests {
                 "{modifiers:?}+{pressed:?} should show {expected}"
             );
         }
+        frame(&mut prefs, key(Key::Enter, Modifiers::NONE));
+        frame(&mut prefs, key(Key::Escape, Modifiers::NONE));
+        assert!(!frame(&mut prefs, vec![]).contains(&"2 of 4".into()));
+        frame(&mut prefs, key(Key::F, Modifiers::COMMAND));
+        assert!(
+            frame(&mut prefs, vec![]).contains(&"2 of 4".into()),
+            "Reopen retains the query and selected match"
+        );
+        frame(&mut prefs, vec![egui::Event::Text("cursor".into())]);
+        assert!(
+            frame(&mut prefs, vec![]).contains(&"1 of 2".into()),
+            "Reopen selects the whole query for replacement"
+        );
         frame(&mut prefs, vec![egui::Event::Text("zz".into())]);
         assert!(frame(&mut prefs, vec![]).contains(&"No results".into()));
+        frame(&mut prefs, key(Key::F, Modifiers::COMMAND));
+        frame(&mut prefs, vec![egui::Event::Text("screenshots".into())]);
+        assert!(
+            frame(&mut prefs, vec![]).contains(&"1 of 4".into()),
+            "Find also selects the query when already open"
+        );
         frame(&mut prefs, key(egui::Key::Escape, egui::Modifiers::NONE));
         assert!(!frame(&mut prefs, vec![]).contains(&"No results".into()));
         assert_eq!(

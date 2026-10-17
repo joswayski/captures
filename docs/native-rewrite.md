@@ -816,6 +816,26 @@ match. AppKit's existing Cmd+G menu and find-field Return routing are unchanged;
 macOS, Windows, Wayland, physical keyboard and screen-reader execution remain
 unverified for this follow-up. No end-to-end acceptance gate closes.
 
+The Find continuity follow-up retains the query and selected match across close
+and reopen in both native hosts. Cmd/Ctrl+F selects the whole query even when Find
+is already open; reopening reveals the current row again. This state is local to
+Preferences, not persisted in settings. AppKit restyling also retains the current
+search and match. The wgpu host leaves Escape to a focused custom-color field,
+including the frame in which egui releases focus, so cancelling the draft neither
+saves it nor closes Find. The next Escape can close Find normally.
+
+Two extended egui regressions fail on the unchanged code (a cancelled draft saves
+`#aabbcc`, and reopening loses the search) and pass after the change. Real private
+X11 light/dark input checks cover both color fields, Enter/blur and invalid-input
+controls, retained matches and replacement typing at normal/minimum sizes. Private
+Sway 1.9 checks with DISPLAY unset also cover reopened queries, selected matches,
+replacement typing and unchanged source/settings/History bytes in both appearances
+and sizes. The fixture waits for the complete query, not a matching count shared
+by an intermediate prefix, before sending navigation keys. AppKit has an extended
+field-editor/key-view regression; macOS and Windows runtime
+verification is pending. Physical input, IME and screen-reader gates remain open;
+no public download, updater pin or release channel changes.
+
 The coordinated Preferences/Feedback follow-up tracks shipping PR #926. General
 is first and contains **Start Captures on login**, with the shipping background
 sign-in description and a separate native development-profile identity. Existing

@@ -654,6 +654,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var retryButton: CaptureButton?
     private var findBar: Surface?
     private var findField: NSTextField?
+    private var findQuery = ""
     private var findCount: NSTextField?
     private var findPrevious: CaptureButton?
     private var findNext: CaptureButton?
@@ -2057,7 +2058,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let gap = tokens.number("s-3")
         let countWidth: CGFloat = 5.5 * tokens.number("text-md")
         let fieldWidth = bar.bounds.width - countWidth - side * 3 - gap * 4
-        let field = NSTextField(string: ""); field.placeholderString = PreferencesPolicy.text("find.placeholder")
+        let field = NSTextField(string: findQuery); field.placeholderString = PreferencesPolicy.text("find.placeholder")
         field.frame = NSRect(x: 0, y: 0, width: fieldWidth, height: side)
         field.autoresizingMask = [.width]; field.identifier = NSUserInterfaceItemIdentifier("find")
         field.setAccessibilityLabel(PreferencesPolicy.text("find.placeholder"))
@@ -2079,7 +2080,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
         root.addSubview(bar); findBar = bar; findField = field
         setHeader(height: Self.headerHeight + Self.findHeight)
-        updateFind()
+        updateFind(scroll: true)
         installKeyViewLoop()
         windowFocusFind()
     }
@@ -2090,7 +2091,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             height: root.bounds.height - height - 1)
     }
 
-    private func windowFocusFind() { root.window?.makeFirstResponder(findField) }
+    private func windowFocusFind() { findField?.selectText(nil) }
     func controlTextDidChange(_ obj: Notification) {
         if (obj.object as? NSTextField)?.identifier?.rawValue == "find" { matchIndex = 0; updateFind(scroll: true) }
     }
@@ -2138,6 +2139,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     func closeFind() {
+        findQuery = findField?.stringValue ?? findQuery
         findBar?.removeFromSuperview(); findBar = nil; findField = nil; findCount = nil
         findPrevious = nil; findNext = nil; matches = []
         setHeader(height: Self.headerHeight)
@@ -2162,6 +2164,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         defer { rebuilding = false }
         let oldY = scroll.contentView.bounds.origin.y
         let query = findField?.stringValue
+        if let query { findQuery = query }
         let focused = (root.window?.firstResponder as? NSView)?.accessibilityLabel()
         let text = status.stringValue, kind = statusKind
         root.subviews.forEach { $0.removeFromSuperview() }
@@ -2171,7 +2174,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         rebuildCards()
         scroll.contentView.scroll(to: NSPoint(x: 0, y: oldY))
         revealHighlightIfNeeded()
-        if let query { showFind(); findField?.stringValue = query; updateFind() }
+        if query != nil { showFind() }
         else if let focused {
             func restore(_ view: NSView) -> NSView? {
                 if view.accessibilityLabel() == focused, view.acceptsFirstResponder { return view }

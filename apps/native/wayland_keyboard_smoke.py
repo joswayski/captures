@@ -129,8 +129,10 @@ def cases(binary, pointer, root, env, bus):
                     history_before = snapshot(history)
                     (profile / "history-before.json").write_text(json.dumps(history_before, indent=2) + "\n")
 
-                    def expect_find(count, index, focused=True, opened=True):
+                    def expect_find(count, index, focused=True, opened=True, query=None):
                         expected = dict(open=opened, count=count, index=index, focused=focused)
+                        if query is not None:
+                            expected["query"] = query
                         def matches():
                             state = layout("preferences-shortcuts-layout").get("find", {})
                             return state if all(state.get(k) == v for k, v in expected.items()) else None
@@ -147,7 +149,7 @@ def cases(binary, pointer, root, env, bus):
                         key("f", "ctrl")
                         expect_find(0, 0)
                         type_text("screenshots")
-                        expect_find(5, 0)
+                        expect_find(5, 0, query="screenshots")
                         # Four capture rows plus Wayland's shortcut limitation
                         # copy match; distinct rows expose direction/duplicate errors.
                         for name, mods, index in (("enter", "none", 1), ("enter", "none", 2),
@@ -176,14 +178,28 @@ def cases(binary, pointer, root, env, bus):
                         key("enter")
                         expect_find(5, 4)
                         type_text("zz")  # Subsequent typing proves Enter retained TextEdit focus.
-                        expect_find(0, 0)
+                        expect_find(0, 0, query="screenshotszz")
                         key("a", "ctrl")
                         type_text("cursor")
-                        expect_find(2, 0)
+                        # Intermediate prefixes can have the same count. Wait for
+                        # the actual query before testing the next command.
+                        expect_find(2, 0, query="cursor")
+                        key("enter")
+                        expect_find(2, 1)
                         key("escape")
-                        expect_find(0, 0, False, False)
+                        expect_find(0, 1, False, False)
                         key("f", "ctrl")
-                        expect_find(0, 0)
+                        expect_find(2, 1, query="cursor")
+                        wait(revealed, "Reopened Find match visible")
+                        shot(PREFERENCES, f"find-reopened-{size}")
+                        type_text("screenshots")  # Reopen selects the whole query.
+                        expect_find(5, 0, query="screenshots")
+                        key("f", "ctrl")  # Already open also selects the query.
+                        type_text("cursor")
+                        expect_find(2, 0, query="cursor")
+                        key("a", "ctrl")
+                        key("backspace")
+                        expect_find(0, 0, query="")
                         key("escape")
                         expect_find(0, 0, False, False)
 
