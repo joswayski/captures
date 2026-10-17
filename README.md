@@ -879,6 +879,8 @@ undo/redo. Native multi-image paste keeps one undo step per image (Tauri uses on
 batch step). Text fields retain normal paste; URL/HTML-only images are not fetched.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
+X11 file-list paste accepts incremental clipboard transfers within the existing
+1 MiB/two-second transfer limits; incomplete or invalid transfers import nothing.
 On Wayland, clipboard pixels require compositor data-control support; editable
 layer ownership and local-file paste use the core selection protocol.
 **Copy image** remains the separate pixel-copy action. These are opt-in native

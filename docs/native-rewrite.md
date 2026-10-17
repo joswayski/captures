@@ -4536,7 +4536,16 @@ cancellation/replacement. No app-local revision substitutes for external change
 detection. External Wayland image reads still require the existing arboard
 data-control support; local files use the focused core selection offer. Linux
 URI-list parsing splits literal CRLF before percent decoding and bounds transfers
-to 1 MiB/two seconds (X11 incremental URI-list transfers are rejected).
+to 1 MiB/two seconds per selection transfer. X11 supports direct and ICCCM `INCR`
+transfers for both advertised formats and URI lists. It acknowledges each property
+once, accepts the size hint only as a lower bound, and waits for a typed empty
+terminator before parsing or importing anything. Malformed chunks, oversized
+hints/payloads and incomplete streams fail without publishing partial images;
+closing the private requestor connection abandons the transfer. Private-X11
+light/dark checks cover split URI escapes/CRLF, the exact byte limit, malformed
+and stalled owners, a slow stream that must not reset the deadline, retry and Undo.
+AppKit, Windows and Wayland transports are unchanged by this X11-specific
+follow-up; physical clipboard-manager acceptance remains open.
 Real private-X11 and headless-Sway input checks pass in light/dark, including
 image pixels, private offers, replacement/cancellation and ordered file paste;
 X11 also covers text-field paste and owned draft reopen after source deletion.

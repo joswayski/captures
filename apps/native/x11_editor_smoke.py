@@ -1222,6 +1222,10 @@ def main():
                                      ("empty", b"", "UTF8_STRING")]:
                 publish(data, mime)
                 run("xdotool", "key", "ctrl+v", "sleep", ".6")
+                # Compare idle results, not a transient disabled Save button
+                # while a slow host is still reading the clipboard offer.
+                wait(lambda: "Working…" not in run("xdotool", "getwindowname", editor).decode(),
+                     f"{name}-only Paste completes")
                 shot(editor, f"clipboard-{name}-ignored")
                 assert layers() == unchanged_layers, "unsupported input must not paste the retained snapshot"
                 assert status_pixels() == unchanged_status, f"{name}-only Paste changed the export status"
@@ -1246,9 +1250,10 @@ def main():
             assert save_layers(lambda values: len(values) == 4, "image paste redo")[-1] == external
             recording.send_signal(signal.SIGINT)
             recording.wait(timeout=10)
-            second = output / "Second.BMP"
+            second = output / "Second é #.BMP"
             run("convert", "-size", "31x17", "xc:#268752", str(second))
-            publish((png.as_uri() + "\r\n" + second.as_uri() + "\r\n").encode(), "text/uri-list")
+            file_list = (png.as_uri() + "\r\n" + second.as_uri() + "\r\n").encode()
+            publish(file_list, "text/uri-list")
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             pasted_files = save_layers(lambda values: len(values) == 6, "ordered file clipboard paste")
             assert [image["name"] for image in pasted_files[-2:]] == [png.name, second.name]
@@ -1256,6 +1261,66 @@ def main():
             save_layers(lambda values: len(values) == 5, "native one undo per file")
             run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 6, "file redo")
+            transfer_payload = output / "clipboard-uris.txt"
+            transfer_payload.write_bytes(file_list)
+
+            def incremental(mode="normal", targets=False):
+                name = f"incr-{mode}" + ("-targets" if targets else "")
+                log = output / f"{name}-protocol.jsonl"
+                assert spawn(name, ["/usr/bin/python3", str(Path(__file__).with_name("x11_clipboard_source.py")),
+                    "--payload", str(transfer_payload), "--log", str(log), "--mode", mode,
+                    *(["--targets-incr"] if targets else [])], announce=True) == "ready"
+                return log
+
+            recording = spawn("clipboard-incr-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "26", "-pix_fmt", "yuv420p", str(output / "clipboard-incr-interaction.mp4")])
+            for y in [80, 120, 160, 200, 260, 340, 430]:
+                run("xdotool", "mousemove", "--sync", "--window", editor, "28", str(y), "sleep", ".15")
+            click(editor, 28, 430)
+
+            def paste_incremental(mode="normal", targets=False):
+                log = incremental(mode, targets)
+                run("xdotool", "key", "ctrl+v", "sleep", ".3")
+                values = save_layers(lambda values: len(values) == 8, "incremental file clipboard paste")
+                assert [layer["name"] for layer in values[-2:]] == [png.name, second.name]
+                asset_pixel(values[-2], 89, 42, (60, 179, 113, 255))
+                asset_pixel(values[-1], 30, 16, (38, 135, 82, 255))
+                shot(editor, "clipboard-incremental-files")
+                events = [json.loads(line) for line in log.read_text().splitlines()]
+                assert any(event == {"event": "chunk", "target": "text/uri-list", "count": 0} for event in events)
+                if mode == "normal":
+                    assert {event["kind"] for event in events if event["event"] == "split"} == {"escape", "CRLF"}
+                if targets:
+                    assert any(event == {"event": "chunk", "target": "TARGETS", "count": 0} for event in events)
+                # Failed attempts must add no undo step; these two remove only
+                # the newly imported images and restore the original six layers.
+                for count in (7, 6):
+                    run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                    save_layers(lambda values: len(values) == count, "incremental image undo")
+
+            paste_incremental()
+            unchanged_layers = layers()
+            for mode in ("oversized-hint", "overflow", "missing-end", "slow", "wrong-type",
+                         "wrong-terminator", "malformed-header"):
+                # Clear the preceding error with an ordinary no-op Paste first.
+                publish(b"ordinary text", "UTF8_STRING")
+                run("xdotool", "key", "ctrl+v", "sleep", ".7")
+                unchanged_status = status_pixels()
+                incremental(mode)
+                run("xdotool", "key", "ctrl+v", "sleep", "2.7" if mode in ("missing-end", "slow") else ".8")
+                shot(editor, f"clipboard-incr-{mode}-error")
+                assert "Working…" not in run("xdotool", "getwindowname", editor).decode(), (
+                    f"{mode} must finish within the bounded transfer deadline")
+                assert layers() == unchanged_layers, f"{mode} imported partial clipboard data"
+                assert status_pixels() != unchanged_status, f"{mode} must report a clipboard error"
+            # A zero lower-bound hint must not mean EOF. The exact cap is valid,
+            # and a later transfer may incrementally advertise TARGETS too.
+            paste_incremental("exact-limit")
+            paste_incremental(targets=True)
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
             png.unlink(); second.unlink()
             publish(b"https://example.invalid/never-fetch.png", "UTF8_STRING")
             close(editor)
@@ -1277,6 +1342,8 @@ def main():
                            "text-html-empty-silent-noop", "corrupt-image-error-and-recovery",
                            "filename-text-paste", "external-image-replaces-layer", "Undo-Redo",
                            "ordered-local-file-paste", "one-undo-per-file", "owned-draft-after-source-deletion",
+                           "INCR-URI-and-TARGETS", "split-URI-escapes-and-CRLF", "INCR-exact-1MiB",
+                           "INCR-errors-no-partial-import", "INCR-absolute-deadline", "INCR-error-retry-and-undo",
                            "URL-text-no-fetch", "session-local-layer-copy", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native clipboard: image pixels, OS ownership, fields, file order, undo and owned drafts")

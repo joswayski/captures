@@ -342,7 +342,7 @@ mod x11_marker {
                 0,
                 WindowClass::INPUT_ONLY,
                 0,
-                &CreateWindowAux::new(),
+                &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
             )?
             .check()?;
         let selection = connection.intern_atom(false, b"CLIPBOARD")?.reply()?.atom;
@@ -356,63 +356,129 @@ mod x11_marker {
             .atom;
         let targets = connection.intern_atom(false, b"TARGETS")?.reply()?.atom;
         let png = connection.intern_atom(false, b"image/png")?.reply()?.atom;
-        let mut has_png = false;
-        for requested in [targets, target] {
-            connection
-                .convert_selection(window, selection, requested, property, x11rb::CURRENT_TIME)?
-                .check()?;
-            connection.flush()?;
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            loop {
-                if std::time::Instant::now() >= deadline {
-                    return Err("Clipboard file transfer timed out.".into());
-                }
-                if let Some(Event::SelectionNotify(event)) = connection.poll_for_event()? {
-                    if event.requestor != window || event.target != requested {
-                        continue;
-                    }
-                    if event.property == 0 {
-                        if requested == targets
-                            && connection.get_selection_owner(selection)?.reply()?.owner == 0
-                        {
-                            return Ok((false, Vec::new()));
-                        }
-                        return Err("Clipboard offer became unavailable.".into());
-                    }
-                    let result = connection
-                        .get_property(true, window, property, AtomEnum::ANY, 0, 1024 * 1024 / 4)?
-                        .reply()?;
-                    if requested == targets {
-                        // Some owners answer unsupported targets with their
-                        // current content. Read only advertised image/file types;
-                        // an invalid offer is not proof of absent image data.
-                        if result.type_ != u32::from(AtomEnum::ATOM)
-                            || result.format != 32
-                            || result.bytes_after != 0
-                        {
-                            return Err("Clipboard format list has an invalid type or size.".into());
-                        }
-                        let atoms: Vec<_> = result
-                            .value32()
-                            .ok_or("Invalid clipboard formats.")?
-                            .collect();
-                        has_png = atoms.contains(&png);
-                        if !atoms.contains(&target) {
-                            return Ok((has_png, Vec::new()));
-                        }
-                        break;
-                    }
-                    if result.type_ != target || result.format != 8 || result.bytes_after != 0 {
-                        return Err(
-                            "Clipboard file list is too large or has an invalid type.".into()
-                        );
-                    }
-                    return Ok((has_png, result.value));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
+        let Some(formats) = read_selection(
+            &connection,
+            window,
+            selection,
+            targets,
+            property,
+            AtomEnum::ATOM.into(),
+            32,
+        )?
+        else {
+            if connection.get_selection_owner(selection)?.reply()?.owner == 0 {
+                return Ok((false, Vec::new()));
             }
+            return Err("Clipboard offer became unavailable.".into());
+        };
+        let atoms: Vec<_> = formats
+            .chunks_exact(4)
+            .map(|bytes| u32::from_ne_bytes(bytes.try_into().expect("four-byte atom")))
+            .collect();
+        let has_png = atoms.contains(&png);
+        if !atoms.contains(&target) {
+            return Ok((has_png, Vec::new()));
         }
-        Ok((has_png, Vec::new()))
+        let bytes = read_selection(&connection, window, selection, target, property, target, 8)?
+            .ok_or("Clipboard offer became unavailable.")?;
+        // This dedicated connection owns the requestor window. Every exit,
+        // including an abandoned INCR transfer, destroys it and its properties.
+        Ok((has_png, bytes))
+    }
+
+    /// Read one bounded selection, directly or through ICCCM's INCR handshake.
+    /// The size hint is only a lower bound; only a typed empty chunk ends INCR.
+    fn read_selection(
+        connection: &RustConnection,
+        window: Window,
+        selection: Atom,
+        target: Atom,
+        property: Atom,
+        expected_type: Atom,
+        expected_format: u8,
+    ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        const MAX_BYTES: usize = 1024 * 1024;
+        let incr = connection.intern_atom(false, b"INCR")?.reply()?.atom;
+        connection
+            .convert_selection(window, selection, target, property, x11rb::CURRENT_TIME)?
+            .check()?;
+        connection.flush()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut incremental = false;
+        let mut bytes = Vec::new();
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return Err("Clipboard file transfer timed out.".into());
+            }
+            let Some(event) = connection.poll_for_event()? else {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            };
+            match event {
+                Event::SelectionNotify(event)
+                    if !incremental
+                        && event.requestor == window
+                        && event.selection == selection
+                        && event.target == target =>
+                {
+                    if event.property == 0 {
+                        return Ok(None);
+                    }
+                    if event.property != property {
+                        return Err("Clipboard reply used an unexpected property.".into());
+                    }
+                }
+                Event::PropertyNotify(event)
+                    if incremental
+                        && event.window == window
+                        && event.atom == property
+                        && event.state == Property::NEW_VALUE => {}
+                _ => continue,
+            }
+            // ANY lets delete=true acknowledge an INCR header as well as data.
+            // Never delete twice: that could discard the owner's next chunk.
+            let result = connection
+                .get_property(
+                    true,
+                    window,
+                    property,
+                    AtomEnum::ANY,
+                    0,
+                    MAX_BYTES as u32 / 4,
+                )?
+                .reply()?;
+            if !incremental && result.type_ == incr {
+                if result.format != 32 || result.value.len() != 4 || result.bytes_after != 0 {
+                    return Err("Clipboard incremental transfer has an invalid header.".into());
+                }
+                let hint = result
+                    .value32()
+                    .and_then(|mut sizes| sizes.next())
+                    .ok_or("Clipboard incremental transfer has an invalid header.")?;
+                if hint > MAX_BYTES as u32 {
+                    return Err("Clipboard file list exceeds 1 MiB.".into());
+                }
+                incremental = true;
+                continue;
+            }
+            if result.type_ != expected_type
+                || result.format != expected_format
+                || result.bytes_after != 0
+                || result.value.len() % usize::from(expected_format / 8) != 0
+            {
+                return Err("Clipboard data has an invalid type or size.".into());
+            }
+            if !incremental {
+                return Ok(Some(result.value));
+            }
+            if result.value.is_empty() {
+                return Ok(Some(bytes));
+            }
+            if result.value.len() > MAX_BYTES - bytes.len() {
+                return Err("Clipboard file list exceeds 1 MiB.".into());
+            }
+            bytes.extend_from_slice(&result.value);
+        }
     }
 
     pub(super) struct Marker {
