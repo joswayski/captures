@@ -1834,24 +1834,15 @@ fn paste_clipboard(
         })?;
         new_id
     } else {
-        // Decode before changing the document. Each image remains its own undo
-        // step, like native Add images (unlike Tauri's batch undo).
+        // Decode and render the entire clipboard batch before publishing one
+        // undoable edit. A later image must not leave a partial paste behind.
         let images = clipboard.images(ctx)?;
         if images.is_empty() {
             let mut presented = Presented::from_session(session);
             presented.preserve_controls = true;
             return Ok(presented);
         }
-        let mut selected_id = after_id;
-        for (name, pixels) in images {
-            selected_id = Some(session.import_image(ImportImage {
-                pixels,
-                name,
-                selected_id,
-                point: None,
-            })?);
-        }
-        selected_id.ok_or("No clipboard image available.")?
+        session.import_images(images, after_id, None)?
     };
     let mut presented = Presented::after_edit(session);
     presented.created_layer = Some(id);

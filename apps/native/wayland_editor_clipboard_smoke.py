@@ -9,6 +9,7 @@ import select
 import subprocess
 import time
 
+from instance_smoke import png
 from wayland_keyboard_smoke import KEYS
 from wayland_native_capture_smoke import wait, windows
 from wayland_screenshot_smoke import ready, stop
@@ -145,7 +146,35 @@ def cases(binary, pointer, root, env, bus):
                     assert count(4)[-1] == external
                     publish((image.as_uri() + "\r\n" + second.as_uri() + "\r\n").encode(), "text/uri-list")
                     key("v", "ctrl")
+                    pasted_files = count(6)
+                    assert [layer["name"] for layer in pasted_files[-2:]] == [image.name, second.name]
+                    shot("clipboard-batch-pasted")
+                    key("z", "ctrl")
+                    unchanged_layers = count(4)
+                    shot("clipboard-batch-undone")
+                    corrupt = profile / "Corrupt.png"
+                    corrupt.write_bytes(b"not an image")
+                    tall = profile / "Tall.png"
+                    tall.write_bytes(png(1, 16_384))
+                    for name, invalid in (("decode", corrupt), ("render", tall)):
+                        publish(b"ordinary text", "text/plain")
+                        key("v", "ctrl")
+                        time.sleep(.7)
+                        unchanged_status = status_pixels()
+                        publish((image.as_uri() + "\r\n" + invalid.as_uri() + "\r\n").encode(), "text/uri-list")
+                        key("v", "ctrl")
+                        time.sleep(.8)
+                        shot(f"clipboard-batch-{name}-error")
+                        assert layers() == unchanged_layers, f"late {name} failure imported a partial batch"
+                        assert status_pixels() != unchanged_status, f"late {name} failure must report an error"
+                    key("z", "ctrl+shift")
+                    assert count(6) == pasted_files, "failed batch must preserve Redo"
+                    key("z", "ctrl")
+                    count(4)
+                    publish((image.as_uri() + "\r\n" + second.as_uri() + "\r\n").encode(), "text/uri-list")
+                    key("v", "ctrl")
                     assert [layer["name"] for layer in count(6)[-2:]] == [image.name, second.name]
+                    shot("clipboard-batch-retried")
                     key("c", "ctrl")
                     wait(marker_types, "clipboard claim before cancellation")
                     time.sleep(.5)
@@ -170,6 +199,8 @@ def cases(binary, pointer, root, env, bus):
                         "checks": ["PNG-pixels", "private-MIME-no-text", "24px-layer-offset",
                             "text-html-empty-cleared-silent-noop", "corrupt-image-error-and-recovery",
                             "external-selection-replacement", "external-image-precedence", "Undo-Redo",
+                            "one-undo-per-batch", "late-decode-and-render-failure-atomic",
+                            "failed-batch-preserves-Redo", "batch-retry",
                             "CRLF-file-order", "source-cancellation", "reclaim-after-cancel", "original-unchanged"]}, indent=2) + "\n")
                     print(f"PASS {appearance}: Wayland clipboard image/file input, ownership replacement/cancellation", flush=True)
                 except Exception:
