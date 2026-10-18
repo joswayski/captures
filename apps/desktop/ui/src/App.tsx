@@ -1458,7 +1458,20 @@ export function CaptureHistory() {
       <div className="history-shell">
         <header className="history-header">
           <div className="history-heading">
-            <p className="eyebrow">On this device</p>
+            <button
+              type="button"
+              className="ui-btn ui-btn-ghost"
+              onClick={() =>
+                void invoke("open_preferences").catch((error) =>
+                  setError(`Couldn’t open Preferences: ${String(error)}`),
+                )
+              }
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m14 6-6 6 6 6" />
+              </svg>
+              Back to Preferences
+            </button>
             <h1>Capture History</h1>
             <p>
               Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here
@@ -5394,7 +5407,7 @@ export function RecordingEditor() {
                 aria-label={previewPlaying ? "Pause preview" : "Play preview"}
                 onClick={() => void togglePreviewPlayback()}
               >
-                <span aria-hidden="true">{previewPlaying ? "Ⅱ" : "▶"}</span>
+                <PauseResumeIcon paused={!previewPlaying} />
               </button>
             )}
             {cropEnabled && (

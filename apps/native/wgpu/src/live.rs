@@ -1903,8 +1903,8 @@ pub struct Live {
     #[cfg(target_os = "linux")]
     portal_screenshot: Option<PortalScreenshot>,
     history_requested: bool,
-    /// A capture-menu note link asked the workbench to open Preferences here.
-    preference_target_requested: Option<PreferenceTarget>,
+    /// Open Preferences, optionally revealing a capture-menu setting.
+    preference_target_requested: Option<Option<PreferenceTarget>>,
     /// A start or display switch failed while New Capture stayed open.
     controls_error: Option<String>,
     permission_recovery_visible: bool,
@@ -2466,7 +2466,7 @@ impl Live {
         self.preference_target_requested.is_some()
     }
 
-    pub fn take_preference_target_requested(&mut self) -> Option<PreferenceTarget> {
+    pub fn take_preference_target_requested(&mut self) -> Option<Option<PreferenceTarget>> {
         self.preference_target_requested.take()
     }
 
@@ -3933,7 +3933,7 @@ impl Live {
                     // show Preferences at the linked row.
                     let Some(flow) = &self.flow else { continue };
                     flow.cancel();
-                    self.preference_target_requested = Some(target);
+                    self.preference_target_requested = Some(Some(target));
                 }
                 SelectorMessage::ConfirmRegion { generation, rect }
                     if accepts_selector_action(
@@ -9062,6 +9062,10 @@ impl Live {
             }
         });
         match header_event {
+            Some(crate::history::HeaderEvent::Preferences) => {
+                self.preference_target_requested = Some(None);
+                ui.ctx().request_repaint();
+            }
             Some(crate::history::HeaderEvent::DeleteAll) => self.delete_all_history(now),
             Some(crate::history::HeaderEvent::Cancel) => self.confirm_clear_history = None,
             None => {}

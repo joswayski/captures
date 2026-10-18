@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--record-navigation", action="store_true", help="record the real pointer/navigation with ffmpeg")
     args = parser.parse_args()
     assert os.geteuid() != 0, "run unprivileged so the deletion-permission test is meaningful"
     binary = args.binary.resolve(strict=True)
@@ -32,8 +33,9 @@ def main():
     env.pop("WAYLAND_DISPLAY", None)
     children = []
     with (output / "processes.log").open("w") as log:
-        def spawn(command, announce=False):
-            child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE if announce else log, stderr=log)
+        def spawn(command, announce=False, interactive=False):
+            child = subprocess.Popen(command, env=env, stdin=subprocess.PIPE if interactive else None,
+                                     stdout=subprocess.PIPE if announce else log, stderr=log)
             children.append(child)
             return child
 
@@ -138,7 +140,68 @@ def main():
                     def screenshot(name):
                         run("import", "-window", window, str(output / f"{prefix}-{name}.png"))
 
+                    def preferences_windows():
+                        result = subprocess.run(["xdotool", "search", "--all", "--onlyvisible", "--pid", str(app.pid),
+                                                 "--name", "^Captures Preferences$"], env=env, capture_output=True, text=True, timeout=5)
+                        return result.stdout.split()
+
+                    def navigation(state):
+                        preserved = {path: path.read_bytes() for path in history.glob("*/*")
+                                     if path.is_file() and not path.parent.name.startswith(".")}
+                        recorder = None
+                        if args.record_navigation and prefix == "dark" and state == "populated":
+                            recorder = spawn(["ffmpeg", "-y", "-f", "x11grab", "-draw_mouse", "1",
+                                "-framerate", "20", "-video_size", "1280x900", "-i", env["DISPLAY"],
+                                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                                str(output / "navigation.mp4")], interactive=True)
+                            time.sleep(.5)
+                        # Move across the heading, a neighboring filter and the
+                        # ghost control before clicking; record real X11 input.
+                        points = [(420, 190), (250, 148), (100, 148), (130, 80), (100, 40)]
+                        for start, end in zip(points, points[1:]):
+                            for step in range(1, 13):
+                                x = round(start[0] + (end[0] - start[0]) * step / 12)
+                                y = round(start[1] + (end[1] - start[1]) * step / 12)
+                                run("xdotool", "mousemove", "--sync", "--window", window, str(x), str(y))
+                                time.sleep(.02)
+                        click(100, 40)
+                        preferences = wait(preferences_windows)
+                        assert len(preferences) == 1
+                        preference = preferences[0]
+                        wait(lambda: run("xdotool", "getactivewindow").decode().strip() == preference)
+                        assert window in run("xdotool", "search", "--onlyvisible", "--name", "^Capture History$").decode().split()
+                        if recorder:
+                            time.sleep(1.5)
+                        # Existing window: restoring must keep its identity and
+                        # focus it, rather than creating another Preferences.
+                        run("xdotool", "windowminimize", preference)
+                        wait(lambda: not preferences_windows())
+                        if recorder:
+                            time.sleep(1)
+                        click(100, 40)
+                        wait(lambda: preferences_windows() == [preference])
+                        wait(lambda: run("xdotool", "getactivewindow").decode().strip() == preference)
+                        time.sleep(1.5 if recorder else .4)
+                        if recorder:
+                            recorder.communicate(b"q", timeout=10)
+                            assert recorder.wait(timeout=10) == 0
+                        run("xdotool", "key", "alt+F4")
+                        wait(lambda: not preferences_windows())
+                        assert all(path.read_bytes() == data for path, data in preserved.items()), "navigation changed History bytes"
+                        assert set(preserved) == {path for path in history.glob("*/*")
+                            if path.is_file() and not path.parent.name.startswith(".")}, "navigation added or removed History files"
+                        run("xdotool", "windowactivate", "--sync", window)
+                        screenshot(state + "-navigation-retained")
+                        print(f"PASS {prefix} {state}: Back creates/focuses Preferences, restores same minimized window, keeps History/source bytes", flush=True)
+
                     screenshot("populated")
+                    navigation("populated")
+                    run("xdotool", "windowsize", "--sync", window, "640", "440")
+                    time.sleep(.3)
+                    screenshot("populated-minimum")
+                    navigation("populated-minimum")
+                    run("xdotool", "windowsize", "--sync", window, "1020", "720")
+                    time.sleep(.3)
                     assert not previews(), "a preview opened before Restore"
                     entries = sorted(history.glob("*/metadata.json"),
                                      key=lambda path: json.loads(path.read_text())["created_at"], reverse=True)
@@ -179,18 +242,18 @@ def main():
                     time.sleep(.3)
                     assert not previews(), "cancelled History drag restored a preview"
                     screenshot("drag-retained")
-                    click(254, 433)  # First card's Restore brings back a floating preview.
+                    click(254, 453)  # First card's Restore brings back a floating preview.
                     preview = wait(previews)[0]
                     time.sleep(.5)  # Arrival motion.
                     screenshot("restored")
                     run("import", "-window", preview, str(output / f"{prefix}-restored-preview.png"))
-                    click(254, 433)  # Already showing: no duplicate window, still confirms.
+                    click(254, 453)  # Already showing: no duplicate window, still confirms.
                     time.sleep(.3)
                     assert len(previews()) == 1, "Restore duplicated the preview window"
                     assert len(list(history.glob("*/metadata.json"))) == 3, "Restore changed History"
                     # An individual Delete is not Clear all. Restore cancels
                     # only that ID's dust, keeping a different Delete's slot.
-                    click(574, 433)
+                    click(574, 453)
                     preview = wait(previews)[0]
                     time.sleep(1.1)
                     def preview_height():
@@ -210,7 +273,7 @@ def main():
                     neighbor_id = json.loads(entries[1].read_text())["id"]
                     wait(lambda: any('"name":"preview-exit"' in line and neighbor_id in line
                                     for line in (output / "processes.log").read_text().splitlines()))
-                    click(254, 433)
+                    click(254, 453)
                     preview = wait(previews)[0]
                     run("xdotool", "mousemove", "--sync", "640", "440")
                     # The restored card is the newest/front slot (bottom).
@@ -265,7 +328,7 @@ def main():
                         "mousedown", "1", "sleep", ".04", "mouseup", "1")
                     cleared_at = time.monotonic()
                     wait(lambda: (output / "processes.log").read_text().count('"settles":false') >= previous_exits + 2)
-                    click(894, 433, settle=False)
+                    click(894, 453, settle=False)
                     # Restore releases Clear all's exit cards before decoding
                     # its new image. The viewport can retire and reopen with a
                     # new XID, so locate the ready window rather than polling
@@ -294,20 +357,20 @@ def main():
 
                     wait(copied_restored)
                     print(f"PASS {prefix}: Restore during Clear all opens one actionable 240px card in {elapsed:.3f}s; all source files unchanged", flush=True)
-                    click(948, 79)  # Delete all arms "Delete all forever" in place.
+                    click(948, 99)  # Delete all arms "Delete all forever" in place.
                     screenshot("confirmation")
                     assert len(list(history.glob("*/metadata.json"))) == 3, "arming confirmation deleted files"
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert len(list(history.glob("*/metadata.json"))) == 3, "Escape deleted files"
-                    click(948, 79)
-                    click(820, 79)  # Explicit Cancel.
+                    click(948, 99)
+                    click(820, 99)  # Explicit Cancel.
                     assert len(list(history.glob("*/metadata.json"))) == 3, "Cancel deleted files"
                     screenshot("cancelled")
                     if fail_partway:
                         protected.chmod(0o555)
-                    click(948, 79)
-                    click(948, 79)  # Explicit Delete all forever.
+                    click(948, 99)
+                    click(948, 99)  # Explicit Delete all forever.
                     if fail_partway:
                         try:
                             wait(lambda: len(list(history.glob("*/metadata.json"))) == 1)
@@ -316,12 +379,17 @@ def main():
                             assert (protected / "capture.png").is_file(), "failed item disappeared"
                         finally:
                             protected.chmod(0o755)
-                        click(948, 79)
-                        click(948, 79)  # Retry after restoring write access.
+                        click(948, 99)
+                        click(948, 99)  # Retry after restoring write access.
                     wait(lambda: not list(history.glob("*/metadata.json")))
                     wait(lambda: not previews())  # Clearing History drops restored previews.
                     time.sleep(.3)
                     screenshot("empty")
+                    navigation("empty")
+                    run("xdotool", "windowsize", "--sync", window, "640", "440")
+                    time.sleep(.3)
+                    screenshot("empty-minimum")
+                    navigation("empty-minimum")
                     assert export.read_bytes() == original_export, "export changed during clear"
                     run("xdotool", "key", "alt+F4")
                     assert app.wait(timeout=10) == 0
@@ -329,6 +397,7 @@ def main():
                     print(f"PASS {prefix}: direct History COPY (saved/recovery bytes), editor layer drop with preview retained, cancelled drag, Restore, confirmation, Escape/Cancel, clear, export preserved, clean exit", flush=True)
             (output / "result.json").write_text(json.dumps({"passed": True, "appearances": 2, "partialFailureAndRetry": True, "restore": True,
                 "historyDrag": True, "historyEditorDrop": True, "restoreDuringClearAll": True, "restoreDuringDelete": True,
+                "preferencesNavigation": True, "minimumWidthNavigation": True,
                 "scope": "Disposable native history on private X11/software GL; not hardware or other OS acceptance."}, indent=2))
         finally:
             for child in reversed(children):

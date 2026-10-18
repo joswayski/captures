@@ -416,6 +416,35 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.count, 4, "locked selection cannot be nudged")
     }
 
+    func testEscapePreservesFieldAndFlyoutOwnershipThenClearsLayerTargetsWithoutEditing() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", layers: [layer(id: "front", name: "Front", x: 8, y: 21,
+            visible: true, locked: false, opacity: 60)])
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let layers = try table("Screenshot layers", in: controller.root)
+        layers.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let escape = try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}")
+        XCTAssertTrue(controller.window.makeFirstResponder(try field("Shift rotation snap", in: controller.root)))
+        XCTAssertFalse(controller.window.performKeyEquivalent(with: escape), "the field owns Escape")
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "front")
+        controller.window.makeFirstResponder(nil)
+        controller.showShapeFlyout(true)
+        controller.window.sendEvent(escape)
+        XCTAssertTrue(controller.shapeFlyout.isHidden)
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "front", "closing a flyout is not canvas Escape")
+        controller.window.sendEvent(escape)
+        XCTAssertNil(controller.selectionOverlay.selectedLayerID)
+        XCTAssertEqual(layers.selectedRow, -1)
+        XCTAssertTrue(controller.selectionOverlay.selectionEnabled, "Escape does not change tools")
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 51, characters: "\u{7f}"))
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 124, characters: "\u{f703}"))
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty)
+    }
+
     func testLayerShortcutsRespectTypingLocksAcceptedSelectionAndBusyCommands() throws {
         _ = NSApplication.shared
         let original = layer(id: "original", name: "Original", x: 8, y: 21,
@@ -1620,8 +1649,12 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(apply.isHidden)
         drag()
         XCTAssertTrue(controller.window.makeFirstResponder(try field("Canvas width", in: controller.root)))
-        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}"))
-        XCTAssertNil(controller.cropSelection, "Escape works with a numeric field focused")
+        let escape = try keyEvent(window: controller.window, keyCode: 53, characters: "\u{1b}")
+        XCTAssertFalse(controller.window.performKeyEquivalent(with: escape))
+        XCTAssertEqual(controller.cropSelection, staged, "a numeric field owns Escape, not the canvas")
+        controller.window.makeFirstResponder(nil)
+        controller.window.sendEvent(escape)
+        XCTAssertNil(controller.cropSelection)
         XCTAssertNotNil(controller.compareView.afterImage)
         drag()
         clear.performClick(nil)

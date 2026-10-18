@@ -1922,7 +1922,9 @@ impl eframe::App for Workbench {
                 if live.is_capturing() {
                     ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 } else if let Some(target) = live.take_preference_target_requested() {
-                    self.preferences_state.open_target(target);
+                    if let Some(target) = target {
+                        self.preferences_state.open_target(target);
+                    }
                     self.preferences.open(ctx);
                 }
             }

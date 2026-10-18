@@ -826,6 +826,12 @@ export function installPreviewBackend(): void {
   previewArtifacts = mockArtifacts();
   mockIPC(
     async (command, payload) => {
+      if (command === "open_preferences" || command === "open_capture_history") {
+        const url = new URL(window.location.href);
+        url.searchParams.set("view", command === "open_preferences" ? "preferences" : "history");
+        window.location.assign(url);
+        return undefined;
+      }
       if (command === "get_recording_selection") return selection;
       if (command === "get_artifacts") return previewArtifacts;
       if (command === "dismiss_all_artifacts") {

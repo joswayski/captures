@@ -244,7 +244,11 @@ fn ensure_previous_app_stopped() -> Result<(), String> {
 
 fn previous_app_running() -> Result<bool, String> {
     #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+
+    #[cfg(windows)]
     let output = std::process::Command::new("powershell.exe")
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW: first-import polling stays in the background.
         .args([
             "-NoProfile",
             "-NonInteractive",

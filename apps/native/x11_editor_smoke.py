@@ -283,9 +283,20 @@ def main():
         geometry = run("xdotool", "getwindowgeometry", "--shell", window).decode()
         return int(re.search(r"^WIDTH=(\d+)$", geometry, re.MULTILINE).group(1))
 
+    def draft_bytes():
+        if draft is None:
+            return None
+        try:
+            return draft.read_bytes()
+        except (FileNotFoundError, NotADirectoryError):
+            # Undo removes the draft; the save-failure fixture blocks its parent
+            # with a file. Neither leaves a manifest to read, as with exists().
+            return None
+
     def document_size():
-        if draft is not None and draft.exists():
-            document = json.loads(draft.read_text())["document"]
+        data = draft_bytes()
+        if data is not None:
+            document = json.loads(data)["document"]
             return document["width"], document["height"]
         return 640, 360
 
@@ -1032,7 +1043,7 @@ def main():
             shot(root, "history")
         else:
             shot(root, "history")
-            click(root, 107, 432)  # First History card: Edit, below the header and filters.
+            click(root, 107, 453)  # First History card: Edit, below navigation, header and filters.
             editor = wait(lambda: windows("Captures Screenshot Editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
@@ -1061,11 +1072,12 @@ def main():
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
 
         def saved(width, height, x, y):
-            if not draft.exists():
+            data = draft_bytes()
+            if data is None:
                 # No draft means the original capture: autosave drops a draft
                 # whose document is back at the capture, as shipping does.
                 return (width, height, x, y) == (640, 360, 0, 0)
-            document = json.loads(draft.read_text())["document"]
+            document = json.loads(data)["document"]
             layer = document["elements"][0]
             return (document["width"], document["height"], layer["x"], layer["y"]) == (width, height, x, y)
 
@@ -1105,7 +1117,7 @@ def main():
             run("xdotool", "keydown", "Alt_L", "sleep", ".1", "key", "F4",
                 "sleep", ".1", "keyup", "Alt_L", "sleep", ".4")
 
-        def history_edit_point(edit_y=432):
+        def history_edit_point(edit_y=453):
             # History cards are newest first in a three-column grid (1020 px window,
             # 24 px padding, 16 px gaps). Edit is the left action of the card body.
             entries = sorted((json.loads(path.read_text()) for path in history.glob("*/metadata.json")
@@ -1116,7 +1128,7 @@ def main():
             card_width = (972 - 2 * 16) / 3
             return round(24 + index * (card_width + 16) + 12 + (card_width - 24 - 6) / 4), edit_y
 
-        def reopen(edit_y=432, keep_banner=False):
+        def reopen(edit_y=453, keep_banner=False):
             export_bar.update(open=False, quality=0, custom=False, dismissed=False)
             tool_state["draw"] = "rectangle"  # Each editor starts with Rectangle.
             click(root, *history_edit_point(edit_y))  # The original capture's History card: Edit.
@@ -1151,12 +1163,9 @@ def main():
         ORIGINAL_LAYERS = [{"kind": "image", "id": "capture-background", "source": "background",
                             "src": "draft-asset:original-capture", "locked": True, "visible": True}]
 
-        def draft_bytes():
-            # None while no draft exists (the document is the original capture).
-            return draft.read_bytes() if draft.exists() else None
-
         def layers():
-            return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else ORIGINAL_LAYERS
+            data = draft_bytes()
+            return json.loads(data)["document"]["elements"] if data is not None else ORIGINAL_LAYERS
 
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
@@ -1819,6 +1828,33 @@ def main():
             blur_click()
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: values[-1] == arrow, "selected style undo")[-1] == arrow
+            for owner in ("field", "context-menu", "layer-settings"):
+                if owner == "field":
+                    canvas_click("width")
+                elif owner == "context-menu":
+                    window_move(layer_row(0), "sleep", ".2", "mousedown", "3",
+                                "sleep", ".15", "mouseup", "3", "sleep", ".3")
+                else:
+                    layer_click(0, "more")
+                run("xdotool", "key", "Escape", "sleep", ".3")
+                blur_click()
+                run("xdotool", "key", "Right", "sleep", ".3")
+                expected = dict(arrow, x=arrow["x"] + 1, endX=arrow["endX"] + 1)
+                assert save_layers(lambda values: values[-1] == expected,
+                                   owner + " Escape retains the selected layer")[-1] == expected
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                assert save_layers(lambda values: values[-1] == arrow, "undo ownership control")[-1] == arrow
+            for width, height, size in [(1000, 901, "normal"), (760, 540, "minimum")]:
+                resize_editor(width, height, "sleep", ".3")
+                layer_click(0)
+                window_move((28, 430), "sleep", ".3")  # Remove row hover without changing selection.
+                before_escape = draft_bytes()
+                shot(editor, "escape-selected-" + size)
+                run("xdotool", "key", "Escape", "Delete", "ctrl+d", "Right", "sleep", "1")
+                assert draft_bytes() == before_escape, "Escape clears targets before layer shortcuts"
+                shot(editor, "escape-deselected-" + size)
+            resize_editor(1000, 901, "sleep", ".3")
+            layer_click(0)
             before_deselection = draft_bytes()
             run("xdotool", "key", "a", "Delete", "ctrl+d", "Right", "sleep", "1")
             assert draft_bytes() == before_deselection, "reactivating Arrow clears layer shortcut targets"
@@ -1998,6 +2034,7 @@ def main():
                            "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters",
                            "rail-arrow-create", "rail-menu-escape", "rail-minimum",
                            "same-tool-clears-selection", "crop-clears-selection",
+                           "escape-clears-selection-normal-minimum", "field-menu-escape-ownership",
                            "created-layer-properties-edit", "created-layer-properties-undo",
                            "created-layer-properties-minimum",
                            "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",
@@ -2121,6 +2158,7 @@ def main():
             assert draft_bytes() == before
             run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "keyup", "Shift_L")
             assert draft_bytes() == before
+            layer_click(0)  # Escape deselects; restore the grip before a new rotation.
             drag((558, 117), (658, 159), shift=True)
             angle = 37 * math.pi / 180
             save_layers(lambda values: math.isclose(values[0].get("rotation", 0), angle, abs_tol=1e-12),
@@ -2474,9 +2512,6 @@ def main():
             shot(editor, "shape-active-created")
             pixel("shape-active-created", 14, rail_point("shapes")[1], (255, 202, 40))
             move_pixels = [(350, 230, (255, 59, 92)), (300, 120, (40, 110, 166))]
-            shape_gesture((320, 160), (357, 191), capture="shape-active-moving-cancel", cancel=True,
-                          held_pixels=move_pixels, restored_pixels=[
-                              (350, 230, (40, 110, 166)), (300, 120, (255, 59, 92))])
             shape_gesture((320, 160), (357, 191), capture="shape-active-moving", held_pixels=move_pixels)
             save_until(lambda: rectangle_is(297, 141, 417, 241), "active Rectangle moves its body")
             assert layers()[-1]["id"] == rectangle_id
@@ -2492,9 +2527,6 @@ def main():
             # becomes 150x130. Endpoints lie 5px inside that original box.
             resized = (272 + 5 * 150 / 130, 116 + 5 * 130 / 110,
                        272 + 125 * 150 / 130, 116 + 105 * 130 / 110)
-            shape_gesture((292, 136), (272, 116), capture="shape-active-resizing-cancel", cancel=True,
-                          held_pixels=[(283, 128, (255, 59, 92))],
-                          restored_pixels=[(283, 128, (40, 110, 166))])
             shape_gesture((292, 136), (272, 116), capture="shape-active-resizing",
                           held_pixels=[(283, 128, (255, 59, 92))])
             save_until(lambda: rectangle_is(*resized), "active Rectangle resizes")
@@ -2507,12 +2539,7 @@ def main():
 
             # Center (347,181), padded top near 117, grip 28px above it.
             # The release vector is (31,-73), independently deriving the angle.
-            before = draft_bytes()
             rotation_pixels = [(330, 113, (255, 59, 92)), (280, 127, (40, 110, 166))]
-            shape_gesture((347, 88), (378, 108), capture="shape-active-rotation-cancel", cancel=True,
-                          held_pixels=rotation_pixels, restored_pixels=[
-                              (330, 113, (40, 110, 166)), (280, 127, (255, 59, 92))])
-            assert draft_bytes() == before
             shape_gesture((347, 88), (378, 108), capture="shape-active-rotating", held_pixels=rotation_pixels)
             angle = math.atan2(31, 73)
             save_layers(lambda values: len(values) == 2 and math.isclose(
@@ -2538,9 +2565,6 @@ def main():
             draw_tool("line")
             shape_gesture((180, 290), (580, 290))
             line = save_layers(lambda values: len(values) == 3, "fresh line")[-1]
-            shape_gesture((380, 290), (380, 250), capture="shape-active-curve-cancel", cancel=True,
-                          held_pixels=[(330, 270, (255, 59, 92))],
-                          restored_pixels=[(330, 270, (40, 110, 166))])
             shape_gesture((380, 290), (380, 250), capture="shape-active-curving",
                           held_pixels=[(330, 270, (255, 59, 92))])
             curved = save_layers(lambda values: len(values) == 3 and len(values[-1]["controls"]) == 3,
@@ -2564,6 +2588,42 @@ def main():
             assert layers() == saved
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "shape-active-reopened-minimum")
+
+            # Escape ends the selection, not the drawing tool. Each cancellation
+            # therefore needs a fresh drawing setup: a row click would switch to
+            # Select and no longer exercise transforms with Rectangle/Line active.
+            for name, start, end, held, restored in [
+                ("moving", (320, 160), (357, 191), move_pixels,
+                 [(350, 230, (40, 110, 166)), (300, 120, (255, 59, 92))]),
+                ("resizing", (292, 136), (272, 116), [(283, 128, (255, 59, 92))],
+                 [(283, 128, (40, 110, 166))]),
+                ("rotation", (347, 88), (378, 108), rotation_pixels,
+                 [(330, 113, (40, 110, 166)), (280, 127, (255, 59, 92))]),
+                ("curve", (380, 290), (380, 250), [(330, 270, (255, 59, 92))],
+                 [(330, 270, (40, 110, 166))]),
+            ]:
+                editor = discard_draft(f"fresh {name} cancellation")
+                resize_editor(1200, 701)
+                draw_tool("line" if name == "curve" else "rectangle")
+                if name == "curve":
+                    shape_gesture((180, 290), (580, 290))
+                else:
+                    shape_gesture((260, 110), (380, 210))
+                save_layers(lambda values: len(values) == 2, f"fresh {name} target")
+                if name in ("resizing", "rotation"):
+                    shape_gesture((320, 160), (357, 191))
+                    save_until(lambda: rectangle_is(297, 141, 417, 241), f"{name} target moved")
+                if name == "rotation":
+                    shape_gesture((292, 136), (272, 116))
+                    save_until(lambda: rectangle_is(*resized), "rotation target resized")
+                capture = f"shape-active-{name}-cancel"
+                shape_gesture(start, end, capture=capture, cancel=True,
+                              held_pixels=held, restored_pixels=restored)
+                pixel(capture + "-restored", 14, rail_point("shapes")[1], (255, 202, 40))
+                before = draft_bytes()
+                run("xdotool", "key", "Delete", "ctrl+d", "Right", "sleep", "1")
+                assert draft_bytes() == before, f"{name}: Escape left a layer shortcut target"
+
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "active-shape suite quits")
@@ -2575,7 +2635,8 @@ def main():
                            "held-move-resize-rotate-curve-pixels", "held-draft-bytes-unchanged",
                            "all-four-cancellations-restore-pixels", "minimum-held-curve-pixels",
                            "empty-space-new-shape", "active-line-starter", "curve-pixels",
-                           "retained-active-tool", "exact-draft-reopen", "minimum-layout", "original-unchanged"],
+                           "retained-active-tool", "cancelled-shapes-deselected",
+                           "exact-draft-reopen", "minimum-layout", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native active shapes: move, resize, rotate, cancel, curve, undo, pixels, draft")
             return
@@ -4775,6 +4836,7 @@ def main():
         shot(editor, "layer-rotation-free-transient")
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         assert draft_bytes() == rotation_before
+        layer_click(0)  # Escape deselects; restore the grip before a new rotation.
         # Vector (0,-69) to (39,-79) is 26.27 degrees, snapping to 30 degrees.
         drag((558, 420), (597, 410), shift=True)
         rotated = save_layers(

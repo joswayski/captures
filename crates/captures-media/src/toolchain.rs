@@ -476,7 +476,7 @@ impl MediaToolchain {
     }
 
     pub fn probe(&self, input: &Path) -> Result<ProbeResult, MediaToolError> {
-        let output = Command::new(&self.ffprobe)
+        let output = media_command(&self.ffprobe)
             .args([
                 "-v",
                 "error",
@@ -501,7 +501,7 @@ impl MediaToolchain {
         if cancel.is_cancelled() {
             return Err(MediaToolError::Cancelled);
         }
-        let mut child = Command::new(&self.ffprobe)
+        let mut child = media_command(&self.ffprobe)
             .args([
                 "-v",
                 "error",
@@ -688,7 +688,7 @@ impl MediaToolchain {
                 writeln!(concat, "file '{}'", escape_concat_path(segment))?;
             }
             concat.sync_all()?;
-            let mut command = Command::new(&self.ffmpeg);
+            let mut command = media_command(&self.ffmpeg);
             command
                 .args([
                     "-hide_banner",
@@ -771,7 +771,7 @@ impl MediaToolchain {
             && self
                 .probe_with_cancel(&segment.video_path, cancel)?
                 .has_audio;
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
         command.arg(&segment.video_path);
         let mut next_input = 1_usize;
@@ -828,7 +828,7 @@ impl MediaToolchain {
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
         let temporary = temporary_output_path(destination, "poster.png");
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command
             .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", "0", "-i"])
             .arg(input)
@@ -868,7 +868,7 @@ impl MediaToolchain {
             spec.frame_height,
             spec.frame_count,
         );
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command
             .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
             .arg(input)
@@ -893,7 +893,7 @@ impl MediaToolchain {
     ) -> Result<(), MediaToolError> {
         let temporary = temporary_output_path(destination, "gif");
         let filter = gif_filter(frames_per_second, max_width, max_colors);
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command
             .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
             .arg(input)
@@ -916,7 +916,7 @@ impl MediaToolchain {
         destination: &Path,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command
             .args([
                 "-hide_banner",
@@ -963,7 +963,7 @@ impl MediaToolchain {
                 }
                 let seek_ms = at_ms.saturating_sub(backoff_ms);
                 let hold_ms = at_ms - seek_ms;
-                let mut command = Command::new(&self.ffmpeg);
+                let mut command = media_command(&self.ffmpeg);
                 command
                     .args([
                         "-hide_banner",
@@ -1643,7 +1643,7 @@ impl MediaToolchain {
         attempt: &VideoAttempt,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
         if edit.trim_start_ms > 0 {
             command.args(["-ss", &seconds(edit.trim_start_ms)]);
@@ -1752,7 +1752,7 @@ impl MediaToolchain {
             openh264_bitrate(attempt, spec),
         )
         .map_err(|error| MediaToolError::Process(error.to_string()))?;
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
         if edit.trim_start_ms > 0 {
             command.args(["-ss", &seconds(edit.trim_start_ms)]);
@@ -1854,7 +1854,7 @@ impl MediaToolchain {
         attempt: &VideoAttempt,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
         if edit.trim_start_ms > 0 {
             command.args(["-ss", &seconds(edit.trim_start_ms)]);
@@ -1896,7 +1896,7 @@ impl MediaToolchain {
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
         let temporary = temporary_output_path(destination, "audio-edit");
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command
             .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
             .arg(input)
@@ -1929,7 +1929,7 @@ impl MediaToolchain {
         attempt: &VideoAttempt,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
         if edit.trim_start_ms > 0 {
             command.args(["-ss", &seconds(edit.trim_start_ms)]);
@@ -2679,7 +2679,7 @@ struct PlaybackVideoCommand {
 
 impl PlaybackVideoCommand {
     fn command(&self, start_ms: u64, duration_ms: u64) -> Command {
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error"]);
         if start_ms > 0 {
             command.args(["-ss", &seconds(start_ms)]);
@@ -2693,8 +2693,6 @@ impl PlaybackVideoCommand {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        #[cfg(target_os = "windows")]
-        command.creation_flags(0x0800_0000);
         command
     }
 }
@@ -2712,7 +2710,7 @@ struct PlaybackAudioCommand {
 impl PlaybackAudioCommand {
     fn command(&self, start_ms: u64, duration_ms: u64) -> Command {
         let filter = playback_audio_filter(&self.accepted_filter, duration_ms);
-        let mut command = Command::new(&self.ffmpeg);
+        let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error"]);
         if start_ms > 0 {
             command.args(["-ss", &seconds(start_ms)]);
@@ -2729,8 +2727,6 @@ impl PlaybackAudioCommand {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        #[cfg(target_os = "windows")]
-        command.creation_flags(0x0800_0000);
         command
     }
 }
@@ -2972,8 +2968,18 @@ fn complete_child(status: ExitStatus, stderr: &[u8]) -> Result<(), MediaToolErro
     }
 }
 
+/// Media sidecars are background workers, including probes and version checks.
+/// Redirecting stdio alone does not prevent Windows from creating a console.
+fn media_command(path: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(path);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW; preserve piped I/O.
+    command
+}
+
 fn verify_tool(path: &Path, name: &'static str) -> Result<(), MediaToolError> {
-    let status = Command::new(path)
+    let status = media_command(path)
         .arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

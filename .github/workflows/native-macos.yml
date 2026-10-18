@@ -27,7 +27,8 @@ jobs:
     needs: route
     # Recording's apple-metal bridge needs the macOS 26 SDK, like the desktop CI.
     runs-on: ${{ needs.route.outputs.mac == 'true' && fromJSON('["self-hosted","josemac"]') || 'macos-26' }}
-    timeout-minutes: 30
+    # Include Rust/Swift builds, GUI checks, artifacts and post-job cache uploads.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

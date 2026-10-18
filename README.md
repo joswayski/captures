@@ -44,7 +44,7 @@ Captures is a cross-platform screen capture utility built for quick captures and
 
 ## Download Captures Preview
 
-These links download the **Tauri Preview 2026.10.1104**, pinned while the native rewrite continues separately. This remains an experimental Preview, not a new stable release.
+These links download the **latest validated Tauri Preview**. This remains an experimental Preview, not a stable release; the native rewrite continues separately.
 
 | Platform | Download |
 | --- | --- |
@@ -53,11 +53,13 @@ These links download the **Tauri Preview 2026.10.1104**, pinned while the native
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-The website, installer links and public updater channel stay on this Tauri build. New native builds do not replace them automatically. Native AppKit/wgpu builds remain opt-in development work until behavior, appearance and platform parity are accepted.
+Tauri desktop changes merged to `main` automatically build, publish and update the website downloads and public updater channel after all three platforms pass release checks. Native AppKit/wgpu work stays separate and never replaces the public Tauri app automatically.
 
 Installed copies check captur.es at launch and about every five minutes. Preferences and the tray also offer **Check for Updates**. Downloads from GitHub are signature-verified before installation; screenshot draft-save failure cancels restart. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Dated builds, including experimental native builds, remain in the [build archive](https://github.com/joswayski/captures/releases).
 
-If you installed a native Preview, the updater will not automatically downgrade it. Quit Captures and manually replace the installed app to return to Tauri. Native migration preserved the original Tauri profile; native-only captures and edits remain in the separate native profile and are not imported back automatically. Do not delete either profile. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained backups and limitations.
+New desktop Preview release notes use AI-written highlights, with commit-based notes as a fallback. Generation runs in the release workflow using source changes, not your captures or app data; the desktop app does not contact Anthropic.
+
+If you installed an experimental native Preview, return to Tauri manually rather than using its updater. Quit Captures and replace the installed app with a download above. Native migration preserved the original Tauri profile; native-only captures and edits remain in the separate native profile and are not imported back automatically. Do not delete either profile. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained backups and limitations.
 
 After a Tauri in-app update, Captures restores open screenshot previews, screenshot and recording editors, the screenshot mini-preview stack and Preferences visibility. Screenshot edits are retained as drafts. Recording editors do not restore unsaved trim/crop/export settings; active recordings block updates. This applies to updates started by a Tauri version with restoration support, not a native cutover or manual reinstall.
 
@@ -80,7 +82,7 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - On macOS and Windows, recording controls stay out of screenshots and recordings by default (Preferences). On Linux, use Hide controls during a recording to keep the bar off-screen
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — closed shapes start filled, with an optional stroke; text, shapes, images, and drawings can rotate from a shared handle (hold Shift to use a configurable snap increment); text and drawings with optional drop shadows (color, opacity, blur, and offset; the whole label, including a background plate), crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
-- Current Tauri source also accepts image pixels or image files from the clipboard with `Cmd`/`Ctrl`+`V` in the screenshot editor, alongside Add images and file drops. Pasted images become editable layers below the selected image (or canvas), with one Undo per paste. Text fields keep normal paste. Layer copy/paste keeps an editable snapshot within that editor and claims the clipboard, so copying an image elsewhere takes precedence on the next paste; **Copy image** still copies the full canvas for other apps. This is not in the pinned Preview yet. Image overlays in the video/GIF editor are not supported
+- Current Tauri source also accepts image pixels or image files from the clipboard with `Cmd`/`Ctrl`+`V` in the screenshot editor, alongside Add images and file drops. Pasted images become editable layers below the selected image (or canvas), with one Undo per paste. Text fields keep normal paste. Layer copy/paste keeps an editable snapshot within that editor and claims the clipboard, so copying an image elsewhere takes precedence on the next paste; **Copy image** still copies the full canvas for other apps. This requires a Preview newer than 2026.10.1104. Image overlays in the video/GIF editor are not supported
 - Open PNG, JPEG, WebP, GIF, MP4, and WebM files with Captures from Finder, File Explorer, or your file manager. Captures appears in Open With and does not become the default app for those types. Installed macOS, Windows, and Debian packages register this; an AppImage needs a desktop entry with `%U`. Save can overwrite the file you opened
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison (Hide on the overlay, or switch back to Preserve quality)
 - Default screenshot save format PNG, JPEG, or WebP (Capture History stays lossless PNG until you save); export with Tiny through Highest quality presets and an in-editor before/after comparison while Export settings are open. Hide the comparison or close Export settings to edit without the slider; save quality stays Compress or Maximum until you change it
@@ -89,7 +91,7 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - 30-day capture history, filtered by screenshots, video, or GIF. Drag a capture's thumbnail directly into an editor or any app that accepts its file type, without restoring a mini preview. Dragging copies the saved file when available, otherwise the original retained capture; History stays intact
 - Light, dark, or system appearance across every Captures window
 - Customizable shortcuts and accent colors. Find a setting in Preferences with `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux
-- Capture shortcuts work from Preferences, except while assigning a shortcut. Preferences → General offers **Start Captures on login** on macOS, Windows, and Linux, starting in the background when you sign in. Current source enables it by default for new installs; saved Off choices stay off. The pinned Tauri Preview still defaults to off
+- Capture shortcuts work from Preferences, except while assigning a shortcut. Preferences → General offers **Start Captures on login** on macOS, Windows, and Linux, starting in the background when you sign in. Current source enables it by default for new installs; saved Off choices stay off. Tauri Preview 2026.10.1104 and earlier default to off
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)
 - After an unexpected quit, Preview may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths. An in-app update restart, normal logoff, or shutdown is not a crash.
@@ -184,12 +186,12 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
-The Preview pipeline uses native UI with shared Rust engines and platform-specific
-capture integrations. Tauri/React sources remain for comparison and historical
-recovery; the Tauri CLI is only an installer bundler for native releases, not an
-application runtime. Ordinary development workbenches keep separate data and do
-not join the installed update channel. The detailed development notes below
-describe implemented slices, not completion of physical acceptance.
+The public Preview pipeline uses the Tauri/React app. The separate native rewrite
+uses AppKit on macOS and Rust/wgpu on Windows/Linux, with shared Rust engines and
+platform-specific capture integrations. Its development workbenches keep separate
+data and do not join the public update channel. The detailed native development
+notes below describe implemented slices, not completion of physical acceptance
+or approval to replace the public app.
 
 The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
@@ -236,8 +238,11 @@ the fresh-configure fix (for Sway, use 1.9+); older Sway 1.7 is not supported.
 Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
-in a separate development settings file. Fresh native profiles show the shipping
-setup screen before capture or opening queued media. macOS offers explicit Screen
+in a separate development settings file. Find retains its query and current match
+when closed; `Cmd`/`Ctrl`+`F` reopens it and selects the query for replacement.
+In the wgpu host, Escape in a custom-color field cancels the draft and leaves Find open.
+Fresh native profiles show the shipping setup screen before capture or opening
+queued media. macOS offers explicit Screen
 Recording and optional Microphone access, Settings links, and a permission restart;
 Windows/X11 show screen capture as ready and do not require upfront screen access.
 Wayland screenshot permission is handled by the desktop portal at capture time.
@@ -718,7 +723,9 @@ outputs and reports final draft failures. A blocked worker can delay reopening o
 Quit. AppKit permission restarts refuse pending editor work. The **Crop** tool selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking, then shows the
 selection's size with **Clear** and **Apply crop**. Apply commits the selection;
-Clear or Escape leaves the document unchanged. Layer rows show a grip,
+Clear leaves the document unchanged. Outside text fields and menus, Escape also
+clears the selected layer and staged crop without changing tools or adding an Undo
+step. Inline text keeps its existing Escape-to-finish behavior. Layer rows show a grip,
 a live preview, the name and kind, and eye, lock and ⋯ actions. Drag a row to
 reorder it (one undo step) and double-click an image row to rename it. The ⋯ menu
 holds blend mode, opacity, image transforms, Bring to front and Send to back, Merge
@@ -888,7 +895,7 @@ X11 file-list paste accepts incremental clipboard transfers within the existing
 On Wayland, clipboard pixels require compositor data-control support; editable
 layer ownership and local-file paste use the core selection protocol.
 **Copy image** remains the separate pixel-copy action. These are opt-in native
-source features, not a change to the pinned Tauri Preview or video editor.
+source features, not a change to the public Tauri app or video editor.
 Closing the editor or discarding its draft clears the internal layer clipboard.
 Right-click a layer for Copy layer, Paste layer, Duplicate, Delete and Merge down.
 These actions target that row; Merge visible and Flatten image affect the document.
@@ -961,8 +968,9 @@ Custom shadows and pinned-font named styles are connected, including style/size
 choices for new text; new text also takes the drawing defaults' Drop shadow, as in
 the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
-Like the shipping app, native Capture History shows its header, filters and grid;
-captures start from the tray, shortcuts and New Capture menu. Wayland additionally
+Native Capture History shows its header, filters and grid. **Back to Preferences**
+opens or restores Preferences without closing History, including when History is
+empty. Captures start from the tray, shortcuts and New Capture menu. Wayland additionally
 offers **Take screenshot…**, **Record display…** and **Record window…** because a tray or global shortcuts may be unavailable. A
 denied capture opens the native permission recovery: Restart & Retry on macOS, or a
 **Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS

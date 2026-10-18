@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 
 import {
   COOKING_MAX_AGE_MS,
@@ -160,4 +160,27 @@ test("superseded runs and failed earlier attempts cook as part of the next batch
   ]);
   // The published snapshot, not any stale workflow event SHA, ends cooking.
   assert.deepEqual(cookingPreviewShas(changes, { publishedCommit: "five", runs, now: NOW }), []);
+});
+
+test("publishing status uses the latest Tauri release, ignoring a newer native archive", async () => {
+  const shas = ["3".repeat(40), "2".repeat(40), "1".repeat(40)];
+  const releases = [
+    { tag_name: "v2026.10.19.1", target_commitish: shas[0] },
+    {
+      tag_name: "v2026.10.18.2",
+      target_commitish: shas[1],
+      assets: [{ name: "captures-tauri.json", state: "uploaded" }],
+    },
+    { tag_name: "v2026.10.11.4", target_commitish: shas[2] },
+  ].map((release) => ({ ...release, draft: false, prerelease: true }));
+  vi.stubGlobal("fetch", async (url: string) =>
+    Response.json(url.includes("/releases?") ? releases : { workflow_runs: [] }),
+  );
+  try {
+    const { resolveCookingPreviewShas } = await import("./server/cookingPreview.ts");
+    const changes = shas.map((sha) => ({ sha, committedAt: new Date().toISOString() }));
+    assert.deepEqual(await resolveCookingPreviewShas(changes), [shas[0]]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

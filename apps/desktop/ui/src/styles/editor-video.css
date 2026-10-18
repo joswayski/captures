@@ -205,15 +205,14 @@
   opacity: 1;
 }
 
-.recording-preview-overlay-play span {
-  margin-left: 3px;
-  font-size: 18px;
-  font-weight: var(--weight-bold);
-  line-height: 1;
-}
-
-.recording-preview-overlay-play.playing span {
-  margin-left: 0;
+.recording-preview-overlay-play svg {
+  width: var(--s-8);
+  height: var(--s-8);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* ------------------------------------------------------------- cropping --- */

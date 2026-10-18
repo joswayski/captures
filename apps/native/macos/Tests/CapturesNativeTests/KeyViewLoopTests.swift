@@ -86,8 +86,36 @@ final class KeyViewLoopTests: XCTestCase {
         let header = try XCTUnwrap(keyViewIndex(order, PreferencesPolicy.text("history")))
         XCTAssertGreaterThan(find, header)
         XCTAssertLessThan(find, firstCard, "The find bar sits in the header, before the cards")
+        let field = try XCTUnwrap(order[find] as? NSTextField)
+        field.stringValue = "screenshots"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        controller.stepFind(1)
+        func countLabel() -> String? {
+            root.subviews.flatMap(\.subviews).compactMap { $0 as? NSTextField }
+                .first { $0.stringValue.contains(" of ") }?.stringValue
+        }
+        XCTAssertEqual(countLabel(), "2 of 4")
         controller.closeFind()
         order = try loop()
         XCTAssertNil(keyViewIndex(order, PreferencesPolicy.text("find.placeholder")))
+        controller.showFind()
+        order = try loop()
+        let reopenedIndex = try XCTUnwrap(keyViewIndex(order, PreferencesPolicy.text("find.placeholder")))
+        let reopened = try XCTUnwrap(order[reopenedIndex] as? NSTextField)
+        XCTAssertEqual(reopened.stringValue, "screenshots", "Closing Find does not discard the query")
+        XCTAssertEqual(countLabel(), "2 of 4", "Reopen retains the selected match")
+        let editor = try XCTUnwrap(reopened.currentEditor() as? NSTextView)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 11))
+        editor.setSelectedRange(NSRange(location: 3, length: 0))
+        controller.showFind()
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 11),
+                       "Find selects the whole query even while it is already open")
+        editor.insertText("cursor", replacementRange: editor.selectedRange())
+        XCTAssertEqual(reopened.stringValue, "cursor", "Typing replaces the selected query")
+        XCTAssertEqual(countLabel(), "1 of 2")
+        controller.stepFind(1)
+        controller.restyle()
+        XCTAssertEqual(countLabel(), "2 of 2", "Restyling keeps the current search and match")
+        controller.closeFind()
     }
 }

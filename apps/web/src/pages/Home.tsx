@@ -6,6 +6,7 @@ import ProductGallery from "../ProductGallery";
 const REPO_URL = "https://github.com/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
+const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
@@ -118,18 +119,8 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Downloads use the existing Tauri app. The native rewrite is being tested
-                  separately. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,
-                  on{" "}
-                  <a
-                    href={X_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-chip"
-                    aria-label="Give feedback on X"
-                  >
-                    <XIcon className="h-3 w-3" />
-                  </a>
-                  , or <CopyEmailButton email={CONTACT_EMAIL} />.
+                  separately. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,{" "}
+                  <FeedbackChannels />.
                 </p>
 
                 <div className="mt-8">
@@ -173,7 +164,8 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Captures is available for macOS, Windows, and Linux. Visit from your computer to
-                  download it, or follow the project on GitHub.
+                  download it, or follow the project on GitHub. Feedback is welcome{" "}
+                  <FeedbackChannels />.
                 </p>
                 <div className="mt-8">
                   <GitHubSourceButton primary />
@@ -277,6 +269,33 @@ function availabilityLabel(download: PreviewDownload | null) {
   if (!current) return "Available for macOS, Windows, and Linux";
   const others = names.filter((name) => name !== current);
   return `Also available for ${others[0]} and ${others[1]}`;
+}
+
+function FeedbackChannels() {
+  return (
+    <>
+      on{" "}
+      <a
+        href={X_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-chip"
+        aria-label="Give feedback on X"
+      >
+        <XIcon className="h-3 w-3" />
+      </a>
+      , on{" "}
+      <a
+        href={CAPER_INVITE_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
+      >
+        caper.chat
+      </a>{" "}
+      (my other app), or <CopyEmailButton email={CONTACT_EMAIL} />
+    </>
+  );
 }
 
 function CopyEmailButton({ email }: { email: string }) {

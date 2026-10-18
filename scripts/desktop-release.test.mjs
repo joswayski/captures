@@ -37,10 +37,6 @@ test("classifies installed-app paths without treating website, API, docs, or tes
   for (const path of [
     "apps/desktop/ui/src/App.tsx",
     "apps/desktop/src-tauri/src/lib.rs",
-    "apps/native/wgpu/src/main.rs",
-    "apps/native/macos/Sources/CapturesNative/Main.swift",
-    "apps/native/wgpu/Cargo.lock",
-    "scripts/native-preview-build.mjs",
     "crates/captures-video/src/lib.rs",
     "shared/design.css",
     ".cargo/config.toml",
@@ -51,6 +47,10 @@ test("classifies installed-app paths without treating website, API, docs, or tes
   }
 
   for (const path of [
+    "apps/native/wgpu/src/main.rs",
+    "apps/native/macos/Sources/CapturesNative/Main.swift",
+    "apps/native/wgpu/Cargo.lock",
+    "scripts/native-preview-build.mjs",
     "apps/web/src/pages/Home.tsx",
     "apps/web/src/server/api.ts",
     "apps/desktop/ui/src/App.test.tsx",
@@ -164,13 +164,14 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
     fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
     "utf8",
   );
+  assert.match(workflow, /on:\n  push:\n    branches: \[main\]\n  workflow_dispatch:/u);
   assert.match(workflow, /should_release: \$\{\{ steps\.scope\.outputs\.should_release \}\}/u);
   assert.match(workflow, /if: needs\.queue\.outputs\.should_release == 'true'/u);
   assert.match(workflow, /desktop-release\.mjs changed/u);
   assert.match(workflow, /desktop-release\.mjs"? notes/u);
   assert.match(
     workflow,
-    /name: Load the current desktop release helper[\s\S]*?ref: \$\{\{ github\.sha \}\}[\s\S]*?sparse-checkout: scripts\/desktop-release\.mjs/u,
+    /name: Load the current desktop release helper[\s\S]*?ref: \$\{\{ github\.sha \}\}[\s\S]*?sparse-checkout: \|\n\s+scripts\/desktop-release\.mjs\n\s+scripts\/ai-release-notes\.mjs/u,
   );
   assert.doesNotMatch(workflow, /generate_release_notes=true/u);
   assert.match(
@@ -178,9 +179,64 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
     /concurrency:\n  group: captures-preview-main\n  cancel-in-progress: false\n\n/u,
   );
   assert.doesNotMatch(workflow, /wait-preview-queue|github\.event\.before/u);
-  assert.match(workflow, /release_sha="\$\{REQUESTED_SHA:-origin\/main\}"/u);
+  assert.match(workflow, /TRIGGER_SHA: \$\{\{ github\.sha \}\}/u);
   assert.match(workflow, /BEFORE_SHA: \$\{\{ steps\.baseline\.outputs\.previous_tag \}\}/u);
   assert.match(workflow, /"\$generated_notes" \\\n\s+"\$PREVIOUS_TAG"/u);
+});
+
+test("queued releases stay on their triggering commit while explicit historical rebuilds remain possible", () => {
+  const workflow = readFileSync(
+    fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
+    "utf8",
+  );
+  const script = workflow
+    .match(
+      /- name: Resolve the main commit to release[\s\S]*?run: \|\n([\s\S]*?)\n      - name:/u,
+    )[1]
+    .replace(/^          /gmu, "");
+  const directory = mkdtempSync(join(tmpdir(), "captures-preview-target-"));
+  const runGit = (...args) =>
+    execFileSync("git", args, {
+      cwd: directory,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  try {
+    runGit("init", "-b", "main");
+    runGit("config", "user.name", "Captures Test");
+    runGit("config", "user.email", "captures@example.com");
+    const commit = (message) => {
+      runGit("commit", "--allow-empty", "-m", message);
+      return runGit("rev-parse", "HEAD");
+    };
+    const historical = commit("Previous release");
+    const trigger = commit("Queued release");
+    const newer = commit("Main moved after the request");
+    runGit("remote", "add", "origin", directory);
+    const output = join(directory, "output");
+    const resolve = (requested = "") => {
+      writeFileSync(output, "");
+      execFileSync("bash", ["-c", script], {
+        cwd: directory,
+        env: {
+          ...process.env,
+          REQUESTED_SHA: requested,
+          TRIGGER_SHA: trigger,
+          GITHUB_OUTPUT: output,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      return readFileSync(output, "utf8");
+    };
+    assert.match(resolve(), new RegExp(`^release_sha=${trigger}\\n`, "u"));
+    assert.equal(runGit("rev-parse", "origin/main"), newer);
+    assert.match(resolve(historical), new RegExp(`^release_sha=${historical}\\n`, "u"));
+    runGit("checkout", "-b", "unmerged", historical);
+    const unmerged = commit("Not approved on main");
+    assert.throws(() => resolve(unmerged), /not a commit on main/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("batches unpublished desktop changes, fixes, and notes across docs-only pushes", () => {
@@ -198,7 +254,12 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     runGit("commit", "-m", text);
     return runGit("rev-parse", "HEAD");
   };
-  const published = (tag_name) => ({ tag_name, draft: false, prerelease: true });
+  const published = (tag_name) => ({
+    tag_name,
+    draft: false,
+    prerelease: true,
+    assets: [{ name: "captures-tauri.json", state: "uploaded" }],
+  });
   try {
     runGit("init");
     runGit("config", "user.name", "Captures Test");
@@ -212,6 +273,8 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     releases.push({ ...published("v2026.09.05.2"), draft: true });
     commit("apps/desktop/app.txt", "Fix 3 (#3)");
     runGit("tag", "v2026.09.05.3"); // Orphan tag from an interrupted stage.
+    runGit("tag", "v2026.10.18.1"); // Published native release must not consume Tauri changes.
+    releases.push({ ...published("v2026.10.18.1"), assets: [] });
     const batch = commit("README.md", "Docs 4 (#4)");
     process.chdir(directory);
     assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.1");
@@ -233,10 +296,10 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     // A new push cannot alter the pinned batch. After publication it belongs
     // exclusively to the next batch, and repeated/docs-only runs are skipped.
     const next = commit("apps/desktop/app.txt", "Change 5 (#5)");
-    runGit("tag", "v2026.09.05.4", batch);
-    releases.push(published("v2026.09.05.4"));
-    assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.4");
-    assert.equal(releaseImpactBetween("v2026.09.05.4", batch).shouldRelease, false);
+    runGit("tag", "v2026.10.18.2", batch);
+    releases.push(published("v2026.10.18.2"));
+    assert.equal(previousPreviewTag(batch, releases), "v2026.10.18.2");
+    assert.equal(releaseImpactBetween("v2026.10.18.2", batch).shouldRelease, false);
     const nextNotes = releaseNotesBetween(
       previousPreviewTag(next, releases),
       next,

@@ -1,19 +1,18 @@
 # Browser-free desktop migration
 
-Status: **native Preview cutover authorized; physical cross-platform acceptance remains open**.
+Status: **opt-in native development; Tauri remains the public Preview and physical cross-platform acceptance remains open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
-complete OS at a time. Preview packaging now selects AppKit on macOS and Rust/wgpu
-on Windows/Linux. The maintainer explicitly authorized switching installed updates
-and downloads before physical acceptance; this does not mark the remaining gates
-complete or start a stable channel. The existing download aliases and updater
-manifest change only after a complete signed release. Older Tauri releases remain
-in the archive. No WebView, JavaScript runtime, localhost server or Tauri runtime
-belongs in the replacement; the existing CLI remains a build-time installer bundler.
-The website continues using the same download aliases.
+complete OS at a time. The native workbenches use AppKit on macOS and Rust/wgpu
+on Windows/Linux. Public downloads and installed updates continue to select
+validated Tauri Previews; native CI and development packages do not authorize a
+cutover or a stable release. Earlier experimental native packages remain in the
+archive. No WebView, JavaScript runtime, localhost server or Tauri runtime belongs
+in the replacement; the Tauri CLI can still bundle native development installers.
+Tauri/React remains the shipping behavior and visual baseline.
 
-Installed profile copy, pinned signature verification and a stopped-process helper
-are now connected separately from the opt-in development updater. macOS/AppImage
-replacement keeps the previous package until renderer/settings/media startup
+Native migration tooling includes installed profile copy, pinned signature
+verification and a stopped-process helper, separately from the opt-in development
+updater. macOS/AppImage replacement keeps the previous package until renderer/settings/media startup
 acknowledgement; a failed acknowledgement retains recovery files and does not
 automatically roll back a possibly running application. Windows uses NSIS; Debian
 uses manual package installation. Open editor-window restoration across this
@@ -26,6 +25,17 @@ We are delivering stage 4 workflow slices and stage 5 editor slices.
 do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
+
+Native History replaces “On this device” with the shipping ghost **Back to
+Preferences** button and shared left-chevron path. It stays available in loading
+and empty History, opens or focuses/unminimizes the separate Preferences window,
+and leaves History open. AppKit reuses `showPreferences(revealing: nil)`; wgpu
+reuses its Preferences viewport without changing the selected settings section.
+The AppKit History tests cover copy, minimum-width containment and keyboard order;
+the X11 History smoke covers real navigation at normal/minimum sizes in light/dark,
+same-window restoration, and unchanged History/source bytes. macOS and Windows
+execution, Wayland navigation and physical window-manager acceptance remain
+unverified in the Linux orb. This slice does not promote a native download.
 
 Windows native frozen selectors now use the shipping cursor-preview policy for
 region/window/display selection and screenshots during recording. The preview
@@ -792,6 +802,17 @@ show the login item as
 unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
 Windows, Wayland and screen-reader acceptance remain open.
 
+The wgpu custom-color fields now display uppercase hex values and expose the
+shipping names for each color well and hex input without replacing their native
+accessibility roles. Escape discards the draft even after egui releases focus;
+Enter and blur still commit valid colors, invalid input restores the saved value,
+and stored settings remain lowercase. A UI/accessibility-tree regression covers
+these contracts. A real private-X11 check reproduces the old Escape save;
+light/dark checks verify cancellation, shorthand expansion, invalid input, reset
+and the normal/minimum presentation. AppKit's existing uppercase controls and labels are
+unchanged; Windows and Wayland use the shared wgpu path but this follow-up has no
+runtime or physical screen-reader acceptance on those hosts.
+
 The wgpu Preferences Find keyboard follow-up consumes each accepted key with its
 own modifiers. Enter/Shift+Enter retain search-field focus for repeated navigation
 and continued typing; Enter on a focused Find button remains that button's action.
@@ -804,6 +825,31 @@ the result; an earlier capture during smooth scrolling clipped the minimum-size
 match. AppKit's existing Cmd+G menu and find-field Return routing are unchanged;
 macOS, Windows, Wayland, physical keyboard and screen-reader execution remain
 unverified for this follow-up. No end-to-end acceptance gate closes.
+
+The Find continuity follow-up retains the query and selected match across close
+and reopen in both native hosts. Cmd/Ctrl+F selects the whole query even when Find
+is already open; reopening reveals the current row again. This state is local to
+Preferences, not persisted in settings. AppKit restyling also retains the current
+search and match. The wgpu host leaves Escape to a focused custom-color field,
+including the frame in which egui releases focus, so cancelling the draft neither
+saves it nor closes Find. The next Escape can close Find normally.
+
+Two extended egui regressions fail on the unchanged code (a cancelled draft saves
+`#aabbcc`, and reopening loses the search) and pass after the change. Real private
+X11 light/dark input checks cover both color fields, Enter/blur and invalid-input
+controls, retained matches and replacement typing at normal/minimum sizes. Private
+Sway 1.9 checks with DISPLAY unset also cover reopened queries, selected matches,
+replacement typing and unchanged source/settings/History bytes in both appearances
+and sizes. The fixture waits for the complete query, not a matching count shared
+by an intermediate prefix, before sending navigation keys. The existing X11 CI
+fixture also checks retained query/index and replacement typing rather than the
+old clear-on-close behavior. AppKit's field-editor/key-view regression passed in
+a hosted suite of 618 tests, seven skipped and zero failures. The overall macOS
+job exhausted its 30-minute limit during post-test cleanup, leaving development
+packaging unverified; the job now allows 45 minutes without removing checks.
+Windows native workbench checks passed. Full hosted workflow completion and
+physical input, IME and screen-reader gates remain open; no public download,
+updater pin or release channel changes.
 
 The coordinated Preferences/Feedback follow-up tracks shipping PR #926. General
 is first and contains **Start Captures on login**, with the shipping background
@@ -1294,6 +1340,27 @@ Each accepted nudge retains normal undo and output invalidation. AppKit protects
 field/selector/slider responders; wgpu reserves arrows for any focused widget.
 Both hosts copy and paste layers. Physical keyboard/IME/accessibility
 acceptance on macOS, Windows, X11 and Wayland remains open.
+
+Canvas Escape now clears the selected layer and staged crop on both native
+hosts without changing the active tool, document, output or undo history.
+Following Delete, Duplicate or arrow keys cannot target a fallback layer.
+wgpu processes Escape in document-key order, once across layout passes; it
+remembers the last rendered text-field identity because egui releases focus
+before the Escape pass. Text fields, inline composition, Shapes, context menus
+and layer settings retain their Escape handling. AppKit no longer clears a
+crop behind a focused numeric field. Pending edits retain their existing
+selection gate; Escape cancels transient gestures, not accepted worker jobs.
+The extended wgpu regression and real X11 input both reproduced retained
+selection and the subsequent unintended edit before the fix. After the fix,
+the native suite passes (517 tests, one ignored), and real X11 and Sway 1.9
+keyboard input passes in dark/light at normal/minimum window sizes. X11 also
+checks that field and menu Escape retain selection; both Linux paths preserve
+draft bytes after canvas Escape followed by Delete, Duplicate and nudge.
+AppKit ownership/deselection XCTest coverage is added but not executable in the
+Linux orb; Windows uses the same wgpu path but has not run this slice locally.
+Physical acceptance remains open on macOS, Windows, X11 and Wayland; no native
+release or parity gate is authorized by this slice.
+
 Both hosts connect Tauri's tool keys to their existing tools: V Select, C Crop,
 T Text, R Rectangle, O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen and
 B background removal. B recalls Wand/Erase/Restore, initially Wand. These
@@ -2005,6 +2072,21 @@ is recorded separately from the earlier paused failure/retry sequence.
 The wgpu host also offers Play/Pause through a persistent shared FFmpeg
 decoder capped at 30 fps and 1280 × 720. Motion frames retain the accepted spatial
 edits but stay separate from session state, dirty identity, estimates and History.
+The recording preview's overlay button uses the shared `pause`/`resume` SVG
+paths in both native hosts, at 24 px with a 2-unit stroke, matching Tauri.
+wgpu no longer draws separate rectangles and a filled triangle; AppKit overrides
+the ordinary button's smaller icon size/stroke only for playback. Other controls,
+playback state, focus and accessible labels are unchanged. These are opt-in native
+controls, not a change to the approved public download or a completed parity gate.
+The icon slice's private-X11 dark/light playback checks exercise normal/minimum
+windows, pause/resume/EOF, loop, failure/retry, close and immutable accepted export.
+Windows and Wayland share this renderer but have no local presentation verification
+for the icon slice; AppKit source changes await macOS execution. Physical acceptance
+remains open on all four hosts.
+Repeated private-X11 debug runs also exposed an intermittent timeout waiting for
+Pause after a failed-decoder retry, reproduced both with and without the icon
+change. The cause remains open; passing individual playback runs does not close
+that recovery acceptance gap.
 A single latest-frame slot bounds pending UI work; no timer remains after stop.
 Pause retains the last presented source position, EOF replays from accepted trim
 start, and failures restore the accepted still. Focus loss/minimize requests Pause;
@@ -3453,8 +3535,12 @@ through the `captures_preview_editor_*`, `_hover_lock_v1`,
   the morph, then observes an intermediate width between 70 and 280 ms instead
   of assuming a timer fired before a fixed 70 ms run-loop deadline. It rebuilds
   immediately without intervening display/flush work and checks both directions
-  against the original 280 ms clock. Missing intermediate frames and late samples
-  that cannot distinguish a restarted clock fail rather than bypass continuity.
+  against the original 280 ms clock. Settlement observes the exact delivered
+  endpoint before a restarted clock could finish, rather than assuming the last
+  timer fired by the original +300 ms run-loop deadline. The hosted diagnostic
+  reproduced stale endpoint samples with preserved clocks and valid timers
+  49–77 ms overdue. Missing intermediate frames and samples too late to
+  distinguish a restarted clock still fail rather than bypass continuity.
   Rendering follows the timing assertions. This checks an already-serviced
   preview, not cold-presentation latency or animation smoothness; servicing idle
   alone did not reliably prevent the hosted test's delayed first timer delivery.

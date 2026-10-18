@@ -14,7 +14,7 @@ enum HistoryCardAction: String, CaseIterable {
 /// Capture History copy from `captures_app::history_view` (shared with the
 /// wgpu host and identical to the shipping Tauri `CaptureHistory`).
 struct HistoryCopy: Equatable {
-    let eyebrow, title, lede, loading, emptyTitle, emptyBody, filteredEmpty: String
+    let backToPreferences, title, lede, loading, emptyTitle, emptyBody, filteredEmpty: String
     let filterGroupLabel, gridLabel, deleteAll, deleteAllConfirm, deleteAllBusy: String
     let deleteAllLabel, deleteAllConfirmLabel, cancel, cancelLabel, missing: String
     let recoveryTitle, recoveryHelp: String
@@ -44,7 +44,7 @@ struct HistoryCopy: Equatable {
             guard let value = copy[key] as? String else { throw SettingsStoreError.invalidResponse }
             return value
         }
-        eyebrow = try text("eyebrow"); title = try text("title"); lede = try text("lede")
+        backToPreferences = try text("back_to_preferences"); title = try text("title"); lede = try text("lede")
         loading = try text("loading"); emptyTitle = try text("empty_title")
         emptyBody = try text("empty_body"); filteredEmpty = try text("filtered_empty")
         filterGroupLabel = try text("filter_group_label"); gridLabel = try text("grid_label")
@@ -212,7 +212,7 @@ struct HistoryGridLayout: Equatable {
 /// accessibility behavior; only the drawing is custom.
 final class HistoryButton: NSButton {
     enum Style { case primary, secondary, danger, confirm, ghost, overlay, confirmOverlay }
-    enum Glyph { case edit, save, trash, restore, check }
+    enum Glyph { case edit, save, trash, restore, check, back }
 
     var tokens: Tokens
     var style: Style { didSet { needsDisplay = true } }
@@ -311,6 +311,7 @@ enum HistoryGlyph {
         case .save: name = "save"
         case .restore: name = "restore"
         case .check: name = "check"
+        case .back: name = "chevron-left"
         }
         color.setStroke()
         ShippingIcons.stroke(name, in: rect, width: 1.7, flipped: flipped)
