@@ -6,6 +6,7 @@ import ProductGallery from "../ProductGallery";
 const REPO_URL = "https://github.com/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
+const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "contact@josevalerio.com";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
@@ -129,7 +130,16 @@ export default function Home({
                   >
                     <XIcon className="h-3 w-3" />
                   </a>
-                  , or <CopyEmailButton email={CONTACT_EMAIL} />.
+                  , on{" "}
+                  <a
+                    href={CAPER_INVITE_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
+                  >
+                    caper.chat
+                  </a>{" "}
+                  (my other app), or <CopyEmailButton email={CONTACT_EMAIL} />.
                 </p>
 
                 <div className="mt-8">
@@ -180,17 +190,6 @@ export default function Home({
                 </div>
               </>
             )}
-            <p className="mt-5 text-sm leading-relaxed text-ink-muted">
-              <a
-                href="https://caper.chat/invite/pIXKAZFUp8"
-                target="_blank"
-                rel="noreferrer"
-                className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
-              >
-                Share feedback on caper.chat
-              </a>
-              , my other app. Ideas and bug reports welcome!
-            </p>
           </div>
         </section>
 
