@@ -831,10 +831,15 @@ controls, retained matches and replacement typing at normal/minimum sizes. Priva
 Sway 1.9 checks with DISPLAY unset also cover reopened queries, selected matches,
 replacement typing and unchanged source/settings/History bytes in both appearances
 and sizes. The fixture waits for the complete query, not a matching count shared
-by an intermediate prefix, before sending navigation keys. AppKit has an extended
-field-editor/key-view regression; macOS and Windows runtime
-verification is pending. Physical input, IME and screen-reader gates remain open;
-no public download, updater pin or release channel changes.
+by an intermediate prefix, before sending navigation keys. The existing X11 CI
+fixture also checks retained query/index and replacement typing rather than the
+old clear-on-close behavior. AppKit's field-editor/key-view regression passed in
+a hosted suite of 618 tests, seven skipped and zero failures. The overall macOS
+job exhausted its 30-minute limit during post-test cleanup, leaving development
+packaging unverified; the job now allows 45 minutes without removing checks.
+Windows native workbench checks passed. Full hosted workflow completion and
+physical input, IME and screen-reader gates remain open; no public download,
+updater pin or release channel changes.
 
 The coordinated Preferences/Feedback follow-up tracks shipping PR #926. General
 is first and contains **Start Captures on login**, with the shipping background
