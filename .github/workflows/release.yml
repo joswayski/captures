@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       channel_only:
-        description: Refresh the approved public downloads without building a native release
+        description: Refresh public downloads from the newest Tauri Preview without rebuilding
         required: false
         type: boolean
         default: false
@@ -15,9 +15,8 @@ on:
         required: false
         type: string
 
-# Main pushes publish experimental archives when the desktop scope gate finds
-# unpublished changes. Public promotion still uses the separately approved tag
-# in scripts/preview-release.mjs, never newest-native.
+# Main pushes build and promote Tauri Previews when unpublished desktop changes
+# exist. Native development and unsigned workbenches never enter this channel.
 # Omitting queue uses GitHub's default single pending slot.
 concurrency:
   group: captures-preview-main
@@ -229,6 +228,7 @@ jobs:
           sparse-checkout: |
             scripts/desktop-release.mjs
             scripts/ai-release-notes.mjs
+            shared/preview-runtime.ts
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v4
         with:
@@ -528,16 +528,9 @@ jobs:
             exit 1
           fi
           echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
-      - name: Install the native renderer toolchain
-        if: runner.os != 'macOS' && hashFiles('scripts/native-preview-build.mjs') != ''
-        run: rustup toolchain install 1.95.0 --profile minimal
-      - name: Build and bundle the native Preview
-        if: hashFiles('scripts/native-preview-build.mjs') != ''
-        run: node scripts/native-preview-build.mjs build "${{ matrix.target }}" "${{ needs.prepare.outputs.app_version }}"
-      # Keep historical pre-cutover recovery builds possible. Current sources
-      # use the native executable; tauri-action is never their runtime/build path.
-      - uses: tauri-apps/tauri-action@v1
-        if: hashFiles('scripts/native-preview-build.mjs') == ''
+      # The public app is always Tauri, even when native build tooling exists.
+      - name: Build and bundle the public Tauri Preview
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -617,15 +610,6 @@ jobs:
             "$ffmpeg" \
             "$ffprobe" \
             "$app/Contents/Resources/notices/ffmpeg/BUILD_CONFIG.txt"
-      - name: Sign version-bound native updater artifacts and upload installers
-        if: hashFiles('scripts/native-preview-build.mjs') != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
-        shell: bash
-        run: |
-          node scripts/native-preview-build.mjs collect "${{ matrix.target }}" "${{ needs.prepare.outputs.app_version }}" native-release-assets
-          node "$GITHUB_WORKSPACE/release-tools/scripts/github-release-assets.mjs" upload "$RELEASE_ID" native-release-assets/*
       - name: Attach FFmpeg source and compliance files
         if: runner.os == 'macOS'
         env:
@@ -659,18 +643,17 @@ jobs:
           RELEASE_NOTES: ${{ needs.prepare.outputs.release_notes }}
         shell: bash
         run: |
+          set -euo pipefail
           node scripts/github-release-assets.mjs download "$RELEASE_ID" release-assets
-          # Legacy tauri-action builds upload their own manifest. Native builds
-          # assemble one only after every platform's signed artifact exists.
-          if [[ ! -f release-assets/latest.json ]]; then
-            node scripts/native-preview-build.mjs manifest release-assets "$APP_VERSION"
-          fi
+          # Only this Tauri-only job may identify a release as public-channel
+          # eligible. Missing Tauri manifests fail validation, never fall back.
+          printf '{"runtime":"tauri","version":"%s"}\n' "$APP_VERSION" > release-assets/captures-tauri.json
           # GitHub draft releases report tag_name as untagged-* even when the
           # CalVer git tag already exists. Pass that tag explicitly so latest.json
           # keeps publishable download URLs before checksums are frozen.
           node scripts/github-release-assets.mjs rewrite-updater-urls "$RELEASE_ID" release-assets/latest.json "$TAG"
           node scripts/release-assets.mjs release-assets "$APP_VERSION"
-          node scripts/github-release-assets.mjs upload "$RELEASE_ID" release-assets/SHA256SUMS release-assets/latest.json
+          node scripts/github-release-assets.mjs upload "$RELEASE_ID" release-assets/SHA256SUMS release-assets/latest.json release-assets/captures-tauri.json
       - name: Confirm the release remains a draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -726,7 +709,7 @@ jobs:
           fi
 
   channel:
-    name: Update approved public Preview
+    name: Update public Tauri Preview
     needs: publish
     if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && (needs.publish.result == 'success' || inputs.channel_only) }}
     runs-on: ubuntu-24.04
@@ -740,7 +723,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Publish the approved Preview on the permanent download page
+      - name: Publish the newest Tauri Preview on the permanent download page
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -825,7 +808,7 @@ jobs:
             echo "> [!WARNING]"
             echo "> Captures Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
             echo
-            echo "These downloads are pinned to the approved Tauri Preview while native parity work continues separately. Newer native builds in the archive are opt-in, not public-channel updates."
+            echo "These downloads track the newest validated Tauri Preview automatically. Native development builds remain separate and are never public-channel updates."
             echo
             echo "- [macOS 13+ — Apple silicon (.dmg)]($(asset_url "$macos_asset"))"
             echo "- [Windows 11 — x64 installer (.exe)]($(asset_url "$windows_asset"))"

@@ -15,19 +15,29 @@ import {
 } from "./install-latest-release.mjs";
 import { latestPreviewRelease, previewVersion, publicPreviewRelease } from "./preview-release.mjs";
 
-test("public downloads stay on the approved Tauri release and never fall forward to native", () => {
+test("public downloads advance to the newest Tauri release, never native or unfinished builds", () => {
   const tauri = { tag_name: "v2026.10.11.4", draft: false, prerelease: true };
   const native = { tag_name: "v2026.10.11.7", draft: false, prerelease: true };
+  const next = {
+    ...tauri,
+    tag_name: "v2026.10.18.2",
+    assets: [{ name: "captures-tauri.json", state: "uploaded" }],
+  };
   assert.equal(publicPreviewRelease([native, tauri]), tauri);
+  assert.equal(publicPreviewRelease([native, tauri, next]), next);
+  assert.equal(publicPreviewRelease([next, { ...native, tag_name: "v2026.10.19.1" }]), next);
+  for (const unfinished of [
+    { ...next, draft: true },
+    { ...next, prerelease: false },
+    { ...next, assets: [{ name: "captures-tauri.json", state: "starter" }] },
+  ])
+    assert.equal(publicPreviewRelease([tauri, unfinished]), tauri);
   for (const releases of [
     [native],
     [native, { ...tauri, draft: true }],
     [native, { ...tauri, prerelease: false }],
   ]) {
-    assert.throws(
-      () => publicPreviewRelease(releases),
-      /approved public Preview .* is not published/u,
-    );
+    assert.throws(() => publicPreviewRelease(releases), /no published Tauri Preview/u);
   }
 });
 

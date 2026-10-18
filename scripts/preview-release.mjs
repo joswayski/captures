@@ -1,16 +1,12 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { isTauriPreview } from "../shared/preview-runtime.ts";
 
 const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
 
-// Explicit public-channel approval, not the newest experimental native build.
-export const PUBLIC_PREVIEW_TAG = "v2026.10.11.4";
-
 export function publicPreviewRelease(releases) {
-  const release = releases.find((candidate) => candidate.tag_name === PUBLIC_PREVIEW_TAG);
-  if (!release || release.draft || !release.prerelease) {
-    throw new Error(`approved public Preview ${PUBLIC_PREVIEW_TAG} is not published`);
-  }
+  const release = latestPreviewRelease(releases.filter(isTauriPreview));
+  if (!release) throw new Error("no published Tauri Preview is available");
   return release;
 }
 

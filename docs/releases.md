@@ -1,20 +1,28 @@
 # Captures releases
 
-## Public channel is pinned to Tauri
+## Public channel automatically tracks Tauri
+
+Tauri is the public application. Main pushes with unpublished Tauri/shared desktop
+changes automatically build and promote a Preview after all platform, signing,
+notarization and complete-package checks pass. Native remains separate development;
+it is never selected just because native tooling is present in the source tree.
+This remains the experimental Preview channel, not a stable-channel launch.
 
 Public downloads, `npm run install:preview`, and both updater endpoints use the
-approved tag in `scripts/preview-release.mjs`: currently `v2026.10.11.4`
-(`2026.10.1104`), the last Tauri Preview before the native cutover. Selection
-fails closed if that release is unavailable; it never falls forward to a newer
-native build. The changelog excludes versions newer than the approved release.
-This is a rollback of the public Preview channel, not a stable-channel launch.
+highest published Tauri CalVer selected by `scripts/preview-release.mjs`. There is
+no fixed-version pin. New releases carry a `captures-tauri.json` runtime marker,
+uploaded only after the Tauri-only packaging job passes validation. The marker is
+included in `SHA256SUMS`. Historical releases through `v2026.10.11.4` are recognized
+as Tauri; later unmarked releases (including the native `v2026.10.18.1`) are excluded.
+The release baseline, public changelog and website publishing status use the same
+runtime filter. A native release cannot consume the next Tauri change batch.
 
-Native parity work and development CI continue separately. Installed native
-versions are newer than this pin and do not automatically downgrade. Returning
-to Tauri requires quitting Captures and replacing the installed app manually;
-the original Tauri profile remains separate from native-only captures and edits.
-Do not delete either profile or assume a reverse migration exists. While pinned,
-the native startup-recovery helper cannot obtain a newer fix from this channel.
+Returning from an installed native Preview to Tauri requires quitting Captures
+and replacing the installed app manually; the original Tauri profile remains
+separate from native-only captures and edits. Do not delete either profile or
+assume a reverse migration exists. Old native archives still query the public
+feed and may offer a newer version, but their version/target-bound signatures
+reject Tauri artifacts. They cannot receive native repairs from this channel.
 
 To refresh the public installers and updater metadata without rebuilding apps:
 
@@ -22,34 +30,35 @@ To refresh the public installers and updater metadata without rebuilding apps:
 gh workflow run release.yml --repo joswayski/captures --ref main -f channel_only=true
 ```
 
-All four installer aliases and `latest.json` are copied from the approved dated
-release. Verify the public feed and installer digests after this job, not merely
-the workflow dispatch. Before a rollback, cancel any obsolete release run using
-the older auto-promoting workflow and verify its draft cleanup. Changing the
-approved tag requires maintainer approval of behavior, visuals and platform parity;
-passing CI or publishing a newer archive is not authorization to promote it.
+All four installer aliases and `latest.json` are copied from the newest validated
+Tauri release. Verify the public feed and installer digests after this job, not
+merely the workflow dispatch. For a broken Tauri release, fix or revert on main
+and publish a higher version; an older version will not downgrade installed apps.
+Adding the Tauri marker to a native archive is not a supported promotion path.
+Native promotion requires a separate maintainer decision on parity and migration.
 
 ## Native Preview packaging and recovery
 
-The native public rollout has been withdrawn pending parity. Automatically published
-native archives use AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
-and remain experimental; physical acceptance is incomplete. `scripts/native-preview-build.mjs`
+The native public rollout has been withdrawn pending parity. Existing native
+archives use AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
+and remain experimental; physical acceptance is incomplete. They are no longer
+published by `release.yml`. `scripts/native-preview-build.mjs`
 builds the native executable and updater helper, verifies their build identity,
 then uses the existing pinned Tauri CLI only to bundle installers. It does not
 build or embed the Tauri app, frontend or WebView2 installer. `CI` can be manually
 dispatched on a branch to build unsigned installers without release secrets.
 
-The release still requires all three platforms, Apple signing/notarization,
+Previously published native releases required all three platforms, Apple signing/notarization,
 FFmpeg notices, checksums and a draft before publication. Native artifacts use
 version/target-bound filenames in their signed Minisign trusted comments; the
 compiled helper authenticates the collected bytes before upload. `latest.json`
 keeps the existing Tauri-compatible platform keys and public signing key, so
 the earlier native rollout could update installed Tauri Previews. That promotion
-is now blocked by the public-channel pin, including after an automatic native release.
+is now blocked by the public runtime filter and Tauri-only release workflow.
 The manifest retains a separately signed `linux-x86_64-deb` artifact for existing
 Tauri Debian installs: their updater cannot install an AppImage fallback. Once on
 native, Debian installs use the manual package update path.
-Historical pre-cutover rebuilds retain their old packaging path.
+Historical rebuilds through `release.yml` also build Tauri, never native.
 
 The installed native profile lives under the platform-local `Captures Native Preview`
 data directory, in `profile`. First launch copies previous settings, retained History
@@ -134,8 +143,8 @@ remain unavailable. Automated checks must not be reported as physical acceptance
 ## Release queue
 
 `.github/workflows/release.yml` runs on every push to `main`, including merges.
-Its inexpensive scope check compares with the last published dated Preview and
-skips app builds when there are no unpublished desktop changes. Website/API-only
+Its inexpensive scope check compares with the last published dated Tauri Preview and
+skips app builds when there are no unpublished desktop changes. Native-app-only and website/API-only
 pushes do not rebuild an already-published desktop; a later push can still collect
 desktop changes left unpublished by a failed or superseded request.
 
@@ -145,11 +154,11 @@ the dispatch commit, or an explicitly supplied `target_sha` on main's history.
 One request runs at a time and a newer pending request replaces the older pending
 request. Channel-only dispatches share this lock and skip all app builds.
 
-Archive builds run the frontend and Rust quality gates, then build macOS
+Tauri builds run the frontend and Rust quality gates, then build macOS
 Apple Silicon, Windows x64, and Linux x64 packages in parallel. A Preview is
 published only when every job succeeds. Notes compare with the nearest published
-dated Preview in the requested commit's history, ignoring drafts and orphan tags.
-Publication does not advance the approved public-channel tag.
+dated Tauri Preview in the requested commit's history, ignoring native releases,
+drafts and orphan tags. Successful publication advances the public channel.
 
 PR and release packaging reuse an exact-key cache of unsigned FFmpeg/ffprobe
 binaries, source archives, and compliance files. The key includes the platform,
@@ -173,7 +182,7 @@ through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
 `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
 `2026.7.1901`; source manifests remain at the development version. The updater
 channel and fixed Git tag are both named `preview`; refreshing them always uses
-the approved public tag, independently of the newest dated archive.
+the newest published Tauri version, ignoring native archives.
 
 The workflow stages a draft Preview at the exact tested commit. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
@@ -197,7 +206,7 @@ During draft preparation, `scripts/ai-release-notes.mjs` asks Anthropic for up t
 five short, user-facing highlights. It follows Caper's warm, concise editorial
 prompt and Opus request configuration, but writes the existing release body,
 not a separate highlights feed. Packaging and the updater reuse that body;
-the Preview warning and approved-public-channel cutoff remain unchanged.
+the Preview warning remains unchanged.
 
 Set the repository Actions secret `ANTHROPIC_API_KEY`. Optional repository
 variables `CAPTURES_RELEASE_NOTES_MODEL` and `CAPTURES_RELEASE_NOTES_EFFORT`
@@ -206,8 +215,8 @@ override `claude-opus-5-5` and `high`. Generation uses structured JSON output,
 It sends filtered source diffs and commit messages to Anthropic, never capture
 files or installed-app data. There is no AI request from the desktop app.
 
-Evidence uses the exact previous-Preview-to-target first-parent range. Runtime
-paths distinguish native builds from historical Tauri builds; website, tests,
+Evidence uses the exact previous-Tauri-Preview-to-target first-parent range. Only
+Tauri and shared source paths supply evidence; native-app source, website, tests,
 dependency bots and secret-looking paths are excluded. Path filtering is not
 a secret-content scanner. Requests are capped at 400,000 serialized characters
 by shortening diffs and marking truncation, without dropping commit metadata.
@@ -243,9 +252,9 @@ not mean the release is complete.
 
 The fixed `preview` pre-release is the permanent **Captures Preview — Latest**
 download page, not a historical build. It holds the macOS, Windows, Debian, and
-AppImage installers plus the `latest.json` updater manifest for the approved
-public CalVer version. That manifest includes a `changelog` only through that
-version, never notes from newer experimental native archives.
+AppImage installers plus the `latest.json` updater manifest for the newest
+public Tauri CalVer version. That manifest includes a Tauri-only `changelog`
+through that version, never notes from experimental native archives.
 Installed Preview builds ask `https://captur.es/api/updates/preview` for that
 manifest about every five minutes (and again shortly after launch). The website
 caches GitHub's `latest.json` for one minute and serves it unchanged; Tauri

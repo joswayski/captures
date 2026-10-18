@@ -13,10 +13,10 @@ desktop-app note and View on GitHub — not download copy or a GitHub Releases
 link. Other desktop platforms are mentioned with a link to GitHub Releases rather
 than listed as installers.
 
-Public installers and the updater feed are pinned to the approved Tauri Preview
-in `scripts/preview-release.mjs`. Main-branch activity is labelled **Development
+Public installers and the updater feed automatically track the newest validated
+Tauri Preview selected by `scripts/preview-release.mjs`. Main-branch activity is labelled **Development
 updates**, not promised as part of that download; native parity work stays separate.
-See [channel operations](../../docs/releases.md#public-channel-is-pinned-to-tauri).
+See [channel operations](../../docs/releases.md#public-channel-automatically-tracks-tauri).
 
 ## Stack
 
