@@ -5,32 +5,49 @@ use std::{fs, os::windows::process::CommandExt, process::Command};
 use captures_media::{CancelToken, MediaToolchain, RecordingAssemblyKind, RecordingSegmentInput};
 
 #[test]
-fn media_workers_do_not_attach_a_windows_console() {
+fn media_workers_do_not_create_a_console_window() {
+    // CI may itself have a windowless console. Run the public-interface checks
+    // with a console window so removing CREATE_NO_WINDOW would inherit it and
+    // fail, rather than silently passing because of the runner's environment.
+    if std::env::var_os("CAPTURES_MEDIA_CONSOLE_TEST_CHILD").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "media_workers_do_not_create_a_console_window",
+                "--nocapture",
+            ])
+            .env("CAPTURES_MEDIA_CONSOLE_TEST_CHILD", "1")
+            .creation_flags(0x0000_0010) // CREATE_NEW_CONSOLE
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "console-parent checks failed ({:?}):\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("console_probe.rs");
     let executable = directory.path().join("console_probe.exe");
-    // A console-subsystem stand-in for either sidecar. CONOUT$ is available
-    // whenever the child has a console, even when stdout/stderr are redirected.
-    // Use only std so the fixture needs neither FFmpeg nor Windows SDK bindings.
+    // A console-subsystem stand-in for either sidecar. CREATE_NO_WINDOW still
+    // provides a console buffer (CONOUT$ opens), but no console window. Reject
+    // any window handle, not just a currently visible window, so hiding a window
+    // after creation cannot mask a flash. No FFmpeg or bindings crate is needed.
     fs::write(
         &source,
         r##"
 #[link(name = "kernel32")]
 extern "system" {
     fn GetConsoleWindow() -> *mut std::ffi::c_void;
-    fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
-}
-#[link(name = "user32")]
-extern "system" {
-    fn IsWindowVisible(window: *mut std::ffi::c_void) -> i32;
 }
 fn main() {
-    let window = unsafe { GetConsoleWindow() };
-    let mut processes = [0u32; 8];
-    let count = unsafe { GetConsoleProcessList(processes.as_mut_ptr(), 8) };
-    eprintln!("console window={window:?}, visible={}, console processes={count}, ids={processes:?}", unsafe { IsWindowVisible(window) });
-    if std::fs::OpenOptions::new().write(true).open("CONOUT$").is_ok() {
-        eprintln!("media worker has an attached console");
+    // SAFETY: GetConsoleWindow has no arguments or caller preconditions.
+    if !unsafe { GetConsoleWindow() }.is_null() {
+        eprintln!("media worker has a console window");
         std::process::exit(23);
     }
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -60,35 +77,13 @@ fn main() {
         .arg("-version")
         .output()
         .unwrap();
-    assert_eq!(visible.status.code(), Some(23));
-    eprintln!("new console: {visible:?}");
-
-    for null_stdio in [false, true] {
-        let mut command = Command::new(&executable);
-        command.creation_flags(0x0800_0000).arg("-version");
-        if null_stdio {
-            command
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            eprintln!("hidden null stdio: {:?}", command.status());
-        } else {
-            eprintln!("hidden piped stdio: {:?}", command.output());
-        }
-    }
-    eprintln!(
-        "detached: {:?}",
-        Command::new(&executable)
-            .creation_flags(0x0000_0008)
-            .arg("-version")
-            .output()
-    );
+    assert_eq!(visible.status.code(), Some(23), "{visible:?}");
 
     let toolchain = MediaToolchain::new(executable.clone(), executable);
     let input = directory.path().join("recording.mp4");
     let cancel = CancelToken::default();
     // Recording startup and recovery, and Open With's probe/poster path, must
-    // all keep their sidecars console-free while preserving output and I/O.
+    // all keep their sidecars windowless while preserving output and I/O.
     toolchain.verify().unwrap();
     for probe in [
         toolchain.probe(&input).unwrap(),
