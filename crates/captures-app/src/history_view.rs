@@ -50,7 +50,7 @@ pub fn card_error_extra(text_height: f64) -> f64 {
 /// Window copy. Field names are stable ABI keys for AppKit.
 #[derive(Clone, Debug, Serialize)]
 pub struct Copy {
-    pub eyebrow: &'static str,
+    pub back_to_preferences: &'static str,
     pub title: &'static str,
     pub lede: &'static str,
     pub loading: &'static str,
@@ -72,7 +72,7 @@ pub struct Copy {
 }
 
 pub const COPY: Copy = Copy {
-    eyebrow: "On this device",
+    back_to_preferences: "Back to Preferences",
     title: "Capture History",
     lede: "Screenshots, videos, GIFs, and interrupted recordings you can recover all appear here for 30 days.",
     loading: "Loading history…",

@@ -17,6 +17,11 @@ Capture History (1020 × 720) and Preferences (880 × 660) are separate, resizab
 windows like the shipping app's, and first-run setup uses the History window's
 root retitled as the 620 × 560 **Captures** setup window until setup completes;
 `--live --open-preferences` also opens Preferences at launch.
+History's **Back to Preferences** ghost button replaces the device eyebrow,
+including while loading or empty. It opens or focuses/restores Preferences and
+keeps History open. `x11_history_smoke.py --record-navigation` can record its real
+pointer flow alongside normal/minimum-width light/dark captures and source-byte
+checks; this is private-X11 evidence, not Windows/Wayland or physical acceptance.
 Live mode also provides a native tray menu with the shipping labels and order:
 New Capture…, Screenshot Region/Window/Display, Record Region/Window/Display,
 Capture History…, Open Save Location, Preferences, Send Feedback…, a disabled

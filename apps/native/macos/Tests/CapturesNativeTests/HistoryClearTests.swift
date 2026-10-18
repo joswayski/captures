@@ -70,7 +70,7 @@ final class HistoryClearTests: XCTestCase {
 
     func testSharedHistoryPresentationMatchesShippingCopy() throws {
         let copy = try HistoryCopy(transport: SettingsBridge())
-        XCTAssertEqual(copy.eyebrow, "On this device")
+        XCTAssertEqual(copy.backToPreferences, "Back to Preferences")
         XCTAssertEqual(copy.title, "Capture History")
         XCTAssertEqual(copy.emptyTitle, "No captures yet")
         XCTAssertEqual(copy.deleteAllConfirm, "Delete all forever")
@@ -129,9 +129,10 @@ final class HistoryClearTests: XCTestCase {
             window.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
             let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
                 failPartway: false, kinds: ["video", "screenshot", "gif", "screenshot", "video"])
+            var preferenceRequests: [String?] = []
             let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
                 historyRoot: directory.path, settingsPath: settingsPath, transport: transport,
-                recoveryWorker: EmptyRecoveryWorker())
+                recoveryWorker: EmptyRecoveryWorker(), showPreferenceSetting: { preferenceRequests.append($0) })
             defer { withExtendedLifetime(controller) {} }
             window.makeKeyAndOrderFront(nil)
             let grid = try historyGrid(root)
@@ -144,9 +145,18 @@ final class HistoryClearTests: XCTestCase {
             func actions(_ row: Int) -> [String] {
                 grid.card(at: row)?.actionButtons.filter { !$0.isHidden }.map(\.title) ?? []
             }
+            let back = try button("Back to Preferences")
+            XCTAssertTrue(back.isEnabled, "navigation is available before History finishes loading")
+            back.performClick(nil)
+            XCTAssertEqual(preferenceRequests.count, 1)
+            XCTAssertNil(preferenceRequests[0], "Back must not jump to a particular setting")
+            XCTAssertTrue(window.isVisible, "Back leaves History open")
             try waitUntil { grid.numberOfRows == 5 && grid.visibleCards.count == 5 }
             XCTAssertEqual(grid.selectedRow, -1, "loading History never selects a card")
-            XCTAssertTrue(labels().contains("ON THIS DEVICE"))
+            XCTAssertFalse(labels().contains("ON THIS DEVICE"))
+            back.performClick(nil)
+            XCTAssertEqual(preferenceRequests.count, 2)
+            XCTAssertEqual(grid.numberOfRows, 5)
             XCTAssertTrue(labels().contains("Capture History"))
             XCTAssertTrue(labels().contains { $0.contains("appear here for 30 days") })
             XCTAssertEqual(try button("All 5").state, .on)
@@ -249,7 +259,7 @@ final class HistoryClearTests: XCTestCase {
         let lede = try XCTUnwrap(root.subviews.compactMap { $0 as? NSTextField }
             .first { $0.stringValue.contains("appear here for 30 days") })
         func assertInside(_ width: CGFloat) throws {
-            for title in ["All 2", "Screenshots 1", "Video 1", "Delete all"] {
+            for title in ["Back to Preferences", "All 2", "Screenshots 1", "Video 1", "Delete all"] {
                 let frame = try control(title).frame
                 XCTAssertGreaterThanOrEqual(frame.minX, 28, "\(title) at \(width)")
                 XCTAssertLessThanOrEqual(frame.maxX, width - 28 + 0.5, "\(title) at \(width)")
@@ -261,8 +271,8 @@ final class HistoryClearTests: XCTestCase {
             XCTAssertEqual(try control("All 2").frame.minY, headerBottom + tokens.number("s-6"),
                            accuracy: 0.5, "filters at \(width)")
         }
-        // Capture, display, permission and Preferences actions live in the
-        // tray, shortcuts and capture menu, as in shipping.
+        // Capture, display and permission actions remain outside History.
+        // Preferences is offered only by the navigation button above the title.
         for title in ["New Capture…", "Preferences", "Refresh", "Screen access",
                       "Capture display", "Capture region", "Capture window"] {
             XCTAssertNil(root.subviews.first { ($0 as? NSButton)?.title == title }, title)
@@ -539,6 +549,10 @@ final class HistoryClearTests: XCTestCase {
                 XCTAssertEqual(empty.bodyLabel.stringValue, "New screenshots, videos, and GIFs appear here automatically.")
                 XCTAssertTrue(root.subviews.compactMap { $0 as? HistoryFilterPill }.allSatisfy(\.isHidden),
                               "filters are hidden while History is empty")
+                let back = try XCTUnwrap(root.subviews.compactMap { $0 as? HistoryButton }
+                    .first { $0.title == "Back to Preferences" })
+                XCTAssertFalse(back.isHidden)
+                XCTAssertTrue(back.isEnabled, "empty History retains navigation")
             } else {
                 XCTAssertTrue(root.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
                     .contains { $0.contains("Couldn’t delete capture history") && $0.contains("fixture deletion failed") })
@@ -589,8 +603,10 @@ final class HistoryClearTests: XCTestCase {
         XCTAssertFalse(order.contains { $0.isDescendant(of: grid) && $0 !== grid },
                        "Tab visits the grid once, not each card control")
         let copy = HistoryCopy.current
+        let back = try XCTUnwrap(order.firstIndex { $0.accessibilityLabel() == copy.backToPreferences })
         let cancel = try XCTUnwrap(order.firstIndex { $0.accessibilityLabel() == copy.cancelLabel })
         let deleteAll = try XCTUnwrap(order.firstIndex { $0.accessibilityLabel() == copy.deleteAllLabel })
+        XCTAssertLessThan(back, cancel, "Back to Preferences starts the header's keyboard order")
         XCTAssertLessThan(cancel, deleteAll, "Cancel precedes Delete all, like shipping")
         let pills = order.indices.filter { order[$0] is HistoryFilterPill }
         XCTAssertEqual(pills.count, CaptureHistoryFilter.allCases.count)
