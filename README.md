@@ -721,7 +721,9 @@ outputs and reports final draft failures. A blocked worker can delay reopening o
 Quit. AppKit permission restarts refuse pending editor work. The **Crop** tool selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking, then shows the
 selection's size with **Clear** and **Apply crop**. Apply commits the selection;
-Clear or Escape leaves the document unchanged. Layer rows show a grip,
+Clear leaves the document unchanged. Outside text fields and menus, Escape also
+clears the selected layer and staged crop without changing tools or adding an Undo
+step. Inline text keeps its existing Escape-to-finish behavior. Layer rows show a grip,
 a live preview, the name and kind, and eye, lock and ⋯ actions. Drag a row to
 reorder it (one undo step) and double-click an image row to rename it. The ⋯ menu
 holds blend mode, opacity, image transforms, Bring to front and Send to back, Merge

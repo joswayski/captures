@@ -577,6 +577,9 @@ struct View {
     text: Option<TextFields>,
     text_apply_pending: bool,
     inline: Option<text_input::InlineText>,
+    /// egui clears focus before delivering Escape; retain the last rendered
+    /// text field's identity so that key still belongs to the field.
+    text_field_focus: Option<egui::Id>,
     pending: bool,
     closed: bool,
     /// Retain the session while accepted work and the final draft drain.
@@ -699,6 +702,7 @@ impl Default for View {
             text: None,
             text_apply_pending: false,
             inline: None,
+            text_field_focus: None,
             pending: true,
             closed: false,
             close_requested: false,
@@ -2284,16 +2288,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     let previous_section = view.section;
     handle_viewport_shortcuts(ui.ctx(), view);
     handle_document_shortcuts(ui.ctx(), view, tx);
-    if view.inline.is_none()
-        && !ui.ctx().egui_wants_keyboard_input()
-        && !egui::Popup::is_any_open(ui.ctx())
-        && ui.input(|input| input.key_pressed(egui::Key::Escape))
-    {
-        view.cancel_crop();
-        view.cancel_drawing();
-        view.cancel_layer_gesture();
-        view.layers.cancel();
-    }
     egui::Panel::top("editor-actions")
         .resizable(false)
         .show_separator_line(false)
@@ -2492,6 +2486,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     if canvas::drain_drops(view, tx) {
         ui.ctx().request_repaint();
     }
+    view.text_field_focus = if ui.ctx().text_edit_focused() {
+        ui.memory(|memory| memory.focused())
+    } else {
+        None
+    };
 }
 
 /// Shipping Properties for drawing tools. The rail picks the tool; the
@@ -2987,6 +2986,11 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         // Widgets have not processed this frame's click/focus change yet.
         || ctx.input(|input| input.pointer.any_pressed())
         || ctx.text_edit_focused()
+        || (ctx.input(|input| input.key_pressed(egui::Key::Escape))
+            && (view.layers.menu.is_some()
+                || view.text_field_focus.is_some_and(|id| {
+                    ctx.memory(|memory| memory.had_focus_last_frame(id))
+                })))
         || egui::Popup::is_any_open(ctx)
         || view.inline.is_some()
         || view.closed
@@ -3060,15 +3064,17 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
                 modifiers,
                 ..
             } = event
-                && (matches!(key, egui::Key::Delete | egui::Key::Backspace)
-                    || (canvas_navigation
-                        && matches!(
-                            key,
-                            egui::Key::ArrowLeft
-                                | egui::Key::ArrowRight
-                                | egui::Key::ArrowUp
-                                | egui::Key::ArrowDown
-                        ))
+                && (matches!(
+                    key,
+                    egui::Key::Escape | egui::Key::Delete | egui::Key::Backspace
+                ) || (canvas_navigation
+                    && matches!(
+                        key,
+                        egui::Key::ArrowLeft
+                            | egui::Key::ArrowRight
+                            | egui::Key::ArrowUp
+                            | egui::Key::ArrowDown
+                    ))
                     || (matches!(
                         key,
                         egui::Key::Z | egui::Key::D | egui::Key::C | egui::Key::V
@@ -3083,6 +3089,16 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         requests
     });
     for shortcut in requests {
+        if let Shortcut::Document(egui::Key::Escape, _) = shortcut {
+            view.cancel_crop();
+            view.cancel_edit_gestures();
+            view.viewport_pan = None;
+            view.layers.cancel();
+            if !view.pending {
+                view.select_layer_exact(None);
+            }
+            continue;
+        }
         if view.pending {
             continue;
         }
@@ -8908,19 +8924,23 @@ mod tests {
             matches!(rx.try_recv(), Ok(Job::Apply(Request::Layer { id, edit: LayerEdit::Delete })) if id == accepted_id)
         );
         view.receive(&ctx, Ok(presented(true)));
-        view.select_layer_exact(None);
+        view.select_layer_exact(Some("capture-background".into()));
+        let document = view.presented.as_ref().unwrap().document.clone();
         frame(
             &mut view,
             vec![
+                key(egui::Key::Escape, false),
                 key(egui::Key::D, true),
                 key(egui::Key::Delete, false),
                 key(egui::Key::ArrowDown, false),
             ],
             false,
         );
+        assert!(view.selected_layer.is_none(), "Escape clears selection");
+        assert_eq!(view.presented.as_ref().unwrap().document, document);
         assert!(
             rx.try_recv().is_err(),
-            "no selection must not target a fallback layer"
+            "Escape must precede later layer shortcuts in the same frame"
         );
     }
 

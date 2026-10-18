@@ -235,11 +235,23 @@ def cases(binary, pointer, root, env, bus):
                     created = wait(lambda: values if len(values := layers()) == 2 else None, "one Text commit")[-1]
                     assert created["text"] == "Alpha\nBeta\nGamma", created
                     click(screenshot, 28, 430)  # Empty rail: release text/tool focus.
+                    for width, height, size in [(1000, 800, "normal"), (760, 540, "minimum")]:
+                        arrange(screenshot, width, height)
+                        click(screenshot, width - 220, 149)  # Select the top (Text) layer row.
+                        before_escape = draft.read_bytes()
+                        key("escape")
+                        key("delete")
+                        key("d", "ctrl")
+                        key("right")
+                        time.sleep(1)
+                        assert draft.read_bytes() == before_escape, "canvas Escape must clear layer shortcut targets"
+                        shot(screenshot, "escape-deselected-" + size)
                     key("z", "ctrl")
                     wait(lambda: not draft.exists(), "single document Undo clears the only edit's draft")
                     key("z", "ctrl+shift")
                     wait(lambda: len(layers()) == 2 and layers()[-1] == created, "exact document Redo")
-                    observations.append({"text": created["text"], "selection": ["Gamma", "ma"], "undo_redo": True})
+                    observations.append({"text": created["text"], "selection": ["Gamma", "ma"],
+                                         "escape_deselect": ["normal", "minimum"], "undo_redo": True})
 
                     recording = "Captures Editor"
                     def controls():

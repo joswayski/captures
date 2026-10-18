@@ -1730,6 +1730,33 @@ def main():
             blur_click()
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: values[-1] == arrow, "selected style undo")[-1] == arrow
+            for owner in ("field", "context-menu", "layer-settings"):
+                if owner == "field":
+                    canvas_click("width")
+                elif owner == "context-menu":
+                    window_move(layer_row(0), "sleep", ".2", "mousedown", "3",
+                                "sleep", ".15", "mouseup", "3", "sleep", ".3")
+                else:
+                    layer_click(0, "more")
+                run("xdotool", "key", "Escape", "sleep", ".3")
+                blur_click()
+                run("xdotool", "key", "Right", "sleep", ".3")
+                expected = dict(arrow, x=arrow["x"] + 1, endX=arrow["endX"] + 1)
+                assert save_layers(lambda values: values[-1] == expected,
+                                   owner + " Escape retains the selected layer")[-1] == expected
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                assert save_layers(lambda values: values[-1] == arrow, "undo ownership control")[-1] == arrow
+            for width, height, size in [(1000, 901, "normal"), (760, 540, "minimum")]:
+                resize_editor(width, height, "sleep", ".3")
+                layer_click(0)
+                window_move((28, 430), "sleep", ".3")  # Remove row hover without changing selection.
+                before_escape = draft_bytes()
+                shot(editor, "escape-selected-" + size)
+                run("xdotool", "key", "Escape", "Delete", "ctrl+d", "Right", "sleep", "1")
+                assert draft_bytes() == before_escape, "Escape clears targets before layer shortcuts"
+                shot(editor, "escape-deselected-" + size)
+            resize_editor(1000, 901, "sleep", ".3")
+            layer_click(0)
             before_deselection = draft_bytes()
             run("xdotool", "key", "a", "Delete", "ctrl+d", "Right", "sleep", "1")
             assert draft_bytes() == before_deselection, "reactivating Arrow clears layer shortcut targets"
@@ -1909,6 +1936,7 @@ def main():
                            "S-star", "V-select-move", "C-crop-cancel", "R-rectangle", "field-tool-letters",
                            "rail-arrow-create", "rail-menu-escape", "rail-minimum",
                            "same-tool-clears-selection", "crop-clears-selection",
+                           "escape-clears-selection-normal-minimum", "field-menu-escape-ownership",
                            "created-layer-properties-edit", "created-layer-properties-undo",
                            "created-layer-properties-minimum",
                            "layer-copy-snapshot-after-delete", "layer-paste-empty-OS-clipboard",

@@ -1330,6 +1330,27 @@ Each accepted nudge retains normal undo and output invalidation. AppKit protects
 field/selector/slider responders; wgpu reserves arrows for any focused widget.
 Both hosts copy and paste layers. Physical keyboard/IME/accessibility
 acceptance on macOS, Windows, X11 and Wayland remains open.
+
+Canvas Escape now clears the selected layer and staged crop on both native
+hosts without changing the active tool, document, output or undo history.
+Following Delete, Duplicate or arrow keys cannot target a fallback layer.
+wgpu processes Escape in document-key order, once across layout passes; it
+remembers the last rendered text-field identity because egui releases focus
+before the Escape pass. Text fields, inline composition, Shapes, context menus
+and layer settings retain their Escape handling. AppKit no longer clears a
+crop behind a focused numeric field. Pending edits retain their existing
+selection gate; Escape cancels transient gestures, not accepted worker jobs.
+The extended wgpu regression and real X11 input both reproduced retained
+selection and the subsequent unintended edit before the fix. After the fix,
+the native suite passes (517 tests, one ignored), and real X11 and Sway 1.9
+keyboard input passes in dark/light at normal/minimum window sizes. X11 also
+checks that field and menu Escape retain selection; both Linux paths preserve
+draft bytes after canvas Escape followed by Delete, Duplicate and nudge.
+AppKit ownership/deselection XCTest coverage is added but not executable in the
+Linux orb; Windows uses the same wgpu path but has not run this slice locally.
+Physical acceptance remains open on macOS, Windows, X11 and Wayland; no native
+release or parity gate is authorized by this slice.
+
 Both hosts connect Tauri's tool keys to their existing tools: V Select, C Crop,
 T Text, R Rectangle, O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen and
 B background removal. B recalls Wand/Erase/Restore, initially Wand. These
