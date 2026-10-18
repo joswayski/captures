@@ -2296,6 +2296,9 @@ final class MiniPreviewTests: XCTestCase {
             func waitForSettledWidth(_ target: CGFloat, before deadline: CFTimeInterval) throws {
                 // Reaching a run-loop deadline can leave a due timer unserviced.
                 // Observe its endpoint, not the last frame before that deadline.
+                // Start observing immediately after rebuild: an unconditional
+                // pump to +300 ms can service unrelated work past the deadline
+                // even if the endpoint was already delivered on time.
                 // Exact equality matters: easing can approach within 0.1 pt of
                 // the endpoint before a wrongly restarted morph has finished.
                 while !reduced, try width() != target, CACurrentMediaTime() < deadline {
@@ -2341,9 +2344,8 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertEqual(try width(), enteringWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its entering badge")
             if reduced { XCTAssertEqual(enteringWidth, fullWidth, accuracy: 0.1) }
-            pump(until: enterStarted + 0.30)
-            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(14)
             try waitForSettledWidth(fullWidth, before: enterRebuilt + 0.28)
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(14)
             // Render only after the timing assertions, never between sampling
             // a frame and rebuilding or while checking the original deadline.
             try write(XCTUnwrap(renderPresentation(panel())),
@@ -2362,9 +2364,8 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertEqual(try width(), leavingWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its leaving badge")
             if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
-            pump(until: leaveStarted + 0.30)
-            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(19)
             try waitForSettledWidth(28, before: leaveRebuilt + 0.28)
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(19)
             try write(XCTUnwrap(renderPresentation(panel())),
                       name: "mini-preview-editor-leave-rebuild-\(reduced ? "reduced" : "motion").png")
             if !reduced { try waitUntil { controller.editorPhase(for: "edited") == lingering } }
