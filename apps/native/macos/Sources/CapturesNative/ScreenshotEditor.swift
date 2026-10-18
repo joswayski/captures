@@ -5550,7 +5550,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func handleEditorShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
         if draining { return true }
-        if event.keyCode == 53, cropSelection != nil { clearCropSelection(); return true }
+        if event.keyCode == 53, shapeFlyout?.isHidden == false {
+            showShapeFlyout(false)
+            return true
+        }
+        if event.keyCode == 53, layerMenuID != nil {
+            closeLayerMenu()
+            return true
+        }
         guard state.snapshot != nil else { return false }
         let command = event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control)
         let key = event.charactersIgnoringModifiers ?? ""
@@ -5567,6 +5574,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             guard !(responder is NSTextView), !(responder is NSTextField),
                   !(responder is NSPopUpButton), !(responder is NSComboBox),
                   !(responder is NSSlider) else { return false }
+            if event.keyCode == 53 {
+                cancelDrawing(); cancelViewportPan(); clearCropSelection()
+                selectCanvasLayer(nil)
+                return true
+            }
             if !command && !event.modifierFlags.contains(.option)
                 && activateToolShortcut(key.lowercased()) { return true }
             let button: CaptureButton?

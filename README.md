@@ -238,8 +238,11 @@ the fresh-configure fix (for Sway, use 1.9+); older Sway 1.7 is not supported.
 Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
-in a separate development settings file. Fresh native profiles show the shipping
-setup screen before capture or opening queued media. macOS offers explicit Screen
+in a separate development settings file. Find retains its query and current match
+when closed; `Cmd`/`Ctrl`+`F` reopens it and selects the query for replacement.
+In the wgpu host, Escape in a custom-color field cancels the draft and leaves Find open.
+Fresh native profiles show the shipping setup screen before capture or opening
+queued media. macOS offers explicit Screen
 Recording and optional Microphone access, Settings links, and a permission restart;
 Windows/X11 show screen capture as ready and do not require upfront screen access.
 Wayland screenshot permission is handled by the desktop portal at capture time.
@@ -720,7 +723,9 @@ outputs and reports final draft failures. A blocked worker can delay reopening o
 Quit. AppKit permission restarts refuse pending editor work. The **Crop** tool selects directly on the
 preview with free or preset aspect ratios and Shift ratio locking, then shows the
 selection's size with **Clear** and **Apply crop**. Apply commits the selection;
-Clear or Escape leaves the document unchanged. Layer rows show a grip,
+Clear leaves the document unchanged. Outside text fields and menus, Escape also
+clears the selected layer and staged crop without changing tools or adding an Undo
+step. Inline text keeps its existing Escape-to-finish behavior. Layer rows show a grip,
 a live preview, the name and kind, and eye, lock and ⋯ actions. Drag a row to
 reorder it (one undo step) and double-click an image row to rename it. The ⋯ menu
 holds blend mode, opacity, image transforms, Bring to front and Send to back, Merge

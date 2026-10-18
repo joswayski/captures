@@ -803,6 +803,17 @@ show the login item as
 unavailable. Rendering was checked on X11 only; AppKit is covered by XCTest, and
 Windows, Wayland and screen-reader acceptance remain open.
 
+The wgpu custom-color fields now display uppercase hex values and expose the
+shipping names for each color well and hex input without replacing their native
+accessibility roles. Escape discards the draft even after egui releases focus;
+Enter and blur still commit valid colors, invalid input restores the saved value,
+and stored settings remain lowercase. A UI/accessibility-tree regression covers
+these contracts. A real private-X11 check reproduces the old Escape save;
+light/dark checks verify cancellation, shorthand expansion, invalid input, reset
+and the normal/minimum presentation. AppKit's existing uppercase controls and labels are
+unchanged; Windows and Wayland use the shared wgpu path but this follow-up has no
+runtime or physical screen-reader acceptance on those hosts.
+
 The wgpu Preferences Find keyboard follow-up consumes each accepted key with its
 own modifiers. Enter/Shift+Enter retain search-field focus for repeated navigation
 and continued typing; Enter on a focused Find button remains that button's action.
@@ -815,6 +826,31 @@ the result; an earlier capture during smooth scrolling clipped the minimum-size
 match. AppKit's existing Cmd+G menu and find-field Return routing are unchanged;
 macOS, Windows, Wayland, physical keyboard and screen-reader execution remain
 unverified for this follow-up. No end-to-end acceptance gate closes.
+
+The Find continuity follow-up retains the query and selected match across close
+and reopen in both native hosts. Cmd/Ctrl+F selects the whole query even when Find
+is already open; reopening reveals the current row again. This state is local to
+Preferences, not persisted in settings. AppKit restyling also retains the current
+search and match. The wgpu host leaves Escape to a focused custom-color field,
+including the frame in which egui releases focus, so cancelling the draft neither
+saves it nor closes Find. The next Escape can close Find normally.
+
+Two extended egui regressions fail on the unchanged code (a cancelled draft saves
+`#aabbcc`, and reopening loses the search) and pass after the change. Real private
+X11 light/dark input checks cover both color fields, Enter/blur and invalid-input
+controls, retained matches and replacement typing at normal/minimum sizes. Private
+Sway 1.9 checks with DISPLAY unset also cover reopened queries, selected matches,
+replacement typing and unchanged source/settings/History bytes in both appearances
+and sizes. The fixture waits for the complete query, not a matching count shared
+by an intermediate prefix, before sending navigation keys. The existing X11 CI
+fixture also checks retained query/index and replacement typing rather than the
+old clear-on-close behavior. AppKit's field-editor/key-view regression passed in
+a hosted suite of 618 tests, seven skipped and zero failures. The overall macOS
+job exhausted its 30-minute limit during post-test cleanup, leaving development
+packaging unverified; the job now allows 45 minutes without removing checks.
+Windows native workbench checks passed. Full hosted workflow completion and
+physical input, IME and screen-reader gates remain open; no public download,
+updater pin or release channel changes.
 
 The coordinated Preferences/Feedback follow-up tracks shipping PR #926. General
 is first and contains **Start Captures on login**, with the shipping background
@@ -1305,6 +1341,27 @@ Each accepted nudge retains normal undo and output invalidation. AppKit protects
 field/selector/slider responders; wgpu reserves arrows for any focused widget.
 Both hosts copy and paste layers. Physical keyboard/IME/accessibility
 acceptance on macOS, Windows, X11 and Wayland remains open.
+
+Canvas Escape now clears the selected layer and staged crop on both native
+hosts without changing the active tool, document, output or undo history.
+Following Delete, Duplicate or arrow keys cannot target a fallback layer.
+wgpu processes Escape in document-key order, once across layout passes; it
+remembers the last rendered text-field identity because egui releases focus
+before the Escape pass. Text fields, inline composition, Shapes, context menus
+and layer settings retain their Escape handling. AppKit no longer clears a
+crop behind a focused numeric field. Pending edits retain their existing
+selection gate; Escape cancels transient gestures, not accepted worker jobs.
+The extended wgpu regression and real X11 input both reproduced retained
+selection and the subsequent unintended edit before the fix. After the fix,
+the native suite passes (517 tests, one ignored), and real X11 and Sway 1.9
+keyboard input passes in dark/light at normal/minimum window sizes. X11 also
+checks that field and menu Escape retain selection; both Linux paths preserve
+draft bytes after canvas Escape followed by Delete, Duplicate and nudge.
+AppKit ownership/deselection XCTest coverage is added but not executable in the
+Linux orb; Windows uses the same wgpu path but has not run this slice locally.
+Physical acceptance remains open on macOS, Windows, X11 and Wayland; no native
+release or parity gate is authorized by this slice.
+
 Both hosts connect Tauri's tool keys to their existing tools: V Select, C Crop,
 T Text, R Rectangle, O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen and
 B background removal. B recalls Wand/Erase/Restore, initially Wand. These
@@ -3479,8 +3536,12 @@ through the `captures_preview_editor_*`, `_hover_lock_v1`,
   the morph, then observes an intermediate width between 70 and 280 ms instead
   of assuming a timer fired before a fixed 70 ms run-loop deadline. It rebuilds
   immediately without intervening display/flush work and checks both directions
-  against the original 280 ms clock. Missing intermediate frames and late samples
-  that cannot distinguish a restarted clock fail rather than bypass continuity.
+  against the original 280 ms clock. Settlement observes the exact delivered
+  endpoint before a restarted clock could finish, rather than assuming the last
+  timer fired by the original +300 ms run-loop deadline. The hosted diagnostic
+  reproduced stale endpoint samples with preserved clocks and valid timers
+  49–77 ms overdue. Missing intermediate frames and samples too late to
+  distinguish a restarted clock still fail rather than bypass continuity.
   Rendering follows the timing assertions. This checks an already-serviced
   preview, not cold-presentation latency or animation smoothness; servicing idle
   alone did not reliably prevent the hosted test's delayed first timer delivery.

@@ -265,8 +265,10 @@ def preferences_find_launch(binary, output, env, spawn, wait, windows, run):
                         latest = event["detail"]
                 return latest
 
-            def expect(count, index, focused=True, opened=True):
+            def expect(count, index, focused=True, opened=True, query=None):
                 expected = dict(open=opened, count=count, index=index, focused=focused)
+                if query is not None:
+                    expected["query"] = query
                 def matches():
                     state = find_state()
                     return state and all(state["find"][key] == value for key, value in expected.items())
@@ -290,7 +292,7 @@ def preferences_find_launch(binary, output, env, spawn, wait, windows, run):
             key("ctrl+f")
             expect(0, 0)
             run("xdotool", "type", "--clearmodifiers", "--delay", "35", "screenshots")
-            expect(4, 0)
+            expect(4, 0, query="screenshots")
             # Four distinct rows make next/previous errors visible (two would not).
             for chord, index in (("Return", 1), ("Return", 2), ("shift+F3", 1),
                                  ("ctrl+g", 2), ("ctrl+shift+g", 1), ("shift+Return", 0),
@@ -316,23 +318,40 @@ def preferences_find_launch(binary, output, env, spawn, wait, windows, run):
             key("Return")
             expect(4, 0)
             run("xdotool", "type", "--clearmodifiers", "zz")
-            expect(0, 0)
+            expect(0, 0, query="screenshotszz")
             key("Return")
             expect(0, 0)
             key("ctrl+a")
             run("xdotool", "type", "--clearmodifiers", "cursor")
-            expect(2, 0)
+            expect(2, 0, query="cursor")
+            key("Return")
+            expect(2, 1)
             key("Escape")
-            expect(0, 0, focused=False, opened=False)
+            expect(0, 1, focused=False, opened=False, query="cursor")
             key("ctrl+f")
-            expect(0, 0)  # Close clears the old query; reopening focuses an empty field.
+            expect(2, 1, query="cursor")
+            wait(revealed, f"{prefix}: reopened match entirely visible, got {find_state()}")
+            # The layout probe precedes presentation of the GPU frame.
+            time.sleep(.3)
+            run("import", "-window", window, str(output / f"{prefix}-reopened.png"))
+            # Reopen selects the query; typing replaces rather than appends.
+            run("xdotool", "type", "--clearmodifiers", "screenshots")
+            expect(4, 0, query="screenshots")
+            key("ctrl+f")  # Already open also selects the whole query.
+            run("xdotool", "type", "--clearmodifiers", "cursor")
+            expect(2, 0, query="cursor")
+            key("ctrl+a")
+            key("BackSpace")
+            expect(0, 0, query="")
             time.sleep(.3)
             run("import", "-window", window, str(output / f"{prefix}-empty.png"))
+            key("Escape")
+            expect(0, 0, focused=False, opened=False, query="")
             key("ctrl+q")
             assert app.wait(timeout=20) == 0, f"{prefix}: normal Quit"
             assert settings.read_bytes() == before, f"{prefix}: Find wrote settings"
             assert not list((profile / "history").glob("*/metadata.json")), "Find published media"
-            print(f"PASS {prefix}: Find next/previous/wrap, modifier/focus gates, retry typing, clear/reopen, settings unchanged", flush=True)
+            print(f"PASS {prefix}: Find next/previous/wrap, modifier/focus gates, retain/reopen/reselect/clear, settings unchanged", flush=True)
 
 
 PANEL = """<?xml version="1.0" encoding="UTF-8"?>
