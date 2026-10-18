@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { applyPreviewChangelog, previewChangelog } from "./preview-changelog.mjs";
 import { encodedPreviewVersion } from "./preview-release.mjs";
 
-function release({ tag, body, draft = false, prerelease = true, id = 1 }) {
-  return { tag_name: tag, body, draft, prerelease, id };
+function release({ tag, body, draft = false, prerelease = true, id = 1, assets = [] }) {
+  return { tag_name: tag, body, draft, prerelease, id, assets };
 }
 
 test("encodes dated Preview tags as Tauri SemVer and display CalVer", () => {
@@ -49,24 +49,30 @@ test("rejects a manifest that is not the newest changelog version", () => {
   );
 });
 
-test("a pinned public manifest excludes newer development notes without changing its assets", () => {
+test("a new Tauri manifest excludes intervening native notes without changing its assets", () => {
   const latest = {
-    version: "2026.10.1104",
+    version: "2026.10.1802",
     platforms: {
       "darwin-aarch64": { signature: "signed-tauri", url: "https://example.com/tauri" },
     },
   };
   const releases = [
+    release({
+      tag: "v2026.10.18.2",
+      body: "New Tauri",
+      assets: [{ name: "captures-tauri.json", state: "uploaded" }],
+    }),
+    release({ tag: "v2026.10.18.1", body: "New native" }),
     release({ tag: "v2026.10.11.7", body: "Native" }),
     release({ tag: "v2026.10.11.4", body: "Tauri" }),
     release({ tag: "v2026.10.11.3", body: "Earlier" }),
   ];
-  const updated = applyPreviewChangelog(latest, releases, "v2026.10.11.4");
+  const updated = applyPreviewChangelog(latest, releases, "v2026.10.18.2");
   assert.deepEqual(updated.platforms, latest.platforms);
-  assert.equal(updated.version, "2026.10.1104");
+  assert.equal(updated.version, "2026.10.1802");
   assert.deepEqual(
     updated.changelog.map((entry) => entry.notes),
-    ["Tauri", "Earlier"],
+    ["New Tauri", "Tauri", "Earlier"],
   );
   assert.throws(() => applyPreviewChangelog(latest, releases, "v2026.10.11.3"), /does not match/u);
   assert.throws(() => applyPreviewChangelog(latest, releases, "preview"), /invalid Preview/u);

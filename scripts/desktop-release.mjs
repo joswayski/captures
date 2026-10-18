@@ -1,14 +1,11 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { isTauriPreview } from "../shared/preview-runtime.ts";
 
 const ZERO_SHA = /^0{40}$/u;
-const DESKTOP_ROOTS = [".cargo/", "apps/desktop/", "apps/native/", "crates/", "shared/"];
-const DESKTOP_EXACT_PATHS = new Set([
-  "Cargo.lock",
-  "Cargo.toml",
-  "scripts/native-preview-build.mjs",
-]);
+const DESKTOP_ROOTS = [".cargo/", "apps/desktop/", "crates/", "shared/"];
+const DESKTOP_EXACT_PATHS = new Set(["Cargo.lock", "Cargo.toml"]);
 const TEST_ONLY_PATH = /(?:^|\/)[^/]+\.test\.(?:[cm]?[jt]sx?)$/u;
 
 /** Files whose contents can change the installed desktop app. */
@@ -201,15 +198,10 @@ export function releaseNotes(commits, repository, fallbackCommit = "") {
   return `## What's Changed\n${notes.join("\n")}\n`;
 }
 
-/** Nearest published Preview on main's history, never an unfinished draft tag. */
+/** Nearest published Tauri Preview on main's history, never a native or draft tag. */
 export function previousPreviewTag(head, releases) {
   const tags = releases
-    .filter(
-      (release) =>
-        !release.draft &&
-        release.prerelease &&
-        /^v\d{4}\.\d{2}\.\d{2}\.[1-9]\d?$/u.test(release.tag_name),
-    )
+    .filter((release) => !release.draft && release.prerelease && isTauriPreview(release))
     .map((release) => release.tag_name);
   if (tags.length === 0) return "";
   try {

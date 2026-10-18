@@ -37,10 +37,6 @@ test("classifies installed-app paths without treating website, API, docs, or tes
   for (const path of [
     "apps/desktop/ui/src/App.tsx",
     "apps/desktop/src-tauri/src/lib.rs",
-    "apps/native/wgpu/src/main.rs",
-    "apps/native/macos/Sources/CapturesNative/Main.swift",
-    "apps/native/wgpu/Cargo.lock",
-    "scripts/native-preview-build.mjs",
     "crates/captures-video/src/lib.rs",
     "shared/design.css",
     ".cargo/config.toml",
@@ -51,6 +47,10 @@ test("classifies installed-app paths without treating website, API, docs, or tes
   }
 
   for (const path of [
+    "apps/native/wgpu/src/main.rs",
+    "apps/native/macos/Sources/CapturesNative/Main.swift",
+    "apps/native/wgpu/Cargo.lock",
+    "scripts/native-preview-build.mjs",
     "apps/web/src/pages/Home.tsx",
     "apps/web/src/server/api.ts",
     "apps/desktop/ui/src/App.test.tsx",
@@ -254,7 +254,12 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     runGit("commit", "-m", text);
     return runGit("rev-parse", "HEAD");
   };
-  const published = (tag_name) => ({ tag_name, draft: false, prerelease: true });
+  const published = (tag_name) => ({
+    tag_name,
+    draft: false,
+    prerelease: true,
+    assets: [{ name: "captures-tauri.json", state: "uploaded" }],
+  });
   try {
     runGit("init");
     runGit("config", "user.name", "Captures Test");
@@ -268,6 +273,8 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     releases.push({ ...published("v2026.09.05.2"), draft: true });
     commit("apps/desktop/app.txt", "Fix 3 (#3)");
     runGit("tag", "v2026.09.05.3"); // Orphan tag from an interrupted stage.
+    runGit("tag", "v2026.10.18.1"); // Published native release must not consume Tauri changes.
+    releases.push({ ...published("v2026.10.18.1"), assets: [] });
     const batch = commit("README.md", "Docs 4 (#4)");
     process.chdir(directory);
     assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.1");
@@ -289,10 +296,10 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     // A new push cannot alter the pinned batch. After publication it belongs
     // exclusively to the next batch, and repeated/docs-only runs are skipped.
     const next = commit("apps/desktop/app.txt", "Change 5 (#5)");
-    runGit("tag", "v2026.09.05.4", batch);
-    releases.push(published("v2026.09.05.4"));
-    assert.equal(previousPreviewTag(batch, releases), "v2026.09.05.4");
-    assert.equal(releaseImpactBetween("v2026.09.05.4", batch).shouldRelease, false);
+    runGit("tag", "v2026.10.18.2", batch);
+    releases.push(published("v2026.10.18.2"));
+    assert.equal(previousPreviewTag(batch, releases), "v2026.10.18.2");
+    assert.equal(releaseImpactBetween("v2026.10.18.2", batch).shouldRelease, false);
     const nextNotes = releaseNotesBetween(
       previousPreviewTag(next, releases),
       next,

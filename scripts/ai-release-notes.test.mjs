@@ -52,10 +52,10 @@ const highlight = (commit) => ({
 });
 
 test.each([true, false])(
-  "summarizes only the pinned %s runtime range, including merge changes",
+  "summarizes Tauri even with native tooling (%s), including merge changes",
   async (native) => {
     const f = fixture(native);
-    const path = native ? "apps/native/wgpu/src/main.rs" : "apps/desktop/ui/src/App.tsx";
+    const path = "apps/desktop/ui/src/App.tsx";
     f.commit(
       { "apps/web/src/page.tsx": "WEB-ONLY", "crates/core/tests/secret.rs": "TEST-SECRET" },
       "Improve the site",
@@ -66,7 +66,7 @@ test.each([true, false])(
         [path]: "REOPEN-SCREENSHOT",
         "shared/private_key.ts": "PRIVATE-KEY",
         "shared/themes.test.ts": "TEST-ONLY",
-        [native ? "apps/desktop/ui/src/App.tsx" : "apps/native/wgpu/src/main.rs"]: "OTHER-RUNTIME",
+        "apps/native/wgpu/src/main.rs": "OTHER-RUNTIME",
       },
       "Reopen your last screenshot",
     );
@@ -101,6 +101,7 @@ test.each([true, false])(
     assert.equal(request.max_tokens, 16000);
     assert.equal(request.fallbacks, "default");
     const source = JSON.parse(request.messages[0].content);
+    assert.equal(source.runtime, "Tauri");
     assert.deepEqual(
       source.commits.map(({ commit }) => commit),
       [after],
