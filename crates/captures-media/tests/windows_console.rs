@@ -4,6 +4,9 @@ use std::{fs, os::windows::process::CommandExt, process::Command};
 
 use captures_media::{CancelToken, MediaToolchain, RecordingAssemblyKind, RecordingSegmentInput};
 
+// The stand-in's input and outputs must satisfy probe's MP4 signature check.
+const FIXTURE_OUTPUT: &[u8] = b"\0\0\0\x14ftypisom\0\0\0\0isom";
+
 #[test]
 fn media_workers_do_not_create_a_console_window() {
     // CI may itself have a windowless console. Run the public-interface checks
@@ -54,7 +57,7 @@ fn main() {
     if args.iter().any(|arg| arg == "-show_streams") {
         println!("{}", r#"{"streams":[{"codec_type":"video","width":320,"height":180}],"format":{"format_name":"mov,mp4","duration":"1.25","size":"100"}}"#);
     } else if !args.iter().any(|arg| arg == "-version") {
-        std::fs::write(args.last().unwrap(), b"fixture output").unwrap();
+        std::fs::write(args.last().unwrap(), b"\0\0\0\x14ftypisom\0\0\0\0isom").unwrap();
     }
 }
 "##,
@@ -81,6 +84,7 @@ fn main() {
 
     let toolchain = MediaToolchain::new(executable.clone(), executable);
     let input = directory.path().join("recording.mp4");
+    fs::write(&input, FIXTURE_OUTPUT).unwrap();
     let cancel = CancelToken::default();
     // Recording startup and recovery, and Open With's probe/poster path, must
     // all keep their sidecars windowless while preserving output and I/O.
@@ -116,13 +120,13 @@ fn main() {
             &cancel,
         )
         .unwrap();
-    assert_eq!(fs::read(&assembled).unwrap(), b"fixture output");
+    assert_eq!(fs::read(&assembled).unwrap(), FIXTURE_OUTPUT);
     let poster = directory.path().join("poster.png");
     toolchain.create_poster(&input, &poster, &cancel).unwrap();
-    assert_eq!(fs::read(&poster).unwrap(), b"fixture output");
+    assert_eq!(fs::read(&poster).unwrap(), FIXTURE_OUTPUT);
     let frame = directory.path().join("frame.png");
     toolchain
         .extract_frame(&input, 500, &frame, &cancel)
         .unwrap();
-    assert_eq!(fs::read(&frame).unwrap(), b"fixture output");
+    assert_eq!(fs::read(&frame).unwrap(), FIXTURE_OUTPUT);
 }
