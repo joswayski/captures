@@ -2264,11 +2264,13 @@ final class MiniPreviewTests: XCTestCase {
                 // presentation can lag that frame until the next display pass.
                 return edit.frame.width
             }
-            func pump(until deadline: CFTimeInterval) {
+            func pump(until deadline: CFTimeInterval, tracingSamples: Bool = false) {
                 while CACurrentMediaTime() < deadline {
                     let remaining = deadline - CACurrentMediaTime()
+                    if tracingSamples { controller.previewView?.editControl(for: "edited")?.traceEditorMorph(20) }
                     _ = RunLoop.current.run(mode: .default,
                         before: Date().addingTimeInterval(min(0.005, max(0, remaining))))
+                    if tracingSamples { controller.previewView?.editControl(for: "edited")?.traceEditorMorph(21) }
                 }
             }
             func inFlightWidth(started: CFTimeInterval, fullWidth: CGFloat) throws -> CGFloat {
@@ -2281,10 +2283,11 @@ final class MiniPreviewTests: XCTestCase {
                 while CACurrentMediaTime() - started < 0.28 {
                     let sampled = try width()
                     let elapsed = CACurrentMediaTime() - started
+                    controller.previewView?.editControl(for: "edited")?.traceEditorMorph(22)
                     if elapsed >= 0.07, elapsed < 0.28, sampled > 30, sampled < fullWidth - 2 {
                         return sampled
                     }
-                    pump(until: min(started + 0.28, CACurrentMediaTime() + 0.005))
+                    pump(until: min(started + 0.28, CACurrentMediaTime() + 0.005), tracingSamples: true)
                 }
                 let finalWidth = try width()
                 XCTFail("No intermediate badge frame within 280 ms; width=\(finalWidth), elapsed=\(CACurrentMediaTime() - started)s")

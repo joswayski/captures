@@ -73,7 +73,7 @@ enum MiniPreviewMotionTrace {
     static var active = false
     static var iteration = 0
     static var reduced = false
-    private static var events = [Event](repeating: Event(), count: 4096)
+    private static var events = [Event](repeating: Event(), count: 16384)
     private static var count = 0
 
     static func begin() { count = 0; _ = events.count; active = true }
@@ -95,6 +95,7 @@ enum MiniPreviewMotionTrace {
         print("MOTION_TRACE codes: 1=reuse,2=registered,3=phase,4=callback,5=write,6=stop,7=deinit")
         print("MOTION_TRACE enter: 10=before-set,11=after-set,12=before-rebuild,13=after-rebuild,14=deadline")
         print("MOTION_TRACE leave: 15=before-set,16=after-set,17=before-rebuild,18=after-rebuild,19=deadline")
+        print("MOTION_TRACE sampling: 20=before-run-loop,21=after-run-loop,22=sample")
         for index in 0..<count {
             let e = events[index]
             print("MOTION_TRACE iteration=\(e.iteration) reduced=\(e.reduced) code=\(e.code) time=\(e.time) owner=\(e.owner) timer=\(e.timer) alive=\(e.alive) valid=\(e.valid) fireIn=\(e.fireIn) phase=\(e.phase) start=\(e.start) from=\(e.from) target=\(e.target) requested=\(e.requested) width=\(e.width) duration=\(e.duration)")
