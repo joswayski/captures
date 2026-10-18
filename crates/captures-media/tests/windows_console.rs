@@ -15,7 +15,20 @@ fn media_workers_do_not_attach_a_windows_console() {
     fs::write(
         &source,
         r##"
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetConsoleWindow() -> *mut std::ffi::c_void;
+    fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+}
+#[link(name = "user32")]
+extern "system" {
+    fn IsWindowVisible(window: *mut std::ffi::c_void) -> i32;
+}
 fn main() {
+    let window = unsafe { GetConsoleWindow() };
+    let mut processes = [0u32; 8];
+    let count = unsafe { GetConsoleProcessList(processes.as_mut_ptr(), 8) };
+    eprintln!("console window={window:?}, visible={}, console processes={count}, ids={processes:?}", unsafe { IsWindowVisible(window) });
     if std::fs::OpenOptions::new().write(true).open("CONOUT$").is_ok() {
         eprintln!("media worker has an attached console");
         std::process::exit(23);
@@ -48,6 +61,7 @@ fn main() {
         .output()
         .unwrap();
     assert_eq!(visible.status.code(), Some(23));
+    eprintln!("new console: {visible:?}");
 
     for null_stdio in [false, true] {
         let mut command = Command::new(&executable);
@@ -62,6 +76,13 @@ fn main() {
             eprintln!("hidden piped stdio: {:?}", command.output());
         }
     }
+    eprintln!(
+        "detached: {:?}",
+        Command::new(&executable)
+            .creation_flags(0x0000_0008)
+            .arg("-version")
+            .output()
+    );
 
     let toolchain = MediaToolchain::new(executable.clone(), executable);
     let input = directory.path().join("recording.mp4");
