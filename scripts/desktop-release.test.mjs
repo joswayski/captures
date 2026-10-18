@@ -170,7 +170,7 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
   assert.match(workflow, /desktop-release\.mjs"? notes/u);
   assert.match(
     workflow,
-    /name: Load the current desktop release helper[\s\S]*?ref: \$\{\{ github\.sha \}\}[\s\S]*?sparse-checkout: scripts\/desktop-release\.mjs/u,
+    /name: Load the current desktop release helper[\s\S]*?ref: \$\{\{ github\.sha \}\}[\s\S]*?sparse-checkout: \|\n\s+scripts\/desktop-release\.mjs\n\s+scripts\/ai-release-notes\.mjs/u,
   );
   assert.doesNotMatch(workflow, /generate_release_notes=true/u);
   assert.match(
