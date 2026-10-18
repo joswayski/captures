@@ -1085,29 +1085,33 @@ private final class NativeEditorSession {
         }
     }
 
-    func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint? = nil) throws
+    func importImages(_ images: [EditorDecodedImage], selectedID: String?, point: CGPoint? = nil) throws
         -> EditorImportPresentation {
-        var request: [String: Any] = ["name": image.name]
+        var request: [String: Any] = ["names": images.map(\.name)]
         if let selectedID { request["selected_id"] = selectedID }
         // A drop sample places the image where the drop guide showed.
         if let point { request["point"] = ["x": Double(point.x), "y": Double(point.y)] }
         let requestData = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
-        guard let width = UInt32(exactly: image.width), let height = UInt32(exactly: image.height),
-              width > 0, height > 0 else { throw AppBridgeError.invalidResponse }
-        let result: [String: Any] = try image.data.withUnsafeBytes { bytes in
-            guard let data = bytes.bindMemory(to: UInt8.self).baseAddress else {
-                throw AppBridgeError.invalidResponse
-            }
-            var pixels = CapturesRegionPixels(
-                data: data, length: image.data.count,
+        // Immutable NSData keeps every pointer valid for the synchronous batch
+        // call, without nesting one withUnsafeBytes closure per clipboard item.
+        let buffers = images.map { $0.data as NSData }
+        let pixels = try zip(images, buffers).map { image, buffer -> CapturesRegionPixels in
+            guard let width = UInt32(exactly: image.width), let height = UInt32(exactly: image.height),
+                  width > 0, height > 0 else { throw AppBridgeError.invalidResponse }
+            return CapturesRegionPixels(
+                data: buffer.bytes.assumingMemoryBound(to: UInt8.self), length: buffer.length,
                 width: width, height: height,
                 bytes_per_row: image.bytesPerRow)
-            let response = String(decoding: requestData, as: UTF8.self).withCString {
-                captures_editor_import_image_v1(handle, &pixels, $0)
+        }
+        let result: [String: Any] = try withExtendedLifetime(buffers) {
+            try pixels.withUnsafeBufferPointer { descriptors in
+                let response = String(decoding: requestData, as: UTF8.self).withCString {
+                    captures_editor_import_images_v1(handle, descriptors.baseAddress, descriptors.count, $0)
+                }
+                guard let response else { throw AppBridgeError.invalidResponse }
+                defer { captures_settings_free_v1(response) }
+                return try AppBridge.decode(Data(bytes: response, count: strlen(response)))
             }
-            guard let response else { throw AppBridgeError.invalidResponse }
-            defer { captures_settings_free_v1(response) }
-            return try AppBridge.decode(Data(bytes: response, count: strlen(response)))
         }
         guard let layerID = result["layer_id"] as? String,
               let snapshotValue = result["snapshot"] as? [String: Any],
@@ -1142,6 +1146,8 @@ protocol EditorWorking: AnyObject {
                  completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
     func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
+    func importImages(_ images: [EditorDecodedImage], selectedID: String?, point: CGPoint?,
+                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void)
     /// Read-only Wand loupe sample at a document point on the session queue;
     /// nil off every visible image or on failure.
     func wandLoupe(at point: CGPoint, completion: @escaping (NativeWandLoupe?) -> Void)
@@ -1338,6 +1344,11 @@ final class EditorWorker: EditorWorking {
 
     func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
+        importImages([image], selectedID: selectedID, point: point, completion: completion)
+    }
+
+    func importImages(_ images: [EditorDecodedImage], selectedID: String?, point: CGPoint?,
+                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
         let storage = storage
         Self.queue.async {
             let result = Result { () throws -> EditorImportPresentation in
@@ -1347,7 +1358,7 @@ final class EditorWorker: EditorWorking {
                 guard storage.snapshot?.activeTextInput == nil else {
                     throw AppBridgeError.backend("Finish or cancel inline text before importing an image.")
                 }
-                let imported = try session.importImage(image, selectedID: selectedID, point: point)
+                let imported = try session.importImages(images, selectedID: selectedID, point: point)
                 storage.snapshot = imported.presentation.snapshot
                 return imported
             }

@@ -2529,6 +2529,92 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: originalURL), original)
     }
 
+    func testRealClipboardBatchIsAtomicAcrossDecodeFailureUndoAndOwnedDraftReopen() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let originalURL = fixture.history.appendingPathComponent(fixture.id).appendingPathComponent("capture.png")
+        let original = try Data(contentsOf: originalURL)
+        let first = fixture.root.appendingPathComponent("First é.tiff")
+        let second = fixture.root.appendingPathComponent("Second #.tiff")
+        let corrupt = fixture.root.appendingPathComponent("Corrupt.png")
+        let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        try writeTiff(url: first, width: 3, height: 2,
+            bytes: Array(repeating: [31, 70, 133, 255], count: 6).flatMap { $0 },
+            colorSpace: colorSpace, bitsPerPixel: 32, alpha: .last)
+        try writeTiff(url: second, width: 1, height: 4,
+            bytes: Array(repeating: [219, 19, 53, 255], count: 4).flatMap { $0 },
+            colorSpace: colorSpace, bitsPerPixel: 32, alpha: .last)
+        try Data("not an image".utf8).write(to: corrupt)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let worker = EditorWorker()
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, layerPasteboard: pasteboard)
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+        func shortcut(_ key: String, _ code: UInt16, shift: Bool = false) throws {
+            XCTAssertTrue(controller.window.performKeyEquivalent(with: try keyEvent(
+                window: controller.window, keyCode: code, characters: key,
+                modifiers: shift ? [.command, .shift] : .command)))
+        }
+        func publish(_ urls: [URL]) {
+            let items = urls.map { url -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                XCTAssertTrue(item.setString(url.absoluteString, forType: .fileURL))
+                return item
+            }
+            pasteboard.clearContents(); XCTAssertTrue(pasteboard.writeObjects(items))
+        }
+        publish([first, second]); try shortcut("v", 9)
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        let imported = try XCTUnwrap(controller.state.snapshot)
+        XCTAssertEqual(imported.layers.prefix(2).map(\.name), ["Second #", "First é"])
+        XCTAssertEqual(imported.width, 7); XCTAssertEqual(imported.height, 9)
+        let frame = try canvasPreviewImage(in: controller.root)
+        XCTAssertEqual(rgba(frame, x: 2, y: 3), [31, 70, 133, 255])
+        XCTAssertEqual(rgba(frame, x: 3, y: 8), [219, 19, 53, 255])
+        try shortcut("z", 6)
+        waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
+        XCTAssertTrue(controller.state.snapshot?.canRedo == true)
+        XCTAssertFalse(controller.state.snapshot?.canUndo == true)
+
+        // The valid first file must not become a partial edit when decoding
+        // the second fails; the preceding batch remains available to Redo.
+        publish([first, corrupt]); try shortcut("v", 9)
+        waitUntil { labels(in: controller.root).contains { $0.contains("could not be loaded") } }
+        XCTAssertEqual(controller.state.snapshot?.layers.count, 1)
+        XCTAssertTrue(controller.state.snapshot?.canRedo == true)
+        XCTAssertFalse(controller.state.snapshot?.canUndo == true)
+        try shortcut("z", 6, shift: true)
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        XCTAssertEqual(controller.state.snapshot?.layers, imported.layers)
+        try shortcut("z", 6)
+        waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
+        publish([first, second]); try shortcut("v", 9)
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        let retried = try XCTUnwrap(controller.state.snapshot)
+        try FileManager.default.removeItem(at: first)
+        try FileManager.default.removeItem(at: second)
+        try worker.prepareForTermination().get()
+        let reopened = EditorWorker()
+        defer { reopened.close(); EditorWorker.flush() }
+        let restored = expectation(description: "clipboard batch draft restored")
+        reopened.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                      artifactID: fixture.id) { result in
+            guard case .success(let presentation) = result else {
+                XCTFail("draft open failed"); restored.fulfill(); return
+            }
+            XCTAssertEqual(presentation.snapshot.layers, retried.layers)
+            XCTAssertEqual(self.rgba(presentation.image, x: 2, y: 3), [31, 70, 133, 255])
+            XCTAssertEqual(self.rgba(presentation.image, x: 3, y: 8), [219, 19, 53, 255])
+            restored.fulfill()
+        }
+        wait(for: [restored], timeout: 5)
+        XCTAssertEqual(try Data(contentsOf: originalURL), original)
+    }
+
     func testRealAsyncQuitRetainsQueuedSavePixelsAndFinalDraft() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -8950,7 +9036,12 @@ private final class FakeEditorWorker: EditorWorking {
 
     func importImage(_ image: EditorDecodedImage, selectedID: String?, point: CGPoint?,
                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
-        imports.append((image, selectedID, point))
+        importImages([image], selectedID: selectedID, point: point, completion: completion)
+    }
+
+    func importImages(_ images: [EditorDecodedImage], selectedID: String?, point: CGPoint?,
+                      completion: @escaping (Result<EditorImportPresentation, Error>) -> Void) {
+        imports.append(contentsOf: images.map { ($0, selectedID, point) })
         if failImport {
             completion(.failure(AppBridgeError.backend(failureMessage))); return
         }
@@ -9477,13 +9568,109 @@ extension ScreenshotEditorTests {
         let first = try XCTUnwrap(worker.imports.first?.point)
         XCTAssertEqual(first.x, guide.point.x, accuracy: 0.001)
         XCTAssertEqual(first.y, guide.point.y, accuracy: 0.001)
-        XCTAssertNil(worker.imports.last?.point, "later files stack below the previous import")
     }
 }
 
 // MARK: - Add images multi-select and animated drop / Expand canvas edges
 
 extension ScreenshotEditorTests {
+    func testRealPickerBatchIsAtomicAndRetryable() throws {
+        try checkRealFileBatch(drop: false)
+    }
+
+    func testRealDropBatchIsAtomicAndRetryable() throws {
+        try checkRealFileBatch(drop: true)
+    }
+
+    private func checkRealFileBatch(drop: Bool) throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let originalURL = fixture.history.appendingPathComponent(fixture.id).appendingPathComponent("capture.png")
+        let original = try Data(contentsOf: originalURL)
+        let first = fixture.root.appendingPathComponent("First é.tiff")
+        let second = fixture.root.appendingPathComponent("Second #.tiff")
+        let tall = fixture.root.appendingPathComponent("Tall.tiff")
+        let corrupt = fixture.root.appendingPathComponent("Corrupt.png")
+        let unsupported = fixture.root.appendingPathComponent("notes.txt")
+        let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        for (url, width, height, color) in [
+            (first, 3, 2, [31, 70, 133, 255]),
+            (second, 1, 4, [219, 19, 53, 255]),
+            (tall, 1, 16_384, [53, 127, 19, 255]),
+        ] {
+            try writeTiff(url: url, width: width, height: height,
+                bytes: Array(repeating: color.map { UInt8($0) }, count: width * height).flatMap { $0 },
+                colorSpace: colorSpace, bitsPerPixel: 32, alpha: .last)
+        }
+        try Data("not an image".utf8).write(to: corrupt)
+        let worker = EditorWorker()
+        var pickerCompletion: (([URL]) -> Void)?
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, imagePicker: { _, completion in pickerCompletion = completion })
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+        try showLayers(in: controller.root)
+        func submit(_ urls: [URL]) throws {
+            if drop {
+                // Outside the image uses the same default below placement as the picker.
+                XCTAssertTrue(controller.handleFileDrop(.hover, urls: urls, at: .zero))
+                XCTAssertTrue(controller.handleFileDrop(.drop, urls: urls, at: .zero))
+            } else {
+                try button("Add image layer", in: controller.root).performClick(nil)
+                try XCTUnwrap(pickerCompletion)(urls)
+            }
+        }
+        func undo(redo: Bool = false) throws {
+            XCTAssertTrue(controller.window.performKeyEquivalent(with: try keyEvent(
+                window: controller.window, keyCode: 6, characters: "z",
+                modifiers: redo ? [.command, .shift] : .command)))
+        }
+        try submit([first, unsupported, second])
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        let imported = try XCTUnwrap(controller.state.snapshot)
+        XCTAssertEqual(imported.layers.prefix(2).map(\.name), ["Second #", "First é"])
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, imported.layers.first?.id)
+        XCTAssertEqual(imported.width, 7); XCTAssertEqual(imported.height, 9)
+        let frame = try canvasPreviewImage(in: controller.root)
+        XCTAssertEqual(rgba(frame, x: 2, y: 3), [31, 70, 133, 255])
+        XCTAssertEqual(rgba(frame, x: 3, y: 8), [219, 19, 53, 255])
+        try undo()
+        waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
+        let baseline = try XCTUnwrap(controller.state.snapshot)
+        XCTAssertTrue(baseline.canRedo); XCTAssertFalse(baseline.canUndo)
+        let selected = controller.selectionOverlay.selectedLayerID
+        let baselineFrame = try canvasPreviewImage(in: controller.root)
+        // The tall image decodes successfully but the combined canvas exceeds
+        // the renderer's dimension limit after the valid first image is staged.
+        for (bad, message) in [(corrupt, "could not be loaded"), (tall, "rendering is limited")] {
+            try submit([first, bad])
+            waitUntil { !controller.state.busy && labels(in: controller.root).contains { $0.contains(message) } }
+            XCTAssertEqual(controller.state.snapshot, baseline)
+            XCTAssertEqual(controller.selectionOverlay.selectedLayerID, selected)
+            let unchanged = try canvasPreviewImage(in: controller.root)
+            for y in 0..<Int(baseline.height) {
+                for x in 0..<Int(baseline.width) {
+                    XCTAssertEqual(rgba(unchanged, x: x, y: y), rgba(baselineFrame, x: x, y: y))
+                }
+            }
+            try undo(redo: true)
+            waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+            XCTAssertEqual(controller.state.snapshot?.layers, imported.layers)
+            try undo()
+            waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
+        }
+        try submit([first, second])
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        XCTAssertEqual(controller.state.snapshot?.layers.prefix(2).map(\.name), ["Second #", "First é"])
+        XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 3, y: 8), [219, 19, 53, 255])
+        try undo()
+        waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
+        XCTAssertFalse(controller.state.snapshot?.canUndo == true)
+        XCTAssertEqual(try Data(contentsOf: originalURL), original)
+    }
+
     func testAddImagesImportsEverySelectedImageLikeACanvasDrop() throws {
         _ = NSApplication.shared
         let background = layer(id: "background", name: "Original", x: 0, y: 0,

@@ -1,5 +1,6 @@
 //! Screenshot editor clipboard input. Editable snapshots stay in the session;
 //! only an opaque private marker is published, never text or document JSON.
+use captures_app::editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS};
 use image::RgbaImage;
 
 #[derive(Default)]
@@ -62,19 +63,7 @@ impl Clipboard {
             })
             .collect();
         if !files.is_empty() {
-            return files
-                .into_iter()
-                .map(|path| {
-                    let pixels = captures_app::editor_image_decode::decode_import(&path)?;
-                    Ok((
-                        path.file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                        pixels,
-                    ))
-                })
-                .collect();
+            return captures_app::editor_image_decode::decode_imports(files);
         }
         // Linux's image reader can report both absent formats and real
         // transfer failures as ContentNotAvailable. Inspect the actual offer
@@ -101,9 +90,9 @@ impl Clipboard {
         let height = u32::try_from(image.height).map_err(|_| "Clipboard image is too tall.")?;
         if width == 0
             || height == 0
-            || width > 16_384
-            || height > 16_384
-            || u64::from(width) * u64::from(height) > 100_000_000
+            || width > MAX_RENDER_DIMENSION
+            || height > MAX_RENDER_DIMENSION
+            || u64::from(width) * u64::from(height) > MAX_RENDER_PIXELS
         {
             return Err(
                 "Clipboard images are limited to 16,384 pixels per side and 100,000,000 pixels."

@@ -186,12 +186,12 @@ and height stay proportional.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
-The Preview pipeline uses native UI with shared Rust engines and platform-specific
-capture integrations. Tauri/React sources remain for comparison and historical
-recovery; the Tauri CLI is only an installer bundler for native releases, not an
-application runtime. Ordinary development workbenches keep separate data and do
-not join the installed update channel. The detailed development notes below
-describe implemented slices, not completion of physical acceptance.
+The public Preview pipeline uses the Tauri/React app. The separate native rewrite
+uses AppKit on macOS and Rust/wgpu on Windows/Linux, with shared Rust engines and
+platform-specific capture integrations. Its development workbenches keep separate
+data and do not join the public update channel. The detailed native development
+notes below describe implemented slices, not completion of physical acceptance
+or approval to replace the public app.
 
 The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to
@@ -744,8 +744,10 @@ Image layers also expose lossless left/right rotations and horizontal/vertical
 flips, including when hidden or locked; each action supports undo and draft restore.
 **Add images** imports one or more PNG, JPEG, WebP, TIFF, GIF, BMP or SVG files: the first lands below
 the selected visible image, each later one below the previous, expanding the canvas
-when needed. Imports respect EXIF orientation, are undoable (one step per file),
-and keep their own draft pixels so reopening does not require the source file.
+when needed. File drops retain the chosen edge or stacked placement for the whole
+batch. One Undo/Redo covers each picker selection or drop; a decode or render failure
+adds nothing and preserves existing Undo/Redo. Imports respect EXIF orientation
+and keep their own draft pixels so reopening does not require the source files.
 GIF imports use only the first frame; **Open** still treats GIFs as recordings.
 Supported ICC profiles and PNG gamma/chromaticity/CICP metadata convert to sRGB.
 The shared decoder rejects calibrated or externally linked BMP color descriptions
@@ -882,8 +884,10 @@ a private marker, not visible text. Cmd/Ctrl V reuses that snapshot only while
 the marker still belongs to this editor; repeated layer pastes offset by 24 pixels.
 External clipboard images or local image files instead import through Add images
 placement, with owned draft pixels, canvas expansion, last-image selection and
-undo/redo. Native multi-image paste keeps one undo step per image (Tauri uses one
-batch step). Text fields retain normal paste; URL/HTML-only images are not fetched.
+one undo/redo step for the entire paste, matching Tauri. If any image cannot be
+decoded or the resulting canvas cannot be rendered, nothing is added and existing
+Undo/Redo remains available. Add images and file drops use the same atomic batch
+contract. Text fields retain normal paste; URL/HTML-only images are not fetched.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 X11 file-list paste accepts incremental clipboard transfers within the existing

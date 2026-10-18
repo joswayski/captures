@@ -1,19 +1,18 @@
 # Browser-free desktop migration
 
-Status: **native Preview cutover authorized; physical cross-platform acceptance remains open**.
+Status: **opt-in native development; Tauri remains the public Preview and physical cross-platform acceptance remains open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
-complete OS at a time. Preview packaging now selects AppKit on macOS and Rust/wgpu
-on Windows/Linux. The maintainer explicitly authorized switching installed updates
-and downloads before physical acceptance; this does not mark the remaining gates
-complete or start a stable channel. The existing download aliases and updater
-manifest change only after a complete signed release. Older Tauri releases remain
-in the archive. No WebView, JavaScript runtime, localhost server or Tauri runtime
-belongs in the replacement; the existing CLI remains a build-time installer bundler.
-The website continues using the same download aliases.
+complete OS at a time. The native workbenches use AppKit on macOS and Rust/wgpu
+on Windows/Linux. Public downloads and installed updates continue to select
+validated Tauri Previews; native CI and development packages do not authorize a
+cutover or a stable release. Earlier experimental native packages remain in the
+archive. No WebView, JavaScript runtime, localhost server or Tauri runtime belongs
+in the replacement; the Tauri CLI can still bundle native development installers.
+Tauri/React remains the shipping behavior and visual baseline.
 
-Installed profile copy, pinned signature verification and a stopped-process helper
-are now connected separately from the opt-in development updater. macOS/AppImage
-replacement keeps the previous package until renderer/settings/media startup
+Native migration tooling includes installed profile copy, pinned signature
+verification and a stopped-process helper, separately from the opt-in development
+updater. macOS/AppImage replacement keeps the previous package until renderer/settings/media startup
 acknowledgement; a failed acknowledgement retains recovery files and does not
 automatically roll back a possibly running application. Windows uses NSIS; Debian
 uses manual package installation. Open editor-window restoration across this
@@ -4416,8 +4415,8 @@ Both hosts now port the shipping canvas interactions from shared
 `captures_app::editor_canvas` geometry and copy. Image files dropped on the
 canvas (egui hovered/dropped files, AppKit `NSDraggingDestination`) show the
 shared `image_drop_guide` target, edge glow or stack light and toast, then
-import one file at a time through the existing external-image layer path at the
-drop sample; later files stack below the previous import and unsupported drops
+import the accepted files as one atomic batch at the drop sample; later files
+retain the chosen edge relative to the previous import and unsupported drops
 report an error. A selected layer past the canvas edge shows the overflow tint and
 an Expand canvas action whose hover shows the dashed ghost; `expand_canvas` is one
 undo step. Lines/arrows show endpoints, curve dots and starter dots with shipping
@@ -4449,7 +4448,7 @@ Add images now matches shipping's multi-select file input on both hosts (rfd
 `pick_files`, `NSOpenPanel.allowsMultipleSelection`). The chosen files feed the
 canvas-drop import queue with no drop point: unsupported files are skipped (all
 unsupported reports the drop error), the first image takes the default placement and
-each later one stacks below the previous import, one undo step per file. The drop
+each later one stacks below the previous import, one undo step per selection. The drop
 guide's snapped edge and the armed Expand canvas ghost now animate like shipping:
 `motion` adds `snap_bloom_breathe` (opacity and scale about the bloom's center),
 `snap_edge_pulse` and `expand_ghost_breathe`, and `editor_canvas` the accent bloom
@@ -4612,9 +4611,23 @@ not persisted or shared across windows. Copy image remains separate.
 External clipboard PNG/TIFF bytes on AppKit, RGBA on wgpu, or supported local
 image files import through Add images placement, sizing and canvas expansion,
 selecting the last image and Select tool. Imported pixels belong to the draft;
-no URL/HTML image resolution or drag-cache fallback is used. Native retains one
-undo step per image, unlike Tauri's single batch step. Existing drops retain
-pointer-guide placement and formats. Focused text controls retain normal paste.
+no URL/HTML image resolution or drag-cache fallback is used. Both native hosts
+decode clipboard images before submitting one batch to the shared session.
+The session validates cumulative retained pixels and renders the entire candidate
+before publishing document, frame, owned assets and one undo/redo step, matching
+Tauri. A late decode, dimension/budget or final-render failure publishes nothing
+and preserves existing Undo/Redo. The additive batch C ABI copies borrowed pixel
+buffers before returning; the single-image ABI remains compatible. Host collection
+also bounds cumulative decoded pixels. Add images and file drops now decode their
+whole accepted selection before submitting that same atomic batch transaction.
+The first drop retains its pointer-guide placement; later files keep the original
+edge (including top/left after canvas expansion) relative to the preceding image,
+matching Tauri. Picker and clipboard batches default below. Formats and focused
+text paste remain unchanged. Late file-decode or candidate-render failure adds no
+layer or Undo step, preserves Redo, and permits retry. Shared tests cover all four
+edges and stacked placement; native controller/worker regressions cover picker and
+drop batching, one Undo/Redo and failures. Physical file dialogs, drag/drop,
+clipboard managers, IME and accessibility acceptance remain open on every OS.
 AppKit compares a private pasteboard token; Windows uses a registered private
 format and OS sequence; X11 serves a private selection with owner identity.
 Wayland uses the existing vendored winit/SCTK queue and focused input serial,

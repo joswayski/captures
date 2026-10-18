@@ -2881,6 +2881,136 @@ fn image_import_is_atomic_undoable_and_draft_owned() {
 }
 
 #[test]
+fn clipboard_image_batch_is_one_atomic_owned_edit() {
+    let (data, id, original) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let baseline = editor.snapshot().document.clone();
+    let first = RgbaImage::from_fn(3, 2, |x, y| Rgba([31 + x as u8, 70 + y as u8, 133, 255]));
+    let second = RgbaImage::from_fn(1, 4, |_, y| Rgba([219, 19 + y as u8, 53, 255]));
+    let last_id = editor
+        .import_images(
+            [
+                ("first.png".into(), first.clone()),
+                ("second.png".into(), second.clone()),
+            ],
+            Some("capture-background".into()),
+            None,
+        )
+        .unwrap();
+    let imported = editor.snapshot().document.clone();
+    assert_eq!((imported.width, imported.height), (7., 9.));
+    assert_eq!(imported.elements.len(), 3);
+    assert_eq!(imported.elements[0], baseline.elements[0]);
+    let Element::Image(last) = &imported.elements[2] else {
+        panic!()
+    };
+    assert_eq!(last.base.id, last_id);
+    assert_eq!(
+        (last.base.x, last.base.y, last.width, last.height),
+        (3., 5., 1., 4.)
+    );
+    assert_eq!(last.name, "second.png");
+    for y in 0..2 {
+        for x in 0..3 {
+            assert_eq!(
+                editor.pixels().get_pixel(x + 2, y + 3),
+                first.get_pixel(x, y)
+            );
+        }
+    }
+    for y in 0..4 {
+        assert_eq!(editor.pixels().get_pixel(3, y + 5), second.get_pixel(0, y));
+    }
+    let frame = editor.pixels();
+    editor.execute(Request::Undo).unwrap();
+    assert_eq!(
+        editor.snapshot().document,
+        &baseline,
+        "one Undo removes both images"
+    );
+    assert_eq!(editor.pixels().as_ref(), &original);
+    assert!(!editor.snapshot().can_undo);
+    let before_failure = serde_json::to_value(editor.snapshot()).unwrap();
+    let prior_frame = editor.pixels();
+    // The first image is valid in each failed batch. The second either fails
+    // validation or makes the final canvas unrenderable; neither may publish it.
+    for (invalid, expected_error) in [
+        (RgbaImage::new(0, 1), "dimension"),
+        (RgbaImage::new(1, 16_384), "rendering is limited"),
+    ] {
+        let error = editor
+            .import_images(
+                [
+                    ("valid.png".into(), first.clone()),
+                    ("invalid.png".into(), invalid),
+                ],
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert!(error.contains(expected_error), "{error}");
+        assert_eq!(
+            serde_json::to_value(editor.snapshot()).unwrap(),
+            before_failure
+        );
+        assert!(Arc::ptr_eq(&editor.pixels(), &prior_frame));
+        assert!(!data.path().join("drafts").exists());
+    }
+    assert!(editor.import_images([], None, None).is_err());
+    assert_eq!(
+        serde_json::to_value(editor.snapshot()).unwrap(),
+        before_failure
+    );
+    editor.execute(Request::Redo).unwrap();
+    assert_eq!(editor.snapshot().document, &imported);
+    assert_eq!(editor.pixels(), frame);
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 45 })
+        .unwrap();
+    let assets = data.path().join("drafts").join(&id).join("assets");
+    assert_eq!(
+        fs::read_dir(assets).unwrap().count(),
+        3,
+        "failed batches retain no assets"
+    );
+    drop(editor);
+    let restored = open(data.path(), &id).unwrap();
+    assert_eq!(restored.snapshot().document, &imported);
+    assert_eq!(restored.pixels(), frame);
+}
+
+#[test]
+fn image_batches_keep_the_drop_edge_after_canvas_expansion() {
+    // Independent 7×3 capture + 3×2 and 1×4 imports. Left/top expansion must
+    // translate the target for the next image; center drops must stay stacked.
+    for (point, size, positions) in [
+        (Point { x: 3.5, y: 0. }, (7., 9.), [(2., 4.), (3., 0.)]),
+        (Point { x: 7., y: 1.5 }, (11., 4.), [(7., 1.), (10., 0.)]),
+        (Point { x: 3.5, y: 3. }, (7., 9.), [(2., 3.), (3., 5.)]),
+        (Point { x: 0., y: 1.5 }, (11., 4.), [(1., 1.), (0., 0.)]),
+        (Point { x: 3.5, y: 1.5 }, (7., 3.), [(2., 1.), (3., 1.)]),
+    ] {
+        let (data, id, _) = setup();
+        let mut editor = open(data.path(), &id).unwrap();
+        editor
+            .import_images(
+                [
+                    ("first.png".into(), RgbaImage::new(3, 2)),
+                    ("second.png".into(), RgbaImage::new(1, 4)),
+                ],
+                None,
+                Some(point),
+            )
+            .unwrap();
+        let document = editor.snapshot().document;
+        assert_eq!((document.width, document.height), size, "{point:?}");
+        for (image, expected) in document.elements[1..].iter().zip(positions) {
+            assert_eq!((image.base().x, image.base().y), expected, "{point:?}");
+        }
+    }
+}
+
+#[test]
 fn failed_import_render_preserves_redo_frame_and_files() {
     let (data, id, _) = setup();
     let mut editor = open(data.path(), &id).unwrap();
