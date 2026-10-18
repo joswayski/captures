@@ -1259,6 +1259,22 @@ final class MiniPreviewTests: XCTestCase {
                 NSImage(cgImage: PreviewView.fixtureImage(scale: 1), size: NSSize(width: 284, height: 160))
             })
             defer { controller.close() }
+            var samples: [(String, CFTimeInterval, Bool, CFTimeInterval)] = []
+            samples.reserveCapacity(16)
+            func mark(_ stage: String) {
+                if ProcessInfo.processInfo.environment["CAPTURES_PREVIEW_MOTION_TRACE"] == "1" {
+                    samples.append((stage, CACurrentMediaTime(), controller.isTransitioning,
+                                    controller.diagnosticTransitionDeadline))
+                }
+            }
+            defer {
+                for (stage, time, active, deadline) in samples {
+                    print("ARRIVAL_TRACE placement=\(placement) stage=\(stage) time=\(time) active=\(active) deadline=\(deadline)")
+                }
+                if !samples.isEmpty {
+                    print("ARRIVAL_TRACE placement=\(placement) fired=\(controller.diagnosticTransitionFiredAt) returned=\(controller.diagnosticTransitionReturnedAt)")
+                }
+            }
             let settings = MiniPreviewSettings(enabled: true, placement: placement, includeInCaptures: false)
             func capture(_ id: String) throws {
                 let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
@@ -1270,11 +1286,14 @@ final class MiniPreviewTests: XCTestCase {
             controller.recordCopyResult(artifactID: "older", succeeded: false)
             XCTAssertEqual(controller.dismiss("dust", exit: .dust), 2.9, accuracy: 0.01)
             let started = CACurrentMediaTime()
+            mark("started")
             XCTAssertGreaterThan(controller.dismiss("close"), 0)
             let chips = try XCTUnwrap(controller.previewView).dustChipCount
             XCTAssertGreaterThan(chips, 0, "exercise real dust, not the fallback")
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            mark("first-capture-before")
             try capture("incoming")
+            mark("first-capture-after")
             let view = try XCTUnwrap(controller.previewView)
             XCTAssertEqual(view.renderedArtifactIDs, ["older", "dust", "close", "incoming"])
             XCTAssertEqual(view.dustChipCount, chips, "the existing chips must survive the arrival")
@@ -1293,15 +1312,21 @@ final class MiniPreviewTests: XCTestCase {
                     XCTAssertFalse(button.canBecomeKeyView, "Tab must skip every exiting control")
                 }
             }
+            mark("model-render-before")
             try write(render(try XCTUnwrap(view.window as? MiniPreviewPanel)),
                       name: "mini-preview-overlap-arrival-\(placement).png")
+            mark("model-render-after")
             if let bitmap = try renderPresentation(try XCTUnwrap(view.window as? MiniPreviewPanel)) {
                 try write(bitmap, name: "mini-preview-overlap-presentation-\(placement).png")
             }
+            mark("presentation-render-after")
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            mark("second-capture-before")
             try capture("again")
+            mark("second-capture-after")
             XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, chips)
             try waitUntil { !controller.isTransitioning }
+            mark("settled")
             XCTAssertLessThan(CACurrentMediaTime() - started, 3.4, "arrivals must not restart a 2.9 s exit")
             XCTAssertEqual(controller.presentedArtifactIDs, ["older", "incoming", "again"])
             let final = try XCTUnwrap(controller.previewView)
@@ -2218,7 +2243,13 @@ final class MiniPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference
         defer { NativeMotion.motionPreference = preference }
-        for reduced in [false, true] {
+        let trace = ProcessInfo.processInfo.environment["CAPTURES_PREVIEW_MOTION_TRACE"] == "1"
+        if trace { MiniPreviewMotionTrace.begin() }
+        defer { if trace { MiniPreviewMotionTrace.finish() } }
+        let variants = trace ? Array(repeating: [false, true], count: 12).flatMap { $0 } : [false, true]
+        for (iteration, reduced) in variants.enumerated() {
+            MiniPreviewMotionTrace.iteration = iteration
+            MiniPreviewMotionTrace.reduced = reduced
             NativeMotion.motionPreference = { reduced }
             let captured = artifact(id: "edited", previewPath: "/edited-preview.png")
             let controller = try presentedController(captured)
@@ -2233,11 +2264,13 @@ final class MiniPreviewTests: XCTestCase {
                 // presentation can lag that frame until the next display pass.
                 return edit.frame.width
             }
-            func pump(until deadline: CFTimeInterval) {
+            func pump(until deadline: CFTimeInterval, tracingSamples: Bool = false) {
                 while CACurrentMediaTime() < deadline {
                     let remaining = deadline - CACurrentMediaTime()
+                    if tracingSamples { controller.previewView?.editControl(for: "edited")?.traceEditorMorph(20) }
                     _ = RunLoop.current.run(mode: .default,
                         before: Date().addingTimeInterval(min(0.005, max(0, remaining))))
+                    if tracingSamples { controller.previewView?.editControl(for: "edited")?.traceEditorMorph(21) }
                 }
             }
             func inFlightWidth(started: CFTimeInterval, fullWidth: CGFloat) throws -> CGFloat {
@@ -2245,19 +2278,38 @@ final class MiniPreviewTests: XCTestCase {
                 // A run-loop deadline does not guarantee a timer delivery.
                 // Observe actual geometry within the original 280 ms morph,
                 // keeping enough distance from both endpoints to catch a snap.
-                // Do not interrupt before 70 ms: a restarted clock must still
-                // differ at the original +300 ms settlement check below.
+                // Leave at least 70 ms between the original completion and a
+                // restarted clock so a late timer can still distinguish them.
                 while CACurrentMediaTime() - started < 0.28 {
                     let sampled = try width()
                     let elapsed = CACurrentMediaTime() - started
+                    controller.previewView?.editControl(for: "edited")?.traceEditorMorph(22)
                     if elapsed >= 0.07, elapsed < 0.28, sampled > 30, sampled < fullWidth - 2 {
                         return sampled
                     }
-                    pump(until: min(started + 0.28, CACurrentMediaTime() + 0.005))
+                    pump(until: min(started + 0.28, CACurrentMediaTime() + 0.005), tracingSamples: true)
                 }
                 let finalWidth = try width()
                 XCTFail("No intermediate badge frame within 280 ms; width=\(finalWidth), elapsed=\(CACurrentMediaTime() - started)s")
                 throw AppBridgeError.invalidResponse
+            }
+            func waitForSettledWidth(_ target: CGFloat, before deadline: CFTimeInterval) throws {
+                // Reaching a run-loop deadline can leave a due timer unserviced.
+                // Observe its endpoint, not the last frame before that deadline.
+                // Start observing immediately after rebuild: an unconditional
+                // pump to +300 ms can service unrelated work past the deadline
+                // even if the endpoint was already delivered on time.
+                // Exact equality matters: easing can approach within 0.1 pt of
+                // the endpoint before a wrongly restarted morph has finished.
+                while !reduced, try width() != target, CACurrentMediaTime() < deadline {
+                    pump(until: min(deadline, CACurrentMediaTime() + 0.005))
+                }
+                if !reduced {
+                    XCTAssertLessThan(CACurrentMediaTime(), deadline,
+                        "an overdue sample cannot distinguish the original clock from a restarted one")
+                }
+                XCTAssertEqual(try width(), target,
+                    "the original morph must finish before a restarted 280 ms clock could finish")
             }
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
             let present = UInt32(CAPTURES_EDITOR_PHASE_PRESENT)
@@ -2280,42 +2332,40 @@ final class MiniPreviewTests: XCTestCase {
                 _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
             }
             let enterStarted = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(10)
             controller.setEditorArtifacts(["edited"])
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(11)
             XCTAssertEqual(controller.editorPhase(for: "edited"), present)
             let enteringWidth = try inFlightWidth(started: enterStarted, fullWidth: fullWidth)
             let enterRebuilt = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(12)
             controller.updateSettings(previewSettings())
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(13)
             XCTAssertEqual(try width(), enteringWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its entering badge")
             if reduced { XCTAssertEqual(enteringWidth, fullWidth, accuracy: 0.1) }
-            pump(until: enterStarted + 0.30)
-            if !reduced {
-                XCTAssertLessThan(CACurrentMediaTime(), enterRebuilt + 0.28,
-                    "an overdue sample cannot distinguish the original clock from a restarted one")
-            }
-            XCTAssertEqual(try width(), fullWidth, accuracy: 0.1,
-                "entering must finish on the original 280 ms clock")
+            try waitForSettledWidth(fullWidth, before: enterRebuilt + 0.28)
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(14)
             // Render only after the timing assertions, never between sampling
             // a frame and rebuilding or while checking the original deadline.
             try write(XCTUnwrap(renderPresentation(panel())),
                       name: "mini-preview-editor-present-rebuild-\(reduced ? "reduced" : "motion").png")
             let leaveStarted = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(15)
             controller.setEditorArtifacts([])
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(16)
             XCTAssertTrue([UInt32(CAPTURES_EDITOR_PHASE_LEAVING), lingering]
                 .contains(controller.editorPhase(for: "edited")))
             let leavingWidth = try inFlightWidth(started: leaveStarted, fullWidth: fullWidth)
             let leaveRebuilt = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(17)
             controller.updateSettings(previewSettings())
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(18)
             XCTAssertEqual(try width(), leavingWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its leaving badge")
             if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
-            pump(until: leaveStarted + 0.30)
-            if !reduced {
-                XCTAssertLessThan(CACurrentMediaTime(), leaveRebuilt + 0.28,
-                    "an overdue sample cannot distinguish the original clock from a restarted one")
-            }
-            XCTAssertEqual(try width(), 28, accuracy: 0.1,
-                "the 280 ms morph ends on the original clock, not 280 ms after rebuilding")
+            try waitForSettledWidth(28, before: leaveRebuilt + 0.28)
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(19)
             try write(XCTUnwrap(renderPresentation(panel())),
                       name: "mini-preview-editor-leave-rebuild-\(reduced ? "reduced" : "motion").png")
             if !reduced { try waitUntil { controller.editorPhase(for: "edited") == lingering } }
