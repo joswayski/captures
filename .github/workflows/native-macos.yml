@@ -115,6 +115,7 @@ jobs:
       - run: bash apps/native/macos/build.sh
         env:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
+          CAPTURES_SAVED_FEEDBACK_TRACE: '1'
       - name: Verify signed development updates and isolated profile import
         run: |
           cargo test --release --locked -p captures-app --lib updater::

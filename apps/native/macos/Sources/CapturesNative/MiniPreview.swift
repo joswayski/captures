@@ -10,6 +10,47 @@ struct MiniPreviewSettings: Equatable {
     let includeInCaptures: Bool
 }
 
+/// Temporary bounded diagnostic. Store numeric samples only; print after the test.
+enum MiniPreviewSavedTrace {
+    struct Event {
+        let iteration: Int
+        let code: UInt8
+        let time: CFTimeInterval
+        let wall: TimeInterval
+        let uptime: UInt64
+        let owner: UInt
+        let previous: UInt
+        let token: Int
+        let since: CFTimeInterval
+        let deadline: UInt64
+        let confirming: Bool
+    }
+    static var active = false
+    static var iteration = 0
+    private static var events: [Event] = []
+
+    static func begin() { events.removeAll(keepingCapacity: true); events.reserveCapacity(1024); active = true }
+    static func record(_ code: UInt8, owner: AnyObject? = nil, previous: AnyObject? = nil,
+                       token: Int = 0, since: CFTimeInterval = 0,
+                       deadline: UInt64 = 0, confirming: Bool = false) {
+        guard active, events.count < 1024 else { return }
+        events.append(Event(iteration: iteration, code: code, time: CACurrentMediaTime(),
+            wall: Date().timeIntervalSinceReferenceDate, uptime: DispatchTime.now().uptimeNanoseconds,
+            owner: owner.map { UInt(bitPattern: ObjectIdentifier($0)) } ?? 0,
+            previous: previous.map { UInt(bitPattern: ObjectIdentifier($0)) } ?? 0,
+            token: token, since: since, deadline: deadline, confirming: confirming))
+    }
+    static func finish() {
+        active = false
+        print("SAVED_TRACE codes: 1=schedule,2=callback-before-guard,3=callback-applied,4=copy,5=button-update")
+        print("SAVED_TRACE test: 10=confirmed,11=before-arrival,12=restored,13=before-render,14=after-render,15=before-wait,16=after-wait")
+        for e in events {
+            print("SAVED_TRACE iteration=\(e.iteration) code=\(e.code) time=\(e.time) wall=\(e.wall) uptime=\(e.uptime) owner=\(e.owner) previous=\(e.previous) token=\(e.token) since=\(e.since) deadline=\(e.deadline) confirming=\(e.confirming)")
+        }
+        print("SAVED_TRACE count=\(events.count) capacity=1024")
+    }
+}
+
 private final class MiniPreviewImageView: NSView {
     let image: NSImage
     init(frame: NSRect, image: NSImage) { self.image = image; super.init(frame: frame) }
@@ -1208,11 +1249,17 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let token = savedFeedbackToken
         let deadline = DispatchTime.now() + remaining
         savedFeedbackSince = CACurrentMediaTime() - startedAgo
+        MiniPreviewSavedTrace.record(1, owner: self, token: token,
+            since: savedFeedbackSince ?? 0, deadline: deadline.uptimeNanoseconds)
         updateSaveButton(saved: saved)
         DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
+            MiniPreviewSavedTrace.record(2, owner: self, token: token,
+                since: self?.savedFeedbackSince ?? 0, deadline: deadline.uptimeNanoseconds)
             guard let self, self.savedFeedbackToken == token else { return }
             self.savedFeedbackSince = nil
             self.updateSaveButton(saved: self.saved)
+            MiniPreviewSavedTrace.record(3, owner: self, token: token,
+                deadline: deadline.uptimeNanoseconds)
         }
     }
 
@@ -1220,6 +1267,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     func continueFeedback(from previous: MiniPreviewCardView) {
         setStatus(previous.status.stringValue, detail: previous.status.toolTip)
         if let since = previous.savedFeedbackSince {
+            MiniPreviewSavedTrace.record(4, owner: self, previous: previous, since: since)
             showSavedFeedback(startedAgo: CACurrentMediaTime() - since)
         }
     }
@@ -1233,6 +1281,8 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     func updateSaveButton(saved: Bool) {
         let confirming = savedFeedbackSince != nil
         let title = confirming ? "Saved" : saved ? "Show in Folder" : "Save file"
+        MiniPreviewSavedTrace.record(5, owner: self, token: savedFeedbackToken,
+            since: savedFeedbackSince ?? 0, confirming: confirming)
         saveButton?.title = title
         saveButton?.kind = confirming ? .check : saved ? .folder : .save
         saveButton?.setAccessibilityLabel(title)

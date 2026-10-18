@@ -1079,6 +1079,16 @@ final class MiniPreviewTests: XCTestCase {
     }
 
     func testSavedFeedbackSurvivesAnArrivalWithoutExtendingItsDeadline() throws {
+        let trace = ProcessInfo.processInfo.environment["CAPTURES_SAVED_FEEDBACK_TRACE"] == "1"
+        if trace { MiniPreviewSavedTrace.begin() }
+        defer { if trace { MiniPreviewSavedTrace.finish() } }
+        for iteration in 0..<(trace ? 12 : 1) {
+            MiniPreviewSavedTrace.iteration = iteration
+            try checkSavedFeedbackArrival()
+        }
+    }
+
+    private func checkSavedFeedbackArrival() throws {
         _ = NSApplication.shared
         let captured = artifact(id: "saved", previewPath: "/saved-preview.png")
         let controller = try presentedController(captured)
@@ -1094,20 +1104,27 @@ final class MiniPreviewTests: XCTestCase {
                 .compactMap { $0 as? MiniPreviewButton }.contains { $0.title == "Saved" } == true
         }
         let confirmedAt = Date()
+        MiniPreviewSavedTrace.record(10, owner: controller.previewView?.card(for: captured.id))
         RunLoop.current.run(until: Date().addingTimeInterval(0.35))
         var restored = false
+        MiniPreviewSavedTrace.record(11, owner: controller.previewView?.card(for: captured.id))
         controller.restore(artifact(id: "other", previewPath: "/other.png"), on: screenID(),
                            settings: previewSettings()) { _ in restored = true }
         try waitUntil { restored }
         let view = try XCTUnwrap(controller.previewView)
         let card = try XCTUnwrap(view.card(for: captured.id))
+        MiniPreviewSavedTrace.record(12, owner: card)
         let button = try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewButton }
             .first { $0.kind == .check || $0.kind == .folder })
         XCTAssertEqual(button.title, "Saved", "an unrelated arrival must not truncate Save confirmation")
         let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
         card.mouseEntered(with: try hoverEvent(for: panel))
+        MiniPreviewSavedTrace.record(13, owner: card, confirming: button.title == "Saved")
         try write(render(panel), name: "mini-preview-saved-after-arrival.png")
+        MiniPreviewSavedTrace.record(14, owner: card, confirming: button.title == "Saved")
+        MiniPreviewSavedTrace.record(15, owner: card, confirming: button.title == "Saved")
         RunLoop.current.run(until: confirmedAt.addingTimeInterval(1.1))
+        MiniPreviewSavedTrace.record(16, owner: card, confirming: button.title == "Saved")
         XCTAssertLessThan(Date().timeIntervalSince(confirmedAt), 1.25,
             "the expiry probe must precede a wrongly restarted 1.35-second deadline")
         XCTAssertEqual(button.title, "Show in Folder", "a rebuild must not restart the one-second deadline")
