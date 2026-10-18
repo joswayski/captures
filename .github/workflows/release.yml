@@ -222,12 +222,20 @@ jobs:
         with:
           path: release-tools
           ref: ${{ github.sha }}
-          sparse-checkout: scripts/desktop-release.mjs
+          sparse-checkout: |
+            scripts/desktop-release.mjs
+            scripts/ai-release-notes.mjs
           sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Create the draft at the tested commit
         id: draft
         env:
           GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.CAPTURES_RELEASE_NOTES_MODEL }}
+          ANTHROPIC_EFFORT: ${{ vars.CAPTURES_RELEASE_NOTES_EFFORT }}
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
           RELEASE_SHA: ${{ needs.queue.outputs.release_sha }}
           TAG: ${{ needs.version.outputs.tag }}
@@ -311,6 +319,10 @@ jobs:
             "$GITHUB_REPOSITORY" \
             "$generated_notes" \
             "$PREVIOUS_TAG"
+          # Editorial failures preserve the deterministic notes above. The
+          # selected body is reused by packaging and the updater manifest.
+          node "$GITHUB_WORKSPACE/release-tools/scripts/ai-release-notes.mjs" \
+            "$PREVIOUS_TAG" "$RELEASE_SHA" "$generated_notes"
           {
             echo "> [!WARNING]"
             echo "> This Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
