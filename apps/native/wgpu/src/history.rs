@@ -54,11 +54,12 @@ pub struct DeleteAll {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderEvent {
+    Preferences,
     DeleteAll,
     Cancel,
 }
 
-/// `.history-header`: eyebrow, title and lede, with Delete all on the right.
+/// `.history-header`: navigation, title and lede, with Delete all on the right.
 pub fn header(ui: &mut egui::Ui, t: &Tokens, delete_all: DeleteAll) -> Option<HeaderEvent> {
     let compact = captures_app::app_windows::compact(ui.ctx().content_rect().width());
     header_layout(ui, t, delete_all, compact).0
@@ -151,17 +152,30 @@ fn header_layout(
     compact: bool,
 ) -> (Option<HeaderEvent>, Rect, Rect) {
     let copy = shared::copy();
-    let heading_ui = |ui: &mut egui::Ui, max_width: f32| {
+    let mut navigation = None;
+    let mut heading_ui = |ui: &mut egui::Ui, max_width: f32| {
         ui.vertical(|ui| {
             ui.set_max_width(max_width);
             ui.spacing_mut().item_spacing.y = t.number("s-3");
-            ui.label(
-                RichText::new(copy.eyebrow.to_uppercase())
-                    .size(t.number("text-2xs"))
-                    .color(t.color("text-subtle"))
-                    .extra_letter_spacing(0.6)
-                    .strong(),
+            let width = text_width(ui, copy.back_to_preferences, t.number("text-sm"))
+                + 15.
+                + t.number("s-3")
+                + 2. * t.number("s-5");
+            let (rect, _) =
+                ui.allocate_exact_size(Vec2::new(width, t.number("h-md")), Sense::hover());
+            let back = button(
+                ui,
+                t,
+                rect,
+                Id::unique("history-preferences"),
+                copy.back_to_preferences,
+                Some(Glyph::Named("chevron-left")),
+                ButtonStyle::Ghost,
+                true,
             );
+            if back.clicked() {
+                navigation = Some(HeaderEvent::Preferences);
+            }
             ui.label(
                 RichText::new(copy.title)
                     .size(t.number("text-3xl"))
@@ -192,7 +206,7 @@ fn header_layout(
                 heading
             })
             .inner;
-        return (event, heading, actions);
+        return (navigation.or(event), heading, actions);
     }
     // `.history-header` is a flex row: the heading column wraps inside the
     // space the actions leave, so the lede never runs under Delete all.
@@ -231,7 +245,7 @@ fn header_layout(
             (event, actions) = row.inner;
         }
     });
-    (event, heading, actions)
+    (navigation.or(event), heading, actions)
 }
 
 /// `.history-filters` pills. `counts` pairs each label with its count.
@@ -1175,6 +1189,51 @@ mod tests {
             ),
             (false, false)
         );
+    }
+
+    #[test]
+    fn back_to_preferences_accepts_keyboard_with_no_history_or_busy_deletion() {
+        for delete_all in [
+            DeleteAll::default(),
+            DeleteAll {
+                visible: true,
+                confirming: true,
+                busy: true,
+                enabled: false,
+            },
+        ] {
+            let ctx = egui::Context::default();
+            crate::ui_fonts::install(&ctx);
+            let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+            tokens.apply(&ctx, true);
+            let mut events = Vec::new();
+            for key in [None, Some(egui::Key::Tab), Some(egui::Key::Enter)] {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640., 440.))),
+                        events: key
+                            .map(|key| egui::Event::Key {
+                                key,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            })
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if let Some(event) = header(ui, &tokens, delete_all) {
+                            events.push(event);
+                        }
+                    },
+                )
+                .textures_delta
+                .clear();
+            }
+            assert_eq!(events, [HeaderEvent::Preferences]);
+        }
     }
 
     #[test]

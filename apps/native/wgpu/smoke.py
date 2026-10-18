@@ -73,7 +73,9 @@ def main():
     broken.write_text("invalid-json")
     shots = {
         "live-empty": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(args.output / "empty-history"), "--appearance", "light"],
+        "live-empty-dark": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(args.output / "empty-history"), "--appearance", "dark"],
         "live-populated": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(populated)],
+        "live-populated-light": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(populated), "--appearance", "light"],
         "permission-dialog-ready": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(args.output / "permission-ready-history"), "--permission-dialog", "ready"],
         "permission-dialog-error": ["--live", "--open-history", "--settings-file", str(completed), "--history-root", str(args.output / "permission-error-history"), "--permission-dialog", "error"],
         "onboarding-light": ["--live", "--history-root", str(args.output / "onboarding-history"), "--settings-file", str(args.output / "fresh-light.json"), "--appearance", "light"],

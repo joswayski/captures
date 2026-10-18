@@ -1,6 +1,8 @@
 name: Captures Preview
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       channel_only:
@@ -13,8 +15,9 @@ on:
         required: false
         type: string
 
-# Native releases are opt-in while parity is unfinished. Public promotion uses
-# the separately approved tag in scripts/preview-release.mjs, never newest-native.
+# Main pushes publish experimental archives when the desktop scope gate finds
+# unpublished changes. Public promotion still uses the separately approved tag
+# in scripts/preview-release.mjs, never newest-native.
 # Omitting queue uses GitHub's default single pending slot.
 concurrency:
   group: captures-preview-main
@@ -59,12 +62,13 @@ jobs:
         id: target
         env:
           REQUESTED_SHA: ${{ inputs.target_sha }}
+          TRIGGER_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
 
           git fetch origin main
-          release_sha="${REQUESTED_SHA:-origin/main}"
+          release_sha="${REQUESTED_SHA:-$TRIGGER_SHA}"
           release_sha="$(git rev-parse "${release_sha}^{commit}")"
           if ! git merge-base --is-ancestor "$release_sha" origin/main; then
             echo "${release_sha} is not a commit on main." >&2
@@ -222,12 +226,20 @@ jobs:
         with:
           path: release-tools
           ref: ${{ github.sha }}
-          sparse-checkout: scripts/desktop-release.mjs
+          sparse-checkout: |
+            scripts/desktop-release.mjs
+            scripts/ai-release-notes.mjs
           sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Create the draft at the tested commit
         id: draft
         env:
           GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.CAPTURES_RELEASE_NOTES_MODEL }}
+          ANTHROPIC_EFFORT: ${{ vars.CAPTURES_RELEASE_NOTES_EFFORT }}
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
           RELEASE_SHA: ${{ needs.queue.outputs.release_sha }}
           TAG: ${{ needs.version.outputs.tag }}
@@ -311,6 +323,10 @@ jobs:
             "$GITHUB_REPOSITORY" \
             "$generated_notes" \
             "$PREVIOUS_TAG"
+          # Editorial failures preserve the deterministic notes above. The
+          # selected body is reused by packaging and the updater manifest.
+          node "$GITHUB_WORKSPACE/release-tools/scripts/ai-release-notes.mjs" \
+            "$PREVIOUS_TAG" "$RELEASE_SHA" "$generated_notes"
           {
             echo "> [!WARNING]"
             echo "> This Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."

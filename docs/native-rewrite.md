@@ -27,6 +27,17 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Native History replaces “On this device” with the shipping ghost **Back to
+Preferences** button and shared left-chevron path. It stays available in loading
+and empty History, opens or focuses/unminimizes the separate Preferences window,
+and leaves History open. AppKit reuses `showPreferences(revealing: nil)`; wgpu
+reuses its Preferences viewport without changing the selected settings section.
+The AppKit History tests cover copy, minimum-width containment and keyboard order;
+the X11 History smoke covers real navigation at normal/minimum sizes in light/dark,
+same-window restoration, and unchanged History/source bytes. macOS and Windows
+execution, Wayland navigation and physical window-manager acceptance remain
+unverified in the Linux orb. This slice does not promote a native download.
+
 Windows native frozen selectors now use the shipping cursor-preview policy for
 region/window/display selection and screenshots during recording. The preview
 includes the originally sampled system cursor only when screenshot cursor
@@ -2062,6 +2073,21 @@ is recorded separately from the earlier paused failure/retry sequence.
 The wgpu host also offers Play/Pause through a persistent shared FFmpeg
 decoder capped at 30 fps and 1280 × 720. Motion frames retain the accepted spatial
 edits but stay separate from session state, dirty identity, estimates and History.
+The recording preview's overlay button uses the shared `pause`/`resume` SVG
+paths in both native hosts, at 24 px with a 2-unit stroke, matching Tauri.
+wgpu no longer draws separate rectangles and a filled triangle; AppKit overrides
+the ordinary button's smaller icon size/stroke only for playback. Other controls,
+playback state, focus and accessible labels are unchanged. These are opt-in native
+controls, not a change to the approved public download or a completed parity gate.
+The icon slice's private-X11 dark/light playback checks exercise normal/minimum
+windows, pause/resume/EOF, loop, failure/retry, close and immutable accepted export.
+Windows and Wayland share this renderer but have no local presentation verification
+for the icon slice; AppKit source changes await macOS execution. Physical acceptance
+remains open on all four hosts.
+Repeated private-X11 debug runs also exposed an intermittent timeout waiting for
+Pause after a failed-decoder retry, reproduced both with and without the icon
+change. The cause remains open; passing individual playback runs does not close
+that recovery acceptance gap.
 A single latest-frame slot bounds pending UI work; no timer remains after stop.
 Pause retains the last presented source position, EOF replays from accepted trim
 start, and failures restore the accepted still. Focus loss/minimize requests Pause;

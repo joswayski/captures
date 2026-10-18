@@ -110,6 +110,21 @@ describe("CaptureHistory", () => {
     vi.clearAllMocks();
   });
 
+  it("can return to Preferences with empty history and reports navigation failures", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_capture_history" || command === "get_recording_drafts") return [];
+      if (command === "open_preferences") throw new Error("Window unavailable");
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<CaptureHistory />);
+    await screen.findByText("No captures yet");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Preferences" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn’t open Preferences: Error: Window unavailable",
+    );
+  });
+
   it.each(["success", "failure"])(
     "ignores an older refresh's %s after a newer snapshot has loaded",
     async (outcome) => {
@@ -442,8 +457,8 @@ describe("CaptureHistory", () => {
     render(<CaptureHistory />);
 
     expect(await screen.findByRole("heading", { name: "Capture History" })).toBeInTheDocument();
-    expect(screen.getByText("On this device")).toBeInTheDocument();
-    expect(screen.queryByText(/on this mac/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("On this device")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to Preferences" })).toBeInTheDocument();
     expect(screen.getByText("1440 × 900 · 250 KB")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));

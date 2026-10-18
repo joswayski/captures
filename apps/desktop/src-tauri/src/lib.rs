@@ -5171,12 +5171,15 @@ fn disable_windows_print_screen_snipping() {
 
 #[cfg(target_os = "windows")]
 fn set_windows_print_screen_snipping_enabled(enabled: bool) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+
     let value = if enabled { "1" } else { "0" };
     for key in [
         r"HKCU\Control Panel\Keyboard",
         r"HKCU\Control Panel\Accessibility",
     ] {
         let output = Command::new("reg")
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW: shortcut setup must not flash a console.
             .args([
                 "add",
                 key,

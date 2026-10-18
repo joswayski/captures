@@ -31,7 +31,7 @@ passing CI or publishing a newer archive is not authorization to promote it.
 
 ## Native Preview packaging and recovery
 
-The native public rollout has been withdrawn pending parity. Manually requested
+The native public rollout has been withdrawn pending parity. Automatically published
 native archives use AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
 and remain experimental; physical acceptance is incomplete. `scripts/native-preview-build.mjs`
 builds the native executable and updater helper, verifies their build identity,
@@ -45,7 +45,7 @@ version/target-bound filenames in their signed Minisign trusted comments; the
 compiled helper authenticates the collected bytes before upload. `latest.json`
 keeps the existing Tauri-compatible platform keys and public signing key, so
 the earlier native rollout could update installed Tauri Previews. That promotion
-is now blocked by the public-channel pin, including after a manual native release.
+is now blocked by the public-channel pin, including after an automatic native release.
 The manifest retains a separately signed `linux-x86_64-deb` artifact for existing
 Tauri Debian installs: their updater cannot install an AppImage fallback. Once on
 native, Debian installs use the manual package update path.
@@ -133,11 +133,16 @@ remain unavailable. Automated checks must not be reported as physical acceptance
 
 ## Release queue
 
-`.github/workflows/release.yml` is manual-only while native parity is unfinished.
-Main pushes continue normal CI but do not request installed native releases.
-Dispatch without `channel_only` to build an experimental dated archive; the
-workflow snapshots `main` once, or rebuilds an explicitly supplied `target_sha`.
-One request runs at a time and a newer pending dispatch replaces the older pending
+`.github/workflows/release.yml` runs on every push to `main`, including merges.
+Its inexpensive scope check compares with the last published dated Preview and
+skips app builds when there are no unpublished desktop changes. Website/API-only
+pushes do not rebuild an already-published desktop; a later push can still collect
+desktop changes left unpublished by a failed or superseded request.
+
+Automatic builds use the triggering commit, not whatever `main` becomes while
+the request waits. Manual dispatch without `channel_only` forces a rebuild of
+the dispatch commit, or an explicitly supplied `target_sha` on main's history.
+One request runs at a time and a newer pending request replaces the older pending
 request. Channel-only dispatches share this lock and skip all app builds.
 
 Archive builds run the frontend and Rust quality gates, then build macOS
@@ -187,6 +192,35 @@ removes only stale drafts with its generated tag before retrying.
 Release notes are generated from only the commits in the release range that
 match the same installed-app scope check. This keeps skipped website and API
 changes from appearing later in the next real desktop update message.
+
+During draft preparation, `scripts/ai-release-notes.mjs` asks Anthropic for up to
+five short, user-facing highlights. It follows Caper's warm, concise editorial
+prompt and Opus request configuration, but writes the existing release body,
+not a separate highlights feed. Packaging and the updater reuse that body;
+the Preview warning and approved-public-channel cutoff remain unchanged.
+
+Set the repository Actions secret `ANTHROPIC_API_KEY`. Optional repository
+variables `CAPTURES_RELEASE_NOTES_MODEL` and `CAPTURES_RELEASE_NOTES_EFFORT`
+override `claude-opus-5-5` and `high`. Generation uses structured JSON output,
+16,000 output tokens, Anthropic server-side fallbacks, and a five-minute timeout.
+It sends filtered source diffs and commit messages to Anthropic, never capture
+files or installed-app data. There is no AI request from the desktop app.
+
+Evidence uses the exact previous-Preview-to-target first-parent range. Runtime
+paths distinguish native builds from historical Tauri builds; website, tests,
+dependency bots and secret-looking paths are excluded. Path filtering is not
+a secret-content scanner. Requests are capped at 400,000 serialized characters
+by shortening diffs and marking truncation, without dropping commit metadata.
+Citations, output shape, plain text and length limits are checked locally;
+these checks cannot prove every sentence is accurate. Review generated prose
+when inspecting a release.
+
+Missing credentials/baseline, provider errors, oversized metadata, or rejected
+output retain the original commit-based notes. A successful empty result stays
+quiet instead of restoring technical commit bullets. Generation happens once
+per draft preparation, so all installers in that build share the same notes;
+a fresh release-workflow run may generate different wording. Existing published
+releases are not backfilled, and `channel_only` does not call Anthropic.
 
 If an in-app update download fails, the notice keeps the error on screen and
 offers **download from captur.es**, which opens the website installer section.

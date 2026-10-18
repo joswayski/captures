@@ -228,6 +228,15 @@ describe("RecordingEditor", () => {
     const play = vi.spyOn(video!, "play").mockResolvedValue();
     fireEvent.click(screen.getByRole("button", { name: "Play preview" }));
     expect(play).toHaveBeenCalledOnce();
+    expect(
+      screen.getByRole("button", { name: "Play preview" }).querySelector("svg"),
+    ).toBeInTheDocument();
+    fireEvent.play(video!);
+    const pauseButton = screen.getByRole("button", { name: "Pause preview" });
+    expect(pauseButton.querySelector("svg")).toBeInTheDocument();
+    expect(pauseButton.textContent).toBe("");
+    fireEvent.pause(video!);
+    expect(screen.getByRole("button", { name: "Play preview" })).toBeInTheDocument();
   });
 
   it("keeps playback inside the trim range, seeks on handle clicks without nudging edges, and optionally loops", async () => {

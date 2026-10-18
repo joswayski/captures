@@ -143,7 +143,7 @@ final class LiveCaptureController: NSObject {
     static let queue = DispatchQueue(label: "es.captures.native.capture", qos: .userInitiated)
     private let historyRootOverride: String?
     private let settingsPath: String?
-    private let showPreferenceSetting: (String) -> Void
+    private let showPreferenceSetting: (String?) -> Void
     private var permissionsVisible = false
     private let captureStateChanged: (Bool) -> Void
     private let selectorGenerationChanged: (UInt64?) -> Void
@@ -331,7 +331,7 @@ final class LiveCaptureController: NSObject {
     private var status: NSTextField!
     private var statusBackground: Surface!
     private var statusAlert = false
-    private var eyebrowLabel: NSTextField!
+    private var backToPreferencesButton: HistoryButton!
     private var headingLabel: NSTextField!
     private var ledeLabel: NSTextField!
     /// Top of the filters row, `s-6` below the header (shipping `.history-shell` gap).
@@ -352,7 +352,7 @@ final class LiveCaptureController: NSObject {
          recordingControlsVisibilityChanged: @escaping (Bool) -> Void = { _ in },
          reportError: @escaping (String) -> Void = { _ in },
          screenPermissionDenied: @escaping (StillCaptureKind, String) -> Bool = { _, _ in false },
-         showPreferenceSetting: @escaping (String) -> Void = { _ in }) {
+         showPreferenceSetting: @escaping (String?) -> Void = { _ in }) {
         self.root = root; self.window = window; self.tokens = tokens
         historyRootOverride = historyRoot; self.transport = transport
         self.recoveryWorker = recoveryWorker
@@ -617,11 +617,12 @@ final class LiveCaptureController: NSObject {
 
     private func build() {
         let copy = historyCopy
-        // Shipping `.history-header`: eyebrow, title and lede; Delete all on the right.
-        let eyebrow = title(copy.eyebrow.uppercased(), frame: NSRect(x: 28, y: 24, width: 420, height: 14),
-                            size: tokens.number("text-2xs"), weight: .semibold)
-        eyebrow.textColor = tokens.color("text-subtle")
-        eyebrowLabel = eyebrow
+        // Shipping navigation stays available while History is loading or empty.
+        backToPreferencesButton = HistoryButton(copy.backToPreferences, frame: .zero,
+            tokens: tokens, style: .ghost, glyph: .back) { [weak self] in
+                self?.showPreferenceSetting(nil)
+            }
+        root.addSubview(backToPreferencesButton)
         headingLabel = title(copy.title, frame: NSRect(x: 28, y: 40, width: 420, height: 36),
                              size: tokens.number("text-3xl"), weight: .semibold)
         let lede = title(copy.lede, frame: NSRect(x: 28, y: 80, width: 600, height: 20),
@@ -750,7 +751,7 @@ final class LiveCaptureController: NSObject {
         }
     }
 
-    /// Shipping DOM order: Cancel before Delete all, the filters, interrupted
+    /// Shipping DOM order: Back to Preferences, Cancel, Delete all, the filters, interrupted
     /// recordings, then the grid. The grid starts focused so its arrow keys
     /// work without a click.
     private func installKeyViewLoop() {
@@ -821,15 +822,18 @@ final class LiveCaptureController: NSObject {
         let gap = tokens.number("s-3")
 
         let headingWidth = max(0, min(420, right - left))
-        eyebrowLabel?.frame = NSRect(x: left, y: 24, width: headingWidth, height: 14)
-        headingLabel?.frame = NSRect(x: left, y: 40, width: headingWidth, height: 36)
+        backToPreferencesButton?.frame = NSRect(x: left, y: 24,
+            width: width(copy.backToPreferences) + 15 + gap + 2 * tokens.number("s-5"), height: height)
+        let titleTop = 24 + height + gap
+        let ledeTop = titleTop + 36 + gap
+        headingLabel?.frame = NSRect(x: left, y: titleTop, width: headingWidth, height: 36)
 
         var headerBottom: CGFloat
         if compact {
             let ledeWidth = max(0, right - left)
             let ledeHeight = ledeLabel.map { max(20, textHeight(copy.lede, font: $0.font!, width: ledeWidth)) } ?? 20
-            ledeLabel?.frame = NSRect(x: left, y: 80, width: ledeWidth, height: ledeHeight)
-            headerBottom = 80 + ledeHeight
+            ledeLabel?.frame = NSRect(x: left, y: ledeTop, width: ledeWidth, height: ledeHeight)
+            headerBottom = ledeTop + ledeHeight
             if !deleteAllButton.isHidden {
                 let y = headerBottom + tokens.number("s-5")
                 var x = left
@@ -841,15 +845,15 @@ final class LiveCaptureController: NSObject {
                 headerBottom = y + height
             }
         } else {
-            deleteAllButton.frame = NSRect(x: right - deleteWidth, y: 70, width: deleteWidth, height: height)
+            deleteAllButton.frame = NSRect(x: right - deleteWidth, y: ledeTop - 10, width: deleteWidth, height: height)
             deleteAllCancelButton.frame = NSRect(x: deleteAllButton.frame.minX - gap - cancelWidth,
-                                                 y: 70, width: cancelWidth, height: height)
+                                                 y: ledeTop - 10, width: cancelWidth, height: height)
             let actionsLeft = deleteAllButton.isHidden ? right + 12
                 : deleteAllCancelButton.isHidden ? deleteAllButton.frame.minX : deleteAllCancelButton.frame.minX
             let ledeWidth = max(0, min(600, actionsLeft - 12 - left))
             let ledeHeight = ledeLabel.map { max(20, textHeight(copy.lede, font: $0.font!, width: ledeWidth)) } ?? 20
-            ledeLabel?.frame = NSRect(x: left, y: 80, width: ledeWidth, height: ledeHeight)
-            headerBottom = max(80 + ledeHeight, deleteAllButton.isHidden ? 0 : 70 + height)
+            ledeLabel?.frame = NSRect(x: left, y: ledeTop, width: ledeWidth, height: ledeHeight)
+            headerBottom = max(ledeTop + ledeHeight, deleteAllButton.isHidden ? 0 : ledeTop - 10 + height)
         }
 
         let top = headerBottom + tokens.number("s-6")

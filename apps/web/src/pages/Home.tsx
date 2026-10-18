@@ -180,6 +180,17 @@ export default function Home({
                 </div>
               </>
             )}
+            <p className="mt-5 text-sm leading-relaxed text-ink-muted">
+              <a
+                href="https://caper.chat/invite/pIXKAZFUp8"
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
+              >
+                Share feedback on caper.chat
+              </a>
+              , my other app. Ideas and bug reports welcome!
+            </p>
           </div>
         </section>
 

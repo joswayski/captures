@@ -53,9 +53,11 @@ These links download the **Tauri Preview 2026.10.1104**, pinned while the native
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-The website, installer links and public updater channel stay on this Tauri build. New native builds do not replace them automatically. Native AppKit/wgpu builds remain opt-in development work until behavior, appearance and platform parity are accepted.
+The website, installer links and public updater channel stay on this Tauri build. New native builds do not replace them automatically. Desktop changes merged to `main` automatically build and publish experimental native AppKit/wgpu archives after release checks pass. Installing those archives remains opt-in until behavior, appearance and platform parity are accepted.
 
 Installed copies check captur.es at launch and about every five minutes. Preferences and the tray also offer **Check for Updates**. Downloads from GitHub are signature-verified before installation; screenshot draft-save failure cancels restart. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Dated builds, including experimental native builds, remain in the [build archive](https://github.com/joswayski/captures/releases).
+
+New desktop Preview release notes use AI-written highlights, with commit-based notes as a fallback. Generation runs in the release workflow using source changes, not your captures or app data; the desktop app does not contact Anthropic.
 
 If you installed a native Preview, the updater will not automatically downgrade it. Quit Captures and manually replace the installed app to return to Tauri. Native migration preserved the original Tauri profile; native-only captures and edits remain in the separate native profile and are not imported back automatically. Do not delete either profile. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained backups and limitations.
 
@@ -962,8 +964,9 @@ Custom shadows and pinned-font named styles are connected, including style/size
 choices for new text; new text also takes the drawing defaults' Drop shadow, as in
 the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
-Like the shipping app, native Capture History shows its header, filters and grid;
-captures start from the tray, shortcuts and New Capture menu. Wayland additionally
+Native Capture History shows its header, filters and grid. **Back to Preferences**
+opens or restores Preferences without closing History, including when History is
+empty. Captures start from the tray, shortcuts and New Capture menu. Wayland additionally
 offers **Take screenshot…**, **Record display…** and **Record window…** because a tray or global shortcuts may be unavailable. A
 denied capture opens the native permission recovery: Restart & Retry on macOS, or a
 **Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS

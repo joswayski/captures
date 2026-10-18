@@ -838,7 +838,8 @@ mod tests {
         let copy = settings_request(json!({"operation":"history_copy"}));
         assert_eq!(copy["ok"], true);
         assert_eq!(copy["copy"]["title"], "Capture History");
-        assert_eq!(copy["copy"]["eyebrow"], "On this device");
+        assert_eq!(copy["copy"]["back_to_preferences"], "Back to Preferences");
+        assert!(copy["copy"].get("eyebrow").is_none());
         assert_eq!(copy["copy"]["delete_all_confirm"], "Delete all forever");
         assert_eq!(copy["copy"]["recovery_title"], "Interrupted recordings");
         assert_eq!(copy["confirm_timeout_ms"], 4_000);
