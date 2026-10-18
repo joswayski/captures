@@ -49,6 +49,60 @@ private final class MiniPreviewButtonCell: NSButtonCell {
     }
 }
 
+/// Temporary diagnostic, enabled only by the continuity test. Buffer numeric
+/// samples without printing, retaining views, or changing timer delivery.
+enum MiniPreviewMotionTrace {
+    struct Event {
+        var code: UInt8 = 0
+        var iteration = 0
+        var reduced = false
+        var time: CFTimeInterval = 0
+        var owner: UInt = 0
+        var timer: UInt = 0
+        var alive = false
+        var valid = false
+        var fireIn: Double = 0
+        var phase: UInt32 = 0
+        var start: CFTimeInterval = 0
+        var from: CGFloat = 0
+        var target: CGFloat = 0
+        var requested: CGFloat = 0
+        var width: CGFloat = 0
+        var duration: Double = 0
+    }
+    static var active = false
+    static var iteration = 0
+    static var reduced = false
+    private static var events = [Event](repeating: Event(), count: 4096)
+    private static var count = 0
+
+    static func begin() { count = 0; _ = events.count; active = true }
+    static func record(_ code: UInt8, owner: UInt, timer: Timer?, alive: Bool = true,
+                       phase: UInt32 = 0, start: CFTimeInterval = 0,
+                       from: CGFloat = 0, target: CGFloat = 0,
+                       requested: CGFloat = 0, width: CGFloat = 0, duration: Double = 0) {
+        guard active, count < events.count else { return }
+        events[count] = Event(code: code, iteration: iteration, reduced: reduced,
+            time: CACurrentMediaTime(), owner: owner,
+            timer: timer.map { UInt(bitPattern: ObjectIdentifier($0)) } ?? 0,
+            alive: alive, valid: timer?.isValid == true, fireIn: timer?.fireDate.timeIntervalSinceNow ?? 0,
+            phase: phase, start: start, from: from, target: target,
+            requested: requested, width: width, duration: duration)
+        count += 1
+    }
+    static func finish() {
+        active = false
+        print("MOTION_TRACE codes: 1=reuse,2=registered,3=phase,4=callback,5=write,6=stop,7=deinit")
+        print("MOTION_TRACE enter: 10=before-set,11=after-set,12=before-rebuild,13=after-rebuild,14=deadline")
+        print("MOTION_TRACE leave: 15=before-set,16=after-set,17=before-rebuild,18=after-rebuild,19=deadline")
+        for index in 0..<count {
+            let e = events[index]
+            print("MOTION_TRACE iteration=\(e.iteration) reduced=\(e.reduced) code=\(e.code) time=\(e.time) owner=\(e.owner) timer=\(e.timer) alive=\(e.alive) valid=\(e.valid) fireIn=\(e.fireIn) phase=\(e.phase) start=\(e.start) from=\(e.from) target=\(e.target) requested=\(e.requested) width=\(e.width) duration=\(e.duration)")
+        }
+        print("MOTION_TRACE count=\(count) capacity=\(events.count)")
+    }
+}
+
 /// Preview-only control so this floating chrome does not inherit Workbench button styling.
 final class MiniPreviewButton: NSButton {
     /// A main action's glyph pops in when it changes (Save → Saved → Show in
@@ -125,7 +179,7 @@ final class MiniPreviewButton: NSButton {
         setAccessibilityLabel(title); toolTip = nil
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit { ticker?.invalidate() }
+    deinit { traceEditorMorph(7); ticker?.invalidate() }
 
     // A retained exit is decorative, including to keyboard and accessibility
     // activation. Disabling NSButton would alter its frozen hover appearance.
@@ -271,10 +325,25 @@ final class MiniPreviewButton: NSButton {
         startTicker(); needsDisplay = true
     }
 
+    func traceEditorMorph(_ code: UInt8, requested: CGFloat = 0, duration: Double = 0) {
+        guard MiniPreviewMotionTrace.active, kind == .edit else { return }
+        MiniPreviewMotionTrace.record(code, owner: UInt(bitPattern: ObjectIdentifier(self)), timer: ticker,
+            phase: editorPhase, start: editorMorph?.start ?? 0,
+            from: editorMorph?.from ?? 0, target: editorMorph?.target ?? 0,
+            requested: requested, width: frame.width, duration: duration)
+    }
+
     private func startTicker() {
-        guard ticker == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
+        guard ticker == nil else { traceEditorMorph(1); return }
+        let owner = UInt(bitPattern: ObjectIdentifier(self))
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            if MiniPreviewMotionTrace.active {
+                MiniPreviewMotionTrace.record(4, owner: owner, timer: timer, alive: self != nil)
+            }
+            self?.tick()
+        }
         RunLoop.main.add(timer, forMode: .common); ticker = timer
+        traceEditorMorph(2)
     }
 
     /// Advance self-drawn motion; the ticker stops once all transitions rest.
@@ -319,6 +388,7 @@ final class MiniPreviewButton: NSButton {
             let width = morph.from + (morph.target - morph.from) * CGFloat(NativeMotion.ease(spec.timing, progress))
             frame = NSRect(x: growsFromTrailingEdge ? rest.maxX - width : rest.minX,
                            y: rest.minY, width: width, height: rest.height)
+            traceEditorMorph(5, requested: width, duration: spec.duration)
             if progress < 1 { running = true } else { editorMorph = nil }
             needsDisplay = true
         }
@@ -330,7 +400,7 @@ final class MiniPreviewButton: NSButton {
             }
             needsDisplay = true
         }
-        if !running { ticker?.invalidate(); ticker = nil }
+        if !running { traceEditorMorph(6); ticker?.invalidate(); ticker = nil }
     }
     override var isHidden: Bool {
         didSet {
@@ -382,6 +452,7 @@ final class MiniPreviewButton: NSButton {
             frame = next
         }
         if let previous { editorJustOpened = previous.editorJustOpened }
+        traceEditorMorph(3, requested: width, duration: morph.duration)
         if showsTooltip { tooltipChanged?(self, true) } else { tooltipChanged?(self, false) }
         needsDisplay = true
     }

@@ -2218,7 +2218,13 @@ final class MiniPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference
         defer { NativeMotion.motionPreference = preference }
-        for reduced in [false, true] {
+        let trace = ProcessInfo.processInfo.environment["CAPTURES_PREVIEW_MOTION_TRACE"] == "1"
+        if trace { MiniPreviewMotionTrace.begin() }
+        defer { if trace { MiniPreviewMotionTrace.finish() } }
+        let variants = trace ? Array(repeating: [false, true], count: 12).flatMap { $0 } : [false, true]
+        for (iteration, reduced) in variants.enumerated() {
+            MiniPreviewMotionTrace.iteration = iteration
+            MiniPreviewMotionTrace.reduced = reduced
             NativeMotion.motionPreference = { reduced }
             let captured = artifact(id: "edited", previewPath: "/edited-preview.png")
             let controller = try presentedController(captured)
@@ -2280,15 +2286,20 @@ final class MiniPreviewTests: XCTestCase {
                 _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
             }
             let enterStarted = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(10)
             controller.setEditorArtifacts(["edited"])
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(11)
             XCTAssertEqual(controller.editorPhase(for: "edited"), present)
             let enteringWidth = try inFlightWidth(started: enterStarted, fullWidth: fullWidth)
             let enterRebuilt = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(12)
             controller.updateSettings(previewSettings())
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(13)
             XCTAssertEqual(try width(), enteringWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its entering badge")
             if reduced { XCTAssertEqual(enteringWidth, fullWidth, accuracy: 0.1) }
             pump(until: enterStarted + 0.30)
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(14)
             if !reduced {
                 XCTAssertLessThan(CACurrentMediaTime(), enterRebuilt + 0.28,
                     "an overdue sample cannot distinguish the original clock from a restarted one")
@@ -2300,16 +2311,21 @@ final class MiniPreviewTests: XCTestCase {
             try write(XCTUnwrap(renderPresentation(panel())),
                       name: "mini-preview-editor-present-rebuild-\(reduced ? "reduced" : "motion").png")
             let leaveStarted = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(15)
             controller.setEditorArtifacts([])
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(16)
             XCTAssertTrue([UInt32(CAPTURES_EDITOR_PHASE_LEAVING), lingering]
                 .contains(controller.editorPhase(for: "edited")))
             let leavingWidth = try inFlightWidth(started: leaveStarted, fullWidth: fullWidth)
             let leaveRebuilt = CACurrentMediaTime()
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(17)
             controller.updateSettings(previewSettings())
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(18)
             XCTAssertEqual(try width(), leavingWidth, accuracy: 1,
                 "rebuilding a survivor must not finish or restart its leaving badge")
             if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
             pump(until: leaveStarted + 0.30)
+            controller.previewView?.editControl(for: "edited")?.traceEditorMorph(19)
             if !reduced {
                 XCTAssertLessThan(CACurrentMediaTime(), leaveRebuilt + 0.28,
                     "an overdue sample cannot distinguish the original clock from a restarted one")
