@@ -5394,7 +5394,7 @@ export function RecordingEditor() {
                 aria-label={previewPlaying ? "Pause preview" : "Play preview"}
                 onClick={() => void togglePreviewPlayback()}
               >
-                <span aria-hidden="true">{previewPlaying ? "Ⅱ" : "▶"}</span>
+                <PauseResumeIcon paused={!previewPlaying} />
               </button>
             )}
             {cropEnabled && (
