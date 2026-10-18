@@ -5,7 +5,8 @@ This guide covers local setup, validation, and packaging. Maintainer release pro
 ## Native Preview packages
 
 Public downloads are pinned to the approved Tauri Preview. Native installer
-packaging is manual-only and does not promote builds to the public channel.
+archives publish automatically for unpublished desktop changes on `main`, but
+do not promote builds to the public channel. Manual rebuilds remain available.
 The native packaging pipeline selects AppKit on macOS and Rust/wgpu on Windows/Linux.
 Ordinary `apps/native` development commands still use isolated development profiles;
 building with `--release` alone does not join the installed channel. Root `npm run build`

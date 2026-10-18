@@ -53,7 +53,7 @@ These links download the **Tauri Preview 2026.10.1104**, pinned while the native
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-The website, installer links and public updater channel stay on this Tauri build. New native builds do not replace them automatically. Native AppKit/wgpu builds remain opt-in development work until behavior, appearance and platform parity are accepted.
+The website, installer links and public updater channel stay on this Tauri build. New native builds do not replace them automatically. Desktop changes merged to `main` automatically build and publish experimental native AppKit/wgpu archives after release checks pass. Installing those archives remains opt-in until behavior, appearance and platform parity are accepted.
 
 Installed copies check captur.es at launch and about every five minutes. Preferences and the tray also offer **Check for Updates**. Downloads from GitHub are signature-verified before installation; screenshot draft-save failure cancels restart. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Dated builds, including experimental native builds, remain in the [build archive](https://github.com/joswayski/captures/releases).
 

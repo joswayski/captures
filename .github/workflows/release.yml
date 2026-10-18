@@ -1,6 +1,8 @@
 name: Captures Preview
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       channel_only:
@@ -13,8 +15,9 @@ on:
         required: false
         type: string
 
-# Native releases are opt-in while parity is unfinished. Public promotion uses
-# the separately approved tag in scripts/preview-release.mjs, never newest-native.
+# Main pushes publish experimental archives when the desktop scope gate finds
+# unpublished changes. Public promotion still uses the separately approved tag
+# in scripts/preview-release.mjs, never newest-native.
 # Omitting queue uses GitHub's default single pending slot.
 concurrency:
   group: captures-preview-main
@@ -59,12 +62,13 @@ jobs:
         id: target
         env:
           REQUESTED_SHA: ${{ inputs.target_sha }}
+          TRIGGER_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
 
           git fetch origin main
-          release_sha="${REQUESTED_SHA:-origin/main}"
+          release_sha="${REQUESTED_SHA:-$TRIGGER_SHA}"
           release_sha="$(git rev-parse "${release_sha}^{commit}")"
           if ! git merge-base --is-ancestor "$release_sha" origin/main; then
             echo "${release_sha} is not a commit on main." >&2
