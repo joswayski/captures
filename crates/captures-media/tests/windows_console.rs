@@ -49,6 +49,20 @@ fn main() {
         .unwrap();
     assert_eq!(visible.status.code(), Some(23));
 
+    for null_stdio in [false, true] {
+        let mut command = Command::new(&executable);
+        command.creation_flags(0x0800_0000).arg("-version");
+        if null_stdio {
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            eprintln!("hidden null stdio: {:?}", command.status());
+        } else {
+            eprintln!("hidden piped stdio: {:?}", command.output());
+        }
+    }
+
     let toolchain = MediaToolchain::new(executable.clone(), executable);
     let input = directory.path().join("recording.mp4");
     let cancel = CancelToken::default();
