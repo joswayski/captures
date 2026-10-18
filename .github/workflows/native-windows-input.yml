@@ -30,13 +30,24 @@ jobs:
           python-version: '3.12'
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.95.0
-          cache-workspaces: apps/native/wgpu
-      - name: Verify Windows shortcut command ownership
-        env:
-          CARGO_PROFILE_TEST_DEBUG: '0'
+          toolchain: 1.94.0
+      - name: Verify fixed test and missing-flag negative control (validation only)
         run: |
-          cargo +1.95.0 test --locked --target-dir apps/native/wgpu/target -p captures-app --lib shortcuts::
+          cargo test --locked -p captures-media --test windows_console -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Fixed test failed' }
+          $path = 'crates/captures-media/src/toolchain.rs'
+          $source = Get-Content -Raw $path
+          $mutated = $source.Replace('command.creation_flags(0x0800_0000)', 'command.creation_flags(0)')
+          if ($mutated -eq $source) { throw 'Mutation did not apply' }
+          Set-Content -NoNewline $path $mutated
+          $output = cargo test --locked -p captures-media --test windows_console -- --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | Write-Output
+          if ($code -eq 0 -or "$output" -notmatch 'ToolUnavailable\("FFmpeg"\)') {
+            throw 'Missing-flag mutation did not fail at the public verify call'
+          }
+          Write-Output 'PASS: fixed public-interface regression passes; removing CREATE_NO_WINDOW fails at verify'
+          exit 0
       - name: Investigate raw-input delivery with registered hotkeys
         if: inputs.probe_raw_input
         run: python apps/native/windows_input_probe.py --allow-input-injection --output native-input/default.json
