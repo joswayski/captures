@@ -2251,8 +2251,8 @@ final class MiniPreviewTests: XCTestCase {
                 // A run-loop deadline does not guarantee a timer delivery.
                 // Observe actual geometry within the original 280 ms morph,
                 // keeping enough distance from both endpoints to catch a snap.
-                // Do not interrupt before 70 ms: a restarted clock must still
-                // differ at the original +300 ms settlement check below.
+                // Leave at least 70 ms between the original completion and a
+                // restarted clock so a late timer can still distinguish them.
                 while CACurrentMediaTime() - started < 0.28 {
                     let sampled = try width()
                     let elapsed = CACurrentMediaTime() - started
@@ -2264,6 +2264,21 @@ final class MiniPreviewTests: XCTestCase {
                 let finalWidth = try width()
                 XCTFail("No intermediate badge frame within 280 ms; width=\(finalWidth), elapsed=\(CACurrentMediaTime() - started)s")
                 throw AppBridgeError.invalidResponse
+            }
+            func waitForSettledWidth(_ target: CGFloat, before deadline: CFTimeInterval) throws {
+                // Reaching a run-loop deadline can leave a due timer unserviced.
+                // Observe its endpoint, not the last frame before that deadline.
+                // Exact equality matters: easing can approach within 0.1 pt of
+                // the endpoint before a wrongly restarted morph has finished.
+                while !reduced, try width() != target, CACurrentMediaTime() < deadline {
+                    pump(until: min(deadline, CACurrentMediaTime() + 0.005))
+                }
+                if !reduced {
+                    XCTAssertLessThan(CACurrentMediaTime(), deadline,
+                        "an overdue sample cannot distinguish the original clock from a restarted one")
+                }
+                XCTAssertEqual(try width(), target,
+                    "the original morph must finish before a restarted 280 ms clock could finish")
             }
             let idle = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
             let present = UInt32(CAPTURES_EDITOR_PHASE_PRESENT)
@@ -2300,12 +2315,7 @@ final class MiniPreviewTests: XCTestCase {
             if reduced { XCTAssertEqual(enteringWidth, fullWidth, accuracy: 0.1) }
             pump(until: enterStarted + 0.30)
             controller.previewView?.editControl(for: "edited")?.traceEditorMorph(14)
-            if !reduced {
-                XCTAssertLessThan(CACurrentMediaTime(), enterRebuilt + 0.28,
-                    "an overdue sample cannot distinguish the original clock from a restarted one")
-            }
-            XCTAssertEqual(try width(), fullWidth, accuracy: 0.1,
-                "entering must finish on the original 280 ms clock")
+            try waitForSettledWidth(fullWidth, before: enterRebuilt + 0.28)
             // Render only after the timing assertions, never between sampling
             // a frame and rebuilding or while checking the original deadline.
             try write(XCTUnwrap(renderPresentation(panel())),
@@ -2326,12 +2336,7 @@ final class MiniPreviewTests: XCTestCase {
             if reduced { XCTAssertEqual(leavingWidth, 28, accuracy: 0.1) }
             pump(until: leaveStarted + 0.30)
             controller.previewView?.editControl(for: "edited")?.traceEditorMorph(19)
-            if !reduced {
-                XCTAssertLessThan(CACurrentMediaTime(), leaveRebuilt + 0.28,
-                    "an overdue sample cannot distinguish the original clock from a restarted one")
-            }
-            XCTAssertEqual(try width(), 28, accuracy: 0.1,
-                "the 280 ms morph ends on the original clock, not 280 ms after rebuilding")
+            try waitForSettledWidth(28, before: leaveRebuilt + 0.28)
             try write(XCTUnwrap(renderPresentation(panel())),
                       name: "mini-preview-editor-leave-rebuild-\(reduced ? "reduced" : "motion").png")
             if !reduced { try waitUntil { controller.editorPhase(for: "edited") == lingering } }

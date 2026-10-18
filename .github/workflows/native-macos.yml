@@ -27,7 +27,7 @@ jobs:
     needs: route
     # Recording's apple-metal bridge needs the macOS 26 SDK, like the desktop CI.
     runs-on: ${{ needs.route.outputs.mac == 'true' && fromJSON('["self-hosted","josemac"]') || 'macos-26' }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -115,6 +115,27 @@ jobs:
         env:
           CAPTURES_TEST_ARTIFACTS: ${{ runner.temp }}/native-pixels
           CAPTURES_PREVIEW_MOTION_TRACE: '1'
+      - name: Reject a restarted preview clock (temporary negative control)
+        if: ${{ !cancelled() }}
+        env:
+          CAPTURES_PREVIEW_MOTION_TRACE: '1'
+        run: |
+          patch=apps/native/macos/clock-restart-negative.patch
+          git apply "$patch"
+          trap 'git apply -R "$patch"' EXIT
+          set +e
+          swift test --package-path apps/native/macos -c release \
+            --filter MiniPreviewTests.testControllerFollowsOpenEditorsThenLeavesAndLingers \
+            > "$RUNNER_TEMP/clock-restart-negative.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/clock-restart-negative.log"
+          test "$status" -ne 0
+          grep -F 'an overdue sample cannot distinguish the original clock from a restarted one' \
+            "$RUNNER_TEMP/clock-restart-negative.log"
+          git apply -R "$patch"
+          trap - EXIT
+          swift build --package-path apps/native/macos -c release
       - name: Verify signed development updates and isolated profile import
         run: |
           cargo test --release --locked -p captures-app --lib updater::

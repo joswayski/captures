@@ -1,0 +1,12 @@
+diff --git a/apps/native/macos/Sources/CapturesNative/MiniPreview.swift b/apps/native/macos/Sources/CapturesNative/MiniPreview.swift
+--- a/apps/native/macos/Sources/CapturesNative/MiniPreview.swift
++++ b/apps/native/macos/Sources/CapturesNative/MiniPreview.swift
+@@ -442,7 +442,7 @@
+             editorMorph = (CACurrentMediaTime(), frame.width, width)
+             startTicker()
+         } else if let previous, let motion = previous.editorMorph, morph.duration > 0 {
+-            editorMorph = motion
++            editorMorph = (CACurrentMediaTime(), previous.frame.width, motion.target)
+             let carriedWidth = previous.frame.width
+             frame = NSRect(x: growsFromTrailingEdge ? rest.maxX - carriedWidth : rest.minX,
+                            y: rest.minY, width: carriedWidth, height: rest.height)
