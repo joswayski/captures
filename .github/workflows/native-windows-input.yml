@@ -39,7 +39,7 @@ jobs:
           $source = Get-Content -Raw $path
           $mutated = $source.Replace('command.creation_flags(0x0800_0000)', 'command.creation_flags(0)')
           if ($mutated -eq $source) { throw 'Mutation did not apply' }
-          Set-Content -NoNewline $path $mutated
+          [System.IO.File]::WriteAllText((Join-Path $PWD $path), $mutated)
           $output = cargo test --locked -p captures-media --test windows_console -- --nocapture 2>&1
           $code = $LASTEXITCODE
           $output | Write-Output
