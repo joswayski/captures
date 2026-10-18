@@ -164,6 +164,7 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
     fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
     "utf8",
   );
+  assert.match(workflow, /on:\n  push:\n    branches: \[main\]\n  workflow_dispatch:/u);
   assert.match(workflow, /should_release: \$\{\{ steps\.scope\.outputs\.should_release \}\}/u);
   assert.match(workflow, /if: needs\.queue\.outputs\.should_release == 'true'/u);
   assert.match(workflow, /desktop-release\.mjs changed/u);
@@ -178,9 +179,64 @@ test("the Preview workflow gates builds and generates scoped notes", () => {
     /concurrency:\n  group: captures-preview-main\n  cancel-in-progress: false\n\n/u,
   );
   assert.doesNotMatch(workflow, /wait-preview-queue|github\.event\.before/u);
-  assert.match(workflow, /release_sha="\$\{REQUESTED_SHA:-origin\/main\}"/u);
+  assert.match(workflow, /TRIGGER_SHA: \$\{\{ github\.sha \}\}/u);
   assert.match(workflow, /BEFORE_SHA: \$\{\{ steps\.baseline\.outputs\.previous_tag \}\}/u);
   assert.match(workflow, /"\$generated_notes" \\\n\s+"\$PREVIOUS_TAG"/u);
+});
+
+test("queued releases stay on their triggering commit while explicit historical rebuilds remain possible", () => {
+  const workflow = readFileSync(
+    fileURLToPath(new URL("../.github/workflows/release.yml", import.meta.url)),
+    "utf8",
+  );
+  const script = workflow
+    .match(
+      /- name: Resolve the main commit to release[\s\S]*?run: \|\n([\s\S]*?)\n      - name:/u,
+    )[1]
+    .replace(/^          /gmu, "");
+  const directory = mkdtempSync(join(tmpdir(), "captures-preview-target-"));
+  const runGit = (...args) =>
+    execFileSync("git", args, {
+      cwd: directory,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  try {
+    runGit("init", "-b", "main");
+    runGit("config", "user.name", "Captures Test");
+    runGit("config", "user.email", "captures@example.com");
+    const commit = (message) => {
+      runGit("commit", "--allow-empty", "-m", message);
+      return runGit("rev-parse", "HEAD");
+    };
+    const historical = commit("Previous release");
+    const trigger = commit("Queued release");
+    const newer = commit("Main moved after the request");
+    runGit("remote", "add", "origin", directory);
+    const output = join(directory, "output");
+    const resolve = (requested = "") => {
+      writeFileSync(output, "");
+      execFileSync("bash", ["-c", script], {
+        cwd: directory,
+        env: {
+          ...process.env,
+          REQUESTED_SHA: requested,
+          TRIGGER_SHA: trigger,
+          GITHUB_OUTPUT: output,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      return readFileSync(output, "utf8");
+    };
+    assert.match(resolve(), new RegExp(`^release_sha=${trigger}\\n`, "u"));
+    assert.equal(runGit("rev-parse", "origin/main"), newer);
+    assert.match(resolve(historical), new RegExp(`^release_sha=${historical}\\n`, "u"));
+    runGit("checkout", "-b", "unmerged", historical);
+    const unmerged = commit("Not approved on main");
+    assert.throws(() => resolve(unmerged), /not a commit on main/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("batches unpublished desktop changes, fixes, and notes across docs-only pushes", () => {

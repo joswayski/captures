@@ -155,7 +155,7 @@ jobs:
             --image-ids "imageTag=$tag" --query 'imageDetails[0].imageDigest' --output text)"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-          printf '### Captures API image ready\n\n`%s@%s`\n\nPublishing does not deploy. Use the infrastructure account activation/deployment procedure.\n' \
+          printf '### Captures API image ready\n\n`%s@%s`\n\nThe next step dispatches infrastructure Ship, which rolls out API before web. Check that step and the Ship run for deployment status.\n' \
             "$image" "$digest" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
         with:

@@ -31,7 +31,7 @@ passing CI or publishing a newer archive is not authorization to promote it.
 
 ## Native Preview packaging and recovery
 
-The native public rollout has been withdrawn pending parity. Manually requested
+The native public rollout has been withdrawn pending parity. Automatically published
 native archives use AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
 and remain experimental; physical acceptance is incomplete. `scripts/native-preview-build.mjs`
 builds the native executable and updater helper, verifies their build identity,
@@ -45,7 +45,7 @@ version/target-bound filenames in their signed Minisign trusted comments; the
 compiled helper authenticates the collected bytes before upload. `latest.json`
 keeps the existing Tauri-compatible platform keys and public signing key, so
 the earlier native rollout could update installed Tauri Previews. That promotion
-is now blocked by the public-channel pin, including after a manual native release.
+is now blocked by the public-channel pin, including after an automatic native release.
 The manifest retains a separately signed `linux-x86_64-deb` artifact for existing
 Tauri Debian installs: their updater cannot install an AppImage fallback. Once on
 native, Debian installs use the manual package update path.
@@ -133,11 +133,16 @@ remain unavailable. Automated checks must not be reported as physical acceptance
 
 ## Release queue
 
-`.github/workflows/release.yml` is manual-only while native parity is unfinished.
-Main pushes continue normal CI but do not request installed native releases.
-Dispatch without `channel_only` to build an experimental dated archive; the
-workflow snapshots `main` once, or rebuilds an explicitly supplied `target_sha`.
-One request runs at a time and a newer pending dispatch replaces the older pending
+`.github/workflows/release.yml` runs on every push to `main`, including merges.
+Its inexpensive scope check compares with the last published dated Preview and
+skips app builds when there are no unpublished desktop changes. Website/API-only
+pushes do not rebuild an already-published desktop; a later push can still collect
+desktop changes left unpublished by a failed or superseded request.
+
+Automatic builds use the triggering commit, not whatever `main` becomes while
+the request waits. Manual dispatch without `channel_only` forces a rebuild of
+the dispatch commit, or an explicitly supplied `target_sha` on main's history.
+One request runs at a time and a newer pending request replaces the older pending
 request. Channel-only dispatches share this lock and skip all app builds.
 
 Archive builds run the frontend and Rust quality gates, then build macOS

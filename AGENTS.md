@@ -5,7 +5,7 @@
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
 - Treat dated Preview builds as experimental. Do not publish a stable release until the maintainer explicitly starts that channel.
-- Public downloads and updates are pinned to the approved Tauri tag in `scripts/preview-release.mjs`. Native builds are opt-in until the maintainer accepts parity; passing CI does not authorize promotion. Match Tauri behavior and visuals, without adding unrequested controls such as Share.
+- Public downloads and updates are pinned to the approved Tauri tag in `scripts/preview-release.mjs`. Native archives publish automatically, but installing them remains opt-in until the maintainer accepts parity; passing CI does not authorize promotion. Match Tauri behavior and visuals, without adding unrequested controls such as Share.
 
 ## Repository map
 
@@ -57,9 +57,9 @@
 
 ## Shipping
 
-`main` is production. A push to `main` reaches users within minutes, with no
-pull request, review or deploy button in between. Speed beats ceremony: there
-are no real users yet, so ship small, watch it land, and fix forward.
+`main` automatically deploys the web/API and publishes experimental desktop
+archives when desktop changes are unpublished. The public desktop channel stays
+on its approved tag. Ship small, watch it land, and fix forward.
 
 Before you push:
 
@@ -116,9 +116,13 @@ Push and deploy:
   Don't run `deploy-captures*.yml` for routine changes.
 - Infrastructure or secrets the change needs go to `joswayski/infrastructure`
   first, following that repository's guidance.
-- Desktop apps: `release.yml` (Captures Preview) stays manual. Dispatch it, or
-  change the approved public tag in `scripts/preview-release.mjs`, only when
-  the maintainer asks (see `docs/releases.md`).
+- Desktop apps: `release.yml` (Captures Preview) runs on main pushes, skips builds
+  without unpublished desktop changes, and publishes dated experimental archives
+  after its quality, signing and complete-package gates. It pins the triggering
+  commit; the newest pending request replaces older pending requests. Manual
+  dispatch remains for rebuilds and channel refreshes. Change the approved public
+  tag in `scripts/preview-release.mjs` only when the maintainer explicitly accepts
+  parity; automatic archives do not promote it (see `docs/releases.md`).
 - Watch it land. `SHA` is your pushed commit:
   - its runs: `gh run list --repo joswayski/captures --commit "$SHA"`, then
     `gh run watch <id> --repo joswayski/captures --exit-status`;
