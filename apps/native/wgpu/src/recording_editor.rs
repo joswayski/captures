@@ -2706,30 +2706,13 @@ fn show_overlay_play(
             ),
         );
         let ink = tokens.color("theme-accent-ink").gamma_multiply(opacity);
-        let glyph = tokens.number("s-4") + 1.;
-        if playing {
-            for offset in [-glyph / 2., glyph / 2.] {
-                painter.rect_filled(
-                    egui::Rect::from_center_size(
-                        center + egui::vec2(offset * 0.7, 0.),
-                        egui::vec2(glyph * 0.45, glyph * 1.8),
-                    ),
-                    1.,
-                    ink,
-                );
-            }
-        } else {
-            let tip = center + egui::vec2(glyph + 1., 0.);
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    center + egui::vec2(-glyph * 0.7 + 1., -glyph),
-                    tip,
-                    center + egui::vec2(-glyph * 0.7 + 1., glyph),
-                ],
-                ink,
-                egui::Stroke::NONE,
-            ));
-        }
+        crate::capture_controls::paint_icon(
+            painter,
+            if playing { "pause" } else { "resume" },
+            egui::Rect::from_center_size(center, egui::Vec2::splat(tokens.number("s-8"))),
+            2.,
+            ink,
+        );
         if response.has_focus() {
             crate::primitives::focus_indicated(ui.ctx());
             painter.circle_stroke(
