@@ -2414,9 +2414,6 @@ def main():
             shot(editor, "shape-active-created")
             pixel("shape-active-created", 14, rail_point("shapes")[1], (255, 202, 40))
             move_pixels = [(350, 230, (255, 59, 92)), (300, 120, (40, 110, 166))]
-            shape_gesture((320, 160), (357, 191), capture="shape-active-moving-cancel", cancel=True,
-                          held_pixels=move_pixels, restored_pixels=[
-                              (350, 230, (40, 110, 166)), (300, 120, (255, 59, 92))])
             shape_gesture((320, 160), (357, 191), capture="shape-active-moving", held_pixels=move_pixels)
             save_until(lambda: rectangle_is(297, 141, 417, 241), "active Rectangle moves its body")
             assert layers()[-1]["id"] == rectangle_id
@@ -2432,9 +2429,6 @@ def main():
             # becomes 150x130. Endpoints lie 5px inside that original box.
             resized = (272 + 5 * 150 / 130, 116 + 5 * 130 / 110,
                        272 + 125 * 150 / 130, 116 + 105 * 130 / 110)
-            shape_gesture((292, 136), (272, 116), capture="shape-active-resizing-cancel", cancel=True,
-                          held_pixels=[(283, 128, (255, 59, 92))],
-                          restored_pixels=[(283, 128, (40, 110, 166))])
             shape_gesture((292, 136), (272, 116), capture="shape-active-resizing",
                           held_pixels=[(283, 128, (255, 59, 92))])
             save_until(lambda: rectangle_is(*resized), "active Rectangle resizes")
@@ -2447,12 +2441,7 @@ def main():
 
             # Center (347,181), padded top near 117, grip 28px above it.
             # The release vector is (31,-73), independently deriving the angle.
-            before = draft_bytes()
             rotation_pixels = [(330, 113, (255, 59, 92)), (280, 127, (40, 110, 166))]
-            shape_gesture((347, 88), (378, 108), capture="shape-active-rotation-cancel", cancel=True,
-                          held_pixels=rotation_pixels, restored_pixels=[
-                              (330, 113, (40, 110, 166)), (280, 127, (255, 59, 92))])
-            assert draft_bytes() == before
             shape_gesture((347, 88), (378, 108), capture="shape-active-rotating", held_pixels=rotation_pixels)
             angle = math.atan2(31, 73)
             save_layers(lambda values: len(values) == 2 and math.isclose(
@@ -2478,9 +2467,6 @@ def main():
             draw_tool("line")
             shape_gesture((180, 290), (580, 290))
             line = save_layers(lambda values: len(values) == 3, "fresh line")[-1]
-            shape_gesture((380, 290), (380, 250), capture="shape-active-curve-cancel", cancel=True,
-                          held_pixels=[(330, 270, (255, 59, 92))],
-                          restored_pixels=[(330, 270, (40, 110, 166))])
             shape_gesture((380, 290), (380, 250), capture="shape-active-curving",
                           held_pixels=[(330, 270, (255, 59, 92))])
             curved = save_layers(lambda values: len(values) == 3 and len(values[-1]["controls"]) == 3,
@@ -2504,6 +2490,42 @@ def main():
             assert layers() == saved
             run("xdotool", "windowsize", "--sync", editor, "760", "540")
             shot(editor, "shape-active-reopened-minimum")
+
+            # Escape ends the selection, not the drawing tool. Each cancellation
+            # therefore needs a fresh drawing setup: a row click would switch to
+            # Select and no longer exercise transforms with Rectangle/Line active.
+            for name, start, end, held, restored in [
+                ("moving", (320, 160), (357, 191), move_pixels,
+                 [(350, 230, (40, 110, 166)), (300, 120, (255, 59, 92))]),
+                ("resizing", (292, 136), (272, 116), [(283, 128, (255, 59, 92))],
+                 [(283, 128, (40, 110, 166))]),
+                ("rotation", (347, 88), (378, 108), rotation_pixels,
+                 [(330, 113, (40, 110, 166)), (280, 127, (255, 59, 92))]),
+                ("curve", (380, 290), (380, 250), [(330, 270, (255, 59, 92))],
+                 [(330, 270, (40, 110, 166))]),
+            ]:
+                editor = discard_draft(f"fresh {name} cancellation")
+                resize_editor(1200, 701)
+                draw_tool("line" if name == "curve" else "rectangle")
+                if name == "curve":
+                    shape_gesture((180, 290), (580, 290))
+                else:
+                    shape_gesture((260, 110), (380, 210))
+                save_layers(lambda values: len(values) == 2, f"fresh {name} target")
+                if name in ("resizing", "rotation"):
+                    shape_gesture((320, 160), (357, 191))
+                    save_until(lambda: rectangle_is(297, 141, 417, 241), f"{name} target moved")
+                if name == "rotation":
+                    shape_gesture((292, 136), (272, 116))
+                    save_until(lambda: rectangle_is(*resized), "rotation target resized")
+                capture = f"shape-active-{name}-cancel"
+                shape_gesture(start, end, capture=capture, cancel=True,
+                              held_pixels=held, restored_pixels=restored)
+                pixel(capture + "-restored", 14, rail_point("shapes")[1], (255, 202, 40))
+                before = draft_bytes()
+                run("xdotool", "key", "Delete", "ctrl+d", "Right", "sleep", "1")
+                assert draft_bytes() == before, f"{name}: Escape left a layer shortcut target"
+
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
             wait(lambda: app.poll() is not None, "active-shape suite quits")
@@ -2515,7 +2537,8 @@ def main():
                            "held-move-resize-rotate-curve-pixels", "held-draft-bytes-unchanged",
                            "all-four-cancellations-restore-pixels", "minimum-held-curve-pixels",
                            "empty-space-new-shape", "active-line-starter", "curve-pixels",
-                           "retained-active-tool", "exact-draft-reopen", "minimum-layout", "original-unchanged"],
+                           "retained-active-tool", "cancelled-shapes-deselected",
+                           "exact-draft-reopen", "minimum-layout", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native active shapes: move, resize, rotate, cancel, curve, undo, pixels, draft")
             return
