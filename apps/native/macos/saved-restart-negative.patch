@@ -1,0 +1,12 @@
+diff --git a/apps/native/macos/Sources/CapturesNative/MiniPreview.swift b/apps/native/macos/Sources/CapturesNative/MiniPreview.swift
+--- a/apps/native/macos/Sources/CapturesNative/MiniPreview.swift
++++ b/apps/native/macos/Sources/CapturesNative/MiniPreview.swift
+@@ -1270,7 +1270,7 @@
+         setStatus(previous.status.stringValue, detail: previous.status.toolTip)
+         if let since = previous.savedFeedbackSince {
+             MiniPreviewSavedTrace.record(4, owner: self, previous: previous, since: since)
+-            showSavedFeedback(startedAgo: CACurrentMediaTime() - since)
++            showSavedFeedback()
+         }
+     }
+ 

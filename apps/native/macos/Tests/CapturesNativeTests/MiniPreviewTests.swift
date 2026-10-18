@@ -1123,7 +1123,13 @@ final class MiniPreviewTests: XCTestCase {
         try write(render(panel), name: "mini-preview-saved-after-arrival.png")
         MiniPreviewSavedTrace.record(14, owner: card, confirming: button.title == "Saved")
         MiniPreviewSavedTrace.record(15, owner: card, confirming: button.title == "Saved")
-        RunLoop.current.run(until: confirmedAt.addingTimeInterval(1.1))
+        // A run-loop return does not guarantee main-queue expiry delivery.
+        // Observe the label within the existing bound that rejects a restart.
+        let expiryProbeDeadline = confirmedAt.addingTimeInterval(1.25)
+        while button.title != "Show in Folder", Date() < expiryProbeDeadline {
+            _ = RunLoop.current.run(mode: .default,
+                before: min(expiryProbeDeadline, Date().addingTimeInterval(0.005)))
+        }
         MiniPreviewSavedTrace.record(16, owner: card, confirming: button.title == "Saved")
         XCTAssertLessThan(Date().timeIntervalSince(confirmedAt), 1.25,
             "the expiry probe must precede a wrongly restarted 1.35-second deadline")
