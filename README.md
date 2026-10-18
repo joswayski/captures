@@ -959,8 +959,9 @@ Custom shadows and pinned-font named styles are connected, including style/size
 choices for new text; new text also takes the drawing defaults' Drop shadow, as in
 the shipping editor. Font import and physical input/IME/accessibility acceptance
 remain open.
-Like the shipping app, native Capture History shows its header, filters and grid;
-captures start from the tray, shortcuts and New Capture menu. Wayland additionally
+Native Capture History shows its header, filters and grid. **Back to Preferences**
+opens or restores Preferences without closing History, including when History is
+empty. Captures start from the tray, shortcuts and New Capture menu. Wayland additionally
 offers **Take screenshot…**, **Record display…** and **Record window…** because a tray or global shortcuts may be unavailable. A
 denied capture opens the native permission recovery: Restart & Retry on macOS, or a
 **Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS

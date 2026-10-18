@@ -988,7 +988,8 @@ This is not hardware or physical multi-display acceptance.
 ## Capture History
 
 The live workspace renders History like the shipping `CaptureHistory` window:
-an "On this device" / **Capture History** header with the 30-day lede, counted
+an always-available ghost **Back to Preferences** button above the **Capture History**
+title and 30-day lede, counted
 All/Screenshots/Video/GIF filter pills (hidden while History is empty), the
 **Interrupted recordings** card, and an auto-fill grid of cards (minimum 252 pt,
 16 pt gaps, 168 pt thumbnail). Each card shows the thumbnail (`contain` fit),
@@ -1001,6 +1002,10 @@ click. Otherwise the trash control arms **Delete forever** for four seconds and
 deletes on the second click. Secondary click lists the card's commands, including
 **Copy image**, **Save image** and (once exported) **Show in Folder** for screenshots. Loading, empty ("No captures yet") and load/delete
 error states use the shipping copy.
+
+Back to Preferences opens or focuses/unminimizes the separate Preferences window
+without closing History or selecting a particular setting. It remains available
+while History loads and when it is empty; it replaces the old device eyebrow.
 
 Copy, card details, actions, the missing-media rule and grid metrics come from
 `captures_app::history_view`; AppKit reads them through the `history_copy`,

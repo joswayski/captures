@@ -97,6 +97,7 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         // and `m4 6 4 4 4-4`, scaled to the 24-unit grid).
         "chevron-up" => &["m6 15 6-6 6 6"],
         "chevron-down" => &["m6 9 6 6 6-6"],
+        "chevron-left" => &["m14 6-6 6 6 6"],
         // Screenshot editor chrome (`EditorIcon` in `ScreenshotEditor.tsx`).
         "editor-chevron-down" => &["m7 9 5 5 5-5"],
         "editor-chevron-up" => &["m7 15 5-5 5 5"],
@@ -666,6 +667,7 @@ mod tests {
             "preview-overflow-down",
             "chevron-up",
             "chevron-down",
+            "chevron-left",
             "editor-chevron-up",
             "editor-chevron-down",
             "align-left",

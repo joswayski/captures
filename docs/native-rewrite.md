@@ -27,6 +27,17 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Native History replaces “On this device” with the shipping ghost **Back to
+Preferences** button and shared left-chevron path. It stays available in loading
+and empty History, opens or focuses/unminimizes the separate Preferences window,
+and leaves History open. AppKit reuses `showPreferences(revealing: nil)`; wgpu
+reuses its Preferences viewport without changing the selected settings section.
+The AppKit History tests cover copy, minimum-width containment and keyboard order;
+the X11 History smoke covers real navigation at normal/minimum sizes in light/dark,
+same-window restoration, and unchanged History/source bytes. macOS and Windows
+execution, Wayland navigation and physical window-manager acceptance remain
+unverified in the Linux orb. This slice does not promote a native download.
+
 Windows native frozen selectors now use the shipping cursor-preview policy for
 region/window/display selection and screenshots during recording. The preview
 includes the originally sampled system cursor only when screenshot cursor
