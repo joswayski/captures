@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { isTauriPreview } from "../shared/preview-runtime.ts";
 
 import { comparePreviewVersions, encodedPreviewVersion } from "./preview-release.mjs";
 
@@ -8,7 +9,7 @@ export function previewChangelog(releases, throughTag) {
   if (throughTag !== undefined && !through) throw new Error("invalid Preview changelog tag");
   return releases
     .flatMap((release) => {
-      if (release?.draft || !release?.prerelease) return [];
+      if (release?.draft || !release?.prerelease || !isTauriPreview(release)) return [];
       const encoded = encodedPreviewVersion(release.tag_name);
       if (!encoded) return [];
       if (through && comparePreviewVersions(encoded.order, through.order) > 0) return [];

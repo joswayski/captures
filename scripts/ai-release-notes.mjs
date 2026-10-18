@@ -76,10 +76,8 @@ function git(cwd, args) {
   }).trim();
 }
 
-function runtimePath(path, native) {
-  const roots = native
-    ? ["apps/native/macos/Sources/", "apps/native/wgpu/src/", "crates/", "shared/"]
-    : ["apps/desktop/ui/src/", "apps/desktop/src-tauri/src/", "crates/", "shared/"];
+function runtimePath(path) {
+  const roots = ["apps/desktop/ui/src/", "apps/desktop/src-tauri/src/", "crates/", "shared/"];
   return (
     roots.some((root) => path.startsWith(root)) &&
     /\.(?:rs|swift|m|mm|h|c|cpp|tsx?|jsx?|css|svg)$/u.test(path) &&
@@ -94,8 +92,6 @@ function evidence(before, after, cwd) {
   if (!before || !/^[0-9a-f]{40}$/u.test(after)) throw new Error("release range unavailable");
   const base = git(cwd, ["rev-parse", "--verify", `${before}^{commit}`]);
   git(cwd, ["merge-base", "--is-ancestor", base, after]);
-  const native =
-    git(cwd, ["ls-tree", "--name-only", after, "scripts/native-preview-build.mjs"]) !== "";
   const commits = [];
   const range = git(cwd, ["rev-list", "--first-parent", "--reverse", `${base}..${after}`]);
   for (const sha of range.split("\n").filter(Boolean)) {
@@ -109,7 +105,7 @@ function evidence(before, after, cwd) {
       continue;
     const paths = git(cwd, ["diff", "--name-only", "-z", `${sha}^1`, sha])
       .split("\0")
-      .filter((path) => runtimePath(path, native));
+      .filter(runtimePath);
     if (!paths.length) continue;
     const diff = git(cwd, [
       "diff",
@@ -124,7 +120,7 @@ function evidence(before, after, cwd) {
     ]);
     commits.push({ commit: sha, subject, body: body.join("\n"), paths, diff });
   }
-  return { runtime: native ? "native (AppKit on macOS, wgpu on Windows/Linux)" : "Tauri", commits };
+  return { runtime: "Tauri", commits };
 }
 
 function requestBody(source, env) {

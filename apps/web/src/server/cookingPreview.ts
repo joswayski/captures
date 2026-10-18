@@ -4,6 +4,7 @@ import {
   type CookingChange,
   type GitHubWorkflowRun,
 } from "../cookingPreview.ts";
+import { isTauriPreview } from "../../../../shared/preview-runtime.ts";
 
 const REPO_API = "https://api.github.com/repos/joswayski/captures";
 const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
@@ -16,6 +17,7 @@ type GitHubRelease = {
   prerelease: boolean;
   tag_name: string;
   target_commitish: string;
+  assets?: { name: string; state?: string }[];
 };
 
 type GitHubWorkflowRuns = {
@@ -67,7 +69,7 @@ async function latestPublishedPreviewCommit(): Promise<string | null> {
   let best: { version: number[]; tag: string; commitish: string } | null = null;
 
   for (const release of releases) {
-    if (release.draft || !release.prerelease) continue;
+    if (release.draft || !release.prerelease || !isTauriPreview(release)) continue;
     const version = previewVersion(release.tag_name);
     if (!version) continue;
     if (!best || comparePreviewVersions(version, best.version) > 0) {
