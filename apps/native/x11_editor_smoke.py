@@ -287,8 +287,9 @@ def main():
             return None
         try:
             return draft.read_bytes()
-        except FileNotFoundError:
-            # Undoing to the original capture can remove the draft while polling.
+        except (FileNotFoundError, NotADirectoryError):
+            # Undo removes the draft; the save-failure fixture blocks its parent
+            # with a file. Neither leaves a manifest to read, as with exists().
             return None
 
     def document_size():
