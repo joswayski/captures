@@ -1107,7 +1107,13 @@ final class MiniPreviewTests: XCTestCase {
         let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
         card.mouseEntered(with: try hoverEvent(for: panel))
         try write(render(panel), name: "mini-preview-saved-after-arrival.png")
-        RunLoop.current.run(until: confirmedAt.addingTimeInterval(1.1))
+        // A run-loop return does not guarantee main-queue expiry delivery.
+        // Observe the label within the existing bound that rejects a restart.
+        let expiryProbeDeadline = confirmedAt.addingTimeInterval(1.25)
+        while button.title != "Show in Folder", Date() < expiryProbeDeadline {
+            _ = RunLoop.current.run(mode: .default,
+                before: min(expiryProbeDeadline, Date().addingTimeInterval(0.005)))
+        }
         XCTAssertLessThan(Date().timeIntervalSince(confirmedAt), 1.25,
             "the expiry probe must precede a wrongly restarted 1.35-second deadline")
         XCTAssertEqual(button.title, "Show in Folder", "a rebuild must not restart the one-second deadline")
