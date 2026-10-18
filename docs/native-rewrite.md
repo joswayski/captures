@@ -3536,8 +3536,12 @@ through the `captures_preview_editor_*`, `_hover_lock_v1`,
   the morph, then observes an intermediate width between 70 and 280 ms instead
   of assuming a timer fired before a fixed 70 ms run-loop deadline. It rebuilds
   immediately without intervening display/flush work and checks both directions
-  against the original 280 ms clock. Missing intermediate frames and late samples
-  that cannot distinguish a restarted clock fail rather than bypass continuity.
+  against the original 280 ms clock. Settlement observes the exact delivered
+  endpoint before a restarted clock could finish, rather than assuming the last
+  timer fired by the original +300 ms run-loop deadline. The hosted diagnostic
+  reproduced stale endpoint samples with preserved clocks and valid timers
+  49–77 ms overdue. Missing intermediate frames and samples too late to
+  distinguish a restarted clock still fail rather than bypass continuity.
   Rendering follows the timing assertions. This checks an already-serviced
   preview, not cold-presentation latency or animation smoothness; servicing idle
   alone did not reliably prevent the hosted test's delayed first timer delivery.
