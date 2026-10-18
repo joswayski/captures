@@ -2060,6 +2060,7 @@ def main():
             assert draft_bytes() == before
             run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "keyup", "Shift_L")
             assert draft_bytes() == before
+            layer_click(0)  # Escape deselects; restore the grip before a new rotation.
             drag((558, 117), (658, 159), shift=True)
             angle = 37 * math.pi / 180
             save_layers(lambda values: math.isclose(values[0].get("rotation", 0), angle, abs_tol=1e-12),
@@ -4714,6 +4715,7 @@ def main():
         shot(editor, "layer-rotation-free-transient")
         run("xdotool", "key", "Escape", "sleep", ".2", "mouseup", "1", "sleep", ".2")
         assert draft_bytes() == rotation_before
+        layer_click(0)  # Escape deselects; restore the grip before a new rotation.
         # Vector (0,-69) to (39,-79) is 26.27 degrees, snapping to 30 degrees.
         drag((558, 420), (597, 410), shift=True)
         rotated = save_layers(
