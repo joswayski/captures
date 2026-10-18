@@ -282,9 +282,19 @@ def main():
         geometry = run("xdotool", "getwindowgeometry", "--shell", window).decode()
         return int(re.search(r"^WIDTH=(\d+)$", geometry, re.MULTILINE).group(1))
 
+    def draft_bytes():
+        if draft is None:
+            return None
+        try:
+            return draft.read_bytes()
+        except FileNotFoundError:
+            # Undoing to the original capture can remove the draft while polling.
+            return None
+
     def document_size():
-        if draft is not None and draft.exists():
-            document = json.loads(draft.read_text())["document"]
+        data = draft_bytes()
+        if data is not None:
+            document = json.loads(data)["document"]
             return document["width"], document["height"]
         return 640, 360
 
@@ -1060,11 +1070,12 @@ def main():
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
 
         def saved(width, height, x, y):
-            if not draft.exists():
+            data = draft_bytes()
+            if data is None:
                 # No draft means the original capture: autosave drops a draft
                 # whose document is back at the capture, as shipping does.
                 return (width, height, x, y) == (640, 360, 0, 0)
-            document = json.loads(draft.read_text())["document"]
+            document = json.loads(data)["document"]
             layer = document["elements"][0]
             return (document["width"], document["height"], layer["x"], layer["y"]) == (width, height, x, y)
 
@@ -1150,12 +1161,9 @@ def main():
         ORIGINAL_LAYERS = [{"kind": "image", "id": "capture-background", "source": "background",
                             "src": "draft-asset:original-capture", "locked": True, "visible": True}]
 
-        def draft_bytes():
-            # None while no draft exists (the document is the original capture).
-            return draft.read_bytes() if draft.exists() else None
-
         def layers():
-            return json.loads(draft.read_text())["document"]["elements"] if draft.exists() else ORIGINAL_LAYERS
+            data = draft_bytes()
+            return json.loads(data)["document"]["elements"] if data is not None else ORIGINAL_LAYERS
 
         def save_layers(predicate, description):
             save_until(lambda: predicate(layers()), description)
