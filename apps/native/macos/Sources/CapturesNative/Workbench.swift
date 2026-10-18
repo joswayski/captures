@@ -117,8 +117,9 @@ final class CaptureButton: NSButton {
     /// Shipping quiet editor chrome (header icon buttons, `.screenshot-canvas-tool`):
     /// no fill until hover, muted ink that lifts to text, `.selected` for an active state.
     var quiet = false { didSet { updateTrackingAreas(); needsDisplay = true } }
-    /// Overrides for quiet chrome: icon side, text size and corner radius.
+    /// Overrides for shipping chrome: icon size/stroke, text size and corner radius.
     var iconSide: CGFloat? { didSet { needsDisplay = true } }
+    var iconStrokeWidth: CGFloat = 1.8 { didSet { needsDisplay = true } }
     var textSize: CGFloat? { didSet { needsDisplay = true } }
     var cornerRadius: CGFloat? { didSet { needsDisplay = true } }
     /// Canvas background chip drawn in place of an icon; `.clear` is transparent.
@@ -366,7 +367,7 @@ final class CaptureButton: NSButton {
         color.setStroke(); color.setFill()
         switch icon {
         case .shipping(let name):
-            ShippingIcons.stroke(name, in: rect)
+            ShippingIcons.stroke(name, in: rect, width: iconStrokeWidth)
         case .stopSquare:
             tokens.color(isEnabled ? "theme-signal" : "glass-text-subtle").setFill()
             NSBezierPath(roundedRect: NSRect(x: rect.midX - 5.5, y: rect.midY - 5.5, width: 11, height: 11),

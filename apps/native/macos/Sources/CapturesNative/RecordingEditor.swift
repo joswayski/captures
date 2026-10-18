@@ -1457,6 +1457,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         playbackButton.primary = true; playbackButton.circular = true
         playbackButton.iconOnly = true; playbackButton.icon = .shipping("resume")
+        playbackButton.iconSide = tokens.number("s-8"); playbackButton.iconStrokeWidth = 2
         playbackButton.setAccessibilityLabel(playbackSoundEnabled
             ? "Play recording preview with sound" : "Play silent recording preview")
         playbackLoop.tokens = tokens; playbackSound.tokens = tokens
