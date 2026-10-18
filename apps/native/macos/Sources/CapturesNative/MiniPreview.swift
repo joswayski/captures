@@ -2756,6 +2756,9 @@ final class MiniPreviewController {
 
     /// Whether exits or a flight are still playing before the stack rebuilds.
     var isTransitioning: Bool { viewTransition != nil }
+    var diagnosticTransitionDeadline: CFTimeInterval { viewTransitionDeadline }
+    private(set) var diagnosticTransitionFiredAt: CFTimeInterval = 0
+    private(set) var diagnosticTransitionReturnedAt: CFTimeInterval = 0
 
     /// Rebuild once every running exit or flight has ended.
     private func scheduleRebuild(after seconds: Double) {
@@ -2765,8 +2768,10 @@ final class MiniPreviewController {
         viewTransitionDeadline = deadline
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.diagnosticTransitionFiredAt = CACurrentMediaTime()
             self.viewTransition = nil
             self.finishView()
+            self.diagnosticTransitionReturnedAt = CACurrentMediaTime()
         }
         viewTransition = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)

@@ -1259,6 +1259,22 @@ final class MiniPreviewTests: XCTestCase {
                 NSImage(cgImage: PreviewView.fixtureImage(scale: 1), size: NSSize(width: 284, height: 160))
             })
             defer { controller.close() }
+            var samples: [(String, CFTimeInterval, Bool, CFTimeInterval)] = []
+            samples.reserveCapacity(16)
+            func mark(_ stage: String) {
+                if ProcessInfo.processInfo.environment["CAPTURES_PREVIEW_MOTION_TRACE"] == "1" {
+                    samples.append((stage, CACurrentMediaTime(), controller.isTransitioning,
+                                    controller.diagnosticTransitionDeadline))
+                }
+            }
+            defer {
+                for (stage, time, active, deadline) in samples {
+                    print("ARRIVAL_TRACE placement=\(placement) stage=\(stage) time=\(time) active=\(active) deadline=\(deadline)")
+                }
+                if !samples.isEmpty {
+                    print("ARRIVAL_TRACE placement=\(placement) fired=\(controller.diagnosticTransitionFiredAt) returned=\(controller.diagnosticTransitionReturnedAt)")
+                }
+            }
             let settings = MiniPreviewSettings(enabled: true, placement: placement, includeInCaptures: false)
             func capture(_ id: String) throws {
                 let generation = try XCTUnwrap(controller.beginCapture(settings: settings))
@@ -1270,11 +1286,14 @@ final class MiniPreviewTests: XCTestCase {
             controller.recordCopyResult(artifactID: "older", succeeded: false)
             XCTAssertEqual(controller.dismiss("dust", exit: .dust), 2.9, accuracy: 0.01)
             let started = CACurrentMediaTime()
+            mark("started")
             XCTAssertGreaterThan(controller.dismiss("close"), 0)
             let chips = try XCTUnwrap(controller.previewView).dustChipCount
             XCTAssertGreaterThan(chips, 0, "exercise real dust, not the fallback")
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            mark("first-capture-before")
             try capture("incoming")
+            mark("first-capture-after")
             let view = try XCTUnwrap(controller.previewView)
             XCTAssertEqual(view.renderedArtifactIDs, ["older", "dust", "close", "incoming"])
             XCTAssertEqual(view.dustChipCount, chips, "the existing chips must survive the arrival")
@@ -1293,15 +1312,21 @@ final class MiniPreviewTests: XCTestCase {
                     XCTAssertFalse(button.canBecomeKeyView, "Tab must skip every exiting control")
                 }
             }
+            mark("model-render-before")
             try write(render(try XCTUnwrap(view.window as? MiniPreviewPanel)),
                       name: "mini-preview-overlap-arrival-\(placement).png")
+            mark("model-render-after")
             if let bitmap = try renderPresentation(try XCTUnwrap(view.window as? MiniPreviewPanel)) {
                 try write(bitmap, name: "mini-preview-overlap-presentation-\(placement).png")
             }
+            mark("presentation-render-after")
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            mark("second-capture-before")
             try capture("again")
+            mark("second-capture-after")
             XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, chips)
             try waitUntil { !controller.isTransitioning }
+            mark("settled")
             XCTAssertLessThan(CACurrentMediaTime() - started, 3.4, "arrivals must not restart a 2.9 s exit")
             XCTAssertEqual(controller.presentedArtifactIDs, ["older", "incoming", "again"])
             let final = try XCTUnwrap(controller.previewView)
