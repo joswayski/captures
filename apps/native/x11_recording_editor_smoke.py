@@ -688,7 +688,7 @@ def main():
             return
         time.sleep(1)
         shot(root, "history")
-        click(root, 107, 432)  # First History card: Edit, below the header and filters.
+        click(root, 107, 453)  # First History card: Edit, below navigation, header and filters.
         editor = wait(lambda: windows("Captures Editor"), "recording editor opens")[0]
         run("xdotool", "windowmove", "--sync", editor, "80", "60")
         run("xdotool", "windowsize", "--sync", editor, "960", "900", "sleep", ".5")
@@ -854,7 +854,7 @@ def main():
             window_artifacts.pop(editor, None)
             assert not exported(), "closing initialized defaults must not save a copy"
             assert source.read_bytes() == original and metadata.read_bytes() == original_metadata
-            click(root, 107, 432)
+            click(root, 107, 453)
             editor = wait(lambda: windows("Captures Editor"), "default-only editor reopens")[0]
             run("xdotool", "windowmove", "--sync", editor, "80", "60",
                 "windowsize", "--sync", editor, "960", "1100", "sleep", ".5")
