@@ -10,7 +10,14 @@ final class MiniPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let preference = NativeMotion.motionPreference
         defer { NativeMotion.motionPreference = preference }
-        for reduced in [false, true] {
+        let tracing = ProcessInfo.processInfo.environment["CAPTURES_BUTTON_POSE_TRACE"] == "1"
+        var samples: [(Int, Bool, String, Double, Double, Double, Double)] = []
+        defer {
+            for (iteration, reduced, phase, time, red, scale, y) in samples {
+                print("BUTTON_POSE", iteration, reduced, phase, time, red, scale, y)
+            }
+        }
+        for (iteration, reduced) in (0..<(tracing ? 12 : 1)).flatMap({ _ in [false, true] }).enumerated() {
             NativeMotion.motionPreference = { reduced }
             var copies = 0
             let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.white)],
@@ -24,11 +31,26 @@ final class MiniPreviewTests: XCTestCase {
                 .first { $0.kind == .copy })
             let frame = button.frame
             let rest = try XCTUnwrap(tokens.color("glass-strong").usingColorSpace(.sRGB))
+            let start = CACurrentMediaTime()
+            func record(_ phase: String) {
+                guard tracing, let layer = button.layer?.presentation() else { return }
+                let t = layer.transform
+                let y = (layer.bounds.midY - layer.anchorPoint.y * layer.bounds.height) * t.m22
+                    + t.m42 + layer.position.y
+                samples.append((iteration, reduced, phase, CACurrentMediaTime() - start,
+                    Double(button.chromeBackground.usingColorSpace(.sRGB)!.redComponent),
+                    Double(t.m11), Double(y - frame.midY)))
+            }
+            record("before-hover")
             button.mouseEntered(with: event)
+            record("after-hover")
             try waitUntil { abs(button.chromeBackground.usingColorSpace(.sRGB)!.redComponent
                 - min(1, rest.redComponent * 1.12)) < 0.001 }
-            func assertPose(scale: Double, dy: Double) throws {
+            record("brightness-ready")
+            func assertPose(scale: Double, dy: Double, phase: String) throws {
+                record(phase + "-before-render")
                 _ = try renderPresentation(panel)
+                record(phase + "-after-render")
                 let layer = try XCTUnwrap(button.layer?.presentation())
                 XCTAssertEqual(layer.transform.m11, CGFloat(scale), accuracy: 0.001)
                 let down: CGFloat = card.isFlipped ? 1 : -1
@@ -37,18 +59,19 @@ final class MiniPreviewTests: XCTestCase {
                 let t = layer.transform
                 let transformedY = (centre.y - layer.anchorPoint.y * layer.bounds.height) * t.m22
                     + t.m42 + layer.position.y
-                XCTAssertEqual(transformedY, frame.midY + down * CGFloat(dy), accuracy: 0.01)
+                XCTAssertEqual(transformedY, frame.midY + down * CGFloat(dy), accuracy: 0.01,
+                               "iteration=\(iteration) reduced=\(reduced) phase=\(phase)")
                 XCTAssertEqual(button.frame, frame)
             }
-            try assertPose(scale: 1, dy: -1)
+            try assertPose(scale: 1, dy: -1, phase: "hover")
             // Exercise the public cell highlight used by native tracking, not
             // NSButton.highlight (which mouse tracking need not call).
             button.cell?.isHighlighted = true
             if !reduced { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
-            try assertPose(scale: 0.97, dy: 1)
+            try assertPose(scale: 0.97, dy: 1, phase: "press")
             button.cell?.isHighlighted = false // cancelled or released tracking
             if !reduced { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
-            try assertPose(scale: 1, dy: -1)
+            try assertPose(scale: 1, dy: -1, phase: "release")
             button.performClick(nil)
             XCTAssertEqual(copies, 1)
             card.setMainActionBusy(true)
@@ -58,7 +81,7 @@ final class MiniPreviewTests: XCTestCase {
             button.mouseExited(with: event)
             button.mouseEntered(with: event)
             if !reduced { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
-            try assertPose(scale: 1, dy: -1)
+            try assertPose(scale: 1, dy: -1, phase: "disabled-hover")
             XCTAssertEqual(button.chromeBackground.usingColorSpace(.sRGB)!.alphaComponent,
                            rest.alphaComponent, accuracy: 0.001)
             let bitmap = try XCTUnwrap(renderPresentation(panel))
