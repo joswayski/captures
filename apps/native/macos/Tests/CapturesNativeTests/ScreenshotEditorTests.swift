@@ -7741,7 +7741,8 @@ final class ScreenshotEditorTests: XCTestCase {
         stale.performActionForItem(at: try XCTUnwrap(stale.items.firstIndex { $0.title == "Duplicate" }))
         XCTAssertEqual((worker.requests.last?["edit"] as? [String: Any])?["action"] as? String, "duplicate")
         let busy = try XCTUnwrap(controller.layerContextMenu(row: 0))
-        XCTAssertTrue(busy.items.filter { !$0.isSeparatorItem }.allSatisfy { !$0.isEnabled })
+        XCTAssertEqual(busy.items.filter { !$0.isSeparatorItem && $0.isEnabled }.map(\.title),
+                       ["Paste layer"], "external images can queue; immediate layer edits stay disabled")
         XCTAssertFalse(mergeDown.isEnabled)
         let count = worker.requests.count
         busy.performActionForItem(at: 0)
