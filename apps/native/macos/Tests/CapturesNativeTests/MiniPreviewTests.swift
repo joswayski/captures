@@ -24,20 +24,30 @@ final class MiniPreviewTests: XCTestCase {
                 .first { $0.kind == .copy })
             let frame = button.frame
             let rest = try XCTUnwrap(tokens.color("glass-strong").usingColorSpace(.sRGB))
+            let down: CGFloat = card.isFlipped ? 1 : -1
+            func presentedCenterY(_ layer: CALayer) -> CGFloat {
+                // Account for AppKit's backing-layer anchor when measuring the centre.
+                let centre = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
+                let t = layer.transform
+                return (centre.y - layer.anchorPoint.y * layer.bounds.height) * t.m22
+                    + t.m42 + layer.position.y
+            }
             button.mouseEntered(with: event)
-            try waitUntil { abs(button.chromeBackground.usingColorSpace(.sRGB)!.redComponent
-                - min(1, rest.redComponent * 1.12)) < 0.001 }
+            try waitUntil {
+                guard abs(button.chromeBackground.usingColorSpace(.sRGB)!.redComponent
+                    - min(1, rest.redComponent * 1.12)) < 0.001 else { return false }
+                // The dark glass's small brightness delta can pass its color
+                // tolerance before the hover reaches its position tolerance.
+                // Observe both within the same bounded wait, not a proxy clock.
+                if reduced { return true } // No transition; the render below publishes the pose.
+                guard let layer = button.layer?.presentation() else { return false }
+                return abs(presentedCenterY(layer) - (frame.midY - down)) < 0.01
+            }
             func assertPose(scale: Double, dy: Double) throws {
                 _ = try renderPresentation(panel)
                 let layer = try XCTUnwrap(button.layer?.presentation())
                 XCTAssertEqual(layer.transform.m11, CGFloat(scale), accuracy: 0.001)
-                let down: CGFloat = card.isFlipped ? 1 : -1
-                // Account for AppKit's backing-layer anchor when measuring the centre.
-                let centre = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
-                let t = layer.transform
-                let transformedY = (centre.y - layer.anchorPoint.y * layer.bounds.height) * t.m22
-                    + t.m42 + layer.position.y
-                XCTAssertEqual(transformedY, frame.midY + down * CGFloat(dy), accuracy: 0.01)
+                XCTAssertEqual(presentedCenterY(layer), frame.midY + down * CGFloat(dy), accuracy: 0.01)
                 XCTAssertEqual(button.frame, frame)
             }
             try assertPose(scale: 1, dy: -1)
