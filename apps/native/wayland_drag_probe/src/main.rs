@@ -221,6 +221,13 @@ fn hex(bytes: &[u8]) -> String {
 fn main() {
     let mut args = std::env::args().skip(1);
     let command = args.next();
+    if command.as_deref() == Some("clipboard-replace") {
+        clipboard_replace(
+            PathBuf::from(args.next().expect("first PNG")),
+            PathBuf::from(args.next().expect("replacement PNG")),
+        );
+        return;
+    }
     if command.as_deref() == Some("keyboard") {
         keyboard();
         return;
@@ -270,6 +277,134 @@ fn main() {
         hide_after_paint: None,
     };
     event_loop.run_app(&mut app).unwrap();
+}
+
+/// Replace the selection after receiving its URI-list request. The old offer
+/// still has a PNG: a receiver must not read that fallback from the new owner.
+fn clipboard_replace(first: PathBuf, replacement: PathBuf) {
+    use std::io::Write;
+    use wayland_client::{
+        delegate_noop,
+        globals::{registry_queue_init, GlobalListContents},
+        protocol::{wl_callback, wl_registry, wl_seat::WlSeat},
+        Connection, Dispatch, QueueHandle,
+    };
+    use wayland_protocols_wlr::data_control::v1::client::{
+        zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
+        zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+        zwlr_data_control_offer_v1::ZwlrDataControlOfferV1,
+        zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
+    };
+    struct State {
+        device: ZwlrDataControlDeviceV1,
+        replacement: ZwlrDataControlSourceV1,
+        pixels: [Vec<u8>; 2],
+    }
+    impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
+        fn event(
+            _: &mut Self,
+            _: &wl_registry::WlRegistry,
+            _: wl_registry::Event,
+            _: &GlobalListContents,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+        }
+    }
+    delegate_noop!(State: ignore WlSeat);
+    delegate_noop!(State: ignore ZwlrDataControlManagerV1);
+    delegate_noop!(State: ignore ZwlrDataControlOfferV1);
+    impl Dispatch<wl_callback::WlCallback, std::sync::Mutex<Option<std::fs::File>>> for State {
+        fn event(
+            _: &mut Self,
+            _: &wl_callback::WlCallback,
+            _: wl_callback::Event,
+            pipe: &std::sync::Mutex<Option<std::fs::File>>,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            // The replacement is processed before we finish the old URI list.
+            pipe.lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .write_all(b"# no local files\r\n")
+                .unwrap();
+            println!("REPLACED");
+            std::io::stdout().flush().unwrap();
+        }
+    }
+    impl Dispatch<ZwlrDataControlDeviceV1, ()> for State {
+        fn event(
+            _: &mut Self,
+            _: &ZwlrDataControlDeviceV1,
+            _: wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_device_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+        }
+        wayland_client::event_created_child!(State, ZwlrDataControlDeviceV1, [
+            0 => (ZwlrDataControlOfferV1, ())
+        ]);
+    }
+    impl Dispatch<ZwlrDataControlSourceV1, usize> for State {
+        fn event(
+            state: &mut Self,
+            _: &ZwlrDataControlSourceV1,
+            event: zwlr_data_control_source_v1::Event,
+            index: &usize,
+            connection: &Connection,
+            qh: &QueueHandle<Self>,
+        ) {
+            if let zwlr_data_control_source_v1::Event::Send { mime_type, fd } = event {
+                let mut pipe = std::fs::File::from(fd);
+                if mime_type == "text/uri-list" {
+                    state.device.set_selection(Some(&state.replacement));
+                    // Keep the old transfer open until the compositor has
+                    // processed the replacement (the receiver is still busy).
+                    connection
+                        .display()
+                        .sync(qh, std::sync::Mutex::new(Some(pipe)));
+                } else if mime_type == "image/png" {
+                    pipe.write_all(&state.pixels[*index]).unwrap();
+                }
+                println!("SENT {index} {mime_type}");
+                std::io::stdout().flush().unwrap();
+            }
+        }
+    }
+    let connection = Connection::connect_to_env().unwrap();
+    let (globals, mut queue) = registry_queue_init::<State>(&connection).unwrap();
+    let qh = queue.handle();
+    let seat = globals.bind::<WlSeat, _, _>(&qh, 1..=1, ()).unwrap();
+    let manager = globals
+        .bind::<ZwlrDataControlManagerV1, _, _>(&qh, 1..=2, ())
+        .unwrap();
+    let device = manager.get_data_device(&seat, &qh, ());
+    let source = manager.create_data_source(&qh, 0);
+    // egui-winit eagerly requests text before the editor receives Ctrl+V.
+    // Serve empty plain text so that read cannot trigger our URI replacement.
+    source.offer("text/plain;charset=utf-8".into());
+    source.offer("text/uri-list".into());
+    source.offer("image/png".into());
+    let replacement_source = manager.create_data_source(&qh, 1);
+    replacement_source.offer("image/png".into());
+    device.set_selection(Some(&source));
+    let mut state = State {
+        device,
+        replacement: replacement_source,
+        pixels: [
+            std::fs::read(first).unwrap(),
+            std::fs::read(replacement).unwrap(),
+        ],
+    };
+    queue.roundtrip(&mut state).unwrap();
+    println!("READY");
+    std::io::stdout().flush().unwrap();
+    loop {
+        queue.blocking_dispatch(&mut state).unwrap();
+    }
 }
 
 fn inject(destination: &str, click: Option<[u32; 4]>) {

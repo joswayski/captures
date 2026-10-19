@@ -37,7 +37,9 @@ def cases(binary, pointer, root, env, bus):
             for path, size, color in ((source, "640x360", "#286ea6"),
                                       (image, "90x43", "#d53e55"),
                                       (second, "31x17", "#268752")):
-                subprocess.run(["convert", "-size", size, "xc:" + color, str(path)], check=True)
+                # Untagged sRGB samples: ImageMagick's default gAMA-only PNG
+                # describes gamma 2.2, not the exact sRGB values asserted below.
+                subprocess.run(["convert", "-size", size, "xc:" + color, "-strip", str(path)], check=True)
             original = source.read_bytes()
             settings = profile / "settings.json"
             settings.write_text(json.dumps({"settings_schema_version": 5, "onboarding_completed": True,
@@ -108,6 +110,34 @@ def cases(binary, pointer, root, env, bus):
                     # Move across neighboring rail controls before focusing blank
                     # rail space. All paste commands below cross the compositor.
                     click(28, 430)
+                    replacement = profile / "Replacement.png"
+                    subprocess.run(["convert", str(second), str(replacement)], check=True)
+                    owner = subprocess.Popen([pointer.args[0], "clipboard-replace", str(image),
+                                              str(replacement)], env=env,
+                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    output = Output(owner)
+                    try:
+                        output.wait("READY")
+                        key("v", "ctrl")
+                        output.wait("REPLACED")
+                        frozen = count(2)[-1]
+                        assert (frozen["naturalWidth"], frozen["naturalHeight"]) == (90, 43), \
+                            "PNG fallback read the replacement clipboard instead of the accepted offer"
+                        asset = draft.parent / "assets" / (frozen["src"].split(":", 1)[1] + ".png")
+                        assert subprocess.check_output(["convert", str(asset), "-crop", "1x1+89+42",
+                                                        "-depth", "8", "rgba:-"]) == bytes((213, 62, 85, 255))
+                        shot("clipboard-offer-retained")
+                        key("v", "ctrl")
+                        replaced = count(3)[-1]
+                        assert (replaced["naturalWidth"], replaced["naturalHeight"]) == (31, 17)
+                        key("z", "ctrl")
+                        assert count(2)[-1] == frozen
+                        key("z", "ctrl")
+                        wait(lambda: not draft.exists(), "undo both clipboard offers")
+                    finally:
+                        (profile / "clipboard-replacement-protocol.json").write_text(
+                            json.dumps(output.seen, indent=2) + "\n")
+                        stop(owner)
                     publish(image.read_bytes(), "image/png")
                     key("v", "ctrl")
                     imported = count(2)[-1]
@@ -372,6 +402,7 @@ def cases(binary, pointer, root, env, bus):
                         "checks": ["PNG-pixels", "private-MIME-no-text", "24px-layer-offset",
                             "text-html-empty-cleared-silent-noop", "corrupt-image-error-and-recovery",
                             "external-selection-replacement", "external-image-precedence", "Undo-Redo",
+                            "PNG-fallback-retains-offer-across-selection-replacement",
                             "one-undo-per-batch", "late-decode-and-render-failure-atomic",
                             "failed-batch-preserves-Redo", "batch-retry",
                             "picker-one-undo-per-batch", "picker-late-decode-render-failure-atomic",
@@ -393,7 +424,7 @@ def cases(binary, pointer, root, env, bus):
         stop(keyboard)
         chooser.remove_from_connection()
     return {"clipboard_appearances": 2, "core_selection_ownership": True,
-            "image_read_protocol": "wlr-data-control", "physical_acceptance": False}
+            "image_read_protocol": "wl_data_device", "physical_acceptance": False}
 
 
 if __name__ == "__main__":

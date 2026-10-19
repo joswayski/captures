@@ -35,8 +35,8 @@ pub struct FileDropBatch {
 /// Image/file formats advertised by the focused seat's clipboard selection.
 #[derive(Debug, Default)]
 pub struct ClipboardOffer {
-    /// Whether a PNG is advertised; reading its pixels still uses data-control.
-    pub has_png: bool,
+    /// Advertised PNG transfer from this same offer, not a later selection.
+    pub png: Option<std::os::fd::OwnedFd>,
     /// Advertised local-file transfer, to be read with bounds off the event loop.
     pub uri_list: Option<std::os::fd::OwnedFd>,
 }
@@ -56,8 +56,8 @@ pub trait ActiveEventLoopExtWayland {
         owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(), &'static str>;
 
-    /// Inspect advertised image/file formats and request an offered URI list.
-    /// The caller owns the pipe and must bound reads off the native event loop.
+    /// Request advertised URI-list and PNG transfers from the focused offer.
+    /// The caller owns both pipes and must bound reads off the native event loop.
     fn clipboard_offer(&self) -> Result<ClipboardOffer, &'static str>;
 
     /// Start a COPY-only URI-list drag from a currently pressed source window.

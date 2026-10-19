@@ -895,8 +895,12 @@ Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 X11 file-list paste accepts incremental clipboard transfers within the existing
 1 MiB/two-second transfer limits; incomplete or invalid transfers import nothing.
-On Wayland, clipboard pixels require compositor data-control support; editable
-layer ownership and local-file paste use the core selection protocol.
+On Wayland, PNG paste, local-file paste and editable layer ownership use the
+focused window's core selection protocol. PNG fallback stays with the same offer
+if the clipboard changes during a file-list transfer; the next paste uses the new
+selection. Transfers are bounded to two seconds per format, 1 MiB for file lists
+and 256 MiB for encoded PNGs, with the shared image dimension and pixel limits.
+Copying canvas pixels to other apps still requires compositor data-control support.
 External Wayland file drops also use the core protocol, accepting COPY-only local
 file lists without blocking input. Each completed offer retains its release position
 and its own Undo step; cancelled, malformed or incomplete transfers import nothing.
