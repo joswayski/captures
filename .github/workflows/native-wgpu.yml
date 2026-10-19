@@ -43,7 +43,9 @@ jobs:
       matrix:
         os: [windows-2025, ubuntu-24.04]
     runs-on: ${{ needs.route.outputs.windows == 'true' && startsWith(matrix.os, 'windows') && fromJSON('["self-hosted","josewin"]') || needs.route.outputs.linux == 'true' && startsWith(matrix.os, 'ubuntu') && fromJSON('["self-hosted","joselinux"]') || matrix.os }}
-    timeout-minutes: 35
+    # The Linux protocol checks can finish just below 35 minutes; leave time
+    # for artifact upload and cache cleanup before dependent packages start.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -189,6 +191,8 @@ jobs:
       - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
       - name: Exercise native Windows windows
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
+      - name: Verify Windows clipboard acquisition in an isolated window station
+        run: python apps/native/windows_clipboard_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke/clipboard
       - name: Forward native media between Windows processes
         run: python apps/native/instance_smoke.py --trace --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke/instance
       - name: Exercise staged Windows Open With arguments

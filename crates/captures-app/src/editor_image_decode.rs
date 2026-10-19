@@ -39,6 +39,86 @@ pub fn decode_import_bytes(bytes: &[u8], name: &str) -> Result<RgbaImage, String
     decode_image(bytes, name, true)
 }
 
+/// Decode an owned Windows CF_DIBV5 transfer through the normal color-managed
+/// importer. Clipboard DIBs omit the BMP file header, so supply its explicit
+/// pixel offset instead of relying on the decoder's headerless offset guess.
+pub fn decode_clipboard_dib(mut bytes: Vec<u8>) -> Result<RgbaImage, String> {
+    let invalid = || "Clipboard bitmap has an invalid layout.".to_owned();
+    if bytes.len() < 124 || bytes.len() > captures_history::editor_draft::MAX_IMAGE_BYTES - 14 {
+        return Err(invalid());
+    }
+    let word = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+    if word(0) != 124 {
+        return Err(invalid());
+    }
+    let width = i32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    let height = i32::from_le_bytes(bytes[8..12].try_into().unwrap()).unsigned_abs();
+    if width <= 0
+        || height == 0
+        || width as u32 > MAX_RENDER_DIMENSION
+        || height > MAX_RENDER_DIMENSION
+        || width as u64 * u64::from(height) > MAX_RENDER_PIXELS
+    {
+        return Err("Clipboard bitmap exceeds the image dimension or pixel limits.".into());
+    }
+    let bits = u16::from_le_bytes(bytes[14..16].try_into().unwrap());
+    if !matches!(bits, 1 | 4 | 8 | 16 | 24 | 32) {
+        return Err(invalid());
+    }
+    let colors = match word(32) {
+        0 if bits <= 8 => 1_u32 << bits,
+        colors => colors,
+    };
+    let pixel_start = usize::try_from(colors)
+        .ok()
+        .and_then(|colors| colors.checked_mul(4))
+        .and_then(|size| size.checked_add(124))
+        .filter(|&offset| offset <= bytes.len())
+        .ok_or_else(invalid)?;
+    let compression = word(16);
+    let profile = word(56) == 0x4d42_4544; // PROFILE_EMBEDDED
+    let pixel_size = match compression {
+        0 | 3 => (width as usize * usize::from(bits)).div_ceil(32) * 4 * height as usize,
+        1 | 2 if word(20) != 0 => word(20) as usize,
+        1 | 2 => {
+            let end = if profile {
+                word(112) as usize
+            } else {
+                bytes.len()
+            };
+            end.checked_sub(pixel_start).ok_or_else(invalid)?
+        }
+        _ => return Err(invalid()),
+    };
+    let pixel_end = pixel_start
+        .checked_add(pixel_size)
+        .filter(|&end| end <= bytes.len())
+        .ok_or_else(invalid)?;
+    // Packed DIB profiles follow the bitmap bits. Reject overlap rather than
+    // guessing whether profile bytes should be interpreted as pixel data.
+    if profile && (word(112) as usize) < pixel_end {
+        return Err(invalid());
+    }
+    // Chromium can supply BI_RGB with an explicit alpha mask. Match arboard's
+    // compatibility rule, preserving declared RGB masks when they are present.
+    if bits == 32 && compression == 0 && word(52) == 0xff00_0000 {
+        let missing_rgb_masks = word(40) == 0 && word(44) == 0 && word(48) == 0;
+        bytes[16..20].copy_from_slice(&3_u32.to_le_bytes()); // BI_BITFIELDS
+        if missing_rgb_masks {
+            for (offset, mask) in [(40, 0x00ff_0000_u32), (44, 0x0000_ff00), (48, 0x0000_00ff)] {
+                bytes[offset..offset + 4].copy_from_slice(&mask.to_le_bytes());
+            }
+        }
+    }
+    let mut header = [0; 14];
+    header[..2].copy_from_slice(b"BM");
+    header[2..6].copy_from_slice(&((bytes.len() + 14) as u32).to_le_bytes());
+    header[10..14].copy_from_slice(&((pixel_start + 14) as u32).to_le_bytes());
+    bytes.reserve_exact(header.len());
+    bytes.splice(..0, header);
+    decode_import_bytes(&bytes, "Clipboard image")
+}
+
 /// Decode a complete import batch, bounding retained pixels before any edit.
 pub fn decode_imports(paths: Vec<std::path::PathBuf>) -> Result<Vec<(String, RgbaImage)>, String> {
     let mut retained = 0_u64;
@@ -693,8 +773,8 @@ mod tests {
     };
 
     use super::{
-        UNSUPPORTED_OPEN_MESSAGE, decode_import, decode_import_bytes, decode_opened_image,
-        decode_svg,
+        UNSUPPORTED_OPEN_MESSAGE, decode_clipboard_dib, decode_import, decode_import_bytes,
+        decode_opened_image, decode_svg,
     };
 
     fn close(actual: u8, expected: u8, tolerance: u8, what: &str) {
@@ -1451,6 +1531,96 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_dib_preserves_masks_alpha_and_row_orientation() {
+        let pixels =
+            RgbaImage::from_raw(1, 3, vec![11, 73, 211, 255, 31, 51, 91, 73, 53, 97, 17, 0])
+                .unwrap();
+        for top_down in [false, true] {
+            for compression in [0_u32, 3] {
+                for reversed_masks in [false, true] {
+                    let mut bytes = vec![0; 124];
+                    bytes[..4].copy_from_slice(&124_u32.to_le_bytes());
+                    bytes[4..8].copy_from_slice(&1_i32.to_le_bytes());
+                    bytes[8..12]
+                        .copy_from_slice(&(if top_down { -3_i32 } else { 3 }).to_le_bytes());
+                    bytes[12..14].copy_from_slice(&1_u16.to_le_bytes());
+                    bytes[14..16].copy_from_slice(&32_u16.to_le_bytes());
+                    bytes[16..20].copy_from_slice(&compression.to_le_bytes());
+                    bytes[52..56].copy_from_slice(&0xff00_0000_u32.to_le_bytes());
+                    bytes[56..60].copy_from_slice(&0x7352_4742_u32.to_le_bytes());
+                    if compression == 3 || reversed_masks {
+                        let masks = if reversed_masks {
+                            [0xff_u32, 0xff00, 0xff0000]
+                        } else {
+                            [0xff0000_u32, 0xff00, 0xff]
+                        };
+                        for (offset, mask) in [40, 44, 48].into_iter().zip(masks) {
+                            bytes[offset..offset + 4].copy_from_slice(&mask.to_le_bytes());
+                        }
+                    }
+                    for row in 0..3 {
+                        let [r, g, b, a] =
+                            pixels.get_pixel(0, if top_down { row } else { 2 - row }).0;
+                        bytes.extend(if reversed_masks {
+                            [r, g, b, a]
+                        } else {
+                            [b, g, r, a]
+                        });
+                    }
+                    assert_eq!(decode_clipboard_dib(bytes.clone()).unwrap(), pixels);
+                    assert!(decode_clipboard_dib(bytes[..bytes.len() - 1].to_vec()).is_err());
+                    for (offset, value) in [
+                        (0, 108_u32),
+                        (4, u32::MAX),
+                        (8, 0x8000_0000),
+                        (32, u32::MAX),
+                    ] {
+                        let mut invalid = bytes.clone();
+                        invalid[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                        assert!(decode_clipboard_dib(invalid).is_err());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipboard_dib_handles_padded_rows_and_indexed_rle() {
+        let expected = RgbaImage::from_raw(
+            1,
+            3,
+            vec![11, 73, 211, 255, 31, 51, 91, 255, 53, 97, 17, 255],
+        )
+        .unwrap();
+        for indexed in [false, true] {
+            let mut bytes = vec![0; 124];
+            bytes[..4].copy_from_slice(&124_u32.to_le_bytes());
+            bytes[4..8].copy_from_slice(&1_i32.to_le_bytes());
+            bytes[8..12].copy_from_slice(&3_i32.to_le_bytes());
+            bytes[12..14].copy_from_slice(&1_u16.to_le_bytes());
+            bytes[14..16].copy_from_slice(&(if indexed { 8_u16 } else { 24 }).to_le_bytes());
+            bytes[56..60].copy_from_slice(&0x7352_4742_u32.to_le_bytes());
+            if indexed {
+                bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+                bytes[32..36].copy_from_slice(&3_u32.to_le_bytes());
+                for pixel in expected.pixels() {
+                    let [r, g, b, _] = pixel.0;
+                    bytes.extend([b, g, r, 0]);
+                }
+                bytes.extend([1, 2, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1]);
+            } else {
+                for y in (0..3).rev() {
+                    let [r, g, b, _] = expected.get_pixel(0, y).0;
+                    bytes.extend([b, g, r, 193]); // Row padding, not a fourth channel.
+                }
+            }
+            assert_eq!(decode_clipboard_dib(bytes.clone()).unwrap(), expected);
+            bytes[20..24].copy_from_slice(&12_u32.to_le_bytes());
+            assert_eq!(decode_clipboard_dib(bytes).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn bmp_embedded_icc_converts_samples_and_unusable_color_descriptions_fail() {
         let data = tempfile::tempdir().unwrap();
         let path = data.path().join("profile.bmp");
@@ -1480,6 +1650,7 @@ mod tests {
         bytes[2..6].copy_from_slice(&length.to_le_bytes());
         fs::write(&path, &bytes).unwrap();
         let decoded = decode_import(&path).unwrap();
+        assert_eq!(decode_clipboard_dib(bytes[14..].to_vec()).unwrap(), decoded);
         for (actual, expected) in decoded
             .as_raw()
             .iter()
@@ -1490,6 +1661,7 @@ mod tests {
         for space in [0u32, 0x4c49_4e4b, 0xffff_ffff] {
             let mut invalid = bytes.clone();
             invalid[70..74].copy_from_slice(&space.to_le_bytes());
+            assert!(decode_clipboard_dib(invalid[14..].to_vec()).is_err());
             fs::write(&path, invalid).unwrap();
             assert!(
                 decode_import(&path)
@@ -1497,9 +1669,16 @@ mod tests {
                     .contains("Convert it to sRGB")
             );
         }
-        for (offset, value) in [(126, 123u32), (126, u32::MAX), (130, u32::MAX), (130, 0)] {
+        for (offset, value) in [
+            (126, 123u32),
+            (126, 124),
+            (126, u32::MAX),
+            (130, u32::MAX),
+            (130, 0),
+        ] {
             let mut invalid = bytes.clone();
             invalid[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            assert!(decode_clipboard_dib(invalid[14..].to_vec()).is_err());
             fs::write(&path, invalid).unwrap();
             assert!(decode_import(&path).unwrap_err().contains("color"));
         }

@@ -895,6 +895,11 @@ Windows/Linux queue completed picker selections alongside file drops even while
 an edit is running, so later drops cannot overtake an already completed selection.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
+Windows acquires file paths and fallback PNG/DIBV5 bytes under one clipboard lock,
+then unlocks before checking files or decoding. Usable files take precedence;
+otherwise PNG takes precedence over DIBV5. Image transfers are limited to 256 MiB
+and use the shared dimension, pixel and color-management checks. Windows physical
+clipboard and rapid-paste ordering acceptance remain open.
 X11 file-list paste accepts incremental clipboard transfers within the existing
 1 MiB/two-second transfer limits; incomplete or invalid transfers import nothing.
 X11 paste uses XFixes selection notifications to reject clipboard replacement

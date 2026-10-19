@@ -417,6 +417,24 @@ impl InputApplication<'_> {
 }
 
 fn main() -> eframe::Result {
+    #[cfg(target_os = "windows")]
+    if std::env::args().nth(1).as_deref() == Some("--clipboard-probe") {
+        let output = std::env::args()
+            .nth(2)
+            .expect("clipboard probe output path");
+        let result = editor_clipboard::Clipboard::default().images(&egui::Context::default());
+        let result = result.map(|images| {
+            images
+                .into_iter()
+                .map(|(name, image)| {
+                    json!({"name":name, "width":image.width(), "height":image.height(), "rgba":image.as_raw()})
+                })
+                .collect::<Vec<_>>()
+        });
+        std::fs::write(output, serde_json::to_vec(&result).unwrap())
+            .expect("clipboard probe result");
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if let Some(result) = primary_selection::helper(std::env::args().skip(1)) {
         std::process::exit(if result.is_ok() { 0 } else { 1 });

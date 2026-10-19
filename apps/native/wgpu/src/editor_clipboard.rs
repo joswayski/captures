@@ -1,11 +1,13 @@
 //! Screenshot editor clipboard input. Editable snapshots stay in the session;
 //! only an opaque private marker is published, never text or document JSON.
+#[cfg(not(target_os = "windows"))]
 use captures_app::editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS};
 use image::RgbaImage;
 
 #[derive(Default)]
 pub struct Clipboard {
     marker: Option<Marker>,
+    #[cfg(not(target_os = "windows"))]
     images: Option<arboard::Clipboard>,
 }
 
@@ -27,7 +29,7 @@ impl Clipboard {
         #[cfg(target_os = "linux")]
         let (files, png) = linux_files(ctx)?;
         #[cfg(target_os = "windows")]
-        let files = {
+        let (files, bitmap) = {
             let _guard = clipboard_win::Clipboard::new_attempts(10)
                 .map_err(|error| format!("Could not open clipboard: {error}"))?;
             let mut files = Vec::new();
@@ -37,7 +39,32 @@ impl Clipboard {
                 clipboard_win::raw::get_file_list_path(&mut files)
                     .map_err(|error| format!("Could not read clipboard files: {error}"))?;
             }
-            files
+            // Own both alternatives before unlocking. Delayed rendering may
+            // legitimately change the sequence number while this lock is held.
+            // Defer fallback failures: usable files still take precedence.
+            let bitmap = (|| -> Result<_, String> {
+                let png = clipboard_win::register_format("PNG")
+                    .ok_or("Could not register clipboard PNG format.")?
+                    .get();
+                let format = if clipboard_win::raw::is_format_avail(png) {
+                    png
+                } else if clipboard_win::raw::is_format_avail(clipboard_win::formats::CF_DIBV5) {
+                    clipboard_win::formats::CF_DIBV5
+                } else {
+                    return Ok(None);
+                };
+                let size = clipboard_win::raw::size(format)
+                    .ok_or("Could not read clipboard image size.")?
+                    .get();
+                if size > captures_history::editor_draft::MAX_IMAGE_BYTES {
+                    return Err("Clipboard image exceeds the encoded-byte limit.".into());
+                }
+                let mut bytes = Vec::new();
+                clipboard_win::raw::get_vec(format, &mut bytes)
+                    .map_err(|error| format!("Could not read clipboard image: {error}"))?;
+                Ok(Some((format, bytes)))
+            })();
+            (files, bitmap)
         };
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let files = {
@@ -65,65 +92,81 @@ impl Clipboard {
         if !files.is_empty() {
             return captures_app::editor_image_decode::decode_imports(files);
         }
-        // Linux's image reader can report both absent formats and real
-        // transfer failures as ContentNotAvailable. Inspect the actual offer
-        // instead of swallowing errors or probing an unsupported PNG target.
-        #[cfg(target_os = "linux")]
-        match png {
-            LinuxPng::Absent => return Ok(Vec::new()),
-            LinuxPng::Wayland(fd) => {
-                let bytes = read_transfer(
-                    fd,
-                    captures_history::editor_draft::MAX_IMAGE_BYTES,
-                    "Clipboard image",
-                )?;
+        #[cfg(target_os = "windows")]
+        {
+            let Some((format, bytes)) = bitmap? else {
+                return Ok(Vec::new());
+            };
+            let pixels = if format == clipboard_win::formats::CF_DIBV5 {
+                captures_app::editor_image_decode::decode_clipboard_dib(bytes)?
+            } else {
                 if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
                     return Err("Could not decode clipboard PNG. Copy it again and retry.".into());
                 }
-                let pixels = captures_app::editor_image_decode::decode_import_bytes(
-                    &bytes,
-                    "Clipboard image",
-                )?;
-                return Ok(vec![("Clipboard image".into(), pixels)]);
-            }
-            LinuxPng::X11(_) => {}
+                captures_app::editor_image_decode::decode_import_bytes(&bytes, "Clipboard image")?
+            };
+            Ok(vec![("Clipboard image".into(), pixels)])
         }
-        if self.images.is_none() {
-            self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
-        }
-        let image = match self.images.as_mut().unwrap().get_image() {
-            Ok(image) => image,
-            // Windows distinguishes absent formats from access/decoding
-            // failures. The separate AppKit host already ignores absent images.
-            #[cfg(target_os = "windows")]
-            Err(arboard::Error::ContentNotAvailable) => return Ok(Vec::new()),
-            Err(arboard::Error::ConversionFailure) => {
-                return Err("Could not decode clipboard image. Copy it again and retry.".into());
-            }
-            Err(error) => return Err(format!("Could not read clipboard image: {error}")),
-        };
-        #[cfg(target_os = "linux")]
-        if let LinuxPng::X11(connection) = png {
-            // arboard opens a separate requestor. Retain our selection watch
-            // across that read so its pixels cannot come from a newer offer.
-            x11_marker::ensure_unchanged(&connection).map_err(|error| error.to_string())?;
-        }
-        let width = u32::try_from(image.width).map_err(|_| "Clipboard image is too wide.")?;
-        let height = u32::try_from(image.height).map_err(|_| "Clipboard image is too tall.")?;
-        if width == 0
-            || height == 0
-            || width > MAX_RENDER_DIMENSION
-            || height > MAX_RENDER_DIMENSION
-            || u64::from(width) * u64::from(height) > MAX_RENDER_PIXELS
+        #[cfg(not(target_os = "windows"))]
         {
-            return Err(
+            // Linux's image reader can report both absent formats and real
+            // transfer failures as ContentNotAvailable. Inspect the actual offer
+            // instead of swallowing errors or probing an unsupported PNG target.
+            #[cfg(target_os = "linux")]
+            match png {
+                LinuxPng::Absent => return Ok(Vec::new()),
+                LinuxPng::Wayland(fd) => {
+                    let bytes = read_transfer(
+                        fd,
+                        captures_history::editor_draft::MAX_IMAGE_BYTES,
+                        "Clipboard image",
+                    )?;
+                    if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
+                        return Err(
+                            "Could not decode clipboard PNG. Copy it again and retry.".into()
+                        );
+                    }
+                    let pixels = captures_app::editor_image_decode::decode_import_bytes(
+                        &bytes,
+                        "Clipboard image",
+                    )?;
+                    return Ok(vec![("Clipboard image".into(), pixels)]);
+                }
+                LinuxPng::X11(_) => {}
+            }
+            if self.images.is_none() {
+                self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
+            }
+            let image = match self.images.as_mut().unwrap().get_image() {
+                Ok(image) => image,
+                Err(arboard::Error::ConversionFailure) => {
+                    return Err("Could not decode clipboard image. Copy it again and retry.".into());
+                }
+                Err(error) => return Err(format!("Could not read clipboard image: {error}")),
+            };
+            #[cfg(target_os = "linux")]
+            if let LinuxPng::X11(connection) = png {
+                // arboard opens a separate requestor. Retain our selection watch
+                // across that read so its pixels cannot come from a newer offer.
+                x11_marker::ensure_unchanged(&connection).map_err(|error| error.to_string())?;
+            }
+            let width = u32::try_from(image.width).map_err(|_| "Clipboard image is too wide.")?;
+            let height = u32::try_from(image.height).map_err(|_| "Clipboard image is too tall.")?;
+            if width == 0
+                || height == 0
+                || width > MAX_RENDER_DIMENSION
+                || height > MAX_RENDER_DIMENSION
+                || u64::from(width) * u64::from(height) > MAX_RENDER_PIXELS
+            {
+                return Err(
                 "Clipboard images are limited to 16,384 pixels per side and 100,000,000 pixels."
                     .into(),
             );
+            }
+            let pixels = RgbaImage::from_raw(width, height, image.bytes.into_owned())
+                .ok_or("Clipboard image has invalid RGBA pixels.")?;
+            Ok(vec![("Clipboard image".into(), pixels)])
         }
-        let pixels = RgbaImage::from_raw(width, height, image.bytes.into_owned())
-            .ok_or("Clipboard image has invalid RGBA pixels.")?;
-        Ok(vec![("Clipboard image".into(), pixels)])
     }
 }
 
