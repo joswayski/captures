@@ -716,7 +716,11 @@ impl ActiveEventLoop {
             Some(offer.receive("text/uri-list".into())
                 .map_err(|_| "Could not receive clipboard files")?.into())
         } else { None };
-        Ok(crate::platform::wayland::ClipboardOffer { has_png, uri_list })
+        let png = if has_png {
+            Some(offer.receive("image/png".into())
+                .map_err(|_| "Could not receive clipboard image")?.into())
+        } else { None };
+        Ok(crate::platform::wayland::ClipboardOffer { png, uri_list })
     }
 
     pub fn set_clipboard_marker(

@@ -25,7 +25,7 @@ impl Clipboard {
         ctx: &eframe::egui::Context,
     ) -> Result<Vec<(String, RgbaImage)>, String> {
         #[cfg(target_os = "linux")]
-        let (files, has_png) = linux_files(ctx)?;
+        let (files, png) = linux_files(ctx)?;
         #[cfg(target_os = "windows")]
         let files = {
             let _guard = clipboard_win::Clipboard::new_attempts(10)
@@ -69,8 +69,24 @@ impl Clipboard {
         // transfer failures as ContentNotAvailable. Inspect the actual offer
         // instead of swallowing errors or probing an unsupported PNG target.
         #[cfg(target_os = "linux")]
-        if !has_png {
-            return Ok(Vec::new());
+        match png {
+            LinuxPng::Absent => return Ok(Vec::new()),
+            LinuxPng::Wayland(fd) => {
+                let bytes = read_transfer(
+                    fd,
+                    captures_history::editor_draft::MAX_IMAGE_BYTES,
+                    "Clipboard image",
+                )?;
+                if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
+                    return Err("Could not decode clipboard PNG. Copy it again and retry.".into());
+                }
+                let pixels = captures_app::editor_image_decode::decode_import_bytes(
+                    &bytes,
+                    "Clipboard image",
+                )?;
+                return Ok(vec![("Clipboard image".into(), pixels)]);
+            }
+            LinuxPng::X11 => {}
         }
         if self.images.is_none() {
             self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
@@ -208,50 +224,38 @@ pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, bool), String> {
-    use std::{
-        io::Read,
-        sync::atomic::Ordering,
-        time::{Duration, Instant},
-    };
-    let (has_png, bytes) = if WAYLAND.load(Ordering::Acquire) {
+enum LinuxPng {
+    Absent,
+    X11,
+    Wayland(std::os::fd::OwnedFd),
+}
+
+#[cfg(target_os = "linux")]
+fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, LinuxPng), String> {
+    use std::{sync::atomic::Ordering, time::Duration};
+    let (png, bytes) = if WAYLAND.load(Ordering::Acquire) {
         let (reply, receive) = std::sync::mpsc::sync_channel(1);
         OFFER_READS.lock().unwrap().push(reply);
         ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
         let offer = receive
             .recv_timeout(Duration::from_secs(2))
             .map_err(|_| "Clipboard offer read did not reach the native event loop.")??;
-        let Some(fd) = offer.uri_list else {
-            return Ok((Vec::new(), offer.has_png));
+        let png = offer.png.map_or(LinuxPng::Absent, LinuxPng::Wayland);
+        let bytes = match offer.uri_list {
+            Some(fd) => read_transfer(fd, 1024 * 1024, "Clipboard file list")?,
+            None => Vec::new(),
         };
-        use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
-        let flags = fcntl_getfl(&fd).map_err(|error| error.to_string())?;
-        fcntl_setfl(&fd, flags | OFlags::NONBLOCK).map_err(|error| error.to_string())?;
-        let mut pipe = std::fs::File::from(fd);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut bytes = Vec::new();
-        loop {
-            if Instant::now() >= deadline {
-                return Err("Clipboard file transfer timed out.".into());
-            }
-            let mut chunk = [0; 8192];
-            match pipe.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(count) => {
-                    bytes.extend_from_slice(&chunk[..count]);
-                    if bytes.len() > 1024 * 1024 {
-                        return Err("Clipboard file list exceeds 1 MiB.".into());
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(10))
-                }
-                Err(error) => return Err(error.to_string()),
-            }
-        }
-        (offer.has_png, bytes)
+        (png, bytes)
     } else {
-        x11_marker::offered_files().map_err(|error| error.to_string())?
+        let (has_png, bytes) = x11_marker::offered_files().map_err(|error| error.to_string())?;
+        (
+            if has_png {
+                LinuxPng::X11
+            } else {
+                LinuxPng::Absent
+            },
+            bytes,
+        )
     };
     // Parse lines before percent decoding: encoded CR/LF belong to filenames,
     // but literal CRLF belongs to the URI-list transport. Never fetch URLs.
@@ -264,7 +268,40 @@ fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, 
         })
         .map(|line| captures_app::preview_channel::local_media_path(line.into()))
         .collect::<Result<_, _>>()?;
-    Ok((files, has_png))
+    Ok((files, png))
+}
+
+#[cfg(target_os = "linux")]
+fn read_transfer(fd: std::os::fd::OwnedFd, maximum: usize, label: &str) -> Result<Vec<u8>, String> {
+    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+    use std::{
+        io::Read,
+        time::{Duration, Instant},
+    };
+    let flags = fcntl_getfl(&fd).map_err(|error| error.to_string())?;
+    fcntl_setfl(&fd, flags | OFlags::NONBLOCK).map_err(|error| error.to_string())?;
+    let mut pipe = std::fs::File::from(fd);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut bytes = Vec::new();
+    loop {
+        if Instant::now() >= deadline {
+            return Err(format!("{label} transfer timed out."));
+        }
+        let mut chunk = [0; 8192];
+        match pipe.read(&mut chunk) {
+            Ok(0) => return Ok(bytes),
+            Ok(count) => {
+                if count > maximum - bytes.len() {
+                    return Err(format!("{label} exceeds {} MiB.", maximum / (1024 * 1024)));
+                }
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
