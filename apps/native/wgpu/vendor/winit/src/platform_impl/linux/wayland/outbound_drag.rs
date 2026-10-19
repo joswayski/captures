@@ -36,6 +36,8 @@ impl Drop for ClipboardMarker {
 
 pub struct OutboundDrag {
     pub source: DragSource,
+    pub device: WlDataDevice,
+    pub own_offer: Option<sctk::reexports::client::backend::ObjectId>,
     pub source_window: WindowId,
     pub uri: Vec<u8>,
     pub path: PathBuf,
@@ -80,7 +82,7 @@ impl WinitState {
             }
             let own = drag.own_drop;
             let same_source = drag.same_source_drop;
-            if let Some(destination) = drag.destination {
+            if let Some(destination) = drag.destination.filter(|_| !drag.dropped) {
                 self.events_sink
                     .push_window_event(WindowEvent::HoveredFileCancelled, destination);
             }
@@ -201,12 +203,17 @@ impl DataDeviceHandler for WinitState {
         _: &Connection,
         _: &QueueHandle<Self>,
         device: &WlDataDevice,
-        _: f64,
-        _: f64,
+        x: f64,
+        y: f64,
         surface: &WlSurface,
     ) {
+        if self.outbound_drag.as_ref().is_none_or(|drag| &drag.device != device || drag.dropped) {
+            self.inbound_enter(device, surface, x, y);
+            return;
+        }
         let destination = make_wid(surface);
         let own = self.windows.borrow().contains_key(&destination);
+        self.drag_cursor(destination, x, y);
         if let Some(drag) = self.outbound_drag.as_mut() {
             drag.destination = own.then_some(destination);
             drag.over_own_window = own;
@@ -220,6 +227,7 @@ impl DataDeviceHandler for WinitState {
                         data.drag_offer()
                     },
                 ) {
+                    drag.own_offer = Some(offer.inner().id());
                     offer.accept_mime_type(offer.serial, Some("text/uri-list".into()));
                     offer.set_actions(DndAction::Copy, DndAction::Copy);
                 }
@@ -227,8 +235,9 @@ impl DataDeviceHandler for WinitState {
         }
     }
 
-    fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {
-        if let Some(drag) = self.outbound_drag.as_mut() {
+    fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
+        self.inbound_leave(device);
+        if let Some(drag) = self.outbound_drag.as_mut().filter(|drag| &drag.device == device) {
             if let Some(destination) = drag.destination.take() {
                 self.events_sink
                     .push_window_event(WindowEvent::HoveredFileCancelled, destination);
@@ -236,9 +245,16 @@ impl DataDeviceHandler for WinitState {
             drag.over_own_window = false;
             drag.over_source_window = false;
             drag.own_offer_copy = false;
+            drag.own_offer = None;
         }
     }
-    fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _: f64, _: f64) {}
+    fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice, x: f64, y: f64) {
+        self.inbound_motion(device, x, y);
+        if let Some(destination) = self.outbound_drag.as_ref()
+            .filter(|drag| &drag.device == device && !drag.dropped).and_then(|drag| drag.destination) {
+            self.drag_cursor(destination, x, y);
+        }
+    }
     fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
         if let Some(marker) = self.clipboard_marker.as_ref().filter(|marker| &marker.device == device) {
             let matches = device.data::<sctk::data_device_manager::data_device::DataDeviceData>()
@@ -248,10 +264,11 @@ impl DataDeviceHandler for WinitState {
         }
     }
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
+        self.inbound_drop(device);
         if let Some((destination, path)) = self
             .outbound_drag
             .as_ref()
-            .filter(|drag| drag.over_own_window && drag.own_offer_copy)
+            .filter(|drag| &drag.device == device && drag.over_own_window && drag.own_offer_copy)
             .and_then(|drag| {
                 drag.destination
                     .map(|destination| (destination, drag.path.clone()))
@@ -265,8 +282,8 @@ impl DataDeviceHandler for WinitState {
                 // editor receiver. Finishing only the offer loses the import.
                 self.events_sink
                     .push_window_event(WindowEvent::HoveredFileCancelled, destination);
-                self.events_sink
-                    .push_window_event(WindowEvent::DroppedFile(path), destination);
+                let position = crate::dpi::LogicalPosition::new(offer.x, offer.y);
+                self.deliver_file_drop(destination, vec![path], position);
                 offer.finish();
             }
         }
@@ -286,13 +303,14 @@ impl DataOfferHandler for WinitState {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &mut DragOffer,
+        offer: &mut DragOffer,
         action: DndAction,
     ) {
+        self.inbound_action(offer, action);
         if let Some(drag) = self
             .outbound_drag
             .as_mut()
-            .filter(|drag| drag.over_own_window)
+            .filter(|drag| drag.over_own_window && drag.own_offer.as_ref() == Some(&offer.inner().id()))
         {
             drag.own_offer_copy = action.contains(DndAction::Copy);
         }

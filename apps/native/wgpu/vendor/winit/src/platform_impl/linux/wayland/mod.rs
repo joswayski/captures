@@ -15,6 +15,7 @@ pub use output::{MonitorHandle, VideoModeHandle};
 pub use window::Window;
 
 mod event_loop;
+mod inbound_drag;
 mod outbound_drag;
 mod output;
 mod seat;

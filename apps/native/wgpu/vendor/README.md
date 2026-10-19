@@ -30,11 +30,23 @@ X11 takes over the client's XI2 implicit grab, handles selection requests,
 Escape, own-window drops and a five-second missing-Finished deadline. Wayland
 uses SCTK's data device/source/offer dispatch and held-button serial, retaining
 the drop destination before leave. Its one-shot five-second post-drop timer
-recovers missing completion; normal completion removes the timer. Neither adds
-general Wayland file import. Same-app source offers now deliver
+recovers missing completion; normal completion removes the timer. Same-app source
+offers deliver
 `HoveredFile`/`DroppedFile` to the destination window as well as acknowledging
 COPY, so editor receivers can import History or mini-preview files. Those files
 come from this source's retained path, not from an unrelated client offer.
+
+External COPY-only Wayland imports use `inbound_drag.rs`: nonblocking calloop
+reads (64 KiB per dispatch), a 1 MiB URI-list limit, a two-second absolute receive
+deadline and eight retained offers. Lists are split before byte-preserving percent
+decoding; remote authorities, malformed escapes, NUL and URL query/fragment text
+reject the entire offer. Completion requires valid EOF and COPY at drop. Leave,
+window/device loss, timeout and read failure destroy unfinished offers without
+`finish`. Dropped offers retain their original window identity and release position
+across subsequent drags. `WindowExtWayland::take_file_drop_batches` exposes complete
+offers during `DroppedFile` callbacks; per-file events remain for other consumers,
+and unconsumed metadata expires after dispatch. Same-client drops use this metadata
+too. Clipboard selection handling is unchanged.
 
 Patch surface: `src/platform/{x11,wayland}.rs`, `platform_impl/linux/mod.rs`,
 the Linux backend module/event-loop initialization, X11 atoms/event processor,
@@ -82,9 +94,9 @@ produced the standalone manifest; its egui sibling dependencies are explicitly
 pinned back to that Git revision rather than resolving registry substitutes.
 No root workspace or shipping Tauri patch is involved.
 
-Only `src/native/wgpu_integration.rs` has source changes: refresh acknowledged
-Wayland mapping state for all viewports before a root pass; preserve compositor
-occlusion separately; avoid painting unmapped immediate surfaces; and recreate
+`src/native/wgpu_integration.rs` refreshes acknowledged
+Wayland mapping state for all viewports before a root pass; preserves compositor
+occlusion separately; avoids painting unmapped immediate surfaces; and recreates
 GPU surfaces after remapping. An explicitly hidden root runs its initial UI pass
 without presenting a buffer. One-shot `RequestPaintWhileHidden` requests declare
 new children without remapping History; consumed requests do not turn ordinary
@@ -112,12 +124,42 @@ This is feature-gated on `accesskit` and shared by Windows, X11 and Wayland.
 Root-only initialization previously left real editor windows absent from AT-SPI
 even though their egui trees were covered by unit tests.
 
+The same integration consumes Wayland drop batches instead of forwarding duplicate
+per-file events. `src/lib.rs` exposes `FileDropBatch::take` for the current viewport,
+with positions converted to egui points. Viewport removal/recreation clears queued
+drops. Other platforms keep egui-winit's raw-file path; no egui-winit fork is needed.
+
 To update, vendor the new locked Git package into a temporary directory, copy
 only eframe, retain its licenses/README, repin all egui siblings to the same
-revision, and reapply this one-file patch against upstream. Do not retain vendor
+revision, and reapply these local patches against upstream. Do not retain vendor
 checksum metadata for changed sources. Update the private lockfile and run native
 gates, the visibility/native-portal/resident-lifecycle smokes and X11
 capture/editor regressions.
+
+## Private SCTK offer ownership patch
+
+`sctk/` is the crates.io **smithay-client-toolkit 0.19.2** package, with its MIT
+license retained. Archive SHA-256:
+
+```text
+3457dea1f0eb631b4034d61d4d8c32074caa6cd1ab2d59f2327bd8461e2c0016
+```
+
+`src/data_device_manager/data_device.rs` adds `take_drag_offer`, which transfers
+ownership to the destination. Upstream snapshots cannot survive a new enter, which
+destroys even the previous dropped offer; an ordinary leave destroys an undropped
+offer. Detached offers still receive action callbacks, while the caller tracks
+motion/leave/drop and owns destruction. Winit uses this only for external transfers;
+its existing own-source and clipboard paths retain SCTK ownership. Both isolated
+native manifests patch this version; root Cargo/Tauri do not. To update, compare
+against the verified archive and reapply this method only if upstream still needs
+it. Do not copy `.cargo-ok` or vendor checksum metadata for modified sources.
+Five existing signatures also have compiler-suggested, behavior-neutral syntax
+updates for Rust 1.95's warnings-as-errors gate: redundant trait-object parentheses
+in `src/compositor.rs`, `src/shell/xdg/mod.rs` and `src/shm/raw.rs`, and explicit
+lifetimes in `src/data_device_manager/write_pipe.rs` and `src/registry.rs`.
+Run the editor clipboard/picker/external-GTK drop smoke and outbound drag smoke
+after every ownership/backend update; physical compositor acceptance remains open.
 
 ## Updating winit
 

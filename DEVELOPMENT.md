@@ -596,9 +596,14 @@ cargo build --locked --manifest-path apps/native/wayland_drag_probe/Cargo.toml
   --output /tmp/captures-wayland-editor-clipboard-new
 ```
 
-This needs headless Sway, wl-copy/wl-paste, grim and the existing virtual-input
+This needs headless Sway, GTK3 Python bindings, wl-copy/wl-paste, grim and the existing virtual-input
 probe. It checks private MIME bytes, editable paste, external selection replacement,
 source cancellation/reclaim, image pixels and CRLF local-file ordering in light/dark.
+It also drives an independent GTK URI-list source through the compositor: atomic
+multi-image drops, single Undo, decode/render rollback and Redo, invalid/oversized
+lists, MOVE rejection, hover cancellation, stalled receives, delayed/overlapping
+offers with frozen positions and closed destinations. Use the pinned Sway fixture
+from `apps/native/build_wayland_compositor_fixture.sh` for reproducible remapping.
 Core selection owns layer copies/files; arboard pixel reads need data-control.
 AppKit's real-image regression uses a UUID-named pasteboard and real FFI/draft
 worker. These are isolated host checks, not physical clipboard-manager, IME or

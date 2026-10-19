@@ -88,26 +88,46 @@ pub(super) fn receive_drops(ctx: &egui::Context, view: &mut View, preview: Optio
     let accepting = view.presented.is_some() && !view.closed && !view.close_requested;
     view.drop.hovering = hovering && accepting;
     view.drop.since = view.drop.hovering.then(|| view.drop.since.unwrap_or(now));
-    if dropped.is_empty() || !accepting {
-        return;
-    }
-    let point = preview
-        .zip(document_bounds(view))
-        .zip(pointer)
-        .filter(|((preview, _), pointer)| preview.contains(*pointer))
-        .map(|((preview, bounds), pointer)| image_point(pointer, preview, bounds));
-    let paths: Vec<PathBuf> = dropped
+    let mut batches: Vec<_> = eframe::FileDropBatch::take(ctx)
         .into_iter()
-        .map(|file| file.path().to_path_buf())
-        .filter(|path| is_supported_image_path(path))
+        .map(|batch| (batch.paths, Some(batch.position)))
         .collect();
-    if paths.is_empty() {
-        view.error = Some(DROP_UNSUPPORTED.into());
+    if !dropped.is_empty() {
+        if accepting
+            && dropped
+                .iter()
+                .any(|file| is_supported_image_path(file.path()))
+        {
+            view.drop.hovering = false;
+            view.drop.since = None;
+        }
+        batches.push((
+            dropped
+                .into_iter()
+                .map(|file| file.path().to_path_buf())
+                .collect(),
+            pointer,
+        ));
+    }
+    if !accepting {
         return;
     }
-    view.drop.hovering = false;
-    view.drop.since = None;
-    view.drop.queue.push_back((paths, point));
+    for (paths, pointer) in batches {
+        let point = preview
+            .zip(document_bounds(view))
+            .zip(pointer)
+            .filter(|((preview, _), pointer)| preview.contains(*pointer))
+            .map(|((preview, bounds), pointer)| image_point(pointer, preview, bounds));
+        let paths: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|path| is_supported_image_path(path))
+            .collect();
+        if paths.is_empty() {
+            view.error = Some(DROP_UNSUPPORTED.into());
+            continue;
+        }
+        view.drop.queue.push_back((paths, point));
+    }
 }
 
 /// Submit the next complete batch once no other edit is in flight.

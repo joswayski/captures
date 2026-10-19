@@ -67,6 +67,9 @@ pub struct WindowState {
     /// The last received configure.
     pub last_configure: Option<WindowConfigure>,
 
+    /// Completed URI-list offers, preserving drop boundaries and positions.
+    pub file_drop_batches: Vec<crate::platform::wayland::FileDropBatch>,
+
     /// Client-side mapping lifecycle. Wayland has no compositor visibility query; this tracks
     /// whether content may currently be attached to the surface.
     mapping: MappingState,
@@ -212,6 +215,7 @@ impl WindowState {
             ime_allowed: false,
             ime_purpose: ImePurpose::Normal,
             last_configure: None,
+            file_drop_batches: Vec::new(),
             mapping: MappingState::AwaitingConfigure,
             mapping_generation: 0,
             initially_configured: false,

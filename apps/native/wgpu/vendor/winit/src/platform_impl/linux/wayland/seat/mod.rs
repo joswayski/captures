@@ -177,7 +177,7 @@ impl SeatHandler for WinitState {
                 }
             },
             SeatCapability::Pointer => {
-                seat_state.data_device = None;
+                let device = seat_state.data_device.take();
                 if let Some(relative_pointer) = seat_state.relative_pointer.take() {
                     relative_pointer.destroy();
                 }
@@ -196,6 +196,9 @@ impl SeatHandler for WinitState {
                     if pointer.pointer().version() >= 3 {
                         pointer.pointer().release();
                     }
+                }
+                if let Some(device) = device {
+                    self.cancel_device_drags(&device.inner().id());
                 }
             },
             SeatCapability::Keyboard => {
@@ -221,7 +224,11 @@ impl SeatHandler for WinitState {
         _queue_handle: &QueueHandle<Self>,
         seat: WlSeat,
     ) {
-        let _ = self.seats.remove(&seat.id());
+        if let Some(state) = self.seats.remove(&seat.id()) {
+            if let Some(device) = state.data_device {
+                self.cancel_device_drags(&device.inner().id());
+            }
+        }
         self.on_keyboard_destroy(&seat.id());
     }
 }

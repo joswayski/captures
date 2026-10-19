@@ -330,7 +330,8 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
     let clock = std::time::Instant::now();
     let timestamp = || clock.elapsed().as_millis() as u32;
     let mut perform = |click: Option<[u32; 4]>, scroll: Option<f64>| {
-        let [x, y, width, height] = click.unwrap_or([180, 150, 900, 500]);
+        let start_x = if destination == "reverse" { 570 } else { 180 };
+        let [x, y, width, height] = click.unwrap_or([start_x, 150, 900, 500]);
         pointer.motion_absolute(timestamp(), x, y, width, height);
         pointer.frame();
         queue.roundtrip(&mut State).unwrap();
@@ -347,8 +348,17 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
         queue.roundtrip(&mut State).unwrap();
         thread::sleep(Duration::from_millis(150));
         if click.is_none() {
+            // Cross the drag threshold while still inside the source. GTK
+            // needs to start its Wayland grab before the pointer leaves it.
+            let threshold_x = if destination == "reverse" { 540 } else { 210 };
+            pointer.motion_absolute(timestamp(), threshold_x, 150, 900, 500);
+            pointer.frame();
+            queue.roundtrip(&mut State).unwrap();
+            thread::sleep(Duration::from_millis(150));
             let (x, y) = match destination {
-                "accept" => (570, 150),
+                "accept" | "cancel-hover" => (570, 150),
+                "reverse" => (180, 150),
+                "center" => (350, 250),
                 "self" => (210, 170),
                 _ => (850, 450),
             };
@@ -356,6 +366,12 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
             pointer.frame();
             queue.roundtrip(&mut State).unwrap();
             thread::sleep(Duration::from_millis(150));
+            if destination == "cancel-hover" {
+                pointer.motion_absolute(timestamp(), 850, 450, 900, 500);
+                pointer.frame();
+                queue.roundtrip(&mut State).unwrap();
+                thread::sleep(Duration::from_millis(150));
+            }
         }
         pointer.button(timestamp(), 0x110, ButtonState::Released);
         pointer.frame();

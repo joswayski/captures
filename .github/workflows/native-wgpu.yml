@@ -116,6 +116,11 @@ jobs:
           cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --bin captures-wgpu-workbench
           python apps/native/wayland_visibility_smoke.py
           /usr/bin/python3 apps/native/wayland_native_capture_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe --screenshots native-wayland-capture
+      - name: Import external Wayland file offers atomically without blocking input
+        if: runner.os == 'Linux'
+        run: |
+          compositor="$(apps/native/build_wayland_compositor_fixture.sh "$RUNNER_TEMP/wayland-compositor-fixture")"
+          PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_editor_clipboard_smoke.py --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --injector apps/native/wayland_drag_probe/target/debug/captures-wayland-drag-probe --output "$RUNNER_TEMP/native-wayland-editor-imports"
       - name: Read Linux PRIMARY and paste through the native text editor
         if: runner.os == 'Linux'
         run: |
@@ -151,6 +156,7 @@ jobs:
             ${{ runner.temp }}/native-wayland-shortcuts
             ${{ runner.temp }}/native-wayland-recording
             ${{ runner.temp }}/native-preview-retarget
+            ${{ runner.temp }}/native-wayland-editor-imports
           if-no-files-found: ignore
 
   windows-release:

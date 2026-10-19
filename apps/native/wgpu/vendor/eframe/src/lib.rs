@@ -155,6 +155,26 @@ compile_error!("`accesskit` feature is only available with `android-game-activit
 // Re-export all useful libraries:
 pub use {egui, egui::emath, egui::epaint};
 
+/// One native file offer, preserving its boundary and release position even
+/// when the transfer completes after the pointer has moved. Wayland/wgpu only;
+/// other backends continue to populate `RawInput::dropped_files`.
+#[derive(Clone, Debug)]
+pub struct FileDropBatch {
+    /// Local paths in the source's original order.
+    pub paths: Vec<std::path::PathBuf>,
+    /// Release position in viewport points.
+    pub position: egui::Pos2,
+}
+
+impl FileDropBatch {
+    /// Drain this viewport's completed drops once, on its first UI pass.
+    pub fn take(ctx: &egui::Context) -> Vec<Self> {
+        let id = egui::Id::unique(ctx.viewport_id());
+        ctx.data_mut(|data| data.remove_temp::<Vec<Self>>(id))
+            .unwrap_or_default()
+    }
+}
+
 #[cfg(feature = "glow")]
 pub use {egui_glow, glow};
 
