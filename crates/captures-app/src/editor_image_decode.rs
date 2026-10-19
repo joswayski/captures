@@ -33,6 +33,12 @@ pub fn decode_import(path: &Path) -> Result<RgbaImage, String> {
     decode(path, true)
 }
 
+/// Decode an owned clipboard transfer with the same limits and color handling
+/// as a file import. `name` is only used in error messages, never opened.
+pub fn decode_import_bytes(bytes: &[u8], name: &str) -> Result<RgbaImage, String> {
+    decode_image(bytes, name, true)
+}
+
 /// Decode a complete import batch, bounding retained pixels before any edit.
 pub fn decode_imports(paths: Vec<std::path::PathBuf>) -> Result<Vec<(String, RgbaImage)>, String> {
     let mut retained = 0_u64;
@@ -81,15 +87,19 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
     file.take(maximum + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
-    if bytes.len() as u64 > maximum {
-        return Err("This image is too large to open in Captures.".into());
-    }
-    // Shipping's webview reports every undecodable import with the file name;
-    // its open_media path rejects anything but PNG/JPEG/WebP stills (no TIFF).
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
+    decode_image(&bytes, &name, import)
+}
+
+fn decode_image(bytes: &[u8], name: &str, import: bool) -> Result<RgbaImage, String> {
+    if bytes.len() > captures_history::editor_draft::MAX_IMAGE_BYTES {
+        return Err("This image is too large to open in Captures.".into());
+    }
+    // Shipping's webview reports every undecodable import with the file name;
+    // its open_media path rejects anything but PNG/JPEG/WebP stills (no TIFF).
     let not_loaded = || format!("{name} could not be loaded.");
     let failed = |error: image::ImageError| {
         if import {
@@ -98,9 +108,9 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
             error.to_string()
         }
     };
-    let format = match image::guess_format(&bytes) {
+    let format = match image::guess_format(bytes) {
         Ok(format) => Some(format),
-        Err(_) if import => return decode_svg(&bytes, &not_loaded()),
+        Err(_) if import => return decode_svg(bytes, &not_loaded()),
         Err(_) => None,
     }
     .filter(|format| {
@@ -120,7 +130,7 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
             UNSUPPORTED_OPEN_MESSAGE.to_owned()
         }
     })?;
-    let mut decoder = ImageReader::with_format(Cursor::new(&bytes), format)
+    let mut decoder = ImageReader::with_format(Cursor::new(bytes), format)
         .into_decoder()
         .map_err(failed)?;
     let (width, height) = decoder.dimensions();
@@ -140,14 +150,14 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
     let icc = if format == ImageFormat::Tiff {
         // image's TIFF adapter suppresses tag errors. Distinguish an absent ICC
         // profile from a malformed one rather than silently importing wrong colors.
-        tiff::decoder::Decoder::new(Cursor::new(&bytes))
+        tiff::decoder::Decoder::new(Cursor::new(bytes))
             .and_then(|mut decoder| decoder.image_ifd().find_tag(tiff::tags::Tag::IccProfile))
             .and_then(|tag| tag.map(|value| value.into_u8_vec()).transpose())
             .map_err(|error| color_error(error.to_string()))?
     } else if format == ImageFormat::Bmp {
         // image's BMP adapter ignores V4/V5 color metadata. Do not silently
         // relabel profiled/calibrated samples as sRGB.
-        bmp_icc(&bytes)?
+        bmp_icc(bytes)?
     } else {
         decoder
             .icc_profile()
@@ -158,7 +168,7 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
         .transpose()
         .map_err(|error| color_error(error.to_string()))?;
     let source = if format == ImageFormat::Png {
-        let metadata = png::Decoder::new(Cursor::new(&bytes))
+        let metadata = png::Decoder::new(Cursor::new(bytes))
             .read_info()
             .map_err(|error| color_error(error.to_string()))?;
         png_source(metadata.info(), icc)
@@ -179,8 +189,8 @@ fn decode(path: &Path, import: bool) -> Result<RgbaImage, String> {
             // profile describes, so read the original inks directly.
             drop(decoder);
             let inks = match format {
-                ImageFormat::Jpeg => jpeg_inks(&bytes),
-                ImageFormat::Tiff => tiff_inks(&bytes),
+                ImageFormat::Jpeg => jpeg_inks(bytes),
+                ImageFormat::Tiff => tiff_inks(bytes),
                 _ => Err(UNSUPPORTED_COLOR_SPACE.into()),
             }?;
             if inks.len() as u64 != u64::from(width) * u64::from(height) * 4 {
@@ -682,7 +692,10 @@ mod tests {
         ProfileClass, RenderingIntent, ToneReprCurve,
     };
 
-    use super::{UNSUPPORTED_OPEN_MESSAGE, decode_import, decode_opened_image, decode_svg};
+    use super::{
+        UNSUPPORTED_OPEN_MESSAGE, decode_import, decode_import_bytes, decode_opened_image,
+        decode_svg,
+    };
 
     fn close(actual: u8, expected: u8, tolerance: u8, what: &str) {
         assert!(
@@ -707,6 +720,10 @@ mod tests {
         fs::write(&path, bytes).unwrap();
         let imported = decode_import(&path).unwrap();
         assert_eq!(decode_opened_image(&path).unwrap(), imported);
+        assert_eq!(
+            decode_import_bytes(bytes, "Clipboard image").unwrap(),
+            imported
+        );
         imported
     }
 
