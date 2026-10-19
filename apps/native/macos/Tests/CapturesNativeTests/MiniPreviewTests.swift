@@ -31,6 +31,14 @@ final class MiniPreviewTests: XCTestCase {
                 .first { $0.kind == .copy })
             let frame = button.frame
             let rest = try XCTUnwrap(tokens.color("glass-strong").usingColorSpace(.sRGB))
+            let down: CGFloat = card.isFlipped ? 1 : -1
+            func presentedCenterY(_ layer: CALayer) -> CGFloat {
+                // Account for AppKit's backing-layer anchor when measuring the centre.
+                let centre = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
+                let t = layer.transform
+                return (centre.y - layer.anchorPoint.y * layer.bounds.height) * t.m22
+                    + t.m42 + layer.position.y
+            }
             let start = CACurrentMediaTime()
             func record(_ phase: String) {
                 guard tracing, let layer = button.layer?.presentation() else { return }
@@ -44,22 +52,21 @@ final class MiniPreviewTests: XCTestCase {
             record("before-hover")
             button.mouseEntered(with: event)
             record("after-hover")
-            try waitUntil { abs(button.chromeBackground.usingColorSpace(.sRGB)!.redComponent
-                - min(1, rest.redComponent * 1.12)) < 0.001 }
-            record("brightness-ready")
+            try waitUntil {
+                guard abs(button.chromeBackground.usingColorSpace(.sRGB)!.redComponent
+                    - min(1, rest.redComponent * 1.12)) < 0.001 else { return false }
+                if reduced { return true }
+                guard let layer = button.layer?.presentation() else { return false }
+                return abs(presentedCenterY(layer) - (frame.midY - down)) < 0.01
+            }
+            record("hover-ready")
             func assertPose(scale: Double, dy: Double, phase: String) throws {
                 record(phase + "-before-render")
                 _ = try renderPresentation(panel)
                 record(phase + "-after-render")
                 let layer = try XCTUnwrap(button.layer?.presentation())
                 XCTAssertEqual(layer.transform.m11, CGFloat(scale), accuracy: 0.001)
-                let down: CGFloat = card.isFlipped ? 1 : -1
-                // Account for AppKit's backing-layer anchor when measuring the centre.
-                let centre = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
-                let t = layer.transform
-                let transformedY = (centre.y - layer.anchorPoint.y * layer.bounds.height) * t.m22
-                    + t.m42 + layer.position.y
-                XCTAssertEqual(transformedY, frame.midY + down * CGFloat(dy), accuracy: 0.01,
+                XCTAssertEqual(presentedCenterY(layer), frame.midY + down * CGFloat(dy), accuracy: 0.01,
                                "iteration=\(iteration) reduced=\(reduced) phase=\(phase)")
                 XCTAssertEqual(button.frame, frame)
             }
