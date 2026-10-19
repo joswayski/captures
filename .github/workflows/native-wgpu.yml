@@ -147,6 +147,15 @@ jobs:
       - name: Hold native preview positions through overlapping dust exits
         if: runner.os == 'Linux'
         run: /usr/bin/python3 apps/native/x11_preview_smoke.py --retarget-only --binary apps/native/wgpu/target/debug/captures-wgpu-workbench --output "$RUNNER_TEMP/native-preview-retarget"
+      - name: Archive Wayland import evidence with original fixture filenames
+        if: always() && runner.os == 'Linux'
+        # The URI test deliberately includes a newline in a filename. GitHub's
+        # artifact service rejects it as a loose file; tar preserves it intact.
+        run: |
+          if [ -d "$RUNNER_TEMP/native-wayland-editor-imports" ]; then
+            tar -czf "$RUNNER_TEMP/native-wayland-editor-imports.tar.gz" \
+              -C "$RUNNER_TEMP" native-wayland-editor-imports
+          fi
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Linux'
         with:
@@ -156,7 +165,7 @@ jobs:
             ${{ runner.temp }}/native-wayland-shortcuts
             ${{ runner.temp }}/native-wayland-recording
             ${{ runner.temp }}/native-preview-retarget
-            ${{ runner.temp }}/native-wayland-editor-imports
+            ${{ runner.temp }}/native-wayland-editor-imports.tar.gz
           if-no-files-found: ignore
 
   windows-release:
