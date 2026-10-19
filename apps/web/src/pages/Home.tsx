@@ -8,7 +8,7 @@ const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
-const CONTACT_EMAIL = "contact@josevalerio.com";
+const CONTACT_EMAIL = "jose@captur.es";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
 const COOKING_TOOLTIP =
   "Development builds are still running. These changes may not be in the public Tauri download.";
