@@ -897,6 +897,9 @@ Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 X11 file-list paste accepts incremental clipboard transfers within the existing
 1 MiB/two-second transfer limits; incomplete or invalid transfers import nothing.
+X11 paste uses XFixes selection notifications to reject clipboard replacement
+during a transfer, including replacement by the same owner, instead of importing
+a newer PNG accidentally. Paste again to explicitly use the new selection.
 On Wayland, PNG paste, local-file paste and editable layer ownership use the
 focused window's core selection protocol. PNG fallback stays with the same offer
 if the clipboard changes during a file-list transfer; the next paste uses the new

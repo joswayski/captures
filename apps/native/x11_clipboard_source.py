@@ -17,6 +17,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument("--png", type=Path)
+    parser.add_argument("--replacement-png", type=Path)
+    parser.add_argument("--replace-on", choices=("text/uri-list", "image/png"), default="text/uri-list",
+                        help="Reacquire the same owner window during this format's read")
     parser.add_argument("--targets-incr", action="store_true")
     parser.add_argument("--mode", choices=["normal", "exact-limit", "oversized-hint", "overflow",
                         "missing-end", "slow", "wrong-type", "wrong-terminator", "malformed-header"],
@@ -26,8 +30,14 @@ def main():
     source = connection.screen().root.create_window(0, 0, 1, 1, 0, 0, X.InputOnly,
                                                     X.CopyFromParent)
     atoms = {name: connection.intern_atom(name) for name in (
-        "CLIPBOARD", "TARGETS", "INCR", "text/uri-list", "UTF8_STRING")}
+        "CLIPBOARD", "TARGETS", "INCR", "text/uri-list", "UTF8_STRING", "image/png")}
     payload = args.payload.read_bytes()
+    png = args.png.read_bytes() if args.png else None
+    replaced = False
+    formats = [atoms["TARGETS"], atoms["text/uri-list"]]
+    if png is not None:
+        # Keep egui's eager text read from consuming the URI offer first.
+        formats.extend([atoms["image/png"], atoms["UTF8_STRING"]])
     if args.mode == "exact-limit":
         payload += b"#" + b"x" * (1024 * 1024 - len(payload) - 3) + b"\r\n"
     if args.mode == "overflow":
@@ -60,12 +70,22 @@ def main():
                                  if key[0] != event.window.id}
                 elif event.type == X.SelectionRequest:
                     property_ = event.property or event.target
+                    if args.replacement_png and event.target == atoms[args.replace_on] and not replaced:
+                        png = args.replacement_png.read_bytes()
+                        source.set_selection_owner(atoms["CLIPBOARD"], X.CurrentTime)
+                        connection.sync()
+                        replaced = True
+                        record("replaced", same_owner=True)
                     if event.target == atoms["TARGETS"] and not args.targets_incr:
-                        event.requestor.change_property(property_, Xatom.ATOM, 32,
-                                                        [atoms["TARGETS"], atoms["text/uri-list"]])
+                        event.requestor.change_property(property_, Xatom.ATOM, 32, formats)
+                    elif png is not None and event.target == atoms["image/png"]:
+                        event.requestor.change_property(property_, atoms["image/png"], 8, png)
+                        record("png", replaced=replaced)
+                    elif png is not None and event.target == atoms["UTF8_STRING"]:
+                        event.requestor.change_property(property_, atoms["UTF8_STRING"], 8, b"")
                     elif event.target in (atoms["TARGETS"], atoms["text/uri-list"]):
                         targets = event.target == atoms["TARGETS"]
-                        values = [atoms["TARGETS"], atoms["text/uri-list"]] if targets else payload
+                        values = formats if targets else payload
                         event.requestor.change_attributes(event_mask=X.PropertyChangeMask | X.StructureNotifyMask)
                         transfers[(event.requestor.id, property_)] = (values, 0, targets)
                         if args.mode == "malformed-header" and not targets:

@@ -86,7 +86,7 @@ impl Clipboard {
                 )?;
                 return Ok(vec![("Clipboard image".into(), pixels)]);
             }
-            LinuxPng::X11 => {}
+            LinuxPng::X11(_) => {}
         }
         if self.images.is_none() {
             self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
@@ -102,6 +102,12 @@ impl Clipboard {
             }
             Err(error) => return Err(format!("Could not read clipboard image: {error}")),
         };
+        #[cfg(target_os = "linux")]
+        if let LinuxPng::X11(connection) = png {
+            // arboard opens a separate requestor. Retain our selection watch
+            // across that read so its pixels cannot come from a newer offer.
+            x11_marker::ensure_unchanged(&connection).map_err(|error| error.to_string())?;
+        }
         let width = u32::try_from(image.width).map_err(|_| "Clipboard image is too wide.")?;
         let height = u32::try_from(image.height).map_err(|_| "Clipboard image is too tall.")?;
         if width == 0
@@ -226,7 +232,7 @@ pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
 #[cfg(target_os = "linux")]
 enum LinuxPng {
     Absent,
-    X11,
+    X11(Box<x11rb::rust_connection::RustConnection>),
     Wayland(std::os::fd::OwnedFd),
 }
 
@@ -247,10 +253,11 @@ fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, 
         };
         (png, bytes)
     } else {
-        let (has_png, bytes) = x11_marker::offered_files().map_err(|error| error.to_string())?;
+        let (has_png, bytes, connection) =
+            x11_marker::offered_files().map_err(|error| error.to_string())?;
         (
             if has_png {
-                LinuxPng::X11
+                LinuxPng::X11(Box::new(connection))
             } else {
                 LinuxPng::Absent
             },
@@ -348,12 +355,17 @@ mod x11_marker {
     };
     use x11rb::{
         connection::Connection,
-        protocol::{Event, xproto::*},
+        protocol::{
+            Event,
+            xfixes::{ConnectionExt as _, SelectionEventMask},
+            xproto::*,
+        },
         rust_connection::RustConnection,
         wrapper::ConnectionExt as _,
     };
 
-    pub(super) fn offered_files() -> Result<(bool, Vec<u8>), Box<dyn std::error::Error>> {
+    pub(super) fn offered_files()
+    -> Result<(bool, Vec<u8>, RustConnection), Box<dyn std::error::Error>> {
         let (connection, screen) = x11rb::connect(None)?;
         let window = connection.generate_id()?;
         connection
@@ -372,6 +384,18 @@ mod x11_marker {
             )?
             .check()?;
         let selection = connection.intern_atom(false, b"CLIPBOARD")?.reply()?.atom;
+        // Owner-window equality misses a client replacing its own selection.
+        // Watch every ownership transition before reading any offered format.
+        connection.xfixes_query_version(2, 0)?.reply()?;
+        connection
+            .xfixes_select_selection_input(
+                window,
+                selection,
+                SelectionEventMask::SET_SELECTION_OWNER
+                    | SelectionEventMask::SELECTION_WINDOW_DESTROY
+                    | SelectionEventMask::SELECTION_CLIENT_CLOSE,
+            )?
+            .check()?;
         let target = connection
             .intern_atom(false, b"text/uri-list")?
             .reply()?
@@ -393,7 +417,8 @@ mod x11_marker {
         )?
         else {
             if connection.get_selection_owner(selection)?.reply()?.owner == 0 {
-                return Ok((false, Vec::new()));
+                ensure_unchanged(&connection)?;
+                return Ok((false, Vec::new(), connection));
             }
             return Err("Clipboard offer became unavailable.".into());
         };
@@ -402,14 +427,33 @@ mod x11_marker {
             .map(|bytes| u32::from_ne_bytes(bytes.try_into().expect("four-byte atom")))
             .collect();
         let has_png = atoms.contains(&png);
-        if !atoms.contains(&target) {
-            return Ok((has_png, Vec::new()));
-        }
-        let bytes = read_selection(&connection, window, selection, target, property, target, 8)?
-            .ok_or("Clipboard offer became unavailable.")?;
+        let bytes = if atoms.contains(&target) {
+            read_selection(&connection, window, selection, target, property, target, 8)?
+                .ok_or("Clipboard offer became unavailable.")?
+        } else {
+            Vec::new()
+        };
+        ensure_unchanged(&connection)?;
         // This dedicated connection owns the requestor window. Every exit,
         // including an abandoned INCR transfer, destroys it and its properties.
-        Ok((has_png, bytes))
+        // Keep it alive through the fallback PNG read's ownership check.
+        Ok((has_png, bytes, connection))
+    }
+
+    pub(super) fn ensure_unchanged(
+        connection: &RustConnection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // A server round trip collects notifications preceding completion of
+        // the read, including reads made through arboard's other connection.
+        connection.get_input_focus()?.reply()?;
+        while let Some(event) = connection.poll_for_event()? {
+            if matches!(event, Event::XfixesSelectionNotify(_)) {
+                return Err(
+                    "Clipboard changed during Paste. Paste again to use the new selection.".into(),
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Read one bounded selection, directly or through ICCCM's INCR handshake.
@@ -459,6 +503,12 @@ mod x11_marker {
                         && event.window == window
                         && event.atom == property
                         && event.state == Property::NEW_VALUE => {}
+                Event::XfixesSelectionNotify(_) => {
+                    return Err(
+                        "Clipboard changed during Paste. Paste again to use the new selection."
+                            .into(),
+                    );
+                }
                 _ => continue,
             }
             // ANY lets delete=true acknowledge an INCR header as well as data.
