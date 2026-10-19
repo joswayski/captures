@@ -891,6 +891,8 @@ contract. Text fields retain normal paste; URL/HTML-only images are not fetched.
 AppKit queues repeated external image pastes, file drops and picker selections
 in arrival order, applying each batch to the latest document. A failed batch does
 not block later imports; closing or replacing the document cancels waiting batches.
+Windows/Linux queue completed picker selections alongside file drops even while
+an edit is running, so later drops cannot overtake an already completed selection.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 X11 file-list paste accepts incremental clipboard transfers within the existing

@@ -1585,11 +1585,9 @@ impl View {
             self.import_picker = None;
             return false;
         }
-        // Preserve the one-in-flight edit contract. A selected file waits until
-        // an accepted edit or a discard confirmation has finished.
-        if self.pending || self.inline.is_some() {
-            return false;
-        }
+        // Accept completed picks even while busy so later drops cannot overtake
+        // them. The shared queue still dispatches only one edit at a time and
+        // waits for inline text to finish before applying any import.
         let Some(result) = self.import_picker.as_ref().map(Receiver::try_recv) else {
             return false;
         };
@@ -12254,7 +12252,7 @@ mod tests {
     }
 
     #[test]
-    fn import_picker_defers_while_busy_and_ignores_cancelled_or_closing_results() {
+    fn import_picker_queues_while_busy_and_ignores_cancelled_or_closing_results() {
         let ctx = egui::Context::default();
         let mut view = View::default();
         view.receive(&ctx, Ok(presented(false)));
@@ -12266,10 +12264,10 @@ mod tests {
             .send(Some(vec![PathBuf::from("photo.png")]))
             .unwrap();
         view.pending = true;
-        assert!(!view.receive_import(&jobs));
-        assert!(queued.try_recv().is_err() && view.import_picker.is_some());
-        view.pending = false;
         assert!(view.receive_import(&jobs));
+        assert!(queued.try_recv().is_err() && view.import_picker.is_none());
+        view.pending = false;
+        assert!(canvas::drain_drops(&mut view, &jobs));
         assert!(
             matches!(queued.recv().unwrap(), Job::Import { paths, selected_id, point: None }
             if paths == [PathBuf::from("photo.png")] && selected_id.is_none())

@@ -4,7 +4,9 @@
 Reuses the real-window/virtual-input host fixture. DISPLAY is unset: no X11
 fallback, installed profile, global clipboard or physical acceptance is involved.
 """
+import errno
 import json
+import os
 from pathlib import Path
 import select
 import subprocess
@@ -307,6 +309,48 @@ def cases(binary, pointer, root, env, bus):
                             click(28, 430)
                             time.sleep(.8)
 
+                    # Hold the real decoder on a FIFO, then complete a picker
+                    # before a later drop. Completion order must survive a busy
+                    # renderer; every accepted batch retains its own Undo.
+                    chooser.selected = [second]
+                    click(window()["rect"]["width"] - 70, 26)
+                    wait(lambda: chooser.pending, "picker before held import")
+                    gate = profile / "Held.png"
+                    os.mkfifo(gate)
+                    writer = None
+                    try:
+                        drop([gate], "drop-held-import")
+
+                        def connect_writer():
+                            try:
+                                return os.open(gate, os.O_WRONLY | os.O_NONBLOCK)
+                            except OSError as error:
+                                if error.errno != errno.ENXIO:
+                                    raise
+                                return None
+
+                        writer = wait(connect_writer, "worker reading held import")
+                        GLib.idle_add(chooser.respond, False)
+                        wait(lambda: not chooser.pending, "picker completed behind held import")
+                        click(28, 430)
+                        drop([image], "drop-after-picker")
+                        payload = image.read_bytes()
+                        assert os.write(writer, payload) == len(payload)
+                    finally:
+                        if writer is not None:
+                            os.close(writer)
+                        gate.unlink()
+                    ordered = count(4)
+                    assert [layer["name"] for layer in ordered[-3:]] == [gate.name, second.name, image.name], \
+                        "a later drop overtook the completed picker while the renderer was busy"
+                    shot("picker-drop-completion-order")
+                    key("z", "ctrl")
+                    assert [layer["name"] for layer in count(3)[-2:]] == [gate.name, second.name]
+                    key("z", "ctrl")
+                    assert count(2)[-1]["name"] == gate.name
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "one Undo per queued import")
+
                     drop([image, second], "drop-batch")
                     dropped = count(3)
                     assert [layer["name"] for layer in dropped[-2:]] == [image.name, second.name]
@@ -407,6 +451,7 @@ def cases(binary, pointer, root, env, bus):
                             "failed-batch-preserves-Redo", "batch-retry",
                             "picker-one-undo-per-batch", "picker-late-decode-render-failure-atomic",
                             "picker-failure-preserves-Redo", "picker-retry",
+                            "busy-picker-completion-precedes-later-drop",
                             "external-GTK-drop-one-undo-per-batch", "drop-late-decode-render-failure-atomic",
                             "drop-failure-preserves-Redo", "drop-retry",
                             "URI-rejection-atomic", "COPY-only", "hover-cancel", "receive-timeout",
