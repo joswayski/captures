@@ -888,6 +888,9 @@ one undo/redo step for the entire paste, matching Tauri. If any image cannot be
 decoded or the resulting canvas cannot be rendered, nothing is added and existing
 Undo/Redo remains available. Add images and file drops use the same atomic batch
 contract. Text fields retain normal paste; URL/HTML-only images are not fetched.
+AppKit queues repeated external image pastes, file drops and picker selections
+in arrival order, applying each batch to the latest document. A failed batch does
+not block later imports; closing or replacing the document cancels waiting batches.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 X11 file-list paste accepts incremental clipboard transfers within the existing

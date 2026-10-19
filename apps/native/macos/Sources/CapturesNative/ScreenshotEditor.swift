@@ -1656,6 +1656,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var importToken = 0
     private var importLoading = false
     private var pendingImport: (images: [EditorDecodedImage], generation: Int, artifactID: String, point: CGPoint?)?
+    private var importQueue: [(sources: [ImportSource], point: CGPoint?)] = []
 
     private enum Section {
         static let geometry = 0
@@ -6082,14 +6083,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         case .drop:
             let guide = dropGuideView.guide
             dropGuideView.active = false; dropGuideView.guide = nil
-            guard let artifactID = state.artifactID, state.snapshot != nil, inlineTextInput == nil,
-                  !importLoading else { return false }
+            guard acceptsImageImports else { return false }
             let images = urls.filter(NativeEditorCanvas.isSupportedImage)
             guard !images.isEmpty else { showError(NativeEditorCanvas.dropUnsupported); return false }
             selectionOverlay.cancelGesture()
-            importToken += 1
-            decodeImports(images.map(ImportSource.file), point: guide?.point, token: importToken,
-                         generation: state.generation, artifactID: artifactID)
+            enqueueImports(images.map(ImportSource.file), point: guide?.point)
             return true
         }
     }
@@ -6130,19 +6128,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func chooseImage() {
-        guard let artifactID = state.artifactID, state.snapshot != nil, !state.busy,
-              !importLoading else { return }
+        guard acceptsImageImports, let artifactID = state.artifactID else { return }
         selectionOverlay.cancelGesture()
-        importToken += 1
         let token = importToken
         let generation = state.generation
         // Decode the complete accepted selection before committing any layer.
         let completion: ([URL]) -> Void = { [weak self] urls in
             DispatchQueue.main.async {
-                guard let self, !urls.isEmpty, self.importToken == token else { return }
+                guard let self, self.importToken == token,
+                      self.state.generation == generation, self.state.artifactID == artifactID else { return }
+                defer { self.updateControls() }
+                guard !urls.isEmpty else { return }
                 let images = urls.filter(NativeEditorCanvas.isSupportedImage)
                 guard !images.isEmpty else { self.showError(NativeEditorCanvas.dropUnsupported); return }
-                self.decodeImports(images.map(ImportSource.file), point: nil, token: token, generation: generation, artifactID: artifactID)
+                self.enqueueImports(images.map(ImportSource.file), point: nil)
             }
         }
         if let imagePicker {
@@ -6153,6 +6152,25 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         panel.beginSheetModal(for: window) { response in
             completion(response == .OK ? panel.urls : [])
         }
+    }
+
+    private var acceptsImageImports: Bool {
+        state.artifactID != nil && state.snapshot != nil && inlineTextInput == nil
+            && window.attachedSheet == nil && !draining && !closeRequested
+    }
+
+    private func enqueueImports(_ sources: [ImportSource], point: CGPoint?) {
+        importQueue.append((sources, point))
+        startNextImport()
+    }
+
+    /// Like shipping's imageImportQueueRef, keep batches in acceptance order,
+    /// decode only one at a time and apply each to the latest document.
+    private func startNextImport() {
+        guard !importLoading, !importQueue.isEmpty, let artifactID = state.artifactID else { return }
+        let next = importQueue.removeFirst()
+        decodeImports(next.sources, point: next.point, token: importToken,
+                      generation: state.generation, artifactID: artifactID)
     }
 
     /// Decode the whole batch off the main thread, then import as one undoable
@@ -6190,6 +6208,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 case .failure(let error):
                     self.importLoading = false
                     self.showError("Couldn’t import image: \(error.localizedDescription)")
+                    self.startNextImport()
                     self.updateControls()
                 }
             }
@@ -6236,6 +6255,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.fail(generation: generation) else { return }
                 self.showError("Couldn’t import image: \(error.localizedDescription)")
             }
+            self.startNextImport()
             self.updateControls()
         }
     }
@@ -6244,6 +6264,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         importToken += 1
         importLoading = false
         pendingImport = nil
+        importQueue.removeAll()
     }
 
     private func transformLayer(_ transform: String, message: String) {
@@ -6297,12 +6318,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func pasteLayer(after id: String?) {
-        guard layerActionsReady, let snapshot = state.snapshot else { return }
+        guard acceptsImageImports, let snapshot = state.snapshot else { return }
         guard id == nil || snapshot.layers.contains(where: { $0.id == id }) else { return }
         guard snapshot.canPasteLayer && ownsLayerClipboard else {
             pasteClipboardImages()
             return
         }
+        guard layerActionsReady else { return }
         let newID = UUID().uuidString.lowercased()
         var request: [String: Any] = ["operation": "paste_layer", "new_id": newID]
         if let id { request["after_id"] = id }
@@ -6312,7 +6334,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func pasteClipboardImages() {
-        guard let artifactID = state.artifactID else { return }
         // Snapshot actual local bytes/URLs now; never ask NSImage or HTML to
         // resolve remote URLs, and never fall back to retained drag contents.
         let sources: [ImportSource] = (layerPasteboard.pasteboardItems ?? []).compactMap { item in
@@ -6324,9 +6345,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         guard !sources.isEmpty else { return }
         cancelDrawing(); cancelViewportPan()
-        importToken += 1
-        decodeImports(sources, point: nil, token: importToken,
-                      generation: state.generation, artifactID: artifactID)
+        enqueueImports(sources, point: nil)
     }
 
     private func combine(_ operation: String, id: String? = nil) {
@@ -6363,7 +6382,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             add("Copy layer", #selector(copyLayerFromMenu(_:)), enabled: ready, id: target.id)
         }
         add("Paste layer", #selector(pasteLayerFromMenu(_:)),
-            enabled: ready, id: targetID)
+            enabled: snapshot.canPasteLayer && ownsLayerClipboard ? ready : acceptsImageImports, id: targetID)
         if let target {
             menu.addItem(.separator())
             add("Duplicate", #selector(duplicateLayerFromMenu(_:)), enabled: ready, id: target.id)
@@ -6706,8 +6725,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
         redoButton?.isEnabled = ready && state.snapshot?.canRedo == true
         draftDiscardButton?.isEnabled = ready
-        addImagesButton?.isEnabled = ready && !importLoading
-        addLayerButton?.isEnabled = ready && !importLoading
+        addImagesButton?.isEnabled = acceptsImageImports
+        addLayerButton?.isEnabled = acceptsImageImports
         sectionControl?.isEnabled = ready
         outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
         exportDisclosure?.isEnabled = state.snapshot != nil && !draining
