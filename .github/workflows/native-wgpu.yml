@@ -189,6 +189,8 @@ jobs:
       - run: cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --release
       - name: Exercise native Windows windows
         run: python apps/native/wgpu/smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke
+      - name: Verify Windows clipboard acquisition in an isolated window station
+        run: python apps/native/windows_clipboard_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke/clipboard
       - name: Forward native media between Windows processes
         run: python apps/native/instance_smoke.py --trace --binary apps/native/wgpu/target/release/captures-wgpu-workbench.exe --output native-smoke/instance
       - name: Exercise staged Windows Open With arguments
